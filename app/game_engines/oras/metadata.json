@@ -1,0 +1,32 @@
+{
+  "key": "oras",
+  "display_name": "Pokémon Omega Rubí / Zafiro Alfa",
+  "generation": 6,
+  "save_names": [
+    "main"
+  ],
+  "capabilities": [
+    "read_party",
+    "replace_move",
+    "read_role_markings",
+    "write_role_markings",
+    "valid_move_filter",
+    "inventory_utilities",
+    "save_watcher",
+    "azahar_rpc_read",
+    "live_party_read",
+    "live_party_write",
+    "live_pc_role_write",
+    "live_inventory_write",
+    "live_tm_write",
+    "obs_sync",
+    "floating_bar",
+    "realtime_core_v1",
+    "realtime_snapshot",
+    "realtime_diagnostics",
+    "realtime_block_resolver_v1",
+    "realtime_recorder_package_v1",
+    "realtime_replay_v1"
+  ],
+  "status": "experimental"
+}

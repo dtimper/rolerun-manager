@@ -1,0 +1,16 @@
+CÓMO ACTUALIZAR TU REPOSITORIO DE v0.1 A v0.2
+================================================
+
+1. Cierra RoleRun Manager.
+2. Abre el ZIP de la v0.2.
+3. Copia TODO el contenido interior de RoleRun_Manager_v0.2.
+4. Pégalo dentro de tu carpeta actual RoleRun_Manager_v0.1 y acepta reemplazar.
+5. No borres la carpeta oculta .git de tu carpeta actual.
+6. Instala el SDK x64 de .NET 10.
+7. Ejecuta preparar_motor.bat.
+8. Ejecuta instalar_y_abrir.bat.
+
+Después de probarlo y confirmar que funciona:
+
+git add .
+git commit -m "RoleRun Manager v0.2 - lectura inicial de guardados"

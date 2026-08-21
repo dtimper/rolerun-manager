@@ -1,0 +1,18 @@
+{
+  "key": "usum",
+  "display_name": "Pokémon Ultra Sol / Ultra Luna",
+  "generation": 7,
+  "save_names": [
+    "main"
+  ],
+  "capabilities": [
+    "read_party",
+    "replace_move",
+    "read_role_markings",
+    "write_role_markings",
+    "valid_move_filter",
+    "save_watcher",
+    "obs_sync"
+  ],
+  "status": "stable"
+}

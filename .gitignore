@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Datos locales
+backups/
+logs/
+
+# Builds
+build/
+dist/
+*.spec
+**/bin/
+**/obj/
+engine/publish/
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log

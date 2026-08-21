@@ -1,0 +1,20 @@
+{
+  "key": "bdsp",
+  "display_name": "Pokémon Diamante Brillante / Perla Reluciente",
+  "generation": 8,
+  "save_names": [
+    "SaveData.bin"
+  ],
+  "capabilities": [
+    "read_party",
+    "replace_move",
+    "read_role_markings",
+    "write_role_markings",
+    "valid_move_filter",
+    "save_watcher",
+    "obs_sync",
+    "read_inventory",
+    "teach_tm_randomized_bdsp"
+  ],
+  "status": "stable"
+}

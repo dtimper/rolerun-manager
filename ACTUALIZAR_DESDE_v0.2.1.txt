@@ -1,0 +1,7 @@
+1. Cierra RoleRun Manager.
+2. Copia todo el contenido de esta carpeta dentro de tu carpeta actual del repositorio.
+3. Acepta reemplazar archivos.
+4. No borres la carpeta oculta .git.
+5. Ejecuta preparar_motor.bat para recompilar el motor v0.3.
+6. Abre instalar_y_abrir.bat.
+7. No hagas commit hasta probar una copia modificada en el juego.

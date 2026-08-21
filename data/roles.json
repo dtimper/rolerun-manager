@@ -1,0 +1,88 @@
+{
+  "Asesino": [
+    {
+      "title": "Bajar Defensa Rival",
+      "pool_key": "asesino_bajar_defensa"
+    },
+    {
+      "title": "Subir Ataque",
+      "pool_key": "asesino_subir_ataque"
+    },
+    {
+      "title": "Ataque Físico",
+      "pool_key": "extra_ataque_fisico"
+    }
+  ],
+  "Mago": [
+    {
+      "title": "Bajar Defensa Esp. Rival",
+      "pool_key": "mago_bajar_defensa_esp"
+    },
+    {
+      "title": "Subir Ataque Especial",
+      "pool_key": "mago_subir_ataque_esp"
+    },
+    {
+      "title": "Ataque Especial",
+      "pool_key": "extra_ataque_especial"
+    }
+  ],
+  "Tanque": [
+    {
+      "title": "Subir Defensa Física",
+      "pool_key": "tanque_subir_defensa_fisica"
+    },
+    {
+      "title": "Protección",
+      "pool_key": "tanque_proteccion"
+    },
+    {
+      "title": "Ataque Físico",
+      "pool_key": "defensa_ataque_fisico"
+    },
+    {
+      "title": "Ataque Especial",
+      "pool_key": "defensa_ataque_especial"
+    }
+  ],
+  "Prisma": [
+    {
+      "title": "Subir Defensa Especial",
+      "pool_key": "prisma_subir_defensa_especial"
+    },
+    {
+      "title": "Protección",
+      "pool_key": "tanque_proteccion"
+    },
+    {
+      "title": "Ataque Físico",
+      "pool_key": "defensa_ataque_fisico"
+    },
+    {
+      "title": "Ataque Especial",
+      "pool_key": "defensa_ataque_especial"
+    }
+  ],
+  "Support": [
+    {
+      "title": "Infatuaciones",
+      "pool_key": "support_infatuaciones"
+    },
+    {
+      "title": "Problemas de Estado",
+      "pool_key": "support_problemas_estado"
+    },
+    {
+      "title": "Recuperaciones",
+      "pool_key": "support_recuperaciones"
+    },
+    {
+      "title": "Hazards",
+      "pool_key": "support_hazards"
+    },
+    {
+      "title": "Ataque de Estado",
+      "pool_key": "support_ataque_estado"
+    }
+  ]
+}

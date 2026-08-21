@@ -1,0 +1,6 @@
+{
+  "key": "dp",
+  "display_name": "Pokémon Diamante / Perla",
+  "save_names": ["*.sav", "*.dsv"],
+  "status": "experimental"
+}

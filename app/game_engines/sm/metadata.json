@@ -1,0 +1,19 @@
+{
+  "key": "sm",
+  "display_name": "Pokémon Sol / Luna",
+  "generation": 7,
+  "save_names": [
+    "main"
+  ],
+  "capabilities": [
+    "read_party",
+    "replace_move",
+    "read_role_markings",
+    "write_role_markings",
+    "valid_move_filter",
+    "inventory_utilities",
+    "save_watcher",
+    "obs_sync"
+  ],
+  "status": "experimental"
+}

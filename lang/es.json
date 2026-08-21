@@ -1,0 +1,10 @@
+{
+  "app_name": "RoleRun Manager",
+  "guided_draft": "Drafteo guiado",
+  "select_save": "Selecciona la partida guardada",
+  "select_role": "Elige el rol",
+  "select_move": "Elige el movimiento",
+  "select_pokemon": "Elige el Pokémon",
+  "replace_move": "Elige el movimiento que sustituirá",
+  "apply_draft": "Aplicar drafteo"
+}

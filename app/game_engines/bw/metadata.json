@@ -1,0 +1,22 @@
+{
+  "key": "bw",
+  "display_name": "Pokémon Blanco / Negro",
+  "generation": 5,
+  "save_names": [
+    "*.sav",
+    "*.dsv"
+  ],
+  "capabilities": [
+    "read_party",
+    "replace_move",
+    "read_role_markings",
+    "write_role_markings",
+    "valid_move_filter",
+    "inventory_utilities",
+    "money_utility",
+    "save_watcher",
+    "obs_sync",
+    "floating_bar"
+  ],
+  "status": "experimental"
+}

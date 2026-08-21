@@ -1,0 +1,23 @@
+{
+  "key": "hgss",
+  "display_name": "Pokémon HeartGold / SoulSilver",
+  "generation": 4,
+  "save_names": [
+    "*.sav",
+    "*.dsv"
+  ],
+  "capabilities": [
+    "read_party",
+    "replace_move",
+    "read_role_markings",
+    "write_role_markings",
+    "valid_move_filter",
+    "inventory_utilities",
+    "money_utility",
+    "save_watcher",
+    "obs_sync",
+    "floating_bar",
+    "desmume_reset_install"
+  ],
+  "status": "experimental"
+}

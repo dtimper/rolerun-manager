@@ -1,0 +1,7 @@
+{
+  "key": "pt",
+  "display_name": "Pokémon Platino",
+  "generation": 4,
+  "save_extensions": [".sav", ".dsv"],
+  "status": "experimental"
+}
