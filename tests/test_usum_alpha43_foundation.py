@@ -229,7 +229,9 @@ def test_alpha56_battle_lane_validates_slots_independently() -> None:
     assert "2:81/37/35 vs PK7 80" in probe.reason
 
 
-def test_alpha56_battle_lane_still_rejects_when_no_slot_is_proven() -> None:
+def test_alpha56_battle_lane_still_rejects_when_no_slot_is_proven(
+    isolated_role_run_log_dir: Path,
+) -> None:
     current = _game(
         _mon(1, max_hp=60, current_hp=50),
         _mon(2, max_hp=80, current_hp=40),
@@ -238,10 +240,13 @@ def test_alpha56_battle_lane_still_rejects_when_no_slot_is_proven() -> None:
         title_id=USUM_ULTRA_SUN_TITLE_ID, active=True,
         max_hp=(61, 81), displayed=(0, 37), actual=(0, 35),
     )
-    probe = _reader(fake).read_battle_probe(current)
+    reader = _reader(fake)
+    assert reader._battle_trace_path.parent == isolated_role_run_log_dir
+    probe = reader.read_battle_probe(current)
     assert probe is not None and probe.state == "battle" and probe.validated is False
     assert probe.health_game is None
     assert "ningún slot" in probe.reason
+    assert (isolated_role_run_log_dir / "usum_battle_health_trace_latest.jsonl").is_file()
 
 
 def test_alpha58_battle_trace_records_actual_displayed_and_mapping(tmp_path: Path, monkeypatch) -> None:

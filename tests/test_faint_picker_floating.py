@@ -107,6 +107,7 @@ def test_mapping_main_window_hides_a_still_visible_floating_bar_before_picker() 
         _main_ui_dirty_while_floating=False,
         _save_floating_bar_position=lambda: calls.append("save-pos"),
         after_cancel=lambda ident: calls.append(f"cancel:{ident}"),
+        _foreground_belongs_to_this_process=lambda: True,
         _set_auto_floating_guard_temporarily=lambda ms: calls.append(f"guard:{ms}"),
         _schedule_pending_faint_picker=lambda delay: calls.append(f"picker:{delay}"),
     )
