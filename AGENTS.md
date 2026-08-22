@@ -73,6 +73,52 @@ Hay que localizar la primera frontera donde el valor observado diverge del
 esperado. El siguiente cambio debe atacar esa causa y acompañarse de una
 regresión que falle antes del arreglo.
 
+## Protocolo de interacción con el usuario
+
+El usuario no tiene que proponer archivos, funciones, offsets, arquitecturas ni
+soluciones técnicas. Su aportación normal consiste en describir qué estaba
+haciendo, qué esperaba, qué ocurrió, qué funcionalidad busca y aportar las
+capturas, logs o archivos que existan. Es responsabilidad del agente traducir
+esa información a una investigación técnica rigurosa.
+
+1. No esperar que el usuario proponga soluciones técnicas.
+2. No interpretar una sugerencia técnica del usuario como una premisa correcta
+   solo porque la mencione. Debe demostrarse con la misma evidencia exigida a
+   cualquier otra hipótesis.
+3. Cuando el usuario reporte un bug, reconstruir primero el flujo relevante de
+   extremo a extremo y localizar la primera divergencia real.
+4. Inspeccionar el código, Git, logs, diagnósticos y tests disponibles antes de
+   pedir información adicional.
+5. Si una respuesta puede obtenerse leyendo archivos locales, obtenerla
+   directamente; no pedir al usuario que copie, busque o interprete esos
+   archivos manualmente.
+6. Hacer preguntas al usuario únicamente cuando falte una observación física
+   que solo él pueda realizar dentro del juego o emulador.
+7. Cuando sea necesaria una prueba física, dar instrucciones simples,
+   concretas y ordenadas, sin exigir conocimientos técnicos.
+8. No pedir al usuario que busque offsets, direcciones RAM, estructuras
+   internas o detalles de implementación salvo que resulte absolutamente
+   imposible instrumentar la observación desde RoleRun.
+9. Ante un bug, proceder en este orden: describir la causa raíz demostrada;
+   explicar qué evidencia la demuestra; indicar qué se va a modificar; añadir
+   una regresión; ejecutar toda la suite; e indicar después una prueba física
+   concreta.
+10. Si la causa raíz todavía no está demostrada, decirlo explícitamente y
+    preparar instrumentación o diagnóstico antes de implementar.
+11. Nunca convertir expresiones del usuario como «creo que», «puede ser»,
+    «igual es» o «quizás» en hechos técnicos.
+12. Si dos correcciones consecutivas solo desplazan el síntoma, detener
+    inmediatamente el parcheo incremental y realizar una investigación
+    completa de causa raíz.
+13. Cuando el usuario valide físicamente una funcionalidad, registrar ese
+    hecho, su alcance y el entorno validado en `docs/CURRENT_STATE.md`.
+14. Mantener el lenguaje dirigido al usuario comprensible y explicar lo
+    importante sin exigirle entender detalles internos de Python, C#, PKHeX,
+    RPC o memoria.
+15. Terminar siempre cada entrega indicando exactamente qué debe probar el
+    usuario a continuación. Si no procede una prueba funcional, indicarlo
+    expresamente y señalar la siguiente comprobación concreta.
+
 ## Preparación obligatoria antes de cambiar nada
 
 1. Leer este archivo completo.
