@@ -1,0 +1,31 @@
+{
+  "format": "rolerun-b2w2-badges-v1",
+  "captured_at": "2026-08-27T18:57:02.802825+02:00",
+  "environment": "Pokemon Negro 2 Espana - melonDS 1.1",
+  "metodo": "Con N medallas conseguidas, el byte de medallas tiene N bits encendidos. Se vuelca la zona alrededor del dinero -ya demostrado- y se listan todas las posiciones que encajan, para no fiarse de una.",
+  "medallas_declaradas": 1,
+  "dinero_leido": 1002207,
+  "direccion_en_produccion": "0x022266A8",
+  "direccion_en_produccion_cuadra": true,
+  "valor_en_produccion": "0x01",
+  "rango_volcado": [
+    "0x02226684",
+    "0x022266C4"
+  ],
+  "volcado": "01 00 11 CC FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF DF 4A 0F 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+  "candidatos": [
+    {
+      "direccion": "0x02226684",
+      "valor": "0x01",
+      "bits": "0b1",
+      "distancia_al_dinero": -32
+    },
+    {
+      "direccion": "0x022266A8",
+      "valor": "0x01",
+      "bits": "0b1",
+      "distancia_al_dinero": 4
+    }
+  ],
+  "note": "Diagnostico de solo lectura. Un byte que coincida una vez no demuestra nada por si solo; lo que decide es que la direccion en produccion cuadre y que siga cuadrando con la siguiente medalla."
+}

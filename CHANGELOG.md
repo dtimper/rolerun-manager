@@ -1,6 +1,16 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.52 — la dirección de medallas, confirmada contra el juego
+
+Con una medalla conseguida, `0x022266A8` vale **0x01**: lo que predijo la
+deducción de PKHeX antes de mirar la RAM. Dos caminos independientes, el mismo
+byte. El segundo candidato del volcado (`dinero−32`) es una coincidencia
+esperable con una sola medalla; la siguiente lo separará.
+
+- `tests/test_b2w2_badges.py`: 29 pruebas, ancladas a la captura real.
+- Suite completa: 1357.
+
 # v0.2.6-alpha.51 — la medalla ya llega al contador
 
 Alpha.50 leía las medallas y las tiraba: la rama de B2/W2 del monitor nunca

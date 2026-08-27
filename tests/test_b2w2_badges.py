@@ -253,3 +253,45 @@ def test_la_rama_de_b2w2_procesa_el_valor() -> None:
     assert "_process_oras_badge_value" in rama[:corte], (
         "la medalla se procesa después de la salud: un cambio de equipo la retrasaría"
     )
+
+
+# --------------------------------------------------------------------------
+# La captura física del usuario, que es lo que confirmó la dirección
+# --------------------------------------------------------------------------
+
+CAPTURA = Path(__file__).resolve().parent.parent / "diagnostics" / "manual" / (
+    "b2w2_badges_latest.json"
+)
+
+
+@pytest.fixture(scope="module")
+def captura():
+    import json
+
+    if not CAPTURA.exists():
+        pytest.skip("No hay captura de medallas en este equipo.")
+    return json.loads(CAPTURA.read_text(encoding="utf-8"))
+
+
+def test_la_captura_confirma_la_direccion(captura) -> None:
+    """Con una medalla conseguida, ese byte tenía que valer exactamente 0x01."""
+    assert captura["direccion_en_produccion"] == f"0x{BADGES_ADDRESS:08X}"
+    assert captura["direccion_en_produccion_cuadra"] is True
+    assert captura["medallas_declaradas"] == 1
+    assert captura["valor_en_produccion"] == "0x01"
+
+
+def test_el_otro_candidato_no_tiene_nada_detras(captura) -> None:
+    """En el volcado hay otro byte que vale 0x01, y es una coincidencia.
+
+    Cualquier byte a uno encaja cuando solo se tiene una medalla. Lo que
+    distingue a `dinero+4` es que la predijo PKHeX **antes** de mirar la RAM;
+    el otro candidato no tiene ninguna teoría detrás. La siguiente medalla lo
+    separará del todo: el bueno pasará a 0x03 y el otro no tiene por qué.
+    """
+    coincidentes = [c for c in captura["candidatos"] if c["distancia_al_dinero"] == 4]
+
+    assert len(coincidentes) == 1, "dinero+4 tiene que estar entre los candidatos"
+    assert len(captura["candidatos"]) <= 4, (
+        "demasiadas coincidencias: una sola medalla no bastaría para elegir"
+    )

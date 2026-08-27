@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.51`
+- Versión de aplicación: `v0.2.6-alpha.52`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,27 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.52 — la dirección de medallas, confirmada contra el juego
+
+Con la Medalla Base ya conseguida, `0x022266A8` vale **0x01**: exactamente lo que
+predijo la deducción de PKHeX antes de mirar la RAM.
+
+Dos caminos independientes apuntan al mismo byte:
+
+1. **Antes de mirar**: en el guardado, cambiar `Misc5B2W2.Badges` mueve el byte
+   que está cuatro más allá del dinero.
+2. **Mirando**: ese byte tiene un bit encendido y el usuario tiene una medalla.
+
+En el volcado aparece un segundo byte que también vale `0x01` (`dinero−32`), y
+es una coincidencia esperable: con una sola medalla, cualquier byte a uno
+encaja. Lo que separa a `dinero+4` es que estaba predicho. La segunda medalla lo
+zanjará del todo —el bueno pasará a `0x03`— y hay una prueba anclada a la
+captura que lo deja escrito.
+
+- `tests/test_b2w2_badges.py`: 29 pruebas. Suite completa: 1357.
+- Queda por confirmar que el **contador de la cabecera** sube solo, que es lo
+  que arregló alpha.51.
 
 ### v0.2.6 Alpha.51 — la medalla ya llega al contador
 
