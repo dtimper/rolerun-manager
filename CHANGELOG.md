@@ -1,6 +1,32 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.17 — monitor que no se queda huérfano y sprites que no bloquean
+
+- **R1 corregido.** Si el usuario guardaba dentro del juego mientras una lectura
+  del monitor estaba en vuelo, el watcher invalidaba el token, se encontraba el
+  cerrojo puesto y no armaba nada; el worker viejo terminaba, soltaba el cerrojo
+  y descartaba su resultado sin reprogramar. La sesión quedaba viva y sin nadie
+  leyendo hasta el siguiente guardado. Ahora el worker obsoleto rearma el
+  monitor si la sesión sigue activa. Se corrige ahí, y no soltando el cerrojo
+  antes, porque eso permitiría capturas solapadas sobre readers sin lock.
+- **Error ≠ dato.** `_oras_live_snapshot_matches_disk` devolvía `False` tanto si
+  la comparación con `main` demostraba una diferencia como si el motor fallaba
+  al leer. Ahora devuelve `None` cuando no se pudo comprobar, deja rastro del
+  error y RoleRun ya no adopta como buena una huella que nunca verificó:
+  conserva la expectativa anterior y reintenta en el siguiente ciclo.
+- **Sprites que ya no bloquean el arranque.** Sin Internet y sin la imagen en
+  disco, el worker terminaba en silencio; como la barrera inicial espera a todos
+  los sprites de la party, RoleRun podía quedarse en la pantalla de carga
+  indefinidamente. Ahora se publica una silueta dibujada localmente, con aviso
+  no bloqueante, y la partida se abre igual.
+- La descarga de sprites pasa a tener límite de tiempo (8 s); `urlretrieve` no
+  admitía ninguno y una red no enrutada podía colgar el hilo para siempre.
+- Se deduplican las peticiones: seis tarjetas de la misma especie abrían seis
+  hilos compitiendo por el mismo archivo temporal.
+- Al recargar la partida se reintentan solo las imágenes que quedaron ausentes.
+- Baseline completa: **935 passed**.
+
 # v0.2.6-alpha.16 — retirada B2/W2 y botón CURAR coherente
 
 - **B1 corregido.** Retirar del PC al equipo (`box-to-party`) era imposible: el

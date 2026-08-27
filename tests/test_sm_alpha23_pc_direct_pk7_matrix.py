@@ -129,7 +129,7 @@ def _fixture(*, occupied: list[tuple[int, int]], leading_empty_slots: int = 0):
 
 
 def test_alpha23_version() -> None:
-    assert APP_VERSION == "0.2.6-alpha.16"
+    assert APP_VERSION == "0.2.6-alpha.17"
 
 
 def test_alpha23_zero_sanity_prefilter_skips_huge_zero_area_but_keeps_pk7() -> None:

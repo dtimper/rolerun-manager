@@ -19,7 +19,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
-from PIL import Image, ImageEnhance, ImageGrab, ImageTk
+from PIL import Image, ImageDraw, ImageEnhance, ImageGrab, ImageTk
 
 from .config import (
     APP_NAME,
@@ -142,6 +142,10 @@ AZAHAR_REALTIME_GAME_KEYS = {"oras", "xy", "sm", "usum"}
 REALTIME_READ_GAME_KEYS = AZAHAR_REALTIME_GAME_KEYS | {"bdsp", "b2w2"}
 INSTANT_REALTIME_UI_GAME_KEYS = AZAHAR_REALTIME_GAME_KEYS | {"bdsp", "b2w2"}
 AUTOMATIC_BADGE_GAME_KEYS = {"oras", "xy", "sm", "usum"}
+# Sin este límite, una descarga de sprite sin red enrutada podía quedarse
+# colgada indefinidamente. La barrera inicial espera a los sprites, así que ese
+# cuelgue dejaba RoleRun en la pantalla de carga para siempre.
+SPRITE_DOWNLOAD_TIMEOUT_SECONDS = 8.0
 
 
 class RoleRunManager(ctk.CTk):
@@ -450,6 +454,9 @@ class RoleRunManager(ctk.CTk):
         # solo después de una escritura de RoleRun. Tres fallos consecutivos
         # devuelven el flujo al detector automático de entrada a partida.
         self._oras_live_monitor_failures = 0
+        # Última vez que no se pudo comparar la RAM con ``main``. Un error de
+        # lectura no puede quedar indistinguible de «no coincide».
+        self._oras_live_disk_compare_error: str | None = None
         # Los cambios compatibles que se crean después de F5 se agrupan durante
         # un instante para que una acción compuesta (p. ej. transferir un rol)
         # llegue a Azahar en una sola escritura verificada, sin pulsar Guardar.
@@ -484,6 +491,11 @@ class RoleRunManager(ctk.CTk):
         self.draft_card_images: list[ctk.CTkImage] = []
         self._sprite_refresh_scheduled = False
         self.sprite_pil_cache: dict[int, Image.Image] = {}
+        # Especies mostradas con silueta local por no haber podido
+        # descargar su imagen. Se reintenta al recargar la partida.
+        self._sprite_placeholder_species: set[int] = set()
+        # Evita abrir varias descargas de la misma especie a la vez.
+        self._sprite_requests_in_flight: set[int] = set()
         self.sprite_buttons: dict[int, ctk.CTkButton] = {}
         self.sprite_queue: queue.Queue[tuple[int, int, Image.Image]] = queue.Queue()
         self.draft_icon_image: ctk.CTkImage | None = None
@@ -9263,19 +9275,32 @@ class RoleRunManager(ctk.CTk):
             self._smooth_render_page(preserve_scroll=(self.active_page == "team"))
         self._schedule_team_integrity_check()
 
-    def _oras_live_snapshot_matches_disk(self, snapshot) -> bool:
+    def _oras_live_snapshot_matches_disk(self, snapshot) -> bool | None:
         """Comprueba un posible Reset solo cuando la party viva realmente cambió.
 
         Leer ``main`` en cada tick sería innecesario. Esta comparación se hace
         únicamente ante una diferencia respecto a la vista actual y permite
         distinguir un Reset/state-load de una edición normal realizada jugando.
+
+        Devuelve ``None`` cuando **no se pudo comprobar**: sin partida asociada o
+        con el motor fallando al leer ``main``. Antes ese caso se confundía con
+        un ``False`` demostrado, de modo que un error transitorio del motor se
+        interpretaba como «el usuario editó dentro del juego» y RoleRun daba por
+        buena una huella que nunca llegó a verificar. Un desconocido no es un
+        dato: quien pregunte debe reintentar, no decidir.
         """
         if not self.current_save:
-            return False
+            return None
         try:
             saved = self.save_engine.read(self.current_save.path)
-        except Exception:
-            return False
+        except Exception as exc:
+            # El fallo deja de ser invisible: sin este rastro, una comparación
+            # que nunca llega a hacerse parece una comparación negativa.
+            self._oras_live_disk_compare_error = (
+                f"{datetime.now().isoformat(timespec='seconds')} · {exc}"
+            )
+            return None
+        self._oras_live_disk_compare_error = None
         return live_party_fingerprint(saved) == live_party_fingerprint(snapshot.game)
 
     def _finish_oras_live_reconciliation(
@@ -9286,6 +9311,20 @@ class RoleRunManager(ctk.CTk):
         # termina, liberamos el cerrojo. El resultado viejo seguirá ignorándose.
         self._oras_live_monitor_in_progress = False
         if token != self._oras_live_monitor_token:
+            # R1: el token queda obsoleto cuando algo reinicia la reconciliación
+            # con este worker en vuelo, típicamente el SaveFileWatcher al
+            # detectar el guardado del propio juego. Quien invalidó el token ya
+            # intentó reprogramar el monitor, pero se encontró el cerrojo puesto
+            # y retornó sin dejar nada armado. Si soltáramos aquí el cerrojo sin
+            # más, la sesión quedaría con _oras_live_active=True y sin nadie
+            # leyendo hasta el siguiente guardado.
+            #
+            # Se rearma aquí, y no limpiando el cerrojo en
+            # _clear_oras_live_reconciliation, porque esto último permitiría que
+            # arrancara una captura nueva mientras esta sigue en vuelo, sobre
+            # readers con estado mutable y sin lock.
+            if self._oras_live_reconciliation_is_active():
+                self._schedule_oras_live_reconciliation(650)
             return
         if (
             generation != self._session_generation
@@ -9645,7 +9684,10 @@ class RoleRunManager(ctk.CTk):
                 self._oras_live_changes_unpersisted
                 and expected_now is not None
                 and actual != expected_now
-                and self._oras_live_snapshot_matches_disk(snapshot)
+                # ``is True`` explícito: si no se pudo leer ``main`` la respuesta
+                # es ``None`` y no se declara un Reset con una comprobación que
+                # nunca llegó a hacerse. Se reintenta en el siguiente ciclo.
+                and self._oras_live_snapshot_matches_disk(snapshot) is True
             )
 
             if looks_like_reload or memory_changed:
@@ -10153,9 +10195,11 @@ class RoleRunManager(ctk.CTk):
         # En alpha.30 una diferencia puede ser una acción legítima hecha dentro
         # del juego. Solo la tratamos como Reset cuando coincide con el main; de
         # lo contrario F5 amplía la nueva huella viva sin borrar REVISAR CAMBIOS.
-        party_recovered = bool(
-            differs_from_expected and self._oras_live_snapshot_matches_disk(snapshot)
+        matches_disk = (
+            self._oras_live_snapshot_matches_disk(snapshot)
+            if differs_from_expected else False
         )
+        party_recovered = bool(differs_from_expected and matches_disk is True)
         memory_recovered = bool(
             self._oras_live_changes_unpersisted
             and not self._oras_live_memory_watches_match(snapshot)
@@ -10164,7 +10208,12 @@ class RoleRunManager(ctk.CTk):
         if recovered:
             self._reconcile_oras_live_memory_watches(snapshot)
             self._clear_oras_live_reconciliation()
-        elif self._oras_live_changes_unpersisted:
+        elif self._oras_live_changes_unpersisted and matches_disk is not None:
+            # Solo se adopta la huella viva como nueva expectativa cuando la
+            # comparación con ``main`` se pudo hacer de verdad. Si el motor
+            # falló, conservamos la expectativa anterior y se reintenta en el
+            # siguiente ciclo; adoptarla a ciegas destruiría la capacidad de
+            # detectar el Reset más tarde.
             self._oras_live_expected_fingerprint = fingerprint
 
         # La primera conexión también puede llegar después de que el usuario
@@ -11287,6 +11336,9 @@ class RoleRunManager(ctk.CTk):
         self._clear_oras_live_reconciliation()
         self.engine.set_allowed_moves(allowed_move_ids)
         self.run.save_path = info.path
+        # Recargar la partida es el momento prometido en el aviso: si antes
+        # faltó Internet, se vuelve a intentar la descarga de esas imágenes.
+        self._retry_placeholder_sprites()
         result = self._sync_obs_state(data)
         self.sync_status = "⚠ Conflicto de roles" if result.get("status") == "conflict" else "✓ Sincronizado con el guardado"
         for pokemon in data.party:
@@ -19911,32 +19963,93 @@ class RoleRunManager(ctk.CTk):
         self.after(90, refresh)
 
 
+    @staticmethod
+    def _placeholder_sprite_image(size: int = 92) -> Image.Image:
+        """Silueta local para una especie cuyo sprite no se pudo obtener.
+
+        Se dibuja con Pillow, sin red, sin tipografías y sin depender de ningún
+        archivo: es justo el caso en el que no hay Internet. Debe leerse como
+        una ausencia intencionada, no como una tarjeta rota.
+        """
+        image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        margen = size // 8
+        draw.ellipse(
+            (margen, margen, size - margen, size - margen),
+            outline=(122, 122, 122, 190), width=max(2, size // 26),
+        )
+        centro = size / 2
+        radio = size / 5.5
+        draw.ellipse(
+            (centro - radio, centro - radio, centro + radio, centro + radio),
+            outline=(122, 122, 122, 150), width=max(2, size // 34),
+        )
+        draw.line(
+            (margen, centro, centro - radio, centro),
+            fill=(122, 122, 122, 150), width=max(2, size // 34),
+        )
+        draw.line(
+            (centro + radio, centro, size - margen, centro),
+            fill=(122, 122, 122, 150), width=max(2, size // 34),
+        )
+        return image
+
     def _load_sprite_async(self, pokemon: SavePokemon) -> None:
-        cached = SPRITE_DIR / f"{pokemon.species_id}.png"
+        species_id = int(getattr(pokemon, "species_id", 0) or 0)
+        if species_id <= 0:
+            return
+        # Sin este dedupe, seis tarjetas de la misma especie abrían seis hilos
+        # descargando el mismo archivo y compitiendo por el mismo temporal.
+        if species_id in self._sprite_requests_in_flight:
+            return
+        self._sprite_requests_in_flight.add(species_id)
+        cached = SPRITE_DIR / f"{species_id}.png"
+        slot = pokemon.slot
 
         def worker() -> None:
+            image = None
             try:
                 if not cached.exists():
                     url = (
                         "https://raw.githubusercontent.com/PokeAPI/sprites/master/"
-                        f"sprites/pokemon/other/home/{pokemon.species_id}.png"
+                        f"sprites/pokemon/other/home/{species_id}.png"
                     )
-                    temp = cached.with_suffix(".tmp")
-                    urllib.request.urlretrieve(url, temp)
+                    # ``urlretrieve`` no admite timeout: sin red enrutada podía
+                    # quedarse colgado indefinidamente y, como la barrera inicial
+                    # espera a los sprites, dejaba RoleRun en la pantalla de
+                    # carga para siempre.
+                    with urllib.request.urlopen(
+                        url, timeout=SPRITE_DOWNLOAD_TIMEOUT_SECONDS,
+                    ) as response:
+                        payload = response.read()
+                    temp = cached.with_suffix(f".{threading.get_ident()}.tmp")
+                    temp.write_bytes(payload)
                     temp.replace(cached)
                 image = Image.open(cached).convert("RGBA")
                 image.thumbnail((92, 92), Image.Resampling.LANCZOS)
-                self.sprite_queue.put((pokemon.slot, pokemon.species_id, image.copy()))
+                image = image.copy()
             except Exception:
-                # La ficha sigue siendo plenamente utilizable aunque no haya Internet.
-                return
+                # La ficha sigue siendo plenamente utilizable aunque no haya
+                # Internet. Se publica igualmente para que quien espera sprites
+                # deje de esperar; el hilo Tk decidirá el placeholder.
+                image = None
+            self.sprite_queue.put((slot, species_id, image))
 
-        threading.Thread(target=worker, daemon=True).start()
+        threading.Thread(
+            target=worker, daemon=True, name=f"RoleRunSprite{species_id}",
+        ).start()
 
     def _poll_sprite_queue(self) -> None:
+        faltantes: list[int] = []
         try:
             while True:
                 slot, species_id, image = self.sprite_queue.get_nowait()
+                self._sprite_requests_in_flight.discard(species_id)
+                if image is None:
+                    image = self._placeholder_sprite_image()
+                    if species_id not in self._sprite_placeholder_species:
+                        self._sprite_placeholder_species.add(species_id)
+                        faltantes.append(species_id)
                 self.sprite_pil_cache[species_id] = image
                 self._apply_sprite(slot, image)
                 if self.project and self.current_game:
@@ -19944,8 +20057,33 @@ class RoleRunManager(ctk.CTk):
                 self._schedule_sprite_page_refresh()
         except queue.Empty:
             pass
+        if faltantes:
+            self._notify_missing_sprites(faltantes)
         if self.winfo_exists():
             self.after(100, self._poll_sprite_queue)
+
+    def _notify_missing_sprites(self, species_ids: list[int]) -> None:
+        """Aviso no bloqueante: RoleRun sigue funcionando sin los sprites."""
+        cantidad = len(species_ids)
+        sujeto = "una imagen" if cantidad == 1 else f"{cantidad} imágenes"
+        try:
+            self._show_live_sync_toast(
+                "IMÁGENES NO DISPONIBLES",
+                f"No se pudo descargar {sujeto} de Pokémon y se muestra una "
+                "silueta en su lugar. Es solo la imagen: los datos, los roles y "
+                "el seguimiento en vivo funcionan con normalidad. Se intentará "
+                "de nuevo la próxima vez que se recargue la partida.",
+                False,
+            )
+        except Exception:
+            # Un aviso jamás puede impedir que la partida se publique.
+            pass
+
+    def _retry_placeholder_sprites(self) -> None:
+        """Permite reintentar la descarga en la siguiente recarga de partida."""
+        for species_id in tuple(self._sprite_placeholder_species):
+            self.sprite_pil_cache.pop(species_id, None)
+        self._sprite_placeholder_species.clear()
 
     def _apply_sprite(self, slot: int, image: Image.Image) -> None:
         button = self.sprite_buttons.get(slot)

@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.16`
+- Versión de aplicación: `v0.2.6-alpha.17`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,28 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.17 — monitor huérfano, error≠dato y sprites no bloqueantes
+
+Tres riesgos de la auditoría, los tres con regresión determinista y sin
+depender de emulador.
+
+El monitor vivo podía quedarse huérfano en cada guardado del juego: el watcher
+reiniciaba la reconciliación con una lectura en vuelo, no lograba armar nada por
+el cerrojo, y el worker viejo terminaba sin reprogramar. La sesión quedaba con
+`_oras_live_active=True` y sin lecturas. El rearme se hace ahora en el cierre del
+worker obsoleto, no soltando el cerrojo antes, para no permitir capturas
+solapadas sobre readers con estado mutable y sin lock.
+
+La comparación de la RAM con `main` confundía un fallo del motor con un «no
+coincide» demostrado, y con eso RoleRun adoptaba como expectativa una huella que
+no había podido verificar. Ahora distingue los tres casos y reintenta.
+
+La ausencia de un sprite ya no puede dejar RoleRun en la pantalla de carga: se
+dibuja una silueta local, se avisa sin bloquear y la partida se abre. La descarga
+tiene límite de tiempo y las peticiones se deduplican.
+
+Baseline completa: **935 passed**.
 
 ### v0.2.6 Alpha.16 — retirada B2/W2 posible y CURAR coherente
 
