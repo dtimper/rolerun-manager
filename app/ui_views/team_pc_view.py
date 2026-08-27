@@ -119,6 +119,7 @@ class UnifiedTeamPCView:
         on_action: Callable[[str, Any], None],
         on_role_info: Callable[[str], None],
         on_heal_party: Callable[[], None] | None = None,
+        on_fix_roles: Callable[[], None] | None = None,
         on_drop: Callable[[str, Any, str, dict[str, Any]], None] | None = None,
         can_drop: Callable[[str, Any, str, dict[str, Any]], bool] | None = None,
         on_select: Callable[[str, Any], None] | None = None,
@@ -154,6 +155,7 @@ class UnifiedTeamPCView:
         self.on_action = on_action
         self.on_role_info = on_role_info
         self.on_heal_party = on_heal_party
+        self.on_fix_roles = on_fix_roles
         self.on_drop = on_drop
         self.can_drop = can_drop
         self.on_select = on_select
@@ -450,6 +452,14 @@ class UnifiedTeamPCView:
                 hover_color="#303030", border_width=1, border_color=GOLD,
                 text_color=GOLD, font=ctk.CTkFont("Segoe UI", 11, "bold"),
             ).pack(side="right")
+        # Solo aparece si hay algo que fijar: un botón que no hace nada estorba.
+        if self.on_fix_roles is not None and not self.mode_banner:
+            ctk.CTkButton(
+                heading, text="◆  FIJAR ROLES", command=self.on_fix_roles,
+                width=126, height=30, corner_radius=8, fg_color="transparent",
+                hover_color="#332B1D", border_width=1, border_color=GOLD,
+                text_color=GOLD, font=ctk.CTkFont("Segoe UI", 11, "bold"),
+            ).pack(side="right", padx=(0, 6))
         slots = ctk.CTkFrame(self.team_panel, fg_color="transparent")
         slots.pack(
             fill="both", expand=True, padx=9,

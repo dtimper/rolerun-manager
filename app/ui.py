@@ -13145,6 +13145,11 @@ class RoleRunManager(ctk.CTk):
                 if faint_mode is None and self._live_party_heal_available()
                 else None
             ),
+            on_fix_roles=(
+                self.fijar_roles_del_equipo
+                if faint_mode is None and self._roles_pendientes_de_fijar()
+                else None
+            ),
             on_drop=None if faint_mode is not None else self._team_pc_drop,
             can_drop=None if faint_mode is not None else self._team_pc_can_drop,
             on_select=self._team_pc_select,
@@ -19075,6 +19080,84 @@ class RoleRunManager(ctk.CTk):
         if selected is None:
             return None
         return tuple(252 if key in selected else 0 for key in STAT_KEYS)  # type: ignore[return-value]
+
+    def _roles_pendientes_de_fijar(self) -> list[tuple[SavePokemon, str]]:
+        """Miembros SIN ROL, con el rol de la casilla que ya ocupan.
+
+        La casilla manda, que es la misma regla que sigue un Pokémon al entrar
+        desde el PC. Aquí no se inventa ningún reparto: se confirma el que la
+        vista lleva enseñando.
+        """
+        if not self.project:
+            return []
+        pendientes: list[tuple[SavePokemon, str]] = []
+        for casilla in build_fixed_team_slots(
+            list(self._projected_party()),
+            lambda pokemon: self._effective_role(pokemon)[0],
+            self._pokemon_identity,
+        ):
+            pokemon = casilla.get("pokemon")
+            if pokemon is None or casilla.get("state") != "preparation":
+                continue
+            if str(casilla.get("occupant_role") or "") != "SIN ROL":
+                # Ocupa una casilla ajena pero YA tiene rol propio: eso es una
+                # decisión del usuario, no algo por fijar.
+                continue
+            pendientes.append((pokemon, str(casilla["slot_role"])))
+        return pendientes
+
+    def fijar_roles_del_equipo(self) -> None:
+        """Asigna de una vez el rol de su casilla a todos los que no tengan.
+
+        Vive en la capa común, así que sirve para los diez juegos: lo único que
+        hace es encolar los mismos `PendingRoleChange` que crea el editor de rol
+        uno a uno, y cada backend los escribe como ya sabe.
+        """
+        pendientes = self._roles_pendientes_de_fijar()
+        if not pendientes:
+            self._set_operation_status(
+                "warning", "NO HAY ROLES QUE FIJAR",
+                "Todos los miembros del equipo ya tienen su rol asignado.",
+            )
+            return
+
+        # El Líbero es el único que necesita una decisión: qué dos estadísticas
+        # sube. Se pregunta antes de tocar nada, y si se cancela no se fija
+        # ninguno: mejor eso que dejar el equipo a medias.
+        libero = next(
+            ((pokemon, rol) for pokemon, rol in pendientes if rol == "Líbero"), None,
+        )
+        if libero is not None and self._active_azahar_realtime_key() in ROLE_EV_WRITER_GAME_KEYS:
+            self._prompt_libero_ev_stats(
+                libero[0],
+                lambda stats: self._fijar_roles_confirmado(pendientes, stats),
+            )
+            return
+        self._fijar_roles_confirmado(pendientes, ())
+
+    def _fijar_roles_confirmado(
+        self, pendientes: list[tuple[SavePokemon, str]], libero_stats: tuple[str, ...],
+    ) -> None:
+        pending_ids_before = {id(change) for change in self.run.pending_changes}
+        fijados: list[str] = []
+        for pokemon, rol in pendientes:
+            # Sin refrescar en cada uno: la vista se reconstruye una sola vez al
+            # final. Con seis miembros eso son seis reconstrucciones menos.
+            self._apply_role_assignment(
+                pokemon, rol, refresh=False,
+                libero_stats=libero_stats if rol == "Líbero" else (),
+            )
+            fijados.append(f"{pokemon.nickname or pokemon.species} · {rol}")
+
+        self._smooth_render_page(preserve_scroll=(self.active_page == "team"))
+        self._sync_live_layout()
+        self._set_operation_status(
+            "prepared",
+            f"{len(fijados)} ROL(ES) FIJADO(S)",
+            " · ".join(fijados),
+            actions=("Revisar cambios",) if self.run.pending_changes else (),
+        )
+        self._request_oras_live_auto_apply_since(pending_ids_before)
 
     def _apply_role_assignment(
         self, pokemon: SavePokemon, role: str, window=None, refresh: bool = True,

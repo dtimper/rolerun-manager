@@ -1,6 +1,18 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.68 — FIJAR ROLES, en los diez juegos
+
+Botón en la cabecera de EQUIPO que asigna de una vez el rol de su casilla a
+todos los que no tengan. Sin ramas por juego: encola los mismos
+`PendingRoleChange` que el editor uno a uno.
+
+- La casilla manda; quien ya tiene rol propio no se toca.
+- Al Líbero se le preguntan sus dos estadísticas antes de tocar nada, y si se
+  cancela no se fija ninguno.
+- El botón solo aparece si hay algo que fijar. Una sola reconstrucción al final.
+- `tests/test_fijar_roles.py`: 21 pruebas. Suite completa: 1424.
+
 # v0.2.6-alpha.67 — el paso entre filas era 0x224, no 0x228
 
 Alpha.65 restó el **inicio** de una fila menos el **campo de PS** de otra, que va

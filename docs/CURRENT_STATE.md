@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.67`
+- Versión de aplicación: `v0.2.6-alpha.68`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,30 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.68 — FIJAR ROLES, en los diez juegos
+
+Botón nuevo en la cabecera de EQUIPO. Asigna de una vez el rol de su casilla a
+todos los miembros que no tengan rol, en vez de abrir el editor uno por uno.
+
+**Y el usuario tenía razón**: esto es del programa y no de ningún juego, así que
+entra en los diez a la vez. No hay ninguna rama por juego — lo único que hace es
+encolar los mismos `PendingRoleChange` que crea el editor de rol, y cada backend
+los escribe como ya sabe. Una prueba lo recorre con las diez claves.
+
+**La regla: la casilla manda.** Es la misma que sigue un Pokémon al entrar desde
+el PC, así que no se inventa ningún reparto: se confirma el que la vista lleva
+enseñando. Un Pokémon que ocupa una casilla ajena pero **ya tiene rol propio** no
+se toca, porque eso es una decisión del usuario.
+
+**El Líbero** es el único que necesita decidir algo —qué dos estadísticas sube—,
+así que se pregunta antes de tocar nada, reutilizando el selector que ya existía.
+Si se cancela **no se fija ninguno**: mejor eso que dejar el equipo a medias.
+
+Detalles: el botón solo aparece si hay algo que fijar, y la vista se reconstruye
+una sola vez al final en lugar de una por Pokémon.
+
+- `tests/test_fijar_roles.py`: 21 pruebas. Suite completa: 1424.
 
 ### v0.2.6 Alpha.67 — el paso entre filas era 0x224, no 0x228
 
