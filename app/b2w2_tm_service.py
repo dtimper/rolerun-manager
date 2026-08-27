@@ -1,34 +1,35 @@
 from __future__ import annotations
 
-"""Tabla MT/MO de quinta generación **de referencia**, extraída de PKHeX.
+"""Perfil de MT de Pokémon Negro 2 y Blanco 2.
 
-ESTO NO ES LA FUENTE DE VERDAD DE UNA PARTIDA.
+DE DÓNDE SALE QUÉ ENSEÑA CADA MT
 
-RoleRun está pensado para jugarse en randomizers, y un randomizer puede cambiar
-qué movimiento enseña cada MT. Esta tabla describe la quinta generación
-original, así que solo es correcta en una partida sin randomizar. La tabla buena
-es la que el juego tiene cargada en memoria, y se lee en vivo como el resto de
-B2/W2.
+Del juego en marcha, no de una tabla guardada. RoleRun está pensado para jugarse
+en **randomizers**, y un randomizer cambia qué movimiento enseña cada MT: una
+tabla extraída de PKHeX una sola vez describe la quinta generación original y
+mentiría en cuanto la partida estuviera randomizada.
 
-Para qué sirve entonces: es la **referencia con la que se localiza y se valida**
-esa tabla viva. En una partida no randomizada, el tramo de RAM correcto tiene
-que coincidir movimiento a movimiento con esta lista, y esa coincidencia es la
-que demuestra la dirección por un segundo camino independiente de su forma.
-Ver `tools_b2w2_tm_table_capture.py`.
+La lista vive en `b2w2_live.TM_TABLE_BASE`, demostrada el 27-08-2026: en los
+4 MiB de RAM hay un único tramo con esa forma y, indexado por objeto, coincide
+101 de 101 con la lista derivada de PKHeX. Un randomizer cambia el contenido de
+esa tabla, no su posición.
 
-Lo que sí es fijo, randomizada la partida o no, es qué objeto es cada MT: MT01
-es el objeto 328 y MT21 el 348 en cualquier B2/W2.
+LO QUE SÍ ES FIJO
 
-La lista no se copió a mano de ninguna parte. `tools_extract_gen5_tm` la **deriva** de
-la propia lógica de PKHeX: enciende un solo bit de MT en una ficha personal en
-blanco y pregunta qué movimiento queda enseñable. Comprobado contra hechos
-independientes: MT21 = Frustración (la MT que el usuario tiene en su partida),
-MO01–MO06 = Corte, Vuelo, Surf, Fuerza, Cascada y Buceo —Buceo como MO06 es
-propio de B2/W2, no de Negro/Blanco—, y los 101 índices dan 101 movimientos
-distintos.
+Qué objeto es cada MT. MT01 es el objeto 328 y MT21 el 348 en cualquier B2/W2,
+randomizada o no. El juego guarda la lista **en orden de objeto**: MT01–MT92
+(328–419), MO01–MO06 (420–425) y MT93–MT95 (618–620).
 
-Los identificadores de objeto salen de la misma tabla de PKHeX que ya validó
-físicamente la mochila real del usuario (MT21 = objeto 348).
+LO QUE NO ENTRA
+
+Las seis MO. La interfaz rotula cada entrada como `MT<número>`, así que una MO
+aparecería con un número que no es el suyo; y en quinta generación un movimiento
+aprendido por MO no se puede olvidar dentro del juego. Sus posiciones se leen
+igual —van en medio de la tabla— pero no se publican como MT.
+
+Y la compatibilidad por especie, que RoleRun ignora a propósito: quién puede
+aprender una MT lo decide el **rol** del Pokémon (ver `_build_tm_candidates` en
+`app/ui.py`).
 """
 
 from dataclasses import dataclass
@@ -36,27 +37,42 @@ from functools import lru_cache
 import json
 from pathlib import Path
 
+from .b2w2_live import TM_TABLE_COUNT
+
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-_TM_TABLE_PATH = _DATA_DIR / "b2w2_tm_table.json"
+_REFERENCE_PATH = _DATA_DIR / "b2w2_tm_table.json"
 _MOVE_PP_PATH = _DATA_DIR / "b2w2_move_pp.json"
+
+# Los objetos, en el orden en que el juego los guarda. Tres tramos contiguos.
+TM_TABLE_ITEM_IDS: tuple[int, ...] = (
+    *range(328, 420),     # MT01 - MT92
+    *range(420, 426),     # MO01 - MO06
+    *range(618, 621),     # MT93 - MT95
+)
+# Qué es cada posición: ("TM", 1) … ("HM", 1) … ("TM", 93) …
+TM_TABLE_SLOTS: tuple[tuple[str, int], ...] = (
+    *(("TM", n) for n in range(1, 93)),
+    *(("HM", n) for n in range(1, 7)),
+    *(("TM", n) for n in range(93, 96)),
+)
+assert len(TM_TABLE_ITEM_IDS) == len(TM_TABLE_SLOTS) == TM_TABLE_COUNT
 
 
 class B2W2TMError(RuntimeError):
-    """La tabla de MT de B2/W2 no está disponible o no es coherente."""
+    """El perfil de MT de B2/W2 no se puede construir con datos demostrados."""
 
 
 @dataclass(frozen=True, slots=True)
 class B2W2TM:
-    number: int
+    number: int        # número real de MT: 1-95
     item_id: int
     move_id: int
-    kind: str          # "TM" o "HM"
-    label: str         # MT21, MO03…
+    label: str         # MT21
 
 
 @dataclass(frozen=True, slots=True)
 class B2W2TMProfile:
-    source: Path
+    source: str
     tms: dict[int, B2W2TM]
     move_base_pp: dict[int, int]
 
@@ -72,55 +88,70 @@ class B2W2TMProfile:
         return int(self.move_base_pp.get(int(move_id), 0))
 
 
-def _numero_unico(entrada: dict) -> int:
-    """Las MO se numeran detrás de las MT para no chocar con ellas.
-
-    La interfaz indexa el perfil por un solo número, así que MO01 pasa a ser 96
-    y no un segundo «1». El rótulo visible se conserva en ``label``.
-    """
-    numero = int(entrada["numero"])
-    return numero + 95 if str(entrada["tipo"]) == "HM" else numero
+@lru_cache(maxsize=1)
+def _move_base_pp() -> dict[int, int]:
+    try:
+        documento = json.loads(_MOVE_PP_PATH.read_text(encoding="utf-8-sig"))
+    except OSError as exc:
+        raise B2W2TMError("Falta data/b2w2_move_pp.json.") from exc
+    return {int(clave): int(valor) for clave, valor in documento.get("pp", {}).items()}
 
 
 @lru_cache(maxsize=1)
-def load_b2w2_tm_profile() -> B2W2TMProfile:
+def reference_move_ids() -> tuple[int, ...]:
+    """La lista derivada de PKHeX, reordenada al orden de objeto del juego.
+
+    No es la fuente de verdad de ninguna partida: sirve para **localizar y
+    validar** la tabla viva, que es la que manda. Ver
+    `tools_b2w2_tm_table_capture.py`.
+    """
     try:
-        documento = json.loads(_TM_TABLE_PATH.read_text(encoding="utf-8-sig"))
+        documento = json.loads(_REFERENCE_PATH.read_text(encoding="utf-8-sig"))
     except OSError as exc:
         raise B2W2TMError("Falta data/b2w2_tm_table.json.") from exc
-    entradas = list(documento.get("entradas", ()))
-    if not entradas:
-        raise B2W2TMError("La tabla de MT de B2/W2 está vacía.")
-
-    tms: dict[int, B2W2TM] = {}
-    for entrada in entradas:
-        numero = _numero_unico(entrada)
-        if numero in tms:
-            raise B2W2TMError(f"La MT/MO número {numero} está repetida en B2/W2.")
-        tms[numero] = B2W2TM(
-            number=numero,
-            item_id=int(entrada["item_id"]),
-            move_id=int(entrada["move_id"]),
-            kind=str(entrada["tipo"]),
-            label=str(entrada["etiqueta"]),
+    por_objeto = {
+        int(entrada["item_id"]): int(entrada["move_id"])
+        for entrada in documento.get("entradas", ())
+    }
+    faltan = [item for item in TM_TABLE_ITEM_IDS if item not in por_objeto]
+    if faltan:
+        raise B2W2TMError(
+            f"La referencia de MT no cubre el objeto #{faltan[0]}."
         )
-    # Dos MT que enseñaran el mismo movimiento, o que compartieran objeto,
-    # significarían que la extracción se ha desalineado. Mejor no publicarla.
+    return tuple(por_objeto[item] for item in TM_TABLE_ITEM_IDS)
+
+
+def build_tm_profile(move_ids, *, source: str) -> B2W2TMProfile:
+    """Construye el perfil a partir de la lista que el juego tiene cargada.
+
+    ``move_ids`` son los 101 movimientos en orden de objeto. Se publican solo
+    las 95 MT; las 6 MO se leen pero no entran (ver el encabezado del módulo).
+    """
+    movimientos = tuple(int(valor) for valor in move_ids)
+    if len(movimientos) != TM_TABLE_COUNT:
+        raise B2W2TMError(
+            f"La tabla de MT de B2/W2 tiene {len(movimientos)} entradas y no {TM_TABLE_COUNT}."
+        )
+
+    pp = _move_base_pp()
+    tms: dict[int, B2W2TM] = {}
+    for item_id, (tipo, numero), move_id in zip(
+        TM_TABLE_ITEM_IDS, TM_TABLE_SLOTS, movimientos,
+    ):
+        if tipo != "TM":
+            continue
+        tms[numero] = B2W2TM(
+            number=numero, item_id=item_id, move_id=move_id,
+            label=f"MT{numero:02d}",
+        )
+
+    # Dos MT que enseñaran lo mismo significarían que la lectura se ha
+    # desalineado. Antes de publicar medio perfil, se falla.
     if len({tm.move_id for tm in tms.values()}) != len(tms):
         raise B2W2TMError("Dos MT de B2/W2 enseñan el mismo movimiento.")
-    if len({tm.item_id for tm in tms.values()}) != len(tms):
-        raise B2W2TMError("Dos MT de B2/W2 comparten identificador de objeto.")
-
-    try:
-        pp_documento = json.loads(_MOVE_PP_PATH.read_text(encoding="utf-8-sig"))
-    except OSError as exc:
-        raise B2W2TMError("Falta data/b2w2_move_pp.json.") from exc
-    pp = {int(clave): int(valor) for clave, valor in pp_documento.get("pp", {}).items()}
-
     sin_pp = sorted(tm.label for tm in tms.values() if pp.get(tm.move_id, 0) <= 0)
     if sin_pp:
         raise B2W2TMError(
-            f"Estas MT enseñan un movimiento sin PP en quinta generación: {', '.join(sin_pp)}."
+            f"Estas MT enseñan un movimiento sin PP en quinta: {', '.join(sin_pp)}."
         )
-
-    return B2W2TMProfile(source=_TM_TABLE_PATH, tms=tms, move_base_pp=pp)
+    return B2W2TMProfile(source=str(source), tms=tms, move_base_pp=pp)

@@ -1,6 +1,23 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.41 — la tabla de MT, demostrada y leída en vivo
+
+**`0x02090C54`**, demostrada con la captura del usuario del 27-08-2026.
+
+- Un **solo** tramo en 4 MiB con la forma de una tabla de MT, y coincide **101
+  de 101** con la referencia de PKHeX. Forma y contenido señalan el mismo sitio.
+- La captura corrigió un supuesto: el juego guarda la lista en **orden de
+  objeto** (MT01–92, MO01–06, MT93–95), no de número de MT. La comparación dio
+  92/101 por eso; eran los mismos movimientos en otro orden.
+- `read_tm_table()` lee en vivo con doble lectura y valida la forma entera;
+  `read_tm_profile()` publica el perfil. Nada sale de una tabla de disco, que es
+  lo que exige jugar en randomizers.
+- Se publican las 95 MT; las 6 MO se leen pero no entran (la interfaz rotula
+  todo como `MT<número>`, y en quinta un movimiento de MO no se olvida en juego).
+- `tests/test_b2w2_tm_table.py` reescrito: 31 pruebas, cuatro de ellas ancladas
+  al archivo de la captura real. Suite completa: 1207.
+
 # v0.2.6-alpha.40 — la tabla de MT, replanteada para randomizers
 
 **Corrige un supuesto equivocado de alpha.39.** Alpha.39 extrajo la tabla

@@ -18,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.b2w2_live import DS_RAM_BASE  # noqa: E402
-from app.b2w2_tm_service import load_b2w2_tm_profile  # noqa: E402
+from app.b2w2_tm_service import reference_move_ids  # noqa: E402
 from tools_b2w2_tm_table_capture import (  # noqa: E402
     MOVIMIENTO_MAXIMO,
     TOTAL_MT,
@@ -27,8 +27,8 @@ from tools_b2w2_tm_table_capture import (  # noqa: E402
 
 
 def _referencia() -> list[int]:
-    perfil = load_b2w2_tm_profile()
-    return [perfil.tm(numero).move_id for numero in sorted(perfil.tms)]
+    """En orden de objeto, que es como el juego guarda la tabla."""
+    return list(reference_move_ids())
 
 
 def _ram(contenido: dict[int, list[int]], palabras: int = 4096) -> bytes:

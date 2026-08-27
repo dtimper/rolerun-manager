@@ -35,11 +35,12 @@ from pathlib import Path
 
 from app.b2w2_live import (
     DS_RAM_BASE,
+    TM_TABLE_BASE,
     B2W2LiveError,
     B2W2MelonDSReader,
     _KERNEL32,
 )
-from app.b2w2_tm_service import load_b2w2_tm_profile
+from app.b2w2_tm_service import reference_move_ids
 
 # RAM principal de la DS: 4 MiB a partir de 0x02000000.
 TAMANO_RAM = 0x00400000
@@ -122,8 +123,11 @@ def main() -> None:
     ram = _leer_ram(pid, base)
     candidatos = _candidatos(ram)
 
-    perfil = load_b2w2_tm_profile()
-    referencia = [perfil.tm(numero).move_id for numero in sorted(perfil.tms)]
+    # En ORDEN DE OBJETO, que es como el juego la guarda: MT01-92, MO01-06 y
+    # MT93-95. La primera version de esta herramienta la pedia en orden de
+    # numero de MT y por eso la captura del 27-08-2026 dio 92/101 en vez de
+    # 101/101: los mismos movimientos, colocados de otra manera.
+    referencia = list(reference_move_ids())
 
     exactos = [c for c in candidatos if c["movimientos"] == referencia]
     for candidato in candidatos:
@@ -144,6 +148,17 @@ def main() -> None:
     if len(candidatos) > 12:
         print(f"  ... y {len(candidatos) - 12} mas (todas en el archivo).")
 
+    conocida = next(
+        (c for c in candidatos if c["direccion"] == f"0x{TM_TABLE_BASE:08X}"), None,
+    )
+
+    print()
+    print(
+        f"Direccion ya demostrada (0x{TM_TABLE_BASE:08X}): "
+        + ("presente" if conocida else "NO APARECE")
+    )
+    if conocida:
+        print(f"  {conocida['coincidencias_con_pkhex']}/101 coinciden con la referencia.")
     print()
     if len(exactos) == 1:
         print(f"DEMOSTRADA: {exactos[0]['direccion']}")
@@ -170,6 +185,8 @@ def main() -> None:
         "referencia_pkhex": referencia,
         "candidatos": candidatos,
         "identicas_a_pkhex": [c["direccion"] for c in exactos],
+        "direccion_en_produccion": f"0x{TM_TABLE_BASE:08X}",
+        "direccion_en_produccion_presente": conocida is not None,
         "note": (
             "Diagnostico de solo lectura. Un tramo aqui no pasa a produccion "
             "mientras no sea el unico que cumple forma y contenido."

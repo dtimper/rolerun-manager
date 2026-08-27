@@ -67,6 +67,20 @@ MONEY_SIZE = 4
 # Es el tope que escribe la utilidad de RoleRun. Un limite mayor no esta
 # demostrado en B2/W2, asi que no se admite.
 MONEY_MAX = 999_999
+# Demostrado con la captura del 27-08-2026 (b2w2_tm_table_latest.json). En los
+# 4 MiB de RAM hay UN solo tramo con la forma de una tabla de MT —101 valores de
+# 16 bits seguidos, todos entre 1 y 559 y todos distintos— y, indexado por
+# objeto, coincide 101 de 101 con la lista derivada de PKHeX.
+#
+# El orden es el de los objetos, no el de los numeros de MT: MT01-MT92
+# (objetos 328-419), MO01-MO06 (420-425) y MT93-MT95 (618-620).
+#
+# Se lee en vivo justamente porque RoleRun se juega en randomizers: un
+# randomizer cambia el contenido de esta tabla, no su posicion.
+TM_TABLE_BASE = 0x02090C54
+TM_TABLE_COUNT = 101
+# Ultimo movimiento de quinta generacion.
+MOVE_ID_MAX = 559
 _BAG_LAYOUT_PATH = Path(__file__).resolve().parent.parent / "data" / "b2w2_bag_layout.json"
 
 
@@ -1557,6 +1571,28 @@ class B2W2MelonDSReader:
         if primera != segunda:
             raise B2W2LiveError("La memoria B2/W2 cambio durante la doble lectura.")
         return primera
+
+    @_serialized
+    def read_tm_table(self, party_read: B2W2PartyRead | None = None) -> tuple[int, ...]:
+        """Lee la lista MT/MO que el juego tiene cargada, en orden de objeto.
+
+        No se usa una tabla guardada en disco: RoleRun se juega en randomizers y
+        un randomizer cambia que movimiento ensena cada MT. Lo que no cambia es
+        la forma, y por eso se comprueba entera antes de publicarla.
+        """
+        lectura = party_read or self.read_party()
+        crudo = self._read_guest_twice(
+            lectura, TM_TABLE_BASE, TM_TABLE_COUNT * 2,
+        )
+        movimientos = struct.unpack(f"<{TM_TABLE_COUNT}H", crudo)
+        fuera = [m for m in movimientos if not 1 <= m <= MOVE_ID_MAX]
+        if fuera:
+            raise B2W2LiveError(
+                f"La tabla de MT B2/W2 contiene {fuera[0]}, que no es un movimiento de quinta."
+            )
+        if len(set(movimientos)) != TM_TABLE_COUNT:
+            raise B2W2LiveError("La tabla de MT B2/W2 repite un movimiento.")
+        return movimientos
 
     @_serialized
     def read_money(self, party_read: B2W2PartyRead | None = None) -> int:

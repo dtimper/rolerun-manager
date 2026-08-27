@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.40`
+- Versión de aplicación: `v0.2.6-alpha.41`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,28 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.41 — la tabla de MT, demostrada y leída en vivo
+
+**Dirección demostrada: `0x02090C54`** (captura del usuario, 27-08-2026).
+
+- En los 4 MiB de RAM hay **un solo** tramo con la forma de una tabla de MT: 101
+  movimientos de 16 bits seguidos, todos válidos y todos distintos.
+- Ese tramo coincide **101 de 101** con la lista derivada de PKHeX. Dos caminos
+  independientes —forma y contenido— señalan el mismo sitio.
+- La captura corrigió un supuesto: el juego guarda la lista en **orden de
+  objeto** (MT01–92 = 328–419, MO01–06 = 420–425, MT93–95 = 618–620), no en
+  orden de número de MT. La primera comparación dio 92/101 justo por eso; eran
+  los mismos movimientos colocados de otra manera.
+- `B2W2MelonDSReader.read_tm_table()` la lee en vivo con doble lectura y valida
+  forma completa. `B2W2RealTimeAdapter.read_tm_profile()` publica el perfil.
+- Se publican las **95 MT**. Las 6 MO se leen —van en medio de la tabla— pero no
+  entran: la interfaz rotula cada entrada como `MT<número>` y una MO saldría con
+  un número ajeno; además, en quinta un movimiento de MO no se olvida en juego.
+- `data/b2w2_tm_table.json` queda como **referencia** para localizar y validar.
+- Pendiente: conectar el perfil a la pantalla de MT y el writer de enseñanza.
+  Nota abierta: los PP salen todavía de una tabla de PKHeX, que un randomizer
+  también puede cambiar. Mismo caso que la curación; hay que resolverlo aparte.
 
 ### v0.2.6 Alpha.40 — la tabla de MT, replanteada para randomizers
 

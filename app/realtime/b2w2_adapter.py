@@ -7,10 +7,11 @@ from dataclasses import replace
 from pathlib import Path
 
 from ..b2w2_live import (
-    BAG_BASE, MONEY_MAX,
+    BAG_BASE, MONEY_MAX, TM_TABLE_BASE,
     STAT_ORDER_PERSONAL, B2W2LiveError, B2W2MelonDSReader, B2W2RoleWrite,
     PK5_PARTY_SIZE, PK5_STORED_SIZE, _crypt,
 )
+from ..b2w2_tm_service import build_tm_profile
 from ..models import (
     PendingInventoryChange, PendingPartyHeal, PendingRoleChange, PendingTeamChange,
 )
@@ -154,6 +155,18 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
                 "melonDS", mochila.process_id, 0, mochila.process_name,
             ),
             BAG_BASE,
+        )
+
+    def read_tm_profile(self):
+        """Publica qué enseña cada MT **según la partida que hay delante**.
+
+        No se sirve una tabla de disco: en un randomizer la MT21 puede enseñar
+        cualquier cosa. La lista se lee de la RAM y se valida entera antes de
+        publicarse; si no cuadra, no se publica un perfil a medias.
+        """
+        movimientos = self.reader.read_tm_table()
+        return build_tm_profile(
+            movimientos, source=f"melonDS · 0x{TM_TABLE_BASE:08X}",
         )
 
     def read_pc(
