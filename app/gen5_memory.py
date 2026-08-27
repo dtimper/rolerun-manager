@@ -106,12 +106,17 @@ GEN5_MEMORY: dict[str, Gen5Memory] = {
     # que en Negro 2: de 381 tramos con la forma correcta, uno solo coincide
     # 101 de 101 con la lista derivada de PKHeX.
     #
-    # Las copias de batalla están LOCALIZADAS pero todavía no ORDENADAS. La
-    # búsqueda por firma encontró exactamente dos filas —0x0226D670 y
-    # 0x0226E348— que comparten especie, PS máximos, habilidad y nivel con el
-    # Pokémon en combate. Cuál de las dos manda en pantalla solo se ve con una
-    # traza temporal, porque fuera de la animación las dos dicen lo mismo, y
-    # equivocarse adelantaría el KO a la animación. Hasta entonces valen None.
+    # Las copias de batalla siguen sin demostrarse, y la traza temporal del
+    # 27-08-2026 explicó por qué: de las dos filas que había encontrado la
+    # búsqueda por firma, solo `0x0226D670` describe de verdad al Pokémon del
+    # jugador —bajó de 24 a 9 PS al recibir el golpe—. La otra, `0x0226E348`,
+    # resultó tener un Pansear a nivel 3342: coincidió una vez por azar.
+    #
+    # En Negro 2 las dos copias buenas describen AL MISMO Pokémon y la lógica
+    # se adelanta a la de presentación —3,4 s en su traza—. Con una sola fila no
+    # se puede saber si `0x0226D670` es la que manda en pantalla o la que se
+    # adelanta, y equivocarse cantaría una baja antes de que el jugador la vea.
+    # Hasta saberlo, las dos valen None.
     "bw": Gen5Memory(
         key="bw",
         label="Negro/Blanco",

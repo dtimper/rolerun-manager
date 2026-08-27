@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.62`
+- Versión de aplicación: `v0.2.6-alpha.63`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,30 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.63 — la segunda fila de Blanco era del rival
+
+El usuario lo vio antes que la herramienta: la traza temporal lo confirma.
+
+- **`0x0226D670`** describe de verdad a su Pokémon: bajó de **24 a 9 PS** al
+  recibir el golpe.
+- **`0x0226E348`** tenía un **Pansear a nivel 3342**. Coincidió una vez por azar
+  cuando el Purrloin estaba a 19/19, y ya no.
+
+**Por qué eso deja el asunto sin resolver.** La traza de Negro 2 enseña cómo son
+las dos copias buenas: describen **al mismo Pokémon**, y la lógica se adelanta a
+la de presentación —3,4 segundos en aquella captura—. Con una sola fila no se
+puede saber si `0x0226D670` es la que manda en pantalla o la que se adelanta, y
+elegir mal cantaría una baja antes de que el jugador la vea. Ambas siguen `None`.
+
+**La herramienta nueva hace las dos cosas de golpe**, sin suponer ninguna
+distancia entre las filas: busca **todas** las que describen al Pokémon que está
+luchando y las vigila a la vez cada 10 ms durante un turno. La que baje antes es
+la lógica; la que lo haga después, la de presentación.
+
+Se descarta el intento anterior, que partía de dos direcciones fijas.
+
+- Suite completa: 1398.
 
 ### v0.2.6 Alpha.62 — Blanco no tenía MT porque preguntaba al juego equivocado
 

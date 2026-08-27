@@ -88,7 +88,7 @@ def test_alpha31_real_game_party_transition_records_full_runtime_slot(tmp_path: 
     latest = tmp_path / "sm_party_runtime_transition_latest.json"
     assert latest.is_file()
     payload = json.loads(latest.read_text(encoding="utf-8"))
-    assert payload["version"] == "0.2.6-alpha.62"
+    assert payload["version"] == "0.2.6-alpha.63"
     assert payload["party_stride"] == SM_PARTY_STRIDE
     assert len(payload["changed_slots"]) == 1
     slot = payload["changed_slots"][0]

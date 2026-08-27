@@ -1,0 +1,68 @@
+{
+  "format": "rolerun-gen5-battle-timing-v1",
+  "juego": "bw",
+  "captured_at": "2026-08-27T20:30:07.983209+02:00",
+  "environment": "Negro/Blanco España · melonDS 1.1",
+  "guest_bases": [
+    "0x0226D670",
+    "0x0226E348"
+  ],
+  "field_order": [
+    "species",
+    "max_hp",
+    "current_hp",
+    "aux_1",
+    "aux_2",
+    "ability",
+    "level"
+  ],
+  "wait_seconds": 60.0,
+  "tail_seconds": 5.0,
+  "hp_change_detected": true,
+  "sample_count": 1487,
+  "transitions": [
+    {
+      "ms": 0.002,
+      "copy_1": [
+        509,
+        27,
+        24,
+        0,
+        0,
+        84,
+        9
+      ],
+      "copy_2": [
+        513,
+        39,
+        39,
+        0,
+        0,
+        82,
+        3342
+      ]
+    },
+    {
+      "ms": 11134.035,
+      "copy_1": [
+        509,
+        27,
+        9,
+        0,
+        0,
+        84,
+        9
+      ],
+      "copy_2": [
+        513,
+        39,
+        39,
+        0,
+        0,
+        82,
+        3342
+      ]
+    }
+  ],
+  "note": "Diagnóstico temporal; no constituye aún una dirección de producción."
+}

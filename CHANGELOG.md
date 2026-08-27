@@ -1,6 +1,17 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.63 — la segunda fila de Blanco era del rival
+
+`0x0226D670` sí es del Pokémon del jugador (24 → 9 PS). `0x0226E348` tenía un
+Pansear a nivel 3342: coincidió una vez por azar.
+
+Con una sola fila no se sabe si es la de presentación o la lógica, y elegir mal
+cantaría una baja antes de verla. La herramienta nueva busca **todas** las filas
+del Pokémon que lucha y las vigila a la vez, sin suponer distancias.
+
+Suite completa: 1398.
+
 # v0.2.6-alpha.62 — Blanco no tenía MT porque preguntaba al juego equivocado
 
 `_get_b2w2_tm_profile` pedía el perfil siempre al adaptador de Negro 2, escrito
