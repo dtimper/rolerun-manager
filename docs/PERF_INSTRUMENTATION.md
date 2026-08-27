@@ -54,6 +54,8 @@ estaríamos midiendo nuestra propia instrumentación en lugar del programa.
 | `ui.save_pending_changes` · `ui.save_live_changes` · `ui.finalize_live_changes` | `ui.py` | La cadena completa de una confirmación. |
 | `ui.start_team_pc_load` · `ui.finish_team_pc_load` | `ui.py` | La cascada posterior a una escritura. |
 | `ui.reload_from_watched_save` | `ui.py` | La micro-congelación tras guardar dentro del juego. |
+| `ui.live_health_incremental` | `ui.py` | La ruta rápida de PS: confirma cuántas veces se evita reconstruir la página. |
+| `b2w2.base_cache` · `b2w2.known_base_read` | `b2w2_live` | Aciertos de la base cacheada y revalidación sobre ella. |
 | `obs.sync` | `obs_sync.py` | Los 24 archivos por sincronización, en NTFS con antivirus. |
 | `run.append_history` | `run_service.py` | Reescritura completa del historial por evento, con su número de eventos para ver la pendiente. |
 
@@ -80,6 +82,9 @@ falla si alguien borra un punto de medición acordado.
 |---|---|---|
 | Suelo por invocación del motor .NET | **~72 ms** (mín. 71,1 · mediana 72,4) | 7 repeticiones de `RoleRun.SaveEngine.exe` sin argumentos, sin abrir ningún save. |
 | `run.append_history` con historial de 1–3 eventos | **2,5 – 8,1 ms** | Ejecución real contra `Documents`, NTFS. |
+| Reconstrucción completa de Equipo y PC | **845 ms** · 642 widgets | Vista real bajo Tk: 666 ms de construcción + 157 de `update_idletasks` + 23 de `update`. Destruirla, 156 ms. |
+| Actualización incremental de los seis PS | **8,2 ms** | Misma vista, `update_team_health` ×6 más relayout. **×103** frente a reconstruir. |
+| `find_ryujinx_process` | **2,36 ms** | A 60 Hz eran 142 ms de CPU por segundo (14 % de un núcleo) en el hilo Tk. |
 
 El suelo de ~72 ms es **antes** de cargar PKHeX.Core y de leer la partida: lo
 paga íntegro cada una de las invocaciones. Con la carga de una run encadenando
@@ -88,5 +93,6 @@ arranque de procesos, y `save_pending_changes` ejecuta `N+k+2` de estas
 invocaciones **en el hilo Tk**.
 
 Pendiente de medir con partida real cargada: el coste añadido de PKHeX.Core y
-del propio save por comando, el render completo en Windows, `ImageGrab.grab`,
-`obs.sync` con antivirus y el walk de `VirtualQueryEx` de melonDS.
+del propio save por comando, `ImageGrab.grab` por navegación, `obs.sync` con
+antivirus y el recorrido de `VirtualQueryEx` sobre melonDS de verdad (la
+instrumentación ya registra `b2w2.region_walk` con regiones y allocations).

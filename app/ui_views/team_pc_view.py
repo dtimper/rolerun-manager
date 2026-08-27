@@ -179,6 +179,10 @@ class UnifiedTeamPCView:
         # barrera inicial debe comprobar los valores que esta superficie llegó
         # realmente a convertir en widgets antes de exponerla.
         self._rendered_team_health: list[tuple[int, int, int]] = []
+        # Referencias a la barra y la etiqueta de PS de cada miembro, para poder
+        # actualizarlas sin reconstruir la página. Medido en Windows: una
+        # reconstrucción completa cuesta 845 ms de hilo Tk.
+        self._team_health_widgets: dict[str, dict[str, Any]] = {}
 
         identities = [
             self.identity_for(slot["pokemon"])
@@ -482,6 +486,73 @@ class UnifiedTeamPCView:
                     font=ctk.CTkFont("Segoe UI", 12),
                 ).pack(anchor="w", padx=6, pady=(0, 2) if self.mode_banner else 0)
 
+    @staticmethod
+    def _health_presentation(
+        hp_value: int | None, max_hp: int,
+    ) -> tuple[float, str, str]:
+        """Fracción, color y texto de una barra de PS.
+
+        Lo usan por igual el render completo y la actualización incremental: si
+        cada uno calculara lo suyo, una barra actualizada en vivo podría acabar
+        mostrando un color distinto al que tendría tras un render normal.
+        """
+        text = (
+            f"{hp_value}/{max_hp}"
+            if hp_value is not None and max_hp > 0 else "No disponible"
+        )
+        if hp_value is None or max_hp <= 0:
+            return 0.0, SUCCESS, text
+        fraction = max(0.0, min(1.0, hp_value / max_hp))
+        color = DANGER if fraction <= 0.25 else (GOLD if fraction <= 0.5 else SUCCESS)
+        return fraction, color, text
+
+    def rendered_team_identities(self) -> frozenset[str]:
+        """Identidades cuyas barras de PS existen ahora mismo en la superficie.
+
+        Permite al controlador distinguir "solo han cambiado los PS" de "la
+        composición del equipo es otra", que sí exige reconstruir.
+        """
+        return frozenset(self._team_health_widgets)
+
+    def update_team_health(
+        self, identity: str, hp_value: int | None, max_hp: int,
+    ) -> bool:
+        """Actualiza los PS de un miembro sin reconstruir la página.
+
+        Devuelve ``False`` cuando no puede hacerlo —identidad no renderizada,
+        tarjeta ya destruida o tarjeta en modo banner, que muestra los PS dentro
+        de otra etiqueta—. En ese caso el controlador debe recurrir al render
+        completo: esta ruta acelera, nunca decide qué se muestra.
+        """
+        entry = self._team_health_widgets.get(str(identity))
+        if not entry:
+            return False
+        bar = entry.get("bar")
+        label = entry.get("label")
+        try:
+            if bar is None or label is None:
+                return False
+            if not bar.winfo_exists() or not label.winfo_exists():
+                return False
+            max_hp = int(max_hp or 0)
+            value = int(hp_value) if hp_value is not None else None
+            fraction, color, text = self._health_presentation(value, max_hp)
+            bar.configure(progress_color=color)
+            bar.set(fraction)
+            label.configure(text=f"PS {text}")
+        except Exception:
+            return False
+        # La barrera inicial comprueba lo que esta superficie materializó de
+        # verdad. Si actualizamos los widgets sin actualizar esa evidencia, la
+        # firma quedaría mintiendo sobre lo que el usuario está viendo.
+        index = entry.get("health_index")
+        if isinstance(index, int) and 0 <= index < len(self._rendered_team_health):
+            slot = self._rendered_team_health[index][0]
+            self._rendered_team_health[index] = (
+                slot, value if value is not None else -1, max_hp,
+            )
+        return True
+
     def _render_team_card(
         self, card, pokemon: Any, slot_role: str, identity: str, *, preparation: bool,
     ) -> None:
@@ -496,12 +567,13 @@ class UnifiedTeamPCView:
         current_hp = getattr(pokemon, "current_hp", None)
         max_hp = int(getattr(pokemon, "max_hp", 0) or 0)
         hp_value = int(current_hp) if current_hp is not None else None
-        hp_text = f"{hp_value}/{max_hp}" if hp_value is not None and max_hp > 0 else "No disponible"
+        _fraction, _color, hp_text = self._health_presentation(hp_value, max_hp)
         self._rendered_team_health.append((
             int(getattr(pokemon, "slot", 0) or 0),
             int(hp_value) if hp_value is not None else -1,
             int(max_hp),
         ))
+        health_index = len(self._rendered_team_health) - 1
         role_heading = slot_role.upper()
         if preparation:
             role_heading += " · PREPARACIÓN"
@@ -543,17 +615,21 @@ class UnifiedTeamPCView:
             health = ctk.CTkFrame(content, fg_color="transparent", corner_radius=0)
             health.grid(row=1, column=1, sticky="ew")
             health.grid_columnconfigure(0, weight=1)
-            fraction = max(0.0, min(1.0, hp_value / max_hp)) if hp_value is not None and max_hp > 0 else 0.0
-            health_color = DANGER if fraction <= 0.25 else (GOLD if fraction <= 0.5 else SUCCESS)
+            fraction, health_color = _fraction, _color
             bar = ctk.CTkProgressBar(
                 health, height=8, fg_color="#343434", progress_color=health_color,
             )
             bar.grid(row=0, column=0, sticky="ew", padx=(0, 8))
             bar.set(fraction)
-            ctk.CTkLabel(
+            hp_label = ctk.CTkLabel(
                 health, text=f"PS {hp_text}", width=78, height=13, text_color=TEXT,
                 font=ctk.CTkFont("Segoe UI", 11, "bold"),
-            ).grid(row=0, column=1, sticky="e")
+            )
+            hp_label.grid(row=0, column=1, sticky="e")
+            # Referencias para poder refrescar los PS en vivo sin reconstruir.
+            self._team_health_widgets[str(identity)] = {
+                "bar": bar, "label": hp_label, "health_index": health_index,
+            }
 
             stats = dict(getattr(pokemon, "stats", {}) or {})
             if max_hp > 0:

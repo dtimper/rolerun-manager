@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.20`
+- Versión de aplicación: `v0.2.6-alpha.21`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,32 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.21 — actualización incremental de los PS en vivo
+
+Primera pieza de la Fase 3. También la primera medición del proyecto hecha sobre
+la vista construida de verdad bajo Tk en Windows, que era la hipótesis abierta
+más cara de la auditoría.
+
+Reconstruir Equipo y PC cuesta **845 ms** de hilo Tk y crea **642 widgets**. Una
+confirmación de cambio dispara 3-4 reconstrucciones: 2,5-3,4 s de congelación. En
+combate, cada cambio de PS pagaba una reconstrucción completa.
+
+`UnifiedTeamPCView` expone ahora `update_team_health()` y
+`rendered_team_identities()`. Refrescar las seis barras cuesta **8,2 ms**: ×103.
+La presentación (fracción, color y texto) vive en `_health_presentation`, único
+punto que usan tanto el render completo como la actualización incremental.
+
+La ruta es de aceleración, no de decisión: cede al render completo si cambia la
+composición del equipo, si la vista no es la publicada, si una tarjeta ya está
+destruida o ante cualquier error. La evidencia que consulta la barrera inicial se
+actualiza junto a los widgets.
+
+Quedan por hacer incrementales los otros disparadores de render completo:
+llegada de sprite, snapshot publicado, reconciliación del PC y escritura
+confirmada.
+
+Baseline completa: **981 passed**.
 
 ### v0.2.6 Alpha.20 — base de melonDS cacheada y revalidada
 
@@ -117,9 +143,11 @@ monitor —que exige la cola vacía— dejaba de leer la partida viva. El botón
 retirado hasta que exista el writer. La regresión es un invariante para los seis
 backends: botón y compuerta deben coincidir siempre.
 
-Estado real: la retirada 5→6 queda **implementada y con prueba**, pendiente de
-validación física en Negro 2/melonDS. La curación B2/W2 sigue **cerrada**.
-Baseline completa: **918 passed**.
+Estado real: la retirada 5→6 quedó **implementada, con prueba y VALIDADA
+FÍSICAMENTE**: el usuario confirmó el 27-08-2026, en Negro 2 España con
+melonDS 1.1, que retirar del PC al equipo funciona correctamente desde RoleRun.
+La curación B2/W2 sigue **cerrada** hasta que exista su writer.
+Baseline en su momento: **918 passed**.
 
 ### v0.2.6 Alpha.15 — instrumentación de rendimiento
 

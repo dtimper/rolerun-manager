@@ -8679,7 +8679,10 @@ class RoleRunManager(ctk.CTk):
             if self._floating_bar_is_visible():
                 self._render_floating_bar(force=True)
                 self._main_ui_dirty_while_floating = True
-            elif self.active_page == "team" and self._live_health_render_after_id is None:
+            elif (
+                self.active_page in TEAM_PC_PAGES
+                and self._live_health_render_after_id is None
+            ):
                 self._live_health_render_after_id = self.after(90, self._refresh_live_health_page)
         if not self.project:
             return
@@ -8798,10 +8801,49 @@ class RoleRunManager(ctk.CTk):
                 changed = True
         return changed
 
+    def _apply_live_health_incrementally(self) -> bool:
+        """Refresca solo las barras de PS. ``False`` si hay que reconstruir.
+
+        Medido en Windows sobre la vista real: reconstruir Equipo y PC cuesta
+        **845 ms** de hilo Tk y 642 widgets. Durante un combate el monitor lee
+        cada 250-450 ms, así que cada cambio de PS pagaba esa reconstrucción
+        entera para mover unas barras.
+
+        Es una ruta de aceleración, no de decisión: ante cualquier duda devuelve
+        ``False`` y el render completo mantiene su comportamiento anterior.
+        """
+        view = getattr(self, "_team_pc_view", None)
+        if view is None or view is not getattr(self, "_presented_team_pc_view", None):
+            return False
+        updater = getattr(view, "update_team_health", None)
+        identities_getter = getattr(view, "rendered_team_identities", None)
+        if not callable(updater) or not callable(identities_getter):
+            return False
+        party = list(self._projected_party())
+        if not party:
+            return False
+        identities = [self._pokemon_identity(member) for member in party]
+        # Si el equipo ya no está compuesto por los mismos Pokémon —una baja, una
+        # sustitución, una entrada desde el PC— mover barras no basta.
+        if set(identities) != set(identities_getter()):
+            return False
+        with perf.span("ui.live_health_incremental", members=len(party)):
+            for member, identity in zip(party, identities):
+                if not updater(
+                    identity,
+                    getattr(member, "current_hp", None),
+                    int(getattr(member, "max_hp", 0) or 0),
+                ):
+                    return False
+        return True
+
     def _refresh_live_health_page(self) -> None:
         self._live_health_render_after_id = None
-        if self.active_page == "team" and not self._floating_bar_is_visible():
-            self._smooth_render_page(preserve_scroll=True)
+        if self.active_page not in TEAM_PC_PAGES or self._floating_bar_is_visible():
+            return
+        if self._apply_live_health_incrementally():
+            return
+        self._smooth_render_page(preserve_scroll=True)
 
     def _pending_faint_party_member(self, event: dict) -> SavePokemon | None:
         if not self.current_game:

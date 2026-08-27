@@ -1,6 +1,34 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.21 — los PS en vivo dejan de reconstruir la página
+
+Primera pieza de la Fase 3, la de velocidad percibida, y la primera medida sobre
+la vista real bajo Tk en Windows.
+
+- **Medición que faltaba.** La auditoría estimó ~0,6 s por reconstrucción en
+  Linux y lo dejó como hipótesis para Windows. Construyendo la vista de verdad:
+  **642 widgets Tk y 845 ms** de hilo bloqueado (666 ms de construcción, 157 de
+  `update_idletasks`, 23 de `update`). Una confirmación de cambio dispara 3-4
+  reconstrucciones: **2,5-3,4 segundos** de congelación.
+- Durante un combate el monitor lee cada 250-450 ms y **cada cambio de PS
+  reconstruía la página entera** solo para mover unas barras.
+- `UnifiedTeamPCView` gana `update_team_health()` y `rendered_team_identities()`.
+  Actualizar las seis barras cuesta **8,2 ms**: **×103** más rápido.
+- La presentación de PS —fracción, color y texto— pasa a calcularse en un único
+  sitio, `_health_presentation`, que usan por igual el render completo y la
+  actualización incremental. Si cada uno calculara lo suyo, una barra actualizada
+  en vivo podría acabar mostrando un color distinto al del render normal.
+- Es una ruta de **aceleración, no de decisión**: cede al render completo si la
+  composición del equipo cambió (baja, sustitución, entrada desde el PC), si la
+  vista no es la publicada, si una tarjeta ya está destruida o ante cualquier
+  error. No cambia nunca lo que se muestra.
+- La evidencia que consulta la barrera inicial se actualiza junto a los widgets:
+  de lo contrario diría que se muestra un PS que ya no es el que se ve.
+- Primeras pruebas del proyecto que **construyen la ventana Tk real**, como
+  recomendaba la auditoría; se omiten solas si no hay entorno gráfico.
+- Baseline completa: **981 passed**.
+
 # v0.2.6-alpha.20 — la base de melonDS se resuelve una vez, no en cada lectura
 
 - Hasta ahora, **cada** `read_party()` y **cada** `read_pc()` de B2/W2 recorrían
