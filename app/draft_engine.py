@@ -8,7 +8,7 @@ from pathlib import Path
 class DraftEngine:
     """Genera drafteos usando IDs estables y nombres localizados."""
 
-    def __init__(self, moves_path: Path, roles_path: Path, catalog_path: Path) -> None:
+    def __init__(self, moves_path: Path, roles_path: Path, catalog_path: Path, *, rng=None) -> None:
         if not moves_path.exists() or not catalog_path.exists():
             raise RuntimeError(
                 "La base localizada todavía no está preparada. Ejecuta preparar_motor.bat."
@@ -39,6 +39,7 @@ class DraftEngine:
                 self.speed_status_moves = set()
                 self.self_healing_damage_moves = set()
         self.allowed_move_ids: set[int] | None = None
+        self._rng = rng or random
 
     def set_allowed_moves(self, move_ids: list[int] | set[int] | None) -> None:
         """Limita los drafteos a movimientos realmente utilizables en el juego cargado."""
@@ -67,31 +68,64 @@ class DraftEngine:
         return int(move_id) in self.self_healing_damage_moves
 
     def generate_role(self, role: str) -> list[dict]:
+        if role == "Líbero":
+            return self._generate_libero()
         if role not in self.roles:
             raise ValueError(f"Rol desconocido: {role}")
-        results = []
-        for category in self.roles[role]:
-            pool = self._compatible_pool(category["pool_key"])
-            if not pool:
-                raise ValueError(
-                    f"La categoría {category['pool_key']} no tiene movimientos utilizables en el juego cargado."
-                )
-            move_id = random.choice(pool)
-            move = self.move(move_id)
-            results.append({
-                "title": category["title"],
-                "pool_key": category["pool_key"],
-                "move_id": move_id,
-                "move": move["name_es"],
-                "move_en": move.get("name_en", ""),
-            })
-        return results
+        return [self._result_for(category) for category in self.roles[role]]
+
+    def _result_for(self, category: dict) -> dict:
+        pool_key = str(category["pool_key"])
+        pool = self._compatible_pool(pool_key)
+        if not pool:
+            raise ValueError(
+                f"La categoría {pool_key} no tiene movimientos utilizables en el juego cargado."
+            )
+        move_id = self._rng.choice(pool)
+        move = self.move(move_id)
+        return {
+            "title": category["title"],
+            "pool_key": pool_key,
+            "move_id": move_id,
+            "move": move["name_es"],
+            "move_en": move.get("name_en", ""),
+        }
+
+    def _generate_libero(self) -> list[dict]:
+        """Genera el pool propio de Líbero sin duplicar categorías de daño."""
+        fixed = [
+            {"title": "Ataque físico", "pool_key": "extra_ataque_fisico"},
+            {"title": "Ataque especial", "pool_key": "extra_ataque_especial"},
+        ]
+        damage_pool_keys = {
+            "extra_ataque_fisico", "extra_ataque_especial",
+            "defensa_ataque_fisico", "defensa_ataque_especial",
+        }
+        candidates: list[dict] = []
+        seen: set[str] = set()
+        for categories in self.roles.values():
+            for category in categories:
+                pool_key = str(category["pool_key"])
+                if pool_key in damage_pool_keys or pool_key in seen:
+                    continue
+                if not self._compatible_pool(pool_key):
+                    continue
+                seen.add(pool_key)
+                candidates.append(category)
+        if len(candidates) < 3:
+            raise ValueError("Líbero no dispone de tres categorías auxiliares utilizables en este juego.")
+        random_categories = self._rng.sample(candidates, 3)
+        # La composición visual de cinco resultados usa tres tarjetas arriba y
+        # dos abajo. Publicamos primero las tres categorías sorteadas para que
+        # la fila superior resuma de un vistazo el resultado aleatorio, y
+        # dejamos los dos ataques fijos en la fila inferior.
+        return [self._result_for(category) for category in random_categories + fixed]
 
     def reroll(self, pool_key: str, current_move_id: int) -> dict:
         pool = self._compatible_pool(pool_key)
         if not pool:
             raise ValueError(f"No hay movimientos utilizables para la categoría: {pool_key}")
         alternatives = [m for m in pool if m != current_move_id]
-        move_id = random.choice(alternatives or pool)
+        move_id = self._rng.choice(alternatives or pool)
         move = self.move(move_id)
         return {"move_id": move_id, "move": move["name_es"], "move_en": move.get("name_en", "")}

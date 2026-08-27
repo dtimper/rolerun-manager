@@ -22,6 +22,7 @@ from .models import (
     LiveMemoryBlock,
     LiveProcessInfo,
     RealTimeSnapshot,
+    badge_source_is_live,
 )
 
 
@@ -51,6 +52,7 @@ class USUMRealTimeAdapter(RealTimeGameAdapter):
         self._last_game: SaveGameData | None = None
         self._last_save_path: Path | None = None
         self._last_runtime_party_region: bytes | None = None
+        self._last_kahuna_trace_signature: tuple[object, ...] | None = None
 
     @staticmethod
     def _process(process) -> LiveProcessInfo:
@@ -189,6 +191,45 @@ class USUMRealTimeAdapter(RealTimeGameAdapter):
         except OSError:
             pass
 
+    def _trace_kahuna_progress(
+        self, *, raw, badges: int | None, source: str | None, sequence: int,
+    ) -> None:
+        """Conserva automáticamente cada transición de progreso/procedencia.
+
+        No registra la mochila ni datos del Pokémon. El journal permite saber si
+        la prueba física obtuvo una lectura RAM validada o cayó al ``main`` sin
+        pedir al usuario que active un recorder o interprete memoria.
+        """
+        signature = (
+            int(raw.process.process_id), int(raw.process.title_id), str(raw.process.name),
+            int(raw.party_base), badges, str(source or ""),
+        )
+        if signature == self._last_kahuna_trace_signature:
+            return
+        self._last_kahuna_trace_signature = signature
+        payload = {
+            "format": "rolerun-usum-kahuna-progress-v1",
+            "version": APP_VERSION,
+            "created_at": datetime.now().isoformat(timespec="milliseconds"),
+            "sequence": int(sequence),
+            "process": {
+                "pid": int(raw.process.process_id),
+                "title_id": f"{int(raw.process.title_id):016X}",
+                "name": str(raw.process.name),
+            },
+            "party_base": f"0x{int(raw.party_base):08X}",
+            "kahunas": int(badges) if badges is not None else None,
+            "source": str(source or "unavailable"),
+            "source_live": badge_source_is_live(source),
+        }
+        try:
+            LOG_DIR.mkdir(parents=True, exist_ok=True)
+            path = LOG_DIR / "usum_kahuna_progress_trace_latest.jsonl"
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+        except OSError:
+            pass
+
     def _convert(
         self, raw, *, sequence: int, battle: BattleState | None = None,
         battle_diagnostic: LiveDiagnostic | None = None,
@@ -262,7 +303,7 @@ class USUMRealTimeAdapter(RealTimeGameAdapter):
                 "tm_live": True,
                 "pc_read_live": True,
                 "pc_write_live": True,
-                "pc_write_modes": ("swap-party-box", "party-to-box", "box-to-party"),
+                "pc_write_modes": ("swap-party-box", "party-to-box", "box-to-party", "move-box-slot"),
                 "pc_swap_diagnostic": False,
                 "party_base": int(raw.party_base),
             },
@@ -354,6 +395,9 @@ class USUMRealTimeAdapter(RealTimeGameAdapter):
             ),
             str(badge_source or "USUM · Z-Crystals"),
             badge_elapsed,
+        )
+        self._trace_kahuna_progress(
+            raw=raw, badges=badges, source=badge_source, sequence=sequence,
         )
         return self._convert(
             raw, sequence=sequence, battle=battle, battle_diagnostic=diagnostic,
@@ -555,5 +599,6 @@ class USUMRealTimeAdapter(RealTimeGameAdapter):
         self._last_game = None
         self._last_save_path = None
         self._last_runtime_party_region = None
+        self._last_kahuna_trace_signature = None
         self.reader.reset_runtime_state()
         self.writer.reset_runtime_state()

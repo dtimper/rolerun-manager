@@ -1,0 +1,50 @@
+{
+  "format": "rolerun-bdsp-ryujinx-gdb-performance-ab-v1",
+  "created_at": "2026-08-22T15:29:48.9755628+02:00",
+  "environment": {
+    "game": "Pokemon Shining Pearl",
+    "revision": "1.3.0",
+    "title_id": "010018E011D92000",
+    "ryujinx": "1.3.3+e2143d4",
+    "host": "Windows x64 / Intel i7-10700K",
+    "memory_manager": "HostMappedUnsafe",
+    "graphics_backend": "Vulkan",
+    "ptc": true,
+    "shader_cache": true
+  },
+  "physical_observations": [
+    {
+      "condition": "PERF-0",
+      "gdb_stub": false,
+      "rolerun_gdb_client": false,
+      "result_reported_by_user": "The game worked considerably better."
+    },
+    {
+      "condition": "PERF-1",
+      "gdb_stub": true,
+      "rolerun_gdb_client": false,
+      "result_reported_by_user": "The game became slower again, although less severely than the first GDB session and remained roughly playable."
+    }
+  ],
+  "closed_session_logs": [
+    {
+      "file": "Ryujinx_1.3.3_2026-08-22_14-21-37.log",
+      "sha256": "41C4B8F00836CBADBD340D5A5919A5E73728661AD23FFD7A06E6200F9D5395AE",
+      "gdb_stub": true
+    },
+    {
+      "file": "Ryujinx_1.3.3_2026-08-22_15-11-55.log",
+      "sha256": "F6F1FA780E7F85A5E6E3589B62A5F4FD72A08CDF0021BF381DB5A67F71B53B6D",
+      "gdb_stub_at_game_start": false,
+      "gdb_stub_enabled_at_runtime": "00:03:02.190"
+    }
+  ],
+  "ryujinx_source_proof": {
+    "commit": "e2143d43bcb6762340d8a01f20e7b5fdf104f02f",
+    "debugger_constructor": "src/Ryujinx.HLE/Debugger/Debugger.cs:49 sets ARMeilleure.Optimizations.EnableDebugging=true",
+    "dispatch_change": "src/ARMeilleure/Translation/Translator.cs:122-136 replaces the unmanaged dispatch loop with a managed per-block debugging loop",
+    "translated_code_change": "src/ARMeilleure/Translation/Translator.cs:392-423 emits precise PC updates and returns instead of tail calls in debugger mode",
+    "cache_separation": "src/ARMeilleure/Translation/PTC/Ptc.cs:306-310 rejects a PTC whose DebuggerMode differs"
+  },
+  "conclusion": "GDB Stub itself causes a repeatable material slowdown in this exact Ryujinx build even without a RoleRun client. The first run was additionally affected by debugger-mode PTC/JIT warm-up. GDB is rejected as the permanent BDSP transport."
+}

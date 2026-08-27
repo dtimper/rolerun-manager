@@ -27,10 +27,21 @@ class _PersonalTableSpec:
 
 
 _SPECS = {
+    "b2w2": _PersonalTableSpec("pkhex_personal_b2w2.bin", 0x4C),
     "xy": _PersonalTableSpec("pkhex_personal_xy.bin", 0x40),
     "oras": _PersonalTableSpec("pkhex_personal_ao.bin", 0x50),
     "sm": _PersonalTableSpec("pkhex_personal_sm.bin", 0x54),
+    "usum": _PersonalTableSpec("pkhex_personal_uu.bin", 0x54),
 }
+
+
+def base_stats_for(family: str, species: int, form: int = 0) -> tuple[int, ...]:
+    """Devuelve HP/Atk/Def/Spe/SpA/SpD desde el Personal de la edición."""
+    record = _record_for(family, species, form)
+    values = tuple(int(value) for value in record[:6])
+    if any(not 1 <= value <= 255 for value in values):
+        raise BoxedMetadataError("La tabla personal declara estadísticas base imposibles.")
+    return values
 
 
 class BoxedMetadataError(ValueError):
@@ -203,3 +214,33 @@ def item_name(item_id: int) -> str:
         if name and name != "(?)":
             return name
     return f"Objeto #{item_id}"
+
+
+@lru_cache(maxsize=1)
+def _species_names() -> tuple[str, ...]:
+    path = _DATA_DIR / "pkhex_species_es.txt"
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except OSError as exc:
+        raise BoxedMetadataError(
+            "No se pudo leer el catálogo español de especies de PKHeX."
+        ) from exc
+    # PKHeX usa el índice de línea como Species ID. La copia incorporada cubre
+    # exactamente Huevo (0) y la Pokédex disponible en BDSP, hasta Arceus (493).
+    names = tuple(line.rstrip("\r") for line in text.splitlines())
+    if len(names) != 494 or names[0] != "Huevo" or names[493] != "Arceus":
+        raise BoxedMetadataError(
+            "El catálogo de especies BDSP de PKHeX no tiene el formato esperado."
+        )
+    return names
+
+
+def species_name(species_id: int) -> str:
+    species_id = int(species_id)
+    try:
+        names = _species_names()
+    except BoxedMetadataError:
+        return f"Especie #{species_id}"
+    if 0 <= species_id < len(names) and names[species_id].strip():
+        return names[species_id]
+    return f"Especie #{species_id}"

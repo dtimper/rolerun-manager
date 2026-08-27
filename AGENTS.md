@@ -118,6 +118,15 @@ esa información a una investigación técnica rigurosa.
 15. Terminar siempre cada entrega indicando exactamente qué debe probar el
     usuario a continuación. Si no procede una prueba funcional, indicarlo
     expresamente y señalar la siguiente comprobación concreta.
+16. Regla de oro de validación local: toda operación que el agente pueda
+    ejecutar y observar directamente en el ordenador disponible debe probarse
+    físicamente antes de entregarla. El ciclo obligatorio es ejecutar la
+    acción real en RoleRun, comprobar el resultado visible en RoleRun y en el
+    juego/emulador, corregir la primera divergencia y repetir hasta obtener el
+    resultado esperado. Un test automatizado o un readback del mismo writer no
+    sustituyen esta comprobación cuando el efecto final puede visualizarse
+    localmente. No pedir al usuario que repita una comprobación que el agente
+    pueda realizar por sí mismo.
 
 ## Preparación obligatoria antes de cambiar nada
 

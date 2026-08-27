@@ -1,0 +1,25 @@
+{
+  "accepted": true,
+  "created_at": "2026-08-22T13:34:47.053",
+  "fcram_scan_attempted": false,
+  "format": "rolerun-usum-utility-diagnostic-v1",
+  "guest_items_reference": "0x33011934",
+  "kind": "items",
+  "metrics": {
+    "equal_bytes": 3612,
+    "matching_windows": 221,
+    "quartile_count": 4,
+    "quartiles": [
+      0,
+      1,
+      2,
+      3
+    ]
+  },
+  "nonzero_matching_windows": 7,
+  "party_base": "0x33F7FA44",
+  "reference_read_size": 4096,
+  "stage": "alpha54-pkmn-ntr-items-reference-proof",
+  "tm_count": 3,
+  "version": "0.2.2-alpha.63"
+}

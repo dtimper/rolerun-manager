@@ -8,6 +8,25 @@ from typing import Any
 from ..save_engine_client import SaveGameData
 
 
+_LIVE_BADGE_SOURCE_PREFIXES = (
+    "Premios líderes ·",
+    "SUBE vivo",
+    "EventWork vivo ·",
+    "Misc vivo",
+    "Z-Crystals vivos ·",
+    "SystemFlags vivos ·",
+)
+
+
+def badge_source_is_live(source: str | None) -> bool:
+    """True solo para las procedencias RAM declaradas por los adapters actuales.
+
+    Una procedencia nueva o ausente queda cerrada por defecto hasta incorporarla
+    explícitamente a este contrato común con su prueba correspondiente.
+    """
+    return str(source or "").startswith(_LIVE_BADGE_SOURCE_PREFIXES)
+
+
 class DiagnosticLevel(str, Enum):
     OK = "ok"
     WARNING = "warning"

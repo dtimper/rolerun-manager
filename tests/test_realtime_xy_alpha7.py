@@ -185,7 +185,7 @@ def test_alpha7_battle_probe_reports_none_outside_battle() -> None:
     assert probe.health_game is None
 
 
-def test_alpha7_writer_allows_replace_fainted_but_still_blocks_party_resize() -> None:
+def test_alpha8_writer_allows_replace_fainted_and_demonstrated_party_resize() -> None:
     class R:
         client_factory = staticmethod(lambda: None)
         transport_label = "fake"
@@ -199,7 +199,7 @@ def test_alpha7_writer_allows_replace_fainted_but_still_blocks_party_resize() ->
         outgoing_pokemon="A",
     )
     assert writer._unsupported_changes([replace]) == []
-    assert writer._unsupported_changes([deposit])
+    assert writer._unsupported_changes([deposit]) == []
 
 
 def test_alpha7_adapter_reports_live_battle_capability() -> None:

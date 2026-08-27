@@ -1,5 +1,12 @@
 from .adapter import RealTimeAdapterError, RealTimeGameAdapter
-from .bridge import AzaharBridge, CitraBridge, EmulatorBridge, EmulatorBridgeInfo
+from .bridge import (
+    AzaharBridge,
+    CitraBridge,
+    EmulatorBridge,
+    EmulatorBridgeInfo,
+    RyujinxBridge,
+    RyujinxGDBDiagnosticBridge,
+)
 from .core import RealTimeCore
 from .events import RealTimeEvent, RealTimeEventType, diff_realtime_snapshots
 from ..realtime_memory import LiveBlockResolver, MemoryCandidateHint, MemoryResolution
@@ -15,6 +22,8 @@ from .oras_adapter import ORASRealTimeAdapter
 from .xy_adapter import XYRealTimeAdapter, XYMultiRealTimeAdapter
 from .sm_adapter import SMRealTimeAdapter
 from .usum_adapter import USUMRealTimeAdapter
+from .bdsp_adapter import BDSPRealTimeAdapter
+from .b2w2_adapter import B2W2RealTimeAdapter
 from .recorder import RealTimeSessionRecorder, snapshot_payload
 from .replay import RealTimeReplay, ReplaySummary
 from .registry import RealTimeRegistry
@@ -22,6 +31,8 @@ from .registry import RealTimeRegistry
 __all__ = [
     "AzaharBridge",
     "BattleState",
+    "BDSPRealTimeAdapter",
+    "B2W2RealTimeAdapter",
     "CitraBridge",
     "DiagnosticLevel",
     "EmulatorBridge",
@@ -44,6 +55,8 @@ __all__ = [
     "RealTimeGameAdapter",
     "RealTimeSessionRecorder",
     "RealTimeSnapshot",
+    "RyujinxBridge",
+    "RyujinxGDBDiagnosticBridge",
     "RealTimeRegistry",
     "RealTimeReplay",
     "ReplaySummary",

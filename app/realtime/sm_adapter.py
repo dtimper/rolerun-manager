@@ -4,11 +4,13 @@ from pathlib import Path
 import json
 import time
 from datetime import datetime
+from dataclasses import is_dataclass, replace
 from typing import Callable, Sequence
 
 from ..models import PendingRoleChange
 from ..config import APP_VERSION, LOG_DIR
 from ..save_engine_client import SaveGameData
+from ..pokemon_stats import stat_dict
 from ..sm_live import (
     PK7_STORED_SIZE, SM_PARTY_STATS_OFFSET, SM_PARTY_STATS_SIZE, SM_PARTY_STRIDE,
     SMLiveError, SMLiveReader, SMLiveWriter, SMLiveWriteResult,
@@ -195,6 +197,28 @@ class SMRealTimeAdapter(RealTimeGameAdapter):
         badges: int | None = None, badge_source: str | None = None,
         badge_diagnostic: LiveDiagnostic | None = None,
     ) -> RealTimeSnapshot:
+        # El Personal efectivo ya es una precondición del writer SM para crear
+        # PartyData. Reutilizamos esa misma fuente demostrada para publicar las
+        # stats base; nunca se consulta una tabla vanilla paralela.
+        personal_for = self.writer.personal_for
+        if personal_for is not None:
+            canonical_order = (0, 1, 2, 4, 5, 3)
+            enriched_party = []
+            for pokemon in raw.game.party:
+                personal = personal_for(int(pokemon.species_id), int(pokemon.form or 0))
+                if personal is None:
+                    enriched_party.append(pokemon)
+                    continue
+                base_binary = tuple(int(value) for value in personal.base_stats)
+                enriched_party.append(replace(
+                    pokemon,
+                    base_stats=stat_dict(tuple(base_binary[index] for index in canonical_order)),
+                ))
+            enriched_game = replace(raw.game, party=enriched_party)
+            if is_dataclass(raw):
+                raw = replace(raw, game=enriched_game)
+            else:  # dobles de pruebas que exponen el mismo contrato por atributos
+                raw.game = enriched_game
         previous_game = self._last_game
         previous_runtime = self._last_runtime_party_region
         current_runtime = bytes(getattr(raw, "runtime_party_region", b"") or b"")

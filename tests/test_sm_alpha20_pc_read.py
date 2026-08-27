@@ -94,6 +94,21 @@ def test_alpha20_parse_boxed_pk7_reads_identity_moves_and_gen7_markings() -> Non
     assert pokemon.markings[1] is True
 
 
+def test_sm_boxed_parser_publishes_nature_ivs_and_evs() -> None:
+    from app.oras_live import decrypt_pk6_stored, encrypt_pk6_stored
+    raw = _stored_pk7(25, 0x12345678)
+    plain = bytearray(decrypt_pk6_stored(raw))
+    plain[0x1C] = 3
+    plain[0x1E:0x24] = bytes((1, 2, 3, 4, 5, 6))
+    struct.pack_into("<I", plain, 0x74, sum(value << (index * 5) for index, value in enumerate((7, 8, 9, 10, 11, 12))))
+    struct.pack_into("<H", plain, 0x06, _checksum(plain))
+    pokemon = parse_pk7_boxed(encrypt_pk6_stored(bytes(plain)), 1, 1, {})
+    assert pokemon is not None
+    assert pokemon.nature_id == 3 and pokemon.nature
+    assert pokemon.ivs["speed"] == 10 and pokemon.ivs["sp_attack"] == 11
+    assert pokemon.evs["speed"] == 4 and pokemon.evs["sp_defense"] == 6
+
+
 def test_alpha20_discovers_pc_matrix_inside_real_main_only_from_positioned_identities() -> None:
     matrix, anchors = _matrix()
     prefix = b"\xA5" * 173
@@ -203,7 +218,11 @@ def test_alpha20_sm_pc_refresh_uses_saved_anchors_and_passes_actual_dimensions(t
     anchors, kwargs = calls[0]
     assert [p.pid for p in anchors] == [100]
     assert kwargs == {"box_count": 2, "box_slot_count": 3}
-    assert manager._oras_live_pc_overrides[(1, 1)].pid == 200
+    # SM publica ya la matriz live completa; no mezcla un override puntual con
+    # la proyección obsoleta del save.
+    assert manager._oras_live_pc_overrides == {}
+    assert manager._pc_cache.raw["live_matrix"] is True
+    assert manager._pc_cache.boxes[0].pokemon[0].pid == 200
 
 
 def test_alpha36_sm_size_changing_pc_writes_are_supported() -> None:

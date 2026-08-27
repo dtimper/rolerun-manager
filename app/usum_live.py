@@ -11,13 +11,14 @@ from typing import Callable, Sequence
 
 from .azahar_rpc import AzaharProcess, AzaharRPCClient, AzaharRPCError
 from .config import APP_VERSION, LOG_DIR
-from .models import PendingChange, PendingInventoryChange, PendingRoleChange, PendingTMTeach, PendingTeamChange
+from .models import PendingChange, PendingInventoryChange, PendingPartyHeal, PendingRoleChange, PendingTMTeach, PendingTeamChange
 from .oras_live import decrypt_pk6, encrypt_pk6, decrypt_pk6_stored, encrypt_pk6_stored
 from .role_rules import ROLE_ORDER, ROLE_TO_MARKING, canonical_role, role_from_markings
 from .save_engine_client import SaveGameData, SavePokemon
 from .usum_rom_service import usum_tm_item_id
 from .boxed_metadata import ability_name, boxed_level, level_for_experience, item_name
 from .oras_tm_service import ORASPersonalStats
+from .pokemon_stats import nature_presentation, stat_dict
 from .win_process_memory import HostPartyTarget, WindowsProcessMemory, WindowsProcessMemoryError
 
 
@@ -79,11 +80,39 @@ USUM_PARTY_COUNT_SIZE = 1
 # Max HP contra la party PK7 live ya demostrada antes de publicar ningún PS.
 USUM_BATTLE_STATE_ADDRESS = 0x30000158
 USUM_BATTLE_STATE_ACTIVE_VALUE = 0x00040001
+# USUMCheatMenu comprueba además 0x30000180 == 3 en varias operaciones de
+# batalla. Alpha.59 lo registró sin usarlo como precondición; las capturas físicas
+# posteriores demostraron fase 3 en todos los tramos con tabla HP válida y fases
+# distintas en carga, selección forzada y terminal. Alpha.60 usa ya ese ciclo.
+USUM_BATTLE_PHASE_ADDRESS = 0x30000180
+USUM_BATTLE_PHASE_ACTIVE_VALUE = 0x00000003
+# Alpha.62: las capturas físicas demuestran que 0x00040005/6 aparece tanto
+# mientras el juego obliga a elegir el siguiente Pokémon como ya en overworld.
+# 0x00040000/1 es una salida positiva observada, pero no un paso obligatorio.
+# El estado ambiguo solo termina el episodio tras convergencia KO→PartyData.
+USUM_BATTLE_STATE_TERMINAL_VALUE = 0x00040000
+USUM_BATTLE_PHASE_TERMINAL_VALUE = 0x00000001
+USUM_BATTLE_STATE_IDLE_VALUE = 0x00040005
+USUM_BATTLE_PHASE_IDLE_VALUE = 0x00000006
 USUM_BATTLE_PLAYER_MAX_HP_BASE = 0x30002776
 USUM_BATTLE_PLAYER_DISPLAY_HP_BASE = 0x30002778
 USUM_BATTLE_PLAYER_ACTUAL_HP_BASE = 0x30009760
 USUM_BATTLE_PLAYER_STRIDE = 0x330
 USUM_BATTLE_HP_SIZE = 2
+USUM_BATTLE_DISPLAY_FROM_MAX = USUM_BATTLE_PLAYER_DISPLAY_HP_BASE - USUM_BATTLE_PLAYER_MAX_HP_BASE
+USUM_BATTLE_ACTUAL_FROM_MAX = USUM_BATTLE_PLAYER_ACTUAL_HP_BASE - USUM_BATTLE_PLAYER_MAX_HP_BASE
+
+# Identidad PK7 alineada con las filas de la tabla HP, no con los slots de party.
+# Fuente técnica primaria: USUMCheatMenu Sources/pokeutil/pokemon.h declara
+# 0x3254EE60 + 0x104*N como "PARTY ON BATTLE INITIAL DATA". La reproducción
+# física alpha.60 del 22-08-2026 confirmó los seis PK7 cifrados/checksum-válidos
+# en UltraSol: Porygon,Eevee,Kangaskhan,Registeel,Tsareena,Carnivine, exactamente
+# el mismo orden que las filas Max=[19,19,149,18,101,17], frente a la party
+# Registeel,Eevee,Kangaskhan,Porygon,Tsareena,Carnivine. Esta lectura demostró
+# directamente que row 1 == party slot 4 aun con dos miembros a 19/19.
+USUM_BATTLE_PLAYER_IDENTITY_BASE = 0x3254EE60
+USUM_BATTLE_PLAYER_IDENTITY_STRIDE = 0x104
+USUM_BATTLE_PLAYER_IDENTITY_SIZE = PK7_STORED_SIZE
 
 # Azahar 263745c RPC: HandleWriteMemory permite PROCESS_IMAGE, HEAP,
 # LINEAR_HEAP y N3DS_EXTRA_RAM, pero NO NEW_LINEAR_HEAP (0x30000000...).
@@ -117,7 +146,7 @@ USUM_SAVE_ITEM_BLOCK_SIZE = 0x00E28
 USUM_SAVE_PARTY_BLOCK_OFFSET = 0x01600
 USUM_SAVE_MISC_BLOCK_OFFSET = 0x04400
 USUM_SAVE_MISC_BLOCK_SIZE = 0x001FC
-# PKHeX SaveBlockAccessor7SM: BoxLayout (bloque 13) y BoxPokemon (bloque 14).
+# PKHeX SaveBlockAccessor7USUM: BoxLayout (bloque 13) y BoxPokemon (bloque 14).
 # Son offsets DEL ARCHIVO SAV7USUM, nunca direcciones RAM. Alpha.21 solo los usa
 # después de demostrar en la sesión actual que Items -> Misc -> BoxLayout viven
 # con exactamente la misma relación relativa tanto en host FCRAM como en guest RPC.
@@ -320,7 +349,7 @@ class USUMBattleProbe:
 
 @dataclass(frozen=True, slots=True)
 class USUMLiveWriteResult:
-    """Resultado de una escritura de rol PK7 confirmada en la RAM de SM."""
+    """Resultado de una escritura PK7 confirmada en la RAM de USUM."""
 
     game: SaveGameData
     process: AzaharProcess
@@ -438,6 +467,17 @@ def parse_pk7_party(raw: bytes, slot: int, move_names: dict[int, str]) -> SavePo
         for move_id in move_ids
     ]
     iv32 = struct.unpack_from("<I", data, 0x74)[0]
+    nature_id = int(data[0x1C])
+    nature = nature_presentation(nature_id)
+
+    # PKHeX PK7/PartyData. EV e IV usan el orden binario
+    # PS, Atq., Def., Vel., At. Esp., Def. Esp.; la UI usa el orden canónico
+    # PS, Atq., Def., At. Esp., Def. Esp., Vel. PartyData anexa los stats
+    # calculados desde 0xF2 con esa misma diferencia de orden.
+    ev_binary = tuple(int(value) for value in data[0x1E:0x24])
+    iv_binary = tuple(int((iv32 >> (index * 5)) & 0x1F) for index in range(6))
+    stat_binary = tuple(struct.unpack_from("<H", data, 0xF2 + index * 2)[0] for index in range(6))
+    canonical_order = (0, 1, 2, 4, 5, 3)
 
     # PKHeX PK7: MarkingValue es un ushort en 0x16; cada símbolo ocupa 2 bits.
     # Para RoleRun cualquier color distinto de None (0) significa marca activa.
@@ -464,6 +504,16 @@ def parse_pk7_party(raw: bytes, slot: int, move_names: dict[int, str]) -> SavePo
         form=int(form),
         current_hp=struct.unpack_from("<H", data, 0xF0)[0],
         max_hp=struct.unpack_from("<H", data, 0xF2)[0],
+        status_condition=struct.unpack_from("<I", data, 0xE8)[0],
+        nature_id=nature_id,
+        stat_nature_id=nature_id,
+        nature=nature.name if nature is not None else "",
+        stat_nature=nature.name if nature is not None else "",
+        nature_increased=nature.increased if nature is not None else None,
+        nature_decreased=nature.decreased if nature is not None else None,
+        stats=stat_dict(tuple(stat_binary[index] for index in canonical_order)),
+        ivs=stat_dict(tuple(iv_binary[index] for index in canonical_order)),
+        evs=stat_dict(tuple(ev_binary[index] for index in canonical_order)),
     )
 
 
@@ -517,7 +567,7 @@ def _is_structurally_valid_occupied_pk7(raw: bytes) -> bool:
 def parse_pk7_boxed(
     raw: bytes, box: int, box_slot: int, move_names: dict[int, str],
 ) -> SavePokemon | None:
-    """Interpreta exclusivamente el bloque PK7 almacenado (0xE8) de una caja SM."""
+    """Interpreta exclusivamente el bloque PK7 almacenado (0xE8) de una caja USUM."""
     if len(raw) != PK7_STORED_SIZE:
         raise USUMLiveError(f"El hueco {box}:{box_slot} del PC tiene un tamaño PK7 inesperado.")
     if not any(raw):
@@ -534,7 +584,7 @@ def parse_pk7_boxed(
     pid = struct.unpack_from("<I", data, 0x18)[0]
     form = data[0x1D] >> 3
     experience = struct.unpack_from("<I", data, 0x10)[0]
-    level = boxed_level("sm", species_id, form, experience)
+    level = boxed_level("usum", species_id, form, experience)
     nickname = _decode_basic_utf16(data[0x40:0x58])
     species_name = nickname or f"Especie #{species_id}"
     move_ids = [struct.unpack_from("<H", data, offset)[0] for offset in _PK7_MOVE_OFFSETS]
@@ -543,6 +593,11 @@ def parse_pk7_boxed(
         for move_id in move_ids
     ]
     iv32 = struct.unpack_from("<I", data, 0x74)[0]
+    nature_id = int(data[0x1C])
+    nature = nature_presentation(nature_id)
+    ev_binary = tuple(int(value) for value in data[0x1E:0x24])
+    iv_binary = tuple(int((iv32 >> (index * 5)) & 0x1F) for index in range(6))
+    canonical_order = (0, 1, 2, 4, 5, 3)
     marking_value = struct.unpack_from("<H", data, 0x16)[0]
     markings = [bool((marking_value >> (index * 2)) & 0b11) for index in range(6)]
     role, role_symbol = role_from_markings(markings, layout=2)
@@ -554,6 +609,14 @@ def parse_pk7_boxed(
         is_egg=bool(iv32 & 0x40000000), markings=markings,
         role=role, role_symbol=role_symbol, box=int(box), box_slot=int(box_slot),
         pid=int(pid), tid=int(tid), sid=int(sid), form=int(form),
+        nature_id=nature_id,
+        stat_nature_id=nature_id,
+        nature=nature.name if nature is not None else "",
+        stat_nature=nature.name if nature is not None else "",
+        nature_increased=nature.increased if nature is not None else None,
+        nature_decreased=nature.decreased if nature is not None else None,
+        ivs=stat_dict(tuple(iv_binary[index] for index in canonical_order)),
+        evs=stat_dict(tuple(ev_binary[index] for index in canonical_order)),
     )
 
 
@@ -575,7 +638,7 @@ def _pc_matrix_size(box_count: int, box_slot_count: int) -> int:
 
 def _pc_slot_index(box: int, box_slot: int, box_slot_count: int) -> int:
     if int(box) < 1 or int(box_slot) < 1 or int(box_slot) > int(box_slot_count):
-        raise USUMLiveError("Caja/slot de PC fuera de rango al preparar un testigo SM.")
+        raise USUMLiveError("Caja/slot de PC fuera de rango al preparar un testigo USUM.")
     return (int(box) - 1) * int(box_slot_count) + (int(box_slot) - 1)
 
 
@@ -584,7 +647,7 @@ def _parse_pc_matrix(
 ) -> dict[tuple[int, int], SavePokemon | None]:
     expected = _pc_matrix_size(box_count, box_slot_count)
     if len(raw) != expected:
-        raise USUMLiveError("La matriz viva del PC SM tiene un tamaño distinto al informado por PKHeX.")
+        raise USUMLiveError("La matriz viva del PC USUM tiene un tamaño distinto al informado por PKHeX.")
     result: dict[tuple[int, int], SavePokemon | None] = {}
     for index in range(int(box_count) * int(box_slot_count)):
         start = index * PK7_STORED_SIZE
@@ -740,45 +803,122 @@ class USUMLiveReader:
         client_factory: Callable[[], AzaharRPCClient] = AzaharRPCClient,
         stable_delay: float = 0.045,
         snapshot_attempts: int = 4,
+        host_memory_factory: Callable[[], WindowsProcessMemory] = WindowsProcessMemory,
     ) -> None:
         self.client_factory = client_factory
+        self.host_memory_factory = host_memory_factory
         self.stable_delay = max(0.0, float(stable_delay))
         self.snapshot_attempts = max(1, int(snapshot_attempts))
         self.move_names = self._load_move_names(move_catalog_path)
         self._party_bases_by_process: dict[tuple[int, int, str], int] = {}
         self._last_resolution: dict[str, object] = {}
-        # Alpha.58: traza acotada de HP de batalla USUM. Se usa únicamente para
-        # demostrar por qué el primer Pokémon activo puede no registrar una baja
-        # mientras un sustituto posterior sí. No escribe RAM ni escanea FCRAM.
+        self._resume_identity_witnesses: set[tuple[int, int, int, int]] = set()
+        # Alpha.59 conserva el journal completo de la vida del reader: una
+        # reentrada del flag o un reinicio del juego no puede truncar la batalla
+        # anterior. Cada payload se duplica también en un archivo inmutable.
         self._battle_trace_active = False
         self._battle_trace_sequence = 0
+        self._battle_trace_episode = 0
+        self._battle_trace_initialized = False
+        self._battle_trace_archive_path: Path | None = None
+        self._battle_trace_last_flags: tuple[int, int] | None = None
         self._battle_trace_path = LOG_DIR / "usum_battle_health_trace_latest.jsonl"
+        # La base de HP se cachea solo mientras sigue superando readback y
+        # validación. Nunca se extrapola entre procesos/batallas.
+        self._battle_lane_cache: dict[tuple[int, int, str], int] = {}
+        self._battle_lane_resolution: dict[str, object] = {}
+        self._battle_lane_failed_at: dict[tuple[object, ...], float] = {}
+        self._battle_party_anchor: tuple[tuple[int, int, str], int, tuple[bytes, ...]] | None = None
+        # Una batalla física puede suspender el carril HP mientras el juego abre
+        # su selector forzado. El mismo par de flags persiste en overworld, así
+        # que el episodio exige terminal positivo o convergencia KO→PartyData.
+        self._battle_lifecycle_processes: set[tuple[int, int, str]] = set()
+        self._battle_suspended_processes: set[tuple[int, int, str]] = set()
+        # Alpha.62: 0x00040005/6 está demostrado tanto durante la selección
+        # forzada como ya en overworld, por lo que no identifica por sí solo el
+        # final. Conservamos exclusivamente transiciones Displayed HP >0->0 de
+        # filas validadas y exigimos que esos mismos PK7 converjan después a 0 en
+        # PartyData. Ambas fuentes ya forman parte de la captura normal y están
+        # enlazadas por identidad fuerte; no se introduce ninguna dirección nueva.
+        self._battle_visible_hp_by_process: dict[
+            tuple[int, int, str], dict[tuple[int, int, int, int], int]
+        ] = {}
+        self._battle_observed_faints_by_process: dict[
+            tuple[int, int, str], set[tuple[int, int, int, int]]
+        ] = {}
+        self._battle_idle_evidence_signatures: dict[
+            tuple[int, int, str], tuple[tuple[tuple[int, int, int, int], ...], ...]
+        ] = {}
+        # party-index -> battle-row (ambos cero-based). Solo se cachea un mapeo
+        # completo demostrado; cambia de forma legítima al elegir otro activo.
+        self._battle_row_mappings: dict[
+            tuple[int, int, str],
+            tuple[tuple[tuple[int, int, int, int], ...], tuple[int, ...], tuple[int, ...]],
+        ] = {}
 
-
-    def _battle_trace_write(self, payload: dict[str, object], *, reset: bool = False) -> None:
+    def set_resume_identity_witnesses(self, identities: Sequence[str]) -> None:
+        """Carga identidades persistidas que pueden demostrar sustitutos conocidos."""
+        parsed: set[tuple[int, int, int, int]] = set()
+        for value in identities:
+            parts = str(value or "").split(":")
+            if len(parts) < 4:
+                continue
+            try:
+                identity = tuple(int(part) for part in parts[:4])
+            except (TypeError, ValueError):
+                continue
+            if all(number >= 0 for number in identity) and identity[0] > 0:
+                parsed.add(identity)  # type: ignore[arg-type]
+        self._resume_identity_witnesses = parsed
+    def _battle_trace_write(self, payload: dict[str, object]) -> None:
         """Escribe una línea JSON compacta del carril HP de batalla.
 
         La traza es deliberadamente pequeña: solo contiene el flag, las seis filas
         Max/Displayed/Actual y la party PK7 usada como testigo. Nunca incluye el
         bloque RAM completo ni ejecuta búsquedas adicionales.
         """
-        try:
-            LOG_DIR.mkdir(parents=True, exist_ok=True)
-            mode = "w" if reset else "a"
-            with self._battle_trace_path.open(mode, encoding="utf-8") as handle:
-                handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
-        except OSError:
-            pass
+        first = not self._battle_trace_initialized
+        if first:
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+            self._battle_trace_archive_path = (
+                LOG_DIR / "USUM-Battle-Traces" / f"usum-battle-health-{stamp}.jsonl"
+            )
+            self._battle_trace_initialized = True
+        line = json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n"
+        for path, mode in (
+            (self._battle_trace_path, "w" if first else "a"),
+            (self._battle_trace_archive_path, "a"),
+        ):
+            if path is None:
+                continue
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open(mode, encoding="utf-8") as handle:
+                    handle.write(line)
+            except OSError:
+                continue
 
-    def _battle_trace_start(self, current: SaveGameData) -> None:
+    def _battle_trace_start(
+        self, current: SaveGameData, *, process: AzaharProcess,
+        primary_flag: int, phase_flag: int,
+    ) -> None:
         if self._battle_trace_active:
             return
         self._battle_trace_active = True
         self._battle_trace_sequence = 0
+        self._battle_trace_episode += 1
         self._battle_trace_write({
             "event": "battle-start",
             "created_at": datetime.now().isoformat(timespec="milliseconds"),
             "version": APP_VERSION,
+            "episode": int(self._battle_trace_episode),
+            "process": {
+                "process_id": int(process.process_id),
+                "title_id": f"0x{int(process.title_id):016X}",
+                "name": str(process.name),
+            },
+            "primary_flag": f"0x{int(primary_flag):08X}",
+            "phase_flag": f"0x{int(phase_flag):08X}",
             "party": [
                 {
                     "party_index": index + 1,
@@ -790,41 +930,151 @@ class USUMLiveReader:
                 }
                 for index, pokemon in enumerate(current.party[:6])
             ],
-        }, reset=True)
+        })
 
-    def _battle_trace_end(self, *, flag_value: int) -> None:
+    def _battle_trace_end(
+        self, *, flag_value: int, phase_value: int | None = None,
+        reason: str = "terminal-pair-observed", evidence: dict[str, object] | None = None,
+    ) -> None:
         if not self._battle_trace_active:
             return
-        self._battle_trace_write({
+        payload: dict[str, object] = {
             "event": "battle-end",
             "created_at": datetime.now().isoformat(timespec="milliseconds"),
             "flag": f"0x{int(flag_value):08X}",
+            "reason": str(reason),
             "sequence": int(self._battle_trace_sequence),
-        })
+            "episode": int(self._battle_trace_episode),
+        }
+        if phase_value is not None:
+            payload["phase_flag"] = f"0x{int(phase_value):08X}"
+        if evidence:
+            payload["evidence"] = dict(evidence)
+        self._battle_trace_write(payload)
         self._battle_trace_active = False
+
+    @staticmethod
+    def _battle_identity_payload(identity: tuple[int, int, int, int]) -> dict[str, object]:
+        species_id, pid, tid, sid = identity
+        return {
+            "species_id": int(species_id),
+            "pid": f"0x{int(pid):08X}",
+            "tid": int(tid),
+            "sid": int(sid),
+        }
+
+    def _clear_battle_lifecycle(self, process_key: tuple[int, int, str]) -> None:
+        self._battle_lifecycle_processes.discard(process_key)
+        self._battle_suspended_processes.discard(process_key)
+        self._battle_lane_cache.pop(process_key, None)
+        self._battle_row_mappings.pop(process_key, None)
+        self._battle_visible_hp_by_process.pop(process_key, None)
+        self._battle_observed_faints_by_process.pop(process_key, None)
+        self._battle_idle_evidence_signatures.pop(process_key, None)
+
+    def _track_validated_battle_hp(
+        self, process_key: tuple[int, int, str],
+        party: Sequence[SavePokemon], clones: Sequence[SavePokemon],
+        validated_slots: Sequence[int],
+    ) -> None:
+        visible = self._battle_visible_hp_by_process.setdefault(process_key, {})
+        observed = self._battle_observed_faints_by_process.setdefault(process_key, set())
+        valid = {int(slot) for slot in validated_slots}
+        for index, (original, clone) in enumerate(zip(party, clones), start=1):
+            if index not in valid:
+                continue
+            identity = _identity(original)
+            current_hp = int(getattr(clone, "current_hp", 0) or 0)
+            previous_hp = visible.get(identity)
+            if previous_hp is not None and int(previous_hp) > 0 and current_hp == 0:
+                observed.add(identity)
+            visible[identity] = current_hp
+
+    def _idle_party_convergence(
+        self, process_key: tuple[int, int, str], current: SaveGameData,
+        *, primary_flag: int, phase_flag: int,
+    ) -> tuple[bool, dict[str, object]]:
+        observed = set(self._battle_observed_faints_by_process.get(process_key, set()))
+        party_hp = {
+            _identity(pokemon): int(getattr(pokemon, "current_hp", 0) or 0)
+            for pokemon in current.party
+            if int(getattr(pokemon, "species_id", 0) or 0) > 0
+        }
+        converged = {identity for identity in observed if party_hp.get(identity) == 0}
+        pending = observed - converged
+        signature = (tuple(sorted(observed)), tuple(sorted(converged)), tuple(sorted(pending)))
+        evidence: dict[str, object] = {
+            "observed_faints": [
+                self._battle_identity_payload(identity) for identity in sorted(observed)
+            ],
+            "converged_to_party_zero": [
+                self._battle_identity_payload(identity) for identity in sorted(converged)
+            ],
+            "not_converged": [
+                self._battle_identity_payload(identity) for identity in sorted(pending)
+            ],
+        }
+        if self._battle_idle_evidence_signatures.get(process_key) != signature:
+            self._battle_idle_evidence_signatures[process_key] = signature
+            self._battle_trace_write({
+                "event": "battle-idle-evidence",
+                "created_at": datetime.now().isoformat(timespec="milliseconds"),
+                "episode": int(self._battle_trace_episode),
+                "primary_flag": f"0x{int(primary_flag):08X}",
+                "phase_flag": f"0x{int(phase_flag):08X}",
+                **evidence,
+            })
+        return bool(observed) and not pending, evidence
 
     def _battle_trace_sample(
         self, *, current: SaveGameData, max_raw: bytes, displayed_raw: bytes, actual_raw: bytes,
         validated_slots: Sequence[int], rejected_slots: Sequence[str],
+        row_mapping: Sequence[int | None],
+        row_identities: Sequence[tuple[int, int, int, int] | None],
+        row_identity_reason: str,
+        process: AzaharProcess, before_state: int, before_phase: int,
+        after_state: int, after_phase: int, max_base: int, lane_source: str,
     ) -> None:
         if not self._battle_trace_active:
-            self._battle_trace_start(current)
+            self._battle_trace_start(
+                current, process=process, primary_flag=before_state, phase_flag=before_phase,
+            )
         self._battle_trace_sequence += 1
         party = [pokemon for pokemon in current.party if int(getattr(pokemon, "species_id", 0) or 0) > 0][:6]
         party_maxes = [int(getattr(pokemon, "max_hp", 0) or 0) for pokemon in party]
+        mapped_party_by_row = {
+            int(row): party_index + 1
+            for party_index, row in enumerate(row_mapping)
+            if row is not None
+        }
         rows = []
         for index in range(len(party)):
             offset = index * USUM_BATTLE_PLAYER_STRIDE
             max_hp = int(struct.unpack_from("<H", max_raw, offset)[0])
             displayed_hp = int(struct.unpack_from("<H", displayed_raw, offset)[0])
             actual_hp = int(struct.unpack_from("<H", actual_raw, offset)[0])
+            identity = row_identities[index] if index < len(row_identities) else None
             rows.append({
                 "battle_row": index + 1,
                 "max_hp": max_hp,
                 "displayed_hp": displayed_hp,
                 "actual_hp": actual_hp,
                 "same_index_party_max": party_maxes[index] if index < len(party_maxes) else None,
-                "same_index_valid": (index + 1) in set(validated_slots),
+                "same_index_valid": bool(
+                    index < len(party_maxes)
+                    and party_maxes[index] > 0
+                    and party_maxes[index] == max_hp
+                    and 0 <= displayed_hp <= max_hp
+                    and 0 <= actual_hp <= max_hp
+                ),
+                "mapped_party_slot": mapped_party_by_row.get(index),
+                "mapped_valid": mapped_party_by_row.get(index) in set(validated_slots),
+                "identity": None if identity is None else {
+                    "species_id": int(identity[0]),
+                    "pid": f"0x{int(identity[1]):08X}",
+                    "tid": int(identity[2]),
+                    "sid": int(identity[3]),
+                },
                 "max_hp_candidate_party_slots": [
                     candidate + 1 for candidate, known_max in enumerate(party_maxes)
                     if known_max > 0 and known_max == max_hp
@@ -834,6 +1084,21 @@ class USUMLiveReader:
             "event": "battle-sample",
             "created_at": datetime.now().isoformat(timespec="milliseconds"),
             "sequence": int(self._battle_trace_sequence),
+            "episode": int(self._battle_trace_episode),
+            "flags": {
+                "primary_before": f"0x{int(before_state):08X}",
+                "phase_before": f"0x{int(before_phase):08X}",
+                "primary_after": f"0x{int(after_state):08X}",
+                "phase_after": f"0x{int(after_phase):08X}",
+            },
+            "lane": {
+                "source": str(lane_source),
+                "max_base": f"0x{int(max_base):08X}",
+                "displayed_base": f"0x{int(max_base + USUM_BATTLE_DISPLAY_FROM_MAX):08X}",
+                "actual_base": f"0x{int(max_base + USUM_BATTLE_ACTUAL_FROM_MAX):08X}",
+                "identity_base": f"0x{USUM_BATTLE_PLAYER_IDENTITY_BASE:08X}",
+                "identity_reason": str(row_identity_reason),
+            },
             "party": [
                 {
                     "party_index": index + 1,
@@ -842,12 +1107,19 @@ class USUMLiveReader:
                     "name": str(getattr(pokemon, "nickname", "") or getattr(pokemon, "species", "")),
                     "current_hp": int(getattr(pokemon, "current_hp", 0) or 0),
                     "max_hp": int(getattr(pokemon, "max_hp", 0) or 0),
+                    "identity": {
+                        "species_id": int(getattr(pokemon, "species_id", 0) or 0),
+                        "pid": f"0x{int(getattr(pokemon, 'pid', 0) or 0):08X}",
+                        "tid": int(getattr(pokemon, "tid", 0) or 0),
+                        "sid": int(getattr(pokemon, "sid", 0) or 0),
+                    },
                 }
                 for index, pokemon in enumerate(party)
             ],
             "rows": rows,
             "validated_slots": list(validated_slots),
             "rejected_slots": list(rejected_slots),
+            "health_game_generated": bool(validated_slots),
         })
 
     @staticmethod
@@ -880,6 +1152,10 @@ class USUMLiveReader:
             "Azahar responde, pero no aparece Pokémon UltraSol/UltraLuna con un Title ID válido "
             f"(procesos visibles: {running})."
         )
+
+    @staticmethod
+    def _battle_process_key(process: AzaharProcess) -> tuple[int, int, str]:
+        return int(process.process_id), int(process.title_id), str(process.name)
 
     @staticmethod
     def _normalize_memory_requests(
@@ -915,7 +1191,7 @@ class USUMLiveReader:
 
     @classmethod
     def _read_party_at(cls, client: AzaharRPCClient, base_address: int) -> tuple[bytes, ...]:
-        """Reconstruye los seis PK7 desde el layout sparse real de la party SM."""
+        """Reconstruye los seis PK7 desde el layout sparse real de la party USUM."""
         slots: list[bytes] = []
         for index in range(6):
             slot_address = int(base_address) + index * USUM_PARTY_STRIDE
@@ -932,8 +1208,8 @@ class USUMLiveReader:
                 party.append(pokemon)
         return party
 
-    @staticmethod
     def _party_continuity_proof(
+        self,
         live: Sequence[SavePokemon], current: SaveGameData,
     ) -> str | None:
         """Demuestra una candidata de party sin exigir que el ``main`` esté al día.
@@ -991,11 +1267,24 @@ class USUMLiveReader:
                 observed_common = tuple(value for value in observed if value in common)
                 if expected_common == observed_common:
                     return "single-replacement-known-members"
+
+        # Dos sustituciones gestionadas por RoleRun tras bajas consecutivas:
+        # se exigen cuatro testigos conservados y evidencia persistida para
+        # AMBAS identidades entrantes. Una candidata estructural por sí sola
+        # continúa siendo insuficiente.
+        if len(expected) == len(observed) and len(expected) >= 4:
+            common = expected_set & observed_set
+            incoming = observed_set - expected_set
+            if (
+                len(incoming) == 2
+                and len(common) == len(expected) - 2
+                and incoming <= self._resume_identity_witnesses
+            ):
+                return "multiple-managed-replacements"
         return None
 
-    @classmethod
-    def _party_matches_witness(cls, live: Sequence[SavePokemon], current: SaveGameData) -> bool:
-        return cls._party_continuity_proof(live, current) is not None
+    def _party_matches_witness(self, live: Sequence[SavePokemon], current: SaveGameData) -> bool:
+        return self._party_continuity_proof(live, current) is not None
 
     @staticmethod
     def _party_is_compact_prefix(live: Sequence[SavePokemon]) -> bool:
@@ -1087,7 +1376,7 @@ class USUMLiveReader:
             base, party, _proof, _overlap = strongest[0]
             return base, party
         raise USUMLiveError(
-            "La calibración de la party SM encontró más de una base con la misma evidencia fuerte. "
+            "La calibración de la party USUM encontró más de una base con la misma evidencia fuerte. "
             "No se eligió ninguna por cercanía ni por suposición."
         )
 
@@ -1238,6 +1527,9 @@ class USUMLiveReader:
                         continue
                     # La validación estructural se repite SIEMPRE, incluso con base cacheada.
                     game = self._build_game(second_party, current, process, party_base)
+                    self._battle_party_anchor = (
+                        self._battle_process_key(process), int(party_base), tuple(second_party),
+                    )
                     return USUMLiveSnapshot(
                         game=game,
                         process=process,
@@ -1267,38 +1559,528 @@ class USUMLiveReader:
     ) -> USUMLiveSnapshot:
         return self._capture(current, memory_blocks=memory_blocks)
 
+    @staticmethod
+    def _read_battle_flags(client) -> tuple[int, int]:
+        primary_raw = bytes(client.read_memory(USUM_BATTLE_STATE_ADDRESS, 4))
+        phase_raw = bytes(client.read_memory(USUM_BATTLE_PHASE_ADDRESS, 4))
+        if len(primary_raw) != 4 or len(phase_raw) != 4:
+            raise USUMLiveError("Azahar devolvió flags de batalla USUM truncados.")
+        return (
+            int(struct.unpack_from("<I", primary_raw, 0)[0]),
+            int(struct.unpack_from("<I", phase_raw, 0)[0]),
+        )
+
+    @staticmethod
+    def _read_battle_lane(client, *, max_base: int, count: int) -> tuple[bytes, bytes, bytes]:
+        span = ((int(count) - 1) * USUM_BATTLE_PLAYER_STRIDE) + USUM_BATTLE_HP_SIZE
+        max_raw = bytes(client.read_memory(int(max_base), span))
+        displayed_raw = bytes(client.read_memory(
+            int(max_base) + USUM_BATTLE_DISPLAY_FROM_MAX, span,
+        ))
+        actual_raw = bytes(client.read_memory(
+            int(max_base) + USUM_BATTLE_ACTUAL_FROM_MAX, span,
+        ))
+        if len(max_raw) != span or len(displayed_raw) != span or len(actual_raw) != span:
+            raise USUMLiveError("Azahar devolvió una tabla de HP USUM truncada.")
+        return max_raw, displayed_raw, actual_raw
+
+    @staticmethod
+    def _decode_battle_row_identities(
+        raw: bytes, *, count: int,
+    ) -> tuple[tuple[int, int, int, int] | None, ...]:
+        identities: list[tuple[int, int, int, int] | None] = []
+        for row in range(int(count)):
+            start = row * USUM_BATTLE_PLAYER_IDENTITY_STRIDE
+            stored = bytes(raw[start:start + USUM_BATTLE_PLAYER_IDENTITY_SIZE])
+            try:
+                plain, _encrypted = _plain_pk7_stored_with_state(stored)
+                species = int(struct.unpack_from("<H", plain, 0x08)[0])
+                if species <= 0:
+                    identities.append(None)
+                    continue
+                identities.append((
+                    species,
+                    int(struct.unpack_from("<I", plain, 0x18)[0]),
+                    int(struct.unpack_from("<H", plain, 0x0C)[0]),
+                    int(struct.unpack_from("<H", plain, 0x0E)[0]),
+                ))
+            except (USUMLiveError, ValueError, struct.error):
+                identities.append(None)
+        return tuple(identities)
+
+    def _read_battle_row_identities(
+        self, client, *, count: int,
+    ) -> tuple[tuple[int, int, int, int] | None, ...]:
+        """Lee dos veces la identidad PK7 de cada fila de batalla.
+
+        Se comparan identidades descifradas, no los 0xE8 bytes completos: PP y
+        otros campos pueden cambiar legítimamente durante una acción, mientras
+        especie+PID+TID+SID deben permanecer estables para la fila.
+        """
+
+        span = (
+            ((int(count) - 1) * USUM_BATTLE_PLAYER_IDENTITY_STRIDE)
+            + USUM_BATTLE_PLAYER_IDENTITY_SIZE
+        )
+        first_raw = bytes(client.read_memory(USUM_BATTLE_PLAYER_IDENTITY_BASE, span))
+        if len(first_raw) != span:
+            raise USUMLiveError("Azahar devolvió la tabla de identidad de batalla USUM truncada.")
+        first = self._decode_battle_row_identities(first_raw, count=count)
+        if self.stable_delay:
+            time.sleep(self.stable_delay)
+        second_raw = bytes(client.read_memory(USUM_BATTLE_PLAYER_IDENTITY_BASE, span))
+        if len(second_raw) != span:
+            raise USUMLiveError("Azahar devolvió la tabla de identidad de batalla USUM truncada.")
+        second = self._decode_battle_row_identities(second_raw, count=count)
+        if first != second:
+            raise USUMLiveError("La identidad de las filas de batalla cambió durante la doble lectura.")
+        return second
+
+    @staticmethod
+    def _battle_lane_matches_party_multiset(
+        party: Sequence[SavePokemon], max_raw: bytes, displayed_raw: bytes, actual_raw: bytes,
+    ) -> bool:
+        party_maxes = tuple(sorted(
+            int(getattr(pokemon, "max_hp", 0) or 0) for pokemon in party
+        ))
+        if not party_maxes or party_maxes[0] <= 0:
+            return False
+        row_maxes: list[int] = []
+        for row in range(len(party)):
+            offset = row * USUM_BATTLE_PLAYER_STRIDE
+            max_hp = int(struct.unpack_from("<H", max_raw, offset)[0])
+            displayed_hp = int(struct.unpack_from("<H", displayed_raw, offset)[0])
+            actual_hp = int(struct.unpack_from("<H", actual_raw, offset)[0])
+            if max_hp <= 0 or not (0 <= displayed_hp <= max_hp and 0 <= actual_hp <= max_hp):
+                return False
+            row_maxes.append(max_hp)
+        return tuple(sorted(row_maxes)) == party_maxes
+
+    def _resolve_battle_row_mapping(
+        self,
+        *,
+        process_key: tuple[int, int, str],
+        party: Sequence[SavePokemon],
+        max_raw: bytes,
+        displayed_raw: bytes,
+        actual_raw: bytes,
+        row_identities: Sequence[tuple[int, int, int, int] | None] = (),
+    ) -> tuple[int | None, ...]:
+        """Vincula cada miembro de party con una fila HP sin asumir su índice.
+
+        La reproducción física alpha.59 demostró que elegir el slot 4 como
+        activo puede permutar las filas 1 y 4. Alpha.60 demostró después que Max,
+        Displayed y Actual pueden ser idénticos para dos Pokémon y no contienen
+        identidad suficiente. Alpha.61 restringe cada candidata mediante el PK7
+        fuerte alineado con la fila; los Max únicos siguen siendo una prueba
+        parcial segura si la tabla de identidad no está disponible. Si más de
+        una permutación sigue siendo posible, solo se publican los miembros cuya
+        fila es idéntica en todas ellas.
+        """
+
+        count = len(party)
+        if count <= 0:
+            return ()
+        identities = tuple(_identity(pokemon) for pokemon in party)
+        party_maxes = tuple(int(getattr(pokemon, "max_hp", 0) or 0) for pokemon in party)
+        row_maxes = tuple(
+            int(struct.unpack_from("<H", max_raw, row * USUM_BATTLE_PLAYER_STRIDE)[0])
+            for row in range(count)
+        )
+        row_displayed = tuple(
+            int(struct.unpack_from("<H", displayed_raw, row * USUM_BATTLE_PLAYER_STRIDE)[0])
+            for row in range(count)
+        )
+        row_actual = tuple(
+            int(struct.unpack_from("<H", actual_raw, row * USUM_BATTLE_PLAYER_STRIDE)[0])
+            for row in range(count)
+        )
+        identities_by_row = tuple(row_identities)
+        if len(identities_by_row) != count:
+            identities_by_row = tuple(None for _ in range(count))
+
+        cached = self._battle_row_mappings.get(process_key)
+        if cached is not None:
+            cached_identities, cached_maxes, cached_rows = cached
+            cache_valid = (
+                cached_identities == identities
+                and cached_maxes == row_maxes
+                and len(cached_rows) == count
+                and len(set(cached_rows)) == count
+            )
+            if cache_valid:
+                for party_index, row in enumerate(cached_rows):
+                    known_max = party_maxes[party_index]
+                    observed_identity = identities_by_row[row]
+                    if (
+                        row_maxes[row] != known_max
+                        or known_max <= 0
+                        or not (0 <= row_displayed[row] <= known_max)
+                        or not (0 <= row_actual[row] <= known_max)
+                        or (
+                            observed_identity is not None
+                            and observed_identity != identities[party_index]
+                        )
+                    ):
+                        cache_valid = False
+                        break
+            if cache_valid:
+                return tuple(int(row) for row in cached_rows)
+            self._battle_row_mappings.pop(process_key, None)
+
+        row_candidates: list[tuple[int, ...]] = []
+        for party_index, known_max in enumerate(party_maxes):
+            row_candidates.append(tuple(
+                row for row in range(count)
+                if (
+                    known_max > 0
+                    and row_maxes[row] == known_max
+                    and 0 <= row_displayed[row] <= known_max
+                    and 0 <= row_actual[row] <= known_max
+                    and (
+                        identities_by_row[row] is None
+                        or identities_by_row[row] == identities[party_index]
+                    )
+                )
+            ))
+
+        # Conserva el comportamiento seguro alpha.56: una fila incompatible no
+        # invalida las demás. Enumeramos todos los matchings de cardinalidad
+        # máxima y solo aceptamos las asignaciones comunes a todos ellos.
+        structurally_valid: list[tuple[int | None, ...]] = []
+        best_count = -1
+
+        def collect(
+            party_index: int, used_rows: set[int], mapping: list[int | None],
+        ) -> None:
+            nonlocal best_count, structurally_valid
+            if party_index >= count:
+                mapped_count = sum(row is not None for row in mapping)
+                candidate = tuple(mapping)
+                if mapped_count > best_count:
+                    best_count = mapped_count
+                    structurally_valid = [candidate]
+                elif mapped_count == best_count:
+                    structurally_valid.append(candidate)
+                return
+            for row in row_candidates[party_index]:
+                if row in used_rows:
+                    continue
+                collect(
+                    party_index + 1,
+                    {*used_rows, row},
+                    [*mapping, int(row)],
+                )
+            collect(party_index + 1, used_rows, [*mapping, None])
+
+        collect(0, set(), [])
+
+        if best_count <= 0 or not structurally_valid:
+            return tuple(None for _ in party)
+
+        repeated_maxes = {
+            value for value in party_maxes
+            if value > 0 and party_maxes.count(value) > 1
+        }
+        witnessed: list[tuple[int | None, ...]] = []
+        for rows in structurally_valid:
+            if all(
+                row is None
+                or party_maxes[index] not in repeated_maxes
+                or (
+                    row_displayed[row] == int(getattr(party[index], "current_hp", 0) or 0)
+                    and row_actual[row] == int(getattr(party[index], "current_hp", 0) or 0)
+                )
+                for index, row in enumerate(rows)
+            ):
+                witnessed.append(rows)
+
+        candidates = witnessed if witnessed else structurally_valid
+        resolved: list[int | None] = []
+        for party_index in range(count):
+            rows = {candidate[party_index] for candidate in candidates}
+            resolved.append(next(iter(rows)) if len(rows) == 1 and None not in rows else None)
+
+        if all(row is not None for row in resolved):
+            full = tuple(int(row) for row in resolved if row is not None)
+            self._battle_row_mappings[process_key] = (identities, row_maxes, full)
+        return tuple(resolved)
+
+    def _trace_battle_lane_resolution(self, payload: dict[str, object]) -> None:
+        self._battle_lane_resolution = dict(payload)
+        self._battle_trace_write({
+            "event": "battle-lane-resolution",
+            "created_at": datetime.now().isoformat(timespec="milliseconds"),
+            "episode": int(self._battle_trace_episode),
+            **payload,
+        })
+
+    def _resolve_battle_lane(
+        self, *, client, process: AzaharProcess, current: SaveGameData,
+        party: Sequence[SavePokemon],
+        row_identities: Sequence[tuple[int, int, int, int] | None],
+    ) -> tuple[int, tuple[bytes, bytes, bytes], tuple[int, int], tuple[int, int]] | None:
+        """Demuestra la tabla de HP viva sin confiar en una base estática.
+
+        La party PK7 capturada de forma estable vincula el backing FCRAM host a
+        su dirección guest. Dentro de esa única región se exige la geometría
+        completa de HP como multiconjunto, una candidatura guest única y dos
+        readbacks RPC idénticos con el flag activo antes/después. La identidad
+        PK7 de filas demuestra después el orden; nunca se impone el de party.
+        """
+        process_key = self._battle_process_key(process)
+        party_maxes = tuple(int(getattr(pokemon, "max_hp", 0) or 0) for pokemon in party)
+        failure_key: tuple[object, ...] = (process_key, party_maxes, int(self._battle_trace_episode))
+        now = time.monotonic()
+        previous_failure = float(self._battle_lane_failed_at.get(failure_key, 0.0) or 0.0)
+        if previous_failure and now - previous_failure < 2.0:
+            return None
+
+        anchor = self._battle_party_anchor
+        if anchor is None or anchor[0] != process_key:
+            self._battle_lane_failed_at[failure_key] = now
+            self._trace_battle_lane_resolution({
+                "status": "rejected", "reason": "no-current-stable-party-anchor",
+                "party_max_hp": list(party_maxes),
+            })
+            return None
+        _anchor_key, guest_party_base, slot_raws = anchor
+        try:
+            parsed_anchor = self._parse_slots(slot_raws)
+            if self._party_continuity_proof(parsed_anchor, current) != "exact-slot-identity":
+                raise USUMLiveError("El ancla host no coincide slot a slot con la party del mismo tick.")
+
+            host_memory = self.host_memory_factory()
+            party_targets = host_memory.find_party_targets(
+                slot_raws=slot_raws, stored_size=PK7_STORED_SIZE,
+                stats_offset=USUM_PARTY_STATS_OFFSET, stats_size=USUM_PARTY_STATS_SIZE,
+                stride=USUM_PARTY_STRIDE,
+            )
+            mapped: dict[int, dict[str, int]] = {}
+            for target in party_targets:
+                host_lanes = host_memory.find_strided_u16_lanes_in_anchor_region(
+                    pid=int(target.pid), anchor_address=int(target.host_party_base),
+                    expected_values=party_maxes, stride=USUM_BATTLE_PLAYER_STRIDE,
+                    displayed_delta=USUM_BATTLE_DISPLAY_FROM_MAX,
+                    actual_delta=USUM_BATTLE_ACTUAL_FROM_MAX,
+                    max_candidates=8,
+                )
+                for host_max_base in host_lanes:
+                    guest_max_base = int(guest_party_base) + (
+                        int(host_max_base) - int(target.host_party_base)
+                    )
+                    last_byte = (
+                        guest_max_base + USUM_BATTLE_ACTUAL_FROM_MAX
+                        + (len(party_maxes) - 1) * USUM_BATTLE_PLAYER_STRIDE + 2
+                    )
+                    if not (_AZAHAR_NEW_LINEAR_HEAP <= guest_max_base < 0x40000000):
+                        continue
+                    if last_byte > 0x40000000:
+                        continue
+                    mapped[guest_max_base] = {
+                        "host_pid": int(target.pid),
+                        "host_party_base": int(target.host_party_base),
+                        "host_max_base": int(host_max_base),
+                    }
+
+            readback: dict[
+                int, tuple[tuple[bytes, bytes, bytes], tuple[int, int], tuple[int, int]]
+            ] = {}
+            for guest_max_base in sorted(mapped):
+                before = self._read_battle_flags(client)
+                first = self._read_battle_lane(client, max_base=guest_max_base, count=len(party))
+                middle = self._read_battle_flags(client)
+                second = self._read_battle_lane(client, max_base=guest_max_base, count=len(party))
+                after = self._read_battle_flags(client)
+                if not all(
+                    flags == (USUM_BATTLE_STATE_ACTIVE_VALUE, USUM_BATTLE_PHASE_ACTIVE_VALUE)
+                    for flags in (before, middle, after)
+                ):
+                    continue
+                if first != second:
+                    continue
+                if not self._battle_lane_matches_party_multiset(party, *second):
+                    continue
+                mapping = self._resolve_battle_row_mapping(
+                    process_key=process_key,
+                    party=party,
+                    max_raw=second[0],
+                    displayed_raw=second[1],
+                    actual_raw=second[2],
+                    row_identities=row_identities,
+                )
+                # La dirección de la lane queda demostrada por FCRAM anclada,
+                # multiconjunto completo, unicidad y doble readback. Una identidad
+                # ambigua solo cierra esas filas concretas; no invalida las filas
+                # únicas que el mismo bloque sí demuestra.
+                if len(mapping) != len(party) or all(row is None for row in mapping):
+                    continue
+                readback[guest_max_base] = (second, before, after)
+
+            if len(readback) != 1:
+                raise USUMLiveError(
+                    "La resolución no produjo una única tabla host↔guest con doble readback RPC."
+                )
+            guest_max_base, proof = next(iter(readback.items()))
+            geometry = mapped[guest_max_base]
+            self._battle_lane_cache[process_key] = int(guest_max_base)
+            self._trace_battle_lane_resolution({
+                "status": "accepted",
+                "reason": "exact-party-anchor+unique-full-max-vector+double-rpc-readback",
+                "party_max_hp": list(party_maxes),
+                "nominal_max_base": f"0x{USUM_BATTLE_PLAYER_MAX_HP_BASE:08X}",
+                "resolved_max_base": f"0x{int(guest_max_base):08X}",
+                "resolved_displayed_base": f"0x{int(guest_max_base + USUM_BATTLE_DISPLAY_FROM_MAX):08X}",
+                "resolved_actual_base": f"0x{int(guest_max_base + USUM_BATTLE_ACTUAL_FROM_MAX):08X}",
+                "guest_delta": int(guest_max_base - USUM_BATTLE_PLAYER_MAX_HP_BASE),
+                "host_pid": int(geometry["host_pid"]),
+                "host_party_base": f"0x{int(geometry['host_party_base']):X}",
+                "host_max_base": f"0x{int(geometry['host_max_base']):X}",
+                "party_target_count": len(party_targets),
+                "mapped_candidate_count": len(mapped),
+                "rpc_candidate_count": len(readback),
+            })
+            return int(guest_max_base), proof[0], proof[1], proof[2]
+        except Exception as exc:
+            self._battle_lane_failed_at[failure_key] = now
+            self._trace_battle_lane_resolution({
+                "status": "rejected", "reason": f"{type(exc).__name__}: {exc}",
+                "party_max_hp": list(party_maxes),
+            })
+            return None
+
     def read_battle_probe(self, current: SaveGameData) -> USUMBattleProbe | None:
         """Lee PS visibles de batalla sin mezclarlos con la captura estable.
 
-        La dirección procede de código público específico de Sun/Moon, pero
-        RoleRun exige dos pruebas en la ejecución actual antes de usarla:
-
-        1. el flag de batalla debe valer 0x00040001 antes Y después de leer HP;
-        2. el Max HP de cada slot ocupado debe coincidir exactamente con el Max
-           HP de la party PK7 live ya validada.
-
-        Si cualquiera de esas pruebas falla, devuelve una sonda sin ``health_game``
-        y el detector conserva el fallback post-combate de alpha.40.
+        La base publicada por USUMCheatMenu sigue siendo una candidata rápida,
+        no una verdad global. Si deja de describir la party, RoleRun localiza la
+        tabla dentro de la FCRAM ya anclada por los seis PK7, exige vector Max HP
+        completo, unicidad y doble readback RPC. Nunca publica una dirección
+        encontrada solo por semejanza parcial.
         """
         try:
             with self.client_factory() as client:
                 process = self._find_usum_process(client.process_list())
                 client.set_process(process.process_id)
+                process_key = self._battle_process_key(process)
 
-                before = bytes(client.read_memory(USUM_BATTLE_STATE_ADDRESS, 4))
-                if len(before) != 4:
-                    return None
-                before_state = struct.unpack_from("<I", before, 0)[0]
-                if int(before_state) != USUM_BATTLE_STATE_ACTIVE_VALUE:
-                    self._battle_trace_end(flag_value=int(before_state))
+                before_state, before_phase = self._read_battle_flags(client)
+                flags = (int(before_state), int(before_phase))
+                if flags != self._battle_trace_last_flags:
+                    self._battle_trace_write({
+                        "event": "battle-flag-transition",
+                        "created_at": datetime.now().isoformat(timespec="milliseconds"),
+                        "primary_flag": f"0x{int(before_state):08X}",
+                        "phase_flag": f"0x{int(before_phase):08X}",
+                        "process_id": int(process.process_id),
+                    })
+                    self._battle_trace_last_flags = flags
+
+                active_pair = (
+                    int(before_state) == USUM_BATTLE_STATE_ACTIVE_VALUE
+                    and int(before_phase) == USUM_BATTLE_PHASE_ACTIVE_VALUE
+                )
+                terminal_pair = (
+                    int(before_state) == USUM_BATTLE_STATE_TERMINAL_VALUE
+                    and int(before_phase) == USUM_BATTLE_PHASE_TERMINAL_VALUE
+                )
+                idle_pair = (
+                    int(before_state) == USUM_BATTLE_STATE_IDLE_VALUE
+                    and int(before_phase) == USUM_BATTLE_PHASE_IDLE_VALUE
+                )
+                lifecycle_active = process_key in self._battle_lifecycle_processes
+
+                if terminal_pair:
+                    if lifecycle_active:
+                        self._battle_trace_end(
+                            flag_value=int(before_state), phase_value=int(before_phase),
+                            reason="terminal-pair-observed",
+                        )
+                    self._clear_battle_lifecycle(process_key)
                     return USUMBattleProbe(
                         state="none", validated=True,
-                        reason=f"battle_flag=0x{int(before_state):08X}",
+                        reason=(
+                            "fin de combate USUM demostrado por "
+                            f"battle_flag=0x{int(before_state):08X}; phase=0x{int(before_phase):08X}"
+                        ),
                     )
 
-                self._battle_trace_start(current)
+                if not active_pair:
+                    if lifecycle_active and idle_pair:
+                        party_converged, convergence_evidence = self._idle_party_convergence(
+                            process_key, current,
+                            primary_flag=int(before_state), phase_flag=int(before_phase),
+                        )
+                        if party_converged:
+                            self._battle_trace_end(
+                                flag_value=int(before_state), phase_value=int(before_phase),
+                                reason="observed-ko-converged-to-party",
+                                evidence=convergence_evidence,
+                            )
+                            self._clear_battle_lifecycle(process_key)
+                            return USUMBattleProbe(
+                                state="none", validated=True,
+                                reason=(
+                                    "fin de combate USUM demostrado: los KO >0→0 observados "
+                                    "en batalla convergieron por identidad a HP=0 en PartyData; "
+                                    f"battle_flag=0x{int(before_state):08X}; "
+                                    f"phase=0x{int(before_phase):08X}"
+                                ),
+                            )
+                        if process_key not in self._battle_suspended_processes:
+                            self._battle_trace_write({
+                                "event": "battle-suspend",
+                                "created_at": datetime.now().isoformat(timespec="milliseconds"),
+                                "episode": int(self._battle_trace_episode),
+                                "primary_flag": f"0x{int(before_state):08X}",
+                                "phase_flag": f"0x{int(before_phase):08X}",
+                                "reason": "idle-pair-awaiting-party-convergence",
+                            })
+                        self._battle_suspended_processes.add(process_key)
+                        # El par idle no permite distinguir todavía sustitución
+                        # forzada de overworld; la tabla HP no es publicable.
+                        return USUMBattleProbe(
+                            state="battle", validated=True,
+                            reason=(
+                                "estado idle USUM ambiguo; esperando convergencia KO→PartyData; "
+                                f"battle_flag=0x{int(before_state):08X}; phase=0x{int(before_phase):08X}"
+                            ),
+                        )
+                    if not lifecycle_active and idle_pair:
+                        return USUMBattleProbe(
+                            state="none", validated=True,
+                            reason=(
+                                f"fuera de combate estable: battle_flag=0x{int(before_state):08X}; "
+                                f"phase=0x{int(before_phase):08X}"
+                            ),
+                        )
+                    # Fases de carga, animación o reset no demuestran ni combate
+                    # publicable ni overworld. La UI conserva su estado anterior.
+                    return None
 
-                party = [pokemon for pokemon in current.party if int(pokemon.species_id) > 0]
+                if not lifecycle_active:
+                    self._battle_lifecycle_processes.add(process_key)
+                    self._battle_row_mappings.pop(process_key, None)
+                    self._battle_visible_hp_by_process[process_key] = {}
+                    self._battle_observed_faints_by_process[process_key] = set()
+                    self._battle_idle_evidence_signatures.pop(process_key, None)
+                    self._battle_trace_start(
+                        current, process=process, primary_flag=before_state, phase_flag=before_phase,
+                    )
+                elif process_key in self._battle_suspended_processes:
+                    self._battle_suspended_processes.discard(process_key)
+                    # La elección de otro activo puede permutar las filas aunque
+                    # la party PK7 conserve sus slots. Se exige una prueba nueva.
+                    self._battle_row_mappings.pop(process_key, None)
+                    self._battle_trace_write({
+                        "event": "battle-resume",
+                        "created_at": datetime.now().isoformat(timespec="milliseconds"),
+                        "episode": int(self._battle_trace_episode),
+                        "primary_flag": f"0x{int(before_state):08X}",
+                        "phase_flag": f"0x{int(before_phase):08X}",
+                    })
+
+                party = [pokemon for pokemon in current.party if int(pokemon.species_id) > 0][:6]
                 count = min(6, len(party))
                 if count <= 0:
                     return USUMBattleProbe(
@@ -1306,20 +2088,75 @@ class USUMLiveReader:
                         reason="La party viva no contiene slots ocupados para validar HP de batalla.",
                     )
 
-                span = ((count - 1) * USUM_BATTLE_PLAYER_STRIDE) + USUM_BATTLE_HP_SIZE
-                max_raw = bytes(client.read_memory(USUM_BATTLE_PLAYER_MAX_HP_BASE, span))
-                displayed_raw = bytes(client.read_memory(USUM_BATTLE_PLAYER_DISPLAY_HP_BASE, span))
-                actual_raw = bytes(client.read_memory(USUM_BATTLE_PLAYER_ACTUAL_HP_BASE, span))
-                after = bytes(client.read_memory(USUM_BATTLE_STATE_ADDRESS, 4))
-                if (
-                    len(max_raw) != span or len(displayed_raw) != span
-                    or len(actual_raw) != span or len(after) != 4
-                ):
-                    return None
-                after_state = struct.unpack_from("<I", after, 0)[0]
-                if int(after_state) != USUM_BATTLE_STATE_ACTIVE_VALUE:
-                    # El combate terminó mientras leíamos. No mezclamos dos estados.
-                    return None
+                row_identities: tuple[tuple[int, int, int, int] | None, ...]
+                try:
+                    row_identities = self._read_battle_row_identities(client, count=count)
+                    proven_identity_rows = sum(identity is not None for identity in row_identities)
+                    row_identity_reason = (
+                        f"doble lectura PK7 estable: {proven_identity_rows}/{count} filas con identidad válida"
+                    )
+                except Exception as exc:
+                    # La nueva tabla de identidad no degrada las filas que ya
+                    # pueden demostrarse por un Max HP único. Solo las filas
+                    # ambiguas permanecen cerradas cuando esta prueba falta.
+                    row_identities = tuple(None for _ in range(count))
+                    row_identity_reason = f"no disponible: {type(exc).__name__}: {exc}"
+
+                cached_base = self._battle_lane_cache.get(process_key)
+                candidate_bases = []
+                if cached_base is not None:
+                    candidate_bases.append((int(cached_base), "runtime-resolved-cache"))
+                if cached_base != USUM_BATTLE_PLAYER_MAX_HP_BASE:
+                    candidate_bases.append((USUM_BATTLE_PLAYER_MAX_HP_BASE, "nominal-validated"))
+
+                max_raw = displayed_raw = actual_raw = b""
+                after_state, after_phase = before_state, before_phase
+                max_base = USUM_BATTLE_PLAYER_MAX_HP_BASE
+                lane_source = "nominal-invalid"
+                prevalidated: tuple[int, ...] = ()
+                row_mapping: tuple[int | None, ...] = tuple(None for _ in party)
+                for candidate_base, candidate_source in candidate_bases:
+                    lane = self._read_battle_lane(client, max_base=candidate_base, count=count)
+                    candidate_after = self._read_battle_flags(client)
+                    if candidate_after != (
+                        USUM_BATTLE_STATE_ACTIVE_VALUE, USUM_BATTLE_PHASE_ACTIVE_VALUE,
+                    ):
+                        # El combate terminó mientras leíamos. No mezclamos dos estados.
+                        return None
+                    max_raw, displayed_raw, actual_raw = lane
+                    after_state, after_phase = candidate_after
+                    max_base = int(candidate_base)
+                    lane_source = str(candidate_source)
+                    row_mapping = self._resolve_battle_row_mapping(
+                        process_key=process_key, party=party,
+                        max_raw=max_raw, displayed_raw=displayed_raw, actual_raw=actual_raw,
+                        row_identities=row_identities,
+                    )
+                    prevalidated = tuple(
+                        index + 1 for index, row in enumerate(row_mapping)
+                        if row is not None
+                    )
+                    if prevalidated:
+                        break
+                    if candidate_source == "runtime-resolved-cache":
+                        self._battle_lane_cache.pop(process_key, None)
+
+                if not prevalidated:
+                    resolved = self._resolve_battle_lane(
+                        client=client, process=process, current=current, party=party,
+                        row_identities=row_identities,
+                    )
+                    if resolved is not None:
+                        max_base, lane, resolved_before, resolved_after = resolved
+                        max_raw, displayed_raw, actual_raw = lane
+                        before_state, before_phase = resolved_before
+                        after_state, after_phase = resolved_after
+                        lane_source = "runtime-resolved"
+                        row_mapping = self._resolve_battle_row_mapping(
+                            process_key=process_key, party=party,
+                            max_raw=max_raw, displayed_raw=displayed_raw, actual_raw=actual_raw,
+                            row_identities=row_identities,
+                        )
         except Exception:
             return None
 
@@ -1329,23 +2166,26 @@ class USUMLiveReader:
         validated_slots: list[int] = []
         rejected_slots: list[str] = []
         for index, pokemon in enumerate(party):
-            offset = index * USUM_BATTLE_PLAYER_STRIDE
+            mapped_row = row_mapping[index] if index < len(row_mapping) else None
+            row_index = int(mapped_row) if mapped_row is not None else index
+            offset = row_index * USUM_BATTLE_PLAYER_STRIDE
             max_hp = int(struct.unpack_from("<H", max_raw, offset)[0])
             displayed_hp = int(struct.unpack_from("<H", displayed_raw, offset)[0])
             actual_hp = int(struct.unpack_from("<H", actual_raw, offset)[0])
             known_max = int(getattr(pokemon, "max_hp", 0) or 0)
 
-            # Alpha.56: la validación del carril de batalla es POR SLOT. La
-            # fuente USUMCheatMenu documenta seis filas del equipo del jugador
-            # con stride 0x330; aun así RoleRun solo publica HP para una fila si
-            # su Max HP coincide con la PartyData live de ese mismo slot.
+            # Alpha.60: la validación sigue siendo POR POKÉMON, pero la fila ya no
+            # se identifica por el mismo índice. Una captura física demostró una
+            # permutación 1↔4 al elegir otro activo. Solo publicamos la fila que
+            # el resolvedor anterior haya vinculado de forma única.
             #
             # Antes, una sola discrepancia invalidaba los seis slots y hacía que
             # cualquier KO se viera únicamente al finalizar el combate. Esto es
             # especialmente frágil tras un PC→party, donde un slot runtime puede
             # tardar en converger aunque los demás sigan siendo demostrables.
             valid_slot = (
-                known_max > 0 and max_hp == known_max
+                mapped_row is not None
+                and known_max > 0 and max_hp == known_max
                 and 0 <= displayed_hp <= max_hp
                 and 0 <= actual_hp <= max_hp
             )
@@ -1366,7 +2206,8 @@ class USUMLiveReader:
                 # conservamos la lectura de party normal (que es segura pero puede
                 # ir retrasada durante el combate), de modo que jamás inventamos HP.
                 rejected_slots.append(
-                    f"{index + 1}:{max_hp}/{displayed_hp}/{actual_hp} vs PK7 {known_max}"
+                    f"party {index + 1}:sin fila única; "
+                    f"row {row_index + 1}={max_hp}/{displayed_hp}/{actual_hp} vs PK7 {known_max}"
                 )
                 displayed_pairs.append((int(getattr(pokemon, "current_hp", 0) or 0), known_max))
                 actual_pairs.append((int(getattr(pokemon, "current_hp", 0) or 0), known_max))
@@ -1380,6 +2221,16 @@ class USUMLiveReader:
         self._battle_trace_sample(
             current=current, max_raw=max_raw, displayed_raw=displayed_raw, actual_raw=actual_raw,
             validated_slots=validated_slots, rejected_slots=rejected_slots,
+            row_mapping=row_mapping,
+            row_identities=row_identities,
+            row_identity_reason=row_identity_reason,
+            process=process, before_state=before_state, before_phase=before_phase,
+            after_state=after_state, after_phase=after_phase,
+            max_base=max_base, lane_source=lane_source,
+        )
+
+        self._track_validated_battle_hp(
+            process_key, party, clones, validated_slots,
         )
 
         if not validated_slots:
@@ -1401,11 +2252,15 @@ class USUMLiveReader:
                 **current.raw,
                 "liveBattleHealth": True,
                 "liveBattleState": "battle",
-                "liveBattleHealthSource": "SM displayed HP",
+                "liveBattleHealthSource": f"USUM displayed HP · {lane_source}",
                 "liveBattleActualHp": [pair[0] for pair in actual_pairs],
+                "liveBattleMaxHpBase": f"0x{int(max_base):08X}",
             },
         )
-        reason = f"flag activo + Max HP validado por slot ({len(validated_slots)}/{count})"
+        reason = (
+            f"flag activo + Max HP validado por slot ({len(validated_slots)}/{count}) "
+            f"mediante {lane_source} @ 0x{int(max_base):08X}"
+        )
         if rejected_slots:
             reason += "; ignorados: " + "; ".join(rejected_slots)
         return USUMBattleProbe(
@@ -1419,7 +2274,14 @@ class USUMLiveReader:
             "party_reference": f"0x{USUM_PARTY_REFERENCE_ADDRESS:08X}",
             "party_stride": USUM_PARTY_STRIDE,
             "party_size": PK7_PARTY_SIZE,
+            "battle_row_identity_base": f"0x{USUM_BATTLE_PLAYER_IDENTITY_BASE:08X}",
+            "battle_row_identity_stride": USUM_BATTLE_PLAYER_IDENTITY_STRIDE,
             "last_resolution": dict(self._last_resolution),
+            "battle_lane_resolution": dict(self._battle_lane_resolution),
+            "battle_lane_cache": {
+                f"{process_id}:{title_id:016X}:{name}": f"0x{int(address):08X}"
+                for (process_id, title_id, name), address in sorted(self._battle_lane_cache.items())
+            },
             "cached_processes": [
                 {"process_id": process_id, "title_id": f"{title_id:016X}", "name": name, "address": f"0x{address:08X}"}
                 for (process_id, title_id, name), address in sorted(self._party_bases_by_process.items())
@@ -1505,10 +2367,20 @@ class USUMLiveReader:
     def reset_runtime_state(self) -> None:
         self._party_bases_by_process.clear()
         self._last_resolution = {}
+        self._battle_lane_cache.clear()
+        self._battle_lane_resolution = {}
+        self._battle_lane_failed_at.clear()
+        self._battle_party_anchor = None
+        self._battle_lifecycle_processes.clear()
+        self._battle_suspended_processes.clear()
+        self._battle_visible_hp_by_process.clear()
+        self._battle_observed_faints_by_process.clear()
+        self._battle_idle_evidence_signatures.clear()
+        self._battle_row_mappings.clear()
 
 
 class USUMLiveWriter:
-    """Escritor vivo seguro de roles y movimientos del equipo SM.
+    """Escritor vivo seguro del equipo de UltraSol/UltraLuna.
 
     La base de party debe haber sido demostrada por ``USUMLiveReader``. Cada cambio
     valida identidad + estado anterior, modifica únicamente campos del PK7
@@ -1600,6 +2472,135 @@ class USUMLiveWriter:
         if selected >= 0:
             value |= 0b01 << (selected * 2)
         struct.pack_into("<H", data, 0x16, value)
+
+    @staticmethod
+    def _set_evs(
+        data: bytearray,
+        *,
+        expected: tuple[int, int, int, int, int, int],
+        desired: tuple[int, int, int, int, int, int],
+    ) -> None:
+        """Escribe EV PK7 con precondición exacta y orden canónico de UI."""
+        expected = tuple(int(value) for value in expected)
+        desired = tuple(int(value) for value in desired)
+        if any(not 0 <= value <= 252 for value in (*expected, *desired)):
+            raise USUMLiveError("Los EV de UltraSol/UltraLuna deben estar entre 0 y 252.")
+        if sum(desired) > 510:
+            raise USUMLiveError("La distribución EV de UltraSol/UltraLuna supera el límite de 510.")
+        # PK7: HP, Atk, Def, Spe, SpA, SpD. UI: HP, Atk, Def, SpA, SpD, Spe.
+        canonical_order = (0, 1, 2, 4, 5, 3)
+        actual_binary = tuple(int(value) for value in data[0x1E:0x24])
+        actual = tuple(actual_binary[index] for index in canonical_order)
+        if actual != expected:
+            raise USUMLiveError(
+                f"Los EV del Pokémon cambiaron dentro del juego ({actual} != {expected}); "
+                "no se escribió ningún byte."
+            )
+        binary = (desired[0], desired[1], desired[2], desired[5], desired[3], desired[4])
+        data[0x1E:0x24] = bytes(binary)
+
+    @staticmethod
+    def _calculate_party_stats(
+        base: tuple[int, int, int, int, int, int],
+        ivs: tuple[int, int, int, int, int, int],
+        evs: tuple[int, int, int, int, int, int],
+        level: int,
+        nature: int,
+    ) -> tuple[int, int, int, int, int, int]:
+        """Calcula stats PK7 en orden binario HP, Atk, Def, Spe, SpA, SpD."""
+        if not 1 <= int(level) <= 100:
+            raise USUMLiveError(f"El nivel {level} queda fuera de 1..100.")
+        if any(not 1 <= int(value) <= 255 for value in base):
+            raise USUMLiveError("El Personal efectivo contiene stats base inválidos.")
+        if any(not 0 <= int(value) <= 31 for value in ivs):
+            raise USUMLiveError("El PK7 contiene IV fuera de 0..31.")
+        if any(not 0 <= int(value) <= 252 for value in evs) or sum(evs) > 510:
+            raise USUMLiveError("La distribución EV queda fuera de los límites del juego.")
+        if not 0 <= int(nature) <= 24:
+            raise USUMLiveError(f"La naturaleza #{nature} no es válida.")
+        hp = 1 if int(base[0]) == 1 else (
+            ((2 * int(base[0]) + int(ivs[0]) + int(evs[0]) // 4) * int(level)) // 100
+            + int(level) + 10
+        )
+        result = [hp]
+        raised, lowered = divmod(int(nature), 5)
+        for index in range(1, 6):
+            value = (
+                ((2 * int(base[index]) + int(ivs[index]) + int(evs[index]) // 4) * int(level)) // 100
+                + 5
+            )
+            nature_index = index - 1
+            if raised != lowered:
+                if nature_index == raised:
+                    value = value * 110 // 100
+                elif nature_index == lowered:
+                    value = value * 90 // 100
+            result.append(value)
+        return tuple(result)  # type: ignore[return-value]
+
+    def _set_party_evs_and_stats(
+        self,
+        data: bytearray,
+        *,
+        pokemon: SavePokemon,
+        expected: tuple[int, int, int, int, int, int],
+        desired: tuple[int, int, int, int, int, int],
+    ) -> None:
+        """Actualiza conjuntamente EV stored y PartyData calculada de USUM."""
+        if self.personal_for is None:
+            raise USUMLiveError(
+                "No está disponible el Personal efectivo de la ROM UltraSol/UltraLuna; "
+                "no se recalcularon las estadísticas."
+            )
+        species = int(struct.unpack_from("<H", data, 8)[0])
+        form = int(data[0x1D] >> 3)
+        personal = self.personal_for(species, form)
+        if personal is None:
+            raise USUMLiveError(
+                f"La ROM efectiva no aportó Personal para especie #{species}, forma {form}; "
+                "no se escribió ningún byte."
+            )
+        base = tuple(int(value) for value in personal.base_stats)
+        iv32 = int(struct.unpack_from("<I", data, 0x74)[0])
+        stored_ivs = tuple((iv32 >> (5 * index)) & 0x1F for index in range(6))
+        # PKHeX PK7 demuestra HyperTrainFlags en 0xDE y orden visible
+        # HP, Atk, Def, SpA, SpD, Spe; PartyData usa Spe antes de SpA/SpD.
+        hyper_flags = int(data[0xDE])
+        hyper_bits_binary = (0, 1, 2, 5, 3, 4)
+        effective_ivs = tuple(
+            31 if hyper_flags & (1 << hyper_bits_binary[index]) else int(stored_ivs[index])
+            for index in range(6)
+        )
+        expected_binary = (
+            int(expected[0]), int(expected[1]), int(expected[2]),
+            int(expected[5]), int(expected[3]), int(expected[4]),
+        )
+        desired_binary = (
+            int(desired[0]), int(desired[1]), int(desired[2]),
+            int(desired[5]), int(desired[3]), int(desired[4]),
+        )
+        current_stats = tuple(
+            int(struct.unpack_from("<H", data, 0xF2 + index * 2)[0]) for index in range(6)
+        )
+        calculated_current = self._calculate_party_stats(
+            base, effective_ivs, expected_binary, int(data[0xEC]), int(data[0x1C]),
+        )
+        if current_stats != calculated_current and tuple(expected) != tuple(desired):
+            raise USUMLiveError(
+                f"Las estadísticas vivas de {pokemon.nickname or pokemon.species} no coinciden con "
+                "Personal/IV/EV/nivel/naturaleza/hiperentrenamiento; no se escribió RAM."
+            )
+        new_stats = self._calculate_party_stats(
+            base, effective_ivs, desired_binary, int(data[0xEC]), int(data[0x1C]),
+        )
+        self._set_evs(data, expected=expected, desired=desired)
+        old_current = int(struct.unpack_from("<H", data, 0xF0)[0])
+        missing_hp = max(0, int(current_stats[0]) - old_current)
+        new_max = int(new_stats[0])
+        new_current = 0 if old_current == 0 else max(1, new_max - missing_hp)
+        struct.pack_into("<H", data, 0xF0, min(new_current, new_max))
+        for index, value in enumerate(new_stats):
+            struct.pack_into("<H", data, 0xF2 + index * 2, int(value))
 
     @staticmethod
     def _refresh_checksum(data: bytearray) -> None:
@@ -1964,7 +2965,12 @@ class USUMLiveWriter:
         return "SIN ROL"
 
     def _party_payload_from_box(
-        self, raw_box: bytes, *, role: str, remove_move_slots: Sequence[int],
+        self,
+        raw_box: bytes,
+        *,
+        role: str,
+        remove_move_slots: Sequence[int],
+        desired_evs: tuple[int, int, int, int, int, int] | None = None,
     ) -> tuple[bytes, SavePokemon]:
         """Convierte un PK7 stored demostrado en EncryptedPartyData 0x104.
 
@@ -1979,6 +2985,13 @@ class USUMLiveWriter:
         plain_stored, was_encrypted = _plain_pk7_stored_with_state(bytes(raw_box))
         data = bytearray(plain_stored)
         self._set_role(data, role)
+        if desired_evs is not None:
+            binary_evs = tuple(int(value) for value in data[0x1E:0x24])
+            current_evs = (
+                binary_evs[0], binary_evs[1], binary_evs[2],
+                binary_evs[4], binary_evs[5], binary_evs[3],
+            )
+            self._set_evs(data, expected=current_evs, desired=desired_evs)
         self._remove_move_slots(data, remove_move_slots)
         self._refresh_checksum(data)
         species_id = struct.unpack_from("<H", data, 8)[0]
@@ -1996,6 +3009,35 @@ class USUMLiveWriter:
         if parsed is None:
             raise USUMLiveError("El EncryptedPartyData preparado no contiene un Pokémon válido.")
         return raw_party, parsed
+
+    @staticmethod
+    def _incoming_team_evs(
+        change: PendingTeamChange, *, expected_role: str,
+    ) -> tuple[int, int, int, int, int, int] | None:
+        """Extrae el reparto EV preparado por la UI sin inventar defaults.
+
+        Los cambios antiguos o construidos fuera de la UI pueden no declarar
+        snapshot; en ese caso se conserva el PK7 original. Si sí lo declaran,
+        rol y seis estadísticas deben ser coherentes antes de tocar RAM.
+        """
+        snapshot = change.incoming_snapshot
+        if not snapshot or "evs" not in snapshot:
+            return None
+        declared_role = canonical_role(change.incoming_role or str(snapshot.get("role") or ""))
+        if declared_role != canonical_role(expected_role):
+            raise USUMLiveError(
+                "El rol preparado para el Pokémon del PC ya no coincide con la casilla de destino; no se escribió ningún byte."
+            )
+        raw_evs = snapshot.get("evs")
+        if not isinstance(raw_evs, dict):
+            raise USUMLiveError("El reparto EV preparado para el Pokémon del PC no es válido; no se escribió ningún byte.")
+        keys = ("hp", "attack", "defense", "sp_attack", "sp_defense", "speed")
+        if any(key not in raw_evs for key in keys):
+            raise USUMLiveError("El reparto EV preparado está incompleto; no se escribió ningún byte.")
+        try:
+            return tuple(int(raw_evs[key]) for key in keys)  # type: ignore[return-value]
+        except (TypeError, ValueError) as exc:
+            raise USUMLiveError("El reparto EV preparado contiene valores no válidos; no se escribió ningún byte.") from exc
 
     def _resolve_target(self, change: PendingRoleChange, live_party: dict[int, SavePokemon]) -> int:
         identity = str(change.pokemon_identity or "")
@@ -2080,7 +3122,7 @@ class USUMLiveWriter:
     def _party_extension(stored: bytes | bytearray, personal: ORASPersonalStats) -> bytes:
         """Reconstruye la extensión PK7 de party desde Personal efectivo + PK7 stored.
 
-        SM guarda en la RAM sparse los primeros 0x16 bytes de esta extensión en
+        USUM guarda en la RAM sparse los primeros 0x16 bytes de esta extensión en
         ``slot+0x158``. El cálculo usa la misma disposición de EV/IV/naturaleza
         que el PK7 almacenado y nunca hereda stats del Pokémon que sale.
         """
@@ -2124,6 +3166,80 @@ class USUMLiveWriter:
         struct.pack_into("<7H", extension, 8, *values)
         return bytes(extension)
 
+    def _enrich_boxed_training_data(
+        self,
+        raw_matrix: bytes,
+        parsed: dict[tuple[int, int], SavePokemon | None],
+        *,
+        box_slot_count: int,
+    ) -> dict[tuple[int, int], SavePokemon | None]:
+        """Añade stats calculados solo cuando la ROM efectiva los demuestra.
+
+        El PK7 almacenado ya contiene naturaleza, IV y EV, pero no PartyData.
+        Para no inventar stats de un randomizer/mod, se reconstruyen con la
+        misma rutina que usa el writer PC→Equipo y únicamente mediante el
+        callback Personal de la ROM que está ejecutando Azahar.
+        """
+        if self.personal_for is None:
+            return parsed
+        enriched = dict(parsed)
+        canonical_order = (0, 1, 2, 4, 5, 3)
+        for (box, box_slot), pokemon in parsed.items():
+            if pokemon is None:
+                continue
+            personal = self.personal_for(int(pokemon.species_id), int(pokemon.form or 0))
+            if personal is None:
+                continue
+            index = _pc_slot_index(int(box), int(box_slot), int(box_slot_count))
+            raw = bytes(raw_matrix[index * PK7_STORED_SIZE:(index + 1) * PK7_STORED_SIZE])
+            stored, _encrypted = _plain_pk7_stored_with_state(raw)
+            extension = self._party_extension(stored, personal)
+            calculated = parse_pk7_party(
+                bytes(stored) + extension, int(box_slot), self.reader.move_names,
+            )
+            if calculated is None or _identity(calculated) != _identity(pokemon):
+                raise USUMLiveError(
+                    "La reconstrucción de stats del PC cambió la identidad del PK7; se rechazó."
+                )
+            base_binary = tuple(int(value) for value in personal.base_stats)
+            enriched[(box, box_slot)] = replace(
+                pokemon,
+                level=int(calculated.level),
+                stats=dict(calculated.stats),
+                base_stats=stat_dict(tuple(base_binary[i] for i in canonical_order)),
+            )
+        return enriched
+
+    def _healed_party_bytes(self, raw: bytes) -> tuple[bytes, bytes]:
+        """Proyecta una curación sin alterar entrenamiento, identidad ni moves."""
+        if self.move_pp_for is None:
+            raise USUMLiveError("No está disponible la tabla efectiva de PP.")
+        plain, encrypted = _plain_pk7_with_state(raw)
+        patched = bytearray(plain)
+        struct.pack_into("<I", patched, 0xE8, 0)
+        max_hp = int(struct.unpack_from("<H", patched, 0xF2)[0])
+        if max_hp <= 0:
+            raise USUMLiveError("El PK7 no tiene Max HP válido; no se curó.")
+        struct.pack_into("<H", patched, 0xF0, max_hp)
+        for index, move_offset in enumerate(_PK7_MOVE_OFFSETS):
+            move_id = int(struct.unpack_from("<H", patched, move_offset)[0])
+            if move_id <= 0:
+                patched[_PK7_MOVE_PP_OFFSETS[index]] = 0
+                continue
+            base_pp = int(self.move_pp_for(move_id) or 0)
+            pp_ups = int(patched[_PK7_MOVE_PP_UPS_OFFSETS[index]])
+            if base_pp <= 0 or not 0 <= pp_ups <= 3:
+                raise USUMLiveError(
+                    f"No se pudieron demostrar los PP máximos del movimiento #{move_id}."
+                )
+            patched[_PK7_MOVE_PP_OFFSETS[index]] = base_pp * (5 + pp_ups) // 5
+        self._refresh_checksum(patched)
+        encoded = encrypt_pk6(bytes(patched)) if encrypted else bytes(patched)
+        return (
+            bytes(encoded[:PK7_STORED_SIZE]),
+            bytes(encoded[PK7_STORED_SIZE:PK7_STORED_SIZE + USUM_PARTY_STATS_SIZE]),
+        )
+
     @staticmethod
     def _diff_offsets(left: bytes, right: bytes) -> list[int]:
         limit = min(len(left), len(right))
@@ -2144,7 +3260,7 @@ class USUMLiveWriter:
         de Azahar 263745c explica por qué: NEW_LINEAR_HEAP no figura entre las
         regiones autorizadas por HandleWriteMemory.
 
-        Para SM, 0x34xxxxxx está dentro de NEW_LINEAR_HEAP y el propio Azahar
+        Para USUM, 0x33xxxxxx está dentro de NEW_LINEAR_HEAP y el propio Azahar
         mapea NEW_LINEAR_HEAP y LINEAR_HEAP al mismo backing FCRAM por offset.
         El alias solo se usa si una lectura previa confirma byte por byte que
         ambos virtual addresses contienen el MISMO PK7 que acabamos de validar.
@@ -2335,7 +3451,7 @@ class USUMLiveWriter:
     def _rollback(
         self, client, party_base: int, attempted_slots: Sequence[int], originals: dict[int, bytes],
         write_addresses: dict[int, int], write_modes: dict[int, str], *,
-        host_memory=None, host_handle=None,
+        host_memory=None, host_handle=None, partydata_slots: set[int] | None = None,
     ) -> list[str]:
         errors: list[str] = []
         for slot in reversed(tuple(attempted_slots)):
@@ -2346,6 +3462,20 @@ class USUMLiveWriter:
             canonical = int(party_base) + (int(slot) - 1) * USUM_PARTY_STRIDE
             expected = bytes(original[:PK7_STORED_SIZE])
             try:
+                if int(slot) in (partydata_slots or set()):
+                    old_stats = bytes(original[PK7_STORED_SIZE:PK7_STORED_SIZE + USUM_PARTY_STATS_SIZE])
+                    stats_write = int(write_address) + USUM_PARTY_STATS_OFFSET
+                    stats_canonical = canonical + USUM_PARTY_STATS_OFFSET
+                    if write_modes.get(int(slot)) == "windows-host-fcram-content-validated":
+                        if host_memory is None or host_handle is None:
+                            raise USUMLiveError("el transporte host ya no está disponible para rollback")
+                        host_memory.write(host_handle, stats_write, old_stats)
+                        stats_confirmed = bytes(host_memory.read(host_handle, stats_write, len(old_stats)))
+                    else:
+                        client.write_memory(stats_write, old_stats)
+                        stats_confirmed = bytes(client.read_memory(stats_write, len(old_stats)))
+                    if stats_confirmed != old_stats or bytes(client.read_memory(stats_canonical, len(old_stats))) != old_stats:
+                        raise USUMLiveError("PartyData no confirmó rollback")
                 if write_modes.get(int(slot)) == "windows-host-fcram-content-validated":
                     if host_memory is None or host_handle is None:
                         raise USUMLiveError("el transporte host ya no está disponible para rollback")
@@ -2815,9 +3945,28 @@ class USUMLiveWriter:
                     int(process.title_id), int(process.process_id), str(process.name), resolved_party_base,
                 )
 
-                # 1) Mochila ya demostrada por el sistema de MT: ruta más fuerte
-                # y barata. La sesión debe coincidir exactamente y el bloque guest
-                # vuelve a superar estabilidad + testigo SAV antes de usarse.
+                # 1) Ancla guest demostrada por la referencia ItemsOffset del
+                # sistema de MT. Esta es la prueba que read_tm_inventory_for_game
+                # publica realmente; no debe confundirse con la caché host+guest
+                # reservada a utilidades que escriben la mochila.
+                guest_anchor = self._tm_guest_inventory_anchor
+                if guest_anchor is not None and guest_anchor[0] == session:
+                    guest_base = int(guest_anchor[1])
+                    live = self._read_stable_guest_items(client, guest_base)
+                    if live is not None:
+                        structural_ok, value = self._validated_kahuna_count_from_live_items(saved_items, live)
+                        if structural_ok:
+                            self._tm_guest_inventory_anchor = (
+                                session, guest_base, bytes(live)
+                            )
+                            self._tm_inventory_session = session
+                            self._last_badge_source = "Z-Crystals vivos · referencia ItemsOffset revalidada"
+                            return value
+                    self._tm_guest_inventory_anchor = None
+
+                # 1b) Compatibilidad con una calibración host+guest de utilidades.
+                # La sesión debe coincidir exactamente y el bloque guest vuelve
+                # a superar estabilidad + testigo SAV antes de usarse.
                 cached_items = self._utility_block_cache.get("items")
                 if cached_items is not None and self._tm_inventory_session == session:
                     _host_pid, _host_base, guest_base, _previous = cached_items
@@ -2860,12 +4009,16 @@ class USUMLiveWriter:
         if allow_full_scan and now - float(self._badge_full_scan_failed_at) >= 30.0:
             try:
                 self.read_tm_inventory_for_game(current, path)
-                cached_items = self._utility_block_cache.get("items")
-                if cached_items is not None:
-                    live = bytes(cached_items[3])
+                # read_tm_inventory_for_game demuestra la referencia guest y la
+                # publica en _tm_guest_inventory_anchor. Alpha.42 consultaba por
+                # error _utility_block_cache, que esta ruta de solo lectura no
+                # rellena, y terminaba devolviendo el main stale.
+                guest_anchor = self._tm_guest_inventory_anchor
+                if guest_anchor is not None:
+                    live = bytes(guest_anchor[2])
                     structural_ok, value = self._validated_kahuna_count_from_live_items(saved_items, live)
                     if structural_ok:
-                        self._last_badge_source = "Z-Crystals vivos · mochila calibrada estructuralmente"
+                        self._last_badge_source = "Z-Crystals vivos · referencia ItemsOffset revalidada"
                         self._badge_full_scan_failed_at = 0.0
                         return value
             except Exception:
@@ -3414,7 +4567,9 @@ class USUMLiveWriter:
                         "No se pudo demostrar una única party host de Azahar antes de tocar el inventario; no se escribió ningún byte."
                     )
                 host_target = party_targets[0]
-                applied: list[tuple[object, int, int, bytes, bytes, str]] = []
+                # Registrar el intento antes del primer byte: una excepción o
+                # readback fallido posterior también necesita rollback.
+                attempted: list[tuple[object, int, int, bytes, bytes, str]] = []
                 handles: list[object] = []
                 try:
                     for change in changes:
@@ -3445,6 +4600,7 @@ class USUMLiveWriter:
                         new_block[patch_offset:patch_offset + len(new_patch)] = new_patch
                         host_address = host_base + patch_offset
                         guest_address = guest_base + patch_offset
+                        attempted.append((handle, host_address, guest_address, current_patch, new_patch, kind))
                         try:
                             host_memory.write(handle, host_address, new_patch)
                             host_check = bytes(host_memory.read(handle, host_address, len(new_patch)))
@@ -3453,15 +4609,9 @@ class USUMLiveWriter:
                         except WindowsProcessMemoryError as exc:
                             raise USUMLiveError(str(exc)) from exc
                         if host_check != new_patch or guest_check != new_patch or full_guest != bytes(new_block):
-                            # rollback inmediato del único campo tocado
-                            try:
-                                host_memory.write(handle, host_address, current_patch)
-                            except Exception:
-                                pass
                             raise USUMLiveError(
-                                f"Azahar no confirmó {change.item_name} en la copia guest viva; RoleRun restauró el campo original."
+                                f"Azahar no confirmó {change.item_name} en la copia guest viva."
                             )
-                        applied.append((handle, host_address, guest_address, current_patch, new_patch, kind))
                         self._utility_block_cache[kind] = (
                             int(host_target.pid), int(host_base), int(guest_base), bytes(new_block)
                         )
@@ -3469,11 +4619,11 @@ class USUMLiveWriter:
                     game = self.reader._build_game(original_capture, current, process, party_base)
                     return USUMLiveWriteResult(
                         game=game, process=process, attempts=capture_attempt,
-                        applied_count=len(changes), already_applied=not bool(applied),
+                        applied_count=len(changes), already_applied=not bool(attempted),
                     )
                 except Exception as exc:
                     rollback_errors: list[str] = []
-                    for handle, host_address, guest_address, old_patch, _new_patch, kind in reversed(applied):
+                    for handle, host_address, guest_address, old_patch, _new_patch, kind in reversed(attempted):
                         try:
                             host_memory.write(handle, host_address, old_patch)
                             if bytes(host_memory.read(handle, host_address, len(old_patch))) != old_patch:
@@ -3485,7 +4635,11 @@ class USUMLiveWriter:
                             rollback_errors.append(f"{kind}: {rollback_exc}")
                     if rollback_errors:
                         raise USUMLiveError(
-                            f"La utilidad SM falló: {exc}. Además no se pudo confirmar todo el rollback: " + "; ".join(rollback_errors)
+                            f"La utilidad USUM falló: {exc}. Además no se pudo confirmar todo el rollback: " + "; ".join(rollback_errors)
+                        ) from exc
+                    if attempted:
+                        raise USUMLiveError(
+                            f"La utilidad USUM falló: {exc}. RoleRun restauró y verificó los campos originales."
                         ) from exc
                     raise
                 finally:
@@ -4358,6 +5512,9 @@ class USUMLiveWriter:
                         raw_guest, box_count=box_count, box_slot_count=box_slot_count,
                         move_names=self.reader.move_names,
                     )
+                    parsed = self._enrich_boxed_training_data(
+                        raw_guest, parsed, box_slot_count=box_slot_count,
+                    )
                 except Exception as exc:
                     self._pc_live_cache = None
                     self._pc_party_anchor = None
@@ -4717,7 +5874,10 @@ class USUMLiveWriter:
                     raise USUMLiveError("La lectura demostrada de PartyData no devolvió los seis slots físicos.")
 
                 incoming_raw, incoming_prepared = self._party_payload_from_box(
-                    source_original, role=result_role, remove_move_slots=change.remove_move_slots,
+                    source_original,
+                    role=result_role,
+                    remove_move_slots=change.remove_move_slots,
+                    desired_evs=self._incoming_team_evs(change, expected_role=result_role),
                 )
                 if self._pokemon_identity(incoming_prepared) != incoming_identity:
                     raise USUMLiveError("El PK7 preparado para sustituir al debilitado perdió su identidad fuerte.")
@@ -4861,6 +6021,144 @@ class USUMLiveWriter:
                 except Exception:
                     pass
 
+    def _apply_pc_move(self, current: SaveGameData, change: PendingTeamChange) -> USUMLiveWriteResult:
+        """Mueve un PK7 stored exacto entre dos huecos de la matriz PC validada.
+
+        No reconstruye la criatura ni toca PartyData. La misma matriz 32×30
+        host==guest usada por Equipo↔PC demuestra origen, destino, identidad y
+        límites. El hueco origen recibe la representación vacía cifrada válida.
+        """
+        if None in (change.box, change.box_slot, change.destination_box, change.destination_box_slot):
+            raise USUMLiveError("El movimiento PC→PC no contiene origen y destino completos.")
+        source = (int(change.box), int(change.box_slot))
+        destination = (int(change.destination_box), int(change.destination_box_slot))
+        if source == destination:
+            raise USUMLiveError("El origen y el destino PC son la misma casilla.")
+        host_memory = None
+        host_handle = None
+        attempted: list[tuple[int, int, bytes, str]] = []
+        try:
+            with self.reader.client_factory() as client:
+                process = self.reader._find_usum_process(client.process_list())
+                client.set_process(process.process_id)
+                party_base = self.reader._locate_party_base(client, process, current)
+                original_capture, capture_attempt = self._capture_stable_party(client, party_base)
+                if not self._read_party_members(original_capture, current):
+                    raise USUMLiveError("La party viva quedó vacía antes del movimiento PC→PC.")
+                host_memory = self.host_memory_factory()
+                cached = self._ensure_pc_live_cache_for_team_write(
+                    client=client, process=process, party_base=int(party_base),
+                    original_capture=original_capture, current=current, host_memory=host_memory,
+                )
+                host_pid, host_pc_base, guest_pc_base = int(cached[1]), int(cached[2]), int(cached[3])
+                box_count, box_slot_count = int(cached[4]), int(cached[5])
+                for box, slot in (source, destination):
+                    if not (1 <= box <= box_count and 1 <= slot <= box_slot_count):
+                        raise USUMLiveError("El movimiento PC→PC queda fuera de la matriz validada.")
+
+                matrix_raw, matrix_parsed = self._read_proven_pc_matrix(
+                    client=client, host_memory=host_memory, host_pid=host_pid,
+                    host_base=host_pc_base, guest_base=guest_pc_base,
+                    box_count=box_count, box_slot_count=box_slot_count,
+                )
+                boxed = matrix_parsed.get(source)
+                if boxed is None:
+                    raise USUMLiveError("La casilla origen del PC ya está vacía; no se escribió ningún byte.")
+                source_identity = self._pokemon_identity(boxed)
+                if change.incoming_identity and source_identity != change.incoming_identity:
+                    raise USUMLiveError("La identidad de la casilla origen cambió antes de escribir.")
+                if matrix_parsed.get(destination) is not None:
+                    raise USUMLiveError("La casilla destino del PC ya está ocupada; no se escribió ningún byte.")
+
+                source_offset = _pc_slot_index(*source, box_slot_count) * PK7_STORED_SIZE
+                destination_offset = _pc_slot_index(*destination, box_slot_count) * PK7_STORED_SIZE
+                source_original = bytes(matrix_raw[source_offset:source_offset + PK7_STORED_SIZE])
+                destination_original = bytes(matrix_raw[destination_offset:destination_offset + PK7_STORED_SIZE])
+                empty_stored = encrypt_pk6_stored(bytes(PK7_STORED_SIZE))
+                source_host = host_pc_base + source_offset
+                source_guest = guest_pc_base + source_offset
+                destination_host = host_pc_base + destination_offset
+                destination_guest = guest_pc_base + destination_offset
+                host_handle = host_memory.open_process(host_pid)
+
+                # Preflight inmediato de ambas representaciones antes del primer byte.
+                if bytes(host_memory.read(host_handle, source_host, PK7_STORED_SIZE)) != source_original:
+                    raise USUMLiveError("El origen host cambió durante el preflight PC→PC.")
+                if bytes(client.read_memory(source_guest, PK7_STORED_SIZE)) != source_original:
+                    raise USUMLiveError("El origen guest cambió durante el preflight PC→PC.")
+                if bytes(host_memory.read(host_handle, destination_host, PK7_STORED_SIZE)) != destination_original:
+                    raise USUMLiveError("El destino host cambió durante el preflight PC→PC.")
+                if bytes(client.read_memory(destination_guest, PK7_STORED_SIZE)) != destination_original:
+                    raise USUMLiveError("El destino guest cambió durante el preflight PC→PC.")
+
+                try:
+                    # Primero preservamos la criatura en destino; solo después
+                    # vaciamos origen. El rollback recorre el orden inverso.
+                    host_memory.write(host_handle, destination_host, source_original)
+                    attempted.append((destination_host, destination_guest, destination_original, "destino PC"))
+                    if bytes(host_memory.read(host_handle, destination_host, PK7_STORED_SIZE)) != source_original:
+                        raise USUMLiveError("El destino host no confirmó los 0xE8 bytes exactos.")
+                    host_memory.write(host_handle, source_host, empty_stored)
+                    attempted.append((source_host, source_guest, source_original, "origen PC"))
+                    if bytes(host_memory.read(host_handle, source_host, PK7_STORED_SIZE)) != empty_stored:
+                        raise USUMLiveError("El origen host no confirmó el PK7 vacío válido.")
+
+                    def verify_matrix() -> None:
+                        raw, parsed = self._read_proven_pc_matrix(
+                            client=client, host_memory=host_memory, host_pid=host_pid,
+                            host_base=host_pc_base, guest_base=guest_pc_base,
+                            box_count=box_count, box_slot_count=box_slot_count,
+                        )
+                        if parsed.get(source) is not None:
+                            raise USUMLiveError("La matriz PC no confirmó el origen vacío.")
+                        moved = parsed.get(destination)
+                        if moved is None or self._pokemon_identity(moved) != source_identity:
+                            raise USUMLiveError("La matriz PC no confirmó la identidad en el destino.")
+                        if bytes(raw[source_offset:source_offset + PK7_STORED_SIZE]) != empty_stored:
+                            raise USUMLiveError("La matriz PC no confirmó el vacío cifrado exacto.")
+                        if bytes(raw[destination_offset:destination_offset + PK7_STORED_SIZE]) != source_original:
+                            raise USUMLiveError("La matriz PC no confirmó el PK7 exacto en destino.")
+
+                    time.sleep(max(0.12, float(getattr(self.reader, "stable_delay", 0.06)) * 2.0))
+                    verify_matrix()
+                    time.sleep(max(0.45, float(getattr(self.reader, "stable_delay", 0.06)) * 5.0))
+                    verify_matrix()
+                    game = self.reader._build_game(
+                        original_capture, current, process, party_base, live_write=True,
+                    )
+                    return USUMLiveWriteResult(
+                        game=game, process=process, attempts=int(capture_attempt),
+                        applied_count=1, already_applied=False,
+                    )
+                except Exception as exc:
+                    rollback_errors: list[str] = []
+                    for host_addr, guest_addr, original, label in reversed(attempted):
+                        try:
+                            host_memory.write(host_handle, host_addr, original)
+                            if bytes(host_memory.read(host_handle, host_addr, len(original))) != original:
+                                rollback_errors.append(f"{label}: host")
+                            if bytes(client.read_memory(guest_addr, len(original))) != original:
+                                rollback_errors.append(f"{label}: guest")
+                        except Exception as rollback_exc:
+                            rollback_errors.append(f"{label}: {rollback_exc}")
+                    if rollback_errors:
+                        raise USUMLiveError(
+                            f"El movimiento PC→PC falló: {exc}. Rollback incompleto: " + "; ".join(rollback_errors)
+                        ) from exc
+                    if attempted:
+                        raise USUMLiveError(
+                            f"El movimiento PC→PC falló: {exc}. RoleRun restauró y verificó ambos huecos."
+                        ) from exc
+                    raise
+        except AzaharRPCError as exc:
+            raise USUMLiveError(str(exc)) from exc
+        finally:
+            if host_memory is not None and host_handle is not None:
+                try:
+                    host_memory.close_process(host_handle)
+                except Exception:
+                    pass
+
     def _apply_team_swap(self, current: SaveGameData, change: PendingTeamChange) -> USUMLiveWriteResult:
         """Aplica un traslado Equipo↔PC sobre las representaciones live demostradas.
 
@@ -4929,19 +6227,28 @@ class USUMLiveWriter:
                     box_count=box_count, box_slot_count=box_slot_count,
                 )
 
-                # ENVIAR AL PC significa «primer hueco libre REAL». La UI puede
-                # haber calculado un destino desde un main/caché desfasado; para
-                # UltraSol/UltraLuna la autoridad es la matriz live que acabamos de demostrar.
+                # El botón ENVIAR AL PC mantiene «primer hueco libre REAL». Un
+                # arrastre, en cambio, declara una casilla exacta: se valida
+                # contra esta misma matriz live dentro de la transacción.
                 if operation == "party-to-box":
-                    destination = next((
-                        (box_no, slot_no)
-                        for box_no in range(1, box_count + 1)
-                        for slot_no in range(1, box_slot_count + 1)
-                        if matrix_parsed.get((box_no, slot_no)) is None
-                    ), None)
-                    if destination is None:
-                        raise USUMLiveError("El PC vivo está lleno; no se escribió ningún byte.")
-                    box, box_slot = destination
+                    if change.box is not None or change.box_slot is not None:
+                        if change.box is None or change.box_slot is None:
+                            raise USUMLiveError("El destino PC exacto está incompleto; no se escribió ningún byte.")
+                        box, box_slot = int(change.box), int(change.box_slot)
+                        if not (1 <= box <= box_count and 1 <= box_slot <= box_slot_count):
+                            raise USUMLiveError("El destino PC exacto queda fuera de la matriz validada; no se escribió ningún byte.")
+                        if matrix_parsed.get((box, box_slot)) is not None:
+                            raise USUMLiveError("La casilla PC elegida ya está ocupada; no se escribió ningún byte.")
+                    else:
+                        destination = next((
+                            (box_no, slot_no)
+                            for box_no in range(1, box_count + 1)
+                            for slot_no in range(1, box_slot_count + 1)
+                            if matrix_parsed.get((box_no, slot_no)) is None
+                        ), None)
+                        if destination is None:
+                            raise USUMLiveError("El PC vivo está lleno; no se escribió ningún byte.")
+                        box, box_slot = destination
                 else:
                     box = int(change.box)
                     box_slot = int(change.box_slot)
@@ -5041,8 +6348,10 @@ class USUMLiveWriter:
                     result_role = canonical_role(outgoing.role)
                     if result_role not in ROLE_ORDER:
                         raise USUMLiveError("El Pokémon saliente no tiene un único rol válido. Pulsa F5 antes de sustituirlo.")
+                    desired_evs = self._incoming_team_evs(change, expected_role=result_role)
                     incoming_raw, incoming_prepared = self._party_payload_from_box(
                         pc_original, role=result_role, remove_move_slots=change.remove_move_slots,
+                        desired_evs=desired_evs,
                     )
                     if self._pokemon_identity(incoming_prepared) != incoming_identity:
                         raise USUMLiveError("El PK7 preparado para entrar perdió su identidad fuerte.")
@@ -5077,8 +6386,10 @@ class USUMLiveWriter:
                     result_role = self._first_free_role(live_party)
                     if result_role not in ROLE_ORDER:
                         raise USUMLiveError("No existe ningún rol libre para el Pokémon que entra; no se escribió ningún byte.")
+                    desired_evs = self._incoming_team_evs(change, expected_role=result_role)
                     incoming_raw, incoming_prepared = self._party_payload_from_box(
                         pc_original, role=result_role, remove_move_slots=change.remove_move_slots,
+                        desired_evs=desired_evs,
                     )
                     if self._pokemon_identity(incoming_prepared) != incoming_identity:
                         raise USUMLiveError("El PK7 preparado para entrar perdió su identidad fuerte.")
@@ -5354,11 +6665,139 @@ class USUMLiveWriter:
                 except Exception:
                     pass
 
+    def _apply_party_heal(
+        self, current: SaveGameData, changes: Sequence[PendingPartyHeal],
+    ) -> USUMLiveWriteResult:
+        """Cura HP, estado y PP de toda la party con rollback stored+PartyData."""
+        if self.move_pp_for is None:
+            raise USUMLiveError(
+                "No está disponible la tabla efectiva de PP; no se curó ningún Pokémon."
+            )
+        host_memory = None
+        host_handle = None
+        attempted: list[tuple[int, int, bytes, bytes, str]] = []
+        try:
+            with self.reader.client_factory() as client:
+                process = self.reader._find_usum_process(client.process_list())
+                client.set_process(process.process_id)
+                party_base = self.reader._locate_party_base(client, process, current)
+                original_capture, capture_attempt = self._capture_stable_party(client, party_base)
+                live_party = self._read_party_members(original_capture, current)
+                targets = {id(change): self._resolve_target(change, live_party) for change in changes}
+
+                desired: dict[int, tuple[bytes, bytes]] = {}
+                for slot in sorted(set(targets.values())):
+                    original = original_capture[slot - 1]
+                    desired[slot] = self._healed_party_bytes(original)
+
+                if all(
+                    desired[slot][0] == original_capture[slot - 1][:PK7_STORED_SIZE]
+                    and desired[slot][1] == original_capture[slot - 1][PK7_STORED_SIZE:PK7_STORED_SIZE + USUM_PARTY_STATS_SIZE]
+                    for slot in desired
+                ):
+                    game = self.reader._build_game(original_capture, current, process, party_base)
+                    return USUMLiveWriteResult(game, process, capture_attempt, len(changes), True)
+
+                host_memory = self.host_memory_factory()
+                matches = host_memory.find_party_targets(
+                    slot_raws=original_capture,
+                    stored_size=PK7_STORED_SIZE,
+                    stats_offset=USUM_PARTY_STATS_OFFSET,
+                    stats_size=USUM_PARTY_STATS_SIZE,
+                    stride=USUM_PARTY_STRIDE,
+                )
+                if len(matches) == 1:
+                    host_target = matches[0]
+                else:
+                    host_target = self._validated_pc_party_target(
+                        client=client, process=process, party_base=party_base,
+                        original_capture=original_capture, host_memory=host_memory,
+                    )
+                host_handle = host_memory.open_process(int(host_target.pid))
+
+                # Preflight completo de todos los campos antes del primer byte.
+                for slot in desired:
+                    host_slot = int(host_target.host_party_base) + (slot - 1) * USUM_PARTY_STRIDE
+                    old_stored = bytes(original_capture[slot - 1][:PK7_STORED_SIZE])
+                    old_stats = bytes(original_capture[slot - 1][PK7_STORED_SIZE:PK7_STORED_SIZE + USUM_PARTY_STATS_SIZE])
+                    if bytes(host_memory.read(host_handle, host_slot, PK7_STORED_SIZE)) != old_stored:
+                        raise USUMLiveError(f"La party host cambió antes de curar el slot {slot}.")
+                    if bytes(host_memory.read(host_handle, host_slot + USUM_PARTY_STATS_OFFSET, USUM_PARTY_STATS_SIZE)) != old_stats:
+                        raise USUMLiveError(f"PartyData cambió antes de curar el slot {slot}.")
+
+                for slot, (new_stored, new_stats) in desired.items():
+                    host_slot = int(host_target.host_party_base) + (slot - 1) * USUM_PARTY_STRIDE
+                    guest_slot = int(party_base) + (slot - 1) * USUM_PARTY_STRIDE
+                    fields = (
+                        (host_slot, guest_slot, bytes(original_capture[slot - 1][:PK7_STORED_SIZE]), new_stored, f"slot {slot} stored"),
+                        (host_slot + USUM_PARTY_STATS_OFFSET, guest_slot + USUM_PARTY_STATS_OFFSET,
+                         bytes(original_capture[slot - 1][PK7_STORED_SIZE:PK7_STORED_SIZE + USUM_PARTY_STATS_SIZE]),
+                         new_stats, f"slot {slot} PartyData"),
+                    )
+                    for host_addr, guest_addr, old, new, label in fields:
+                        if old == new:
+                            continue
+                        attempted.append((host_addr, guest_addr, old, new, label))
+                        host_memory.write(host_handle, host_addr, new)
+                        if bytes(host_memory.read(host_handle, host_addr, len(new))) != new:
+                            raise USUMLiveError(f"{label} no confirmó readback host.")
+                        if bytes(client.read_memory(guest_addr, len(new))) != new:
+                            raise USUMLiveError(f"{label} no confirmó readback guest.")
+
+                verified_capture, verified_attempt = self._capture_stable_party(client, party_base)
+                verified_party = self._read_party_members(verified_capture, current)
+                for change in changes:
+                    slot = targets[id(change)]
+                    actual = verified_party.get(slot)
+                    if actual is None or self._pokemon_identity(actual) != str(change.pokemon_identity):
+                        raise USUMLiveError(f"El slot {slot} cambió de identidad durante la curación.")
+                    if int(actual.current_hp) != int(actual.max_hp) or int(actual.status_condition or 0) != 0:
+                        raise USUMLiveError(f"El slot {slot} no confirmó HP/estado curados.")
+                    plain, _encrypted = _plain_pk7_with_state(verified_capture[slot - 1])
+                    for index, move_id in enumerate(actual.move_ids[:4]):
+                        if int(move_id or 0) <= 0:
+                            continue
+                        base_pp = int(self.move_pp_for(int(move_id)) or 0)
+                        pp_ups = int(plain[_PK7_MOVE_PP_UPS_OFFSETS[index]])
+                        expected_pp = base_pp * (5 + pp_ups) // 5
+                        if int(plain[_PK7_MOVE_PP_OFFSETS[index]]) != expected_pp:
+                            raise USUMLiveError(f"El slot {slot} no confirmó los PP restaurados.")
+                game = self.reader._build_game(verified_capture, current, process, party_base, live_write=True)
+                return USUMLiveWriteResult(
+                    game, process, max(capture_attempt, verified_attempt), len(changes), False,
+                )
+        except Exception as exc:
+            rollback_errors: list[str] = []
+            for host_addr, guest_addr, old, _new, label in reversed(attempted):
+                try:
+                    host_memory.write(host_handle, host_addr, old)
+                    if bytes(host_memory.read(host_handle, host_addr, len(old))) != old:
+                        rollback_errors.append(f"{label}: host")
+                except Exception as rollback_exc:
+                    rollback_errors.append(f"{label}: {rollback_exc}")
+            if rollback_errors:
+                raise USUMLiveError(
+                    f"La curación USUM falló: {exc}. Rollback incompleto: " + "; ".join(rollback_errors)
+                ) from exc
+            if attempted:
+                raise USUMLiveError(
+                    f"La curación USUM falló: {exc}. RoleRun restauró los bytes originales."
+                ) from exc
+            raise
+        finally:
+            if host_memory is not None and host_handle is not None:
+                try:
+                    host_memory.close_process(host_handle)
+                except Exception:
+                    pass
+
     def apply(self, current: SaveGameData, changes: Sequence[object]) -> USUMLiveWriteResult:
         if not changes:
             raise USUMLiveError("No hay cambios que aplicar en UltraSol/UltraLuna.")
         if all(isinstance(change, PendingInventoryChange) for change in changes):
             return self._apply_inventory(current, list(changes))
+        if all(isinstance(change, PendingPartyHeal) for change in changes):
+            return self._apply_party_heal(current, list(changes))
         team_changes = [change for change in changes if isinstance(change, PendingTeamChange)]
         if team_changes:
             if len(team_changes) != 1 or len(changes) != 1:
@@ -5368,6 +6807,8 @@ class USUMLiveWriter:
                 )
             if str(team_changes[0].operation) == "replace-fainted":
                 return self._apply_faint_replacement(current, team_changes[0])
+            if str(team_changes[0].operation) == "move-box-slot":
+                return self._apply_pc_move(current, team_changes[0])
             return self._apply_team_swap(current, team_changes[0])
         if any(isinstance(change, PendingInventoryChange) for change in changes):
             raise USUMLiveError(
@@ -5395,6 +6836,7 @@ class USUMLiveWriter:
                 original_slots: dict[int, bytes] = {}
                 plain_slots: dict[int, bytearray] = {}
                 was_encrypted: dict[int, bool] = {}
+                partydata_slots: set[int] = set()
                 for slot in sorted(set(targets.values())):
                     original = original_capture[slot - 1]
                     plain, encrypted = _plain_pk7_with_state(original)
@@ -5415,6 +6857,19 @@ class USUMLiveWriter:
                                 f"RoleRun esperaba {expected}; no se escribió ningún byte."
                             )
                         self._set_role(plain_slots[slot], change.new_role)
+                        if change.new_evs is not None:
+                            if change.old_evs is None:
+                                raise USUMLiveError(
+                                    "El cambio EV de UltraSol/UltraLuna no incluye los EV anteriores; "
+                                    "no se escribió ningún byte."
+                                )
+                            self._set_party_evs_and_stats(
+                                plain_slots[slot],
+                                pokemon=live_party[slot],
+                                expected=tuple(change.old_evs),
+                                desired=tuple(change.new_evs),
+                            )
+                            partydata_slots.add(slot)
                     elif isinstance(change, (PendingChange, PendingTMTeach)):
                         if isinstance(change, PendingTMTeach):
                             self._assert_live_tm_available(client, process, party_base, change)
@@ -5432,6 +6887,12 @@ class USUMLiveWriter:
                     encoded_slots[slot] = encoded
                     expected_party[slot] = expected
                     if encoded[:PK7_STORED_SIZE] != original_slots[slot][:PK7_STORED_SIZE]:
+                        any_byte_change = True
+                    if (
+                        slot in partydata_slots
+                        and encoded[PK7_STORED_SIZE:PK7_STORED_SIZE + USUM_PARTY_STATS_SIZE]
+                        != original_slots[slot][PK7_STORED_SIZE:PK7_STORED_SIZE + USUM_PARTY_STATS_SIZE]
+                    ):
                         any_byte_change = True
 
                 if not any_byte_change:
@@ -5455,7 +6916,13 @@ class USUMLiveWriter:
                     # por contenido exacto de TODA la party (stored + stats + stride).
                     host_slots: list[int] = []
                     for slot in sorted(encoded_slots):
-                        if encoded_slots[slot][:PK7_STORED_SIZE] == original_slots[slot][:PK7_STORED_SIZE]:
+                        stored_changed = encoded_slots[slot][:PK7_STORED_SIZE] != original_slots[slot][:PK7_STORED_SIZE]
+                        stats_changed = (
+                            slot in partydata_slots
+                            and encoded_slots[slot][PK7_STORED_SIZE:PK7_STORED_SIZE + USUM_PARTY_STATS_SIZE]
+                            != original_slots[slot][PK7_STORED_SIZE:PK7_STORED_SIZE + USUM_PARTY_STATS_SIZE]
+                        )
+                        if not stored_changed and not stats_changed:
                             continue
                         canonical = int(party_base) + (slot - 1) * USUM_PARTY_STRIDE
                         resolved = self._resolve_write_address(
@@ -5531,6 +6998,17 @@ class USUMLiveWriter:
                         canonical = int(party_base) + (slot - 1) * USUM_PARTY_STRIDE
                         write_address = int(write_addresses[slot])
                         expected_stored = bytes(encoded_slots[slot][:PK7_STORED_SIZE])
+                        old_stats = bytes(original_slots[slot][PK7_STORED_SIZE:PK7_STORED_SIZE + USUM_PARTY_STATS_SIZE])
+                        expected_stats = bytes(encoded_slots[slot][PK7_STORED_SIZE:PK7_STORED_SIZE + USUM_PARTY_STATS_SIZE])
+                        if slot in partydata_slots:
+                            if bytes(client.read_memory(canonical + USUM_PARTY_STATS_OFFSET, USUM_PARTY_STATS_SIZE)) != old_stats:
+                                raise USUMLiveError(f"PartyData cambió antes de escribir el slot {slot}.")
+                            if write_modes[slot] == "windows-host-fcram-content-validated":
+                                transport_old_stats = bytes(host_memory.read(host_handle, write_address + USUM_PARTY_STATS_OFFSET, USUM_PARTY_STATS_SIZE))
+                            else:
+                                transport_old_stats = bytes(client.read_memory(write_address + USUM_PARTY_STATS_OFFSET, USUM_PARTY_STATS_SIZE))
+                            if transport_old_stats != old_stats:
+                                raise USUMLiveError(f"El transporte PartyData cambió antes de escribir el slot {slot}.")
                         if write_modes[slot] == "windows-host-fcram-content-validated":
                             try:
                                 host_memory.write(host_handle, write_address, expected_stored)
@@ -5542,6 +7020,19 @@ class USUMLiveWriter:
                             client.write_memory(write_address, expected_stored)
                             transport_readback = bytes(client.read_memory(write_address, PK7_STORED_SIZE))
                             label = "immediate-after-write-via-rpc"
+
+                        if slot in partydata_slots and expected_stats != old_stats:
+                            stats_address = write_address + USUM_PARTY_STATS_OFFSET
+                            if write_modes[slot] == "windows-host-fcram-content-validated":
+                                host_memory.write(host_handle, stats_address, expected_stats)
+                                stats_readback = bytes(host_memory.read(host_handle, stats_address, USUM_PARTY_STATS_SIZE))
+                            else:
+                                client.write_memory(stats_address, expected_stats)
+                                stats_readback = bytes(client.read_memory(stats_address, USUM_PARTY_STATS_SIZE))
+                            if stats_readback != expected_stats or bytes(client.read_memory(canonical + USUM_PARTY_STATS_OFFSET, USUM_PARTY_STATS_SIZE)) != expected_stats:
+                                raise USUMLiveError(
+                                    f"La PartyData calculada del slot {slot} no confirmó readback guest/transporte."
+                                )
 
                         immediate_readbacks[slot] = self._diagnostic_slot_snapshot(
                             client, address=canonical,
@@ -5571,6 +7062,14 @@ class USUMLiveWriter:
                             raise USUMLiveError(
                                 f"Azahar no confirmó el rol del slot {slot}; se restaurará el PK7 original."
                             )
+                        if actual.evs != expected.evs:
+                            raise USUMLiveError(
+                                f"Azahar no confirmó los EV del slot {slot}; se restaurará el PK7 original."
+                            )
+                        if slot in partydata_slots and actual.stats != expected.stats:
+                            raise USUMLiveError(
+                                f"Azahar no confirmó las estadísticas calculadas del slot {slot}; se restaurará el PK7 original."
+                            )
                         if [int(v or 0) for v in actual.move_ids[:4]] != [int(v or 0) for v in expected.move_ids[:4]]:
                             raise USUMLiveError(
                                 f"Azahar no confirmó los movimientos del slot {slot}; se restaurará el PK7 original."
@@ -5594,6 +7093,7 @@ class USUMLiveWriter:
                     rollback_errors = self._rollback(
                         client, party_base, attempted_slots, original_slots, write_addresses, write_modes,
                         host_memory=host_memory, host_handle=host_handle,
+                        partydata_slots=partydata_slots,
                     )
                     diagnostic_hint = (
                         f" Diagnóstico guardado en: {diagnostic_path}"
@@ -5602,12 +7102,12 @@ class USUMLiveWriter:
                     )
                     if rollback_errors:
                         raise USUMLiveError(
-                            f"La escritura PK7 de SM falló: {exc}. No se pudo confirmar toda la restauración: "
+                            f"La escritura PK7 de USUM falló: {exc}. No se pudo confirmar toda la restauración: "
                             + "; ".join(rollback_errors) + diagnostic_hint
                         ) from exc
                     if attempted_slots:
                         raise USUMLiveError(
-                            f"La escritura PK7 de SM falló: {exc}. RoleRun restauró los PK7 originales en RAM."
+                            f"La escritura PK7 de USUM falló: {exc}. RoleRun restauró los PK7 originales en RAM."
                             + diagnostic_hint
                         ) from exc
                     raise

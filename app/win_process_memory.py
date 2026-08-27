@@ -495,6 +495,126 @@ class WindowsProcessMemory:
         finally:
             self.close_process(handle)
 
+    def find_strided_u16_lanes_in_anchor_region(
+        self, *, pid: int, anchor_address: int, expected_values: Sequence[int],
+        stride: int, displayed_delta: int, actual_delta: int,
+        max_candidates: int = 8, max_primary_hits: int = 262_144,
+        chunk_size: int = 8 * 1024 * 1024,
+    ) -> list[int]:
+        """Localiza una tabla de HP solo dentro de la FCRAM ya anclada.
+
+        La búsqueda no convierte una coincidencia aislada en una dirección RAM.
+        Exige el multiconjunto completo de Max HP con el stride indicado y,
+        además, que Displayed/Actual HP de todas las filas estén en rango. El
+        orden no participa en la prueba: USUM reordena físicamente las filas al
+        cambiar el Pokémon inicial. El caller todavía debe demostrar la
+        traducción host↔guest, la unicidad, la identidad de cada fila y hacer
+        readback por el transporte del emulador antes de usar un resultado.
+        """
+        values = tuple(int(value) for value in expected_values)
+        if not values or any(value <= 0 or value > 0xFFFF for value in values):
+            raise WindowsProcessMemoryError("El vector Max HP no es una prueba estructural válida.")
+        if int(stride) <= 0 or int(displayed_delta) < 0 or int(actual_delta) < 0:
+            raise WindowsProcessMemoryError("La geometría de la tabla de HP no es válida.")
+
+        row_tail = (len(values) - 1) * int(stride)
+        extent = max(row_tail + 2, int(displayed_delta) + row_tail + 2,
+                     int(actual_delta) + row_tail + 2)
+        expected_multiset = tuple(sorted(values))
+        # El Max HP más alto suele ser el testigo de dos bytes menos frecuente.
+        # Como su fila puede estar permutada, cada hit se prueba en todas las
+        # posiciones posibles. El multiconjunto completo se valida después.
+        primary = int(max(values)).to_bytes(2, "little")
+
+        handle = self.open_process(int(pid))
+        try:
+            region = next(
+                ((int(base), int(size)) for base, size in self.iter_writable_regions(handle)
+                 if int(base) <= int(anchor_address) < int(base) + int(size)),
+                None,
+            )
+            if region is None:
+                raise WindowsProcessMemoryError(
+                    f"La party host 0x{int(anchor_address):X} no pertenece a una región RW demostrable de Azahar."
+                )
+            region_base, region_size = region
+            overlap = max(1, extent - 1)
+            offset = 0
+            tail = b""
+            seen: set[int] = set()
+            candidates: list[int] = []
+            primary_hits = 0
+
+            while offset < region_size:
+                amount = min(int(chunk_size), region_size - offset)
+                try:
+                    block = self.read(handle, region_base + offset, amount)
+                except WindowsProcessMemoryError:
+                    break
+                hay = tail + block
+                hay_base = region_base + offset - len(tail)
+                search_from = 0
+                while True:
+                    pos = hay.find(primary, search_from)
+                    if pos < 0:
+                        break
+                    search_from = pos + 1
+                    primary_hits += 1
+                    if primary_hits > int(max_primary_hits):
+                        raise WindowsProcessMemoryError(
+                            "El testigo Max HP produjo demasiadas coincidencias; no se aceptó ninguna dirección."
+                        )
+                    for primary_index in range(len(values)):
+                        candidate = hay_base + pos - primary_index * int(stride)
+                        if candidate in seen:
+                            continue
+                        seen.add(candidate)
+                        if candidate < region_base or candidate + extent > region_base + region_size:
+                            continue
+                        relative = candidate - hay_base
+                        if relative < 0 or relative + extent > len(hay):
+                            # La superposición conserva la candidatura para el
+                            # siguiente bloque, donde podrá validarse completa.
+                            seen.discard(candidate)
+                            continue
+
+                        valid = True
+                        has_live_hp = False
+                        observed_maxes: list[int] = []
+                        for index in range(len(values)):
+                            row = relative + index * int(stride)
+                            max_hp = int.from_bytes(hay[row:row + 2], "little")
+                            displayed_row = relative + int(displayed_delta) + index * int(stride)
+                            actual_row = relative + int(actual_delta) + index * int(stride)
+                            displayed_hp = int.from_bytes(hay[displayed_row:displayed_row + 2], "little")
+                            actual_hp = int.from_bytes(hay[actual_row:actual_row + 2], "little")
+                            if max_hp <= 0 or displayed_hp > max_hp or actual_hp > max_hp:
+                                valid = False
+                                break
+                            observed_maxes.append(max_hp)
+                            if displayed_hp > 0 or actual_hp > 0:
+                                has_live_hp = True
+                        if valid and tuple(sorted(observed_maxes)) != expected_multiset:
+                            valid = False
+                        # Una fila desplazada +2 o +actual_delta puede repetir el
+                        # vector cuando todos están a PS máximos, pero sus campos
+                        # acompañantes caen sobre padding/campos ajenos y pueden ser
+                        # todos cero. Un combate utilizable siempre conserva al
+                        # menos un miembro con HP mientras puede continuar.
+                        if valid and has_live_hp:
+                            candidates.append(candidate)
+                            if len(candidates) > int(max_candidates):
+                                raise WindowsProcessMemoryError(
+                                    "La FCRAM contiene demasiadas tablas de HP compatibles; no se eligió ninguna."
+                                )
+
+                tail = hay[-overlap:] if len(hay) > overlap else hay
+                offset += amount
+
+            return sorted(candidates)
+        finally:
+            self.close_process(handle)
+
 
 
     @staticmethod

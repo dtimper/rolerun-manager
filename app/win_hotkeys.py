@@ -40,18 +40,24 @@ MOD_SHIFT = 0x0004
 MOD_WIN = 0x0008
 MOD_NOREPEAT = 0x4000
 WM_HOTKEY = 0x0312
+WM_TIMER = 0x0113
 WM_QUIT = 0x0012
 
 
 class WindowsHotkeyManager:
-    """Registers reliable system-wide single-key shortcuts through Win32.
+    """Registers reliable system-wide shortcuts through Win32.
 
     Unlike the third-party ``keyboard`` package, RegisterHotKey distinguishes
     numeric-keypad virtual keys and does not require an elevated process.
     """
 
-    def __init__(self, callback: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        callback: Callable[[str], None],
+        active_predicate: Callable[[], bool] | None = None,
+    ) -> None:
         self.callback = callback
+        self.active_predicate = active_predicate or (lambda: True)
         self._thread: threading.Thread | None = None
         self._thread_id: int | None = None
         self._ready = threading.Event()
@@ -109,6 +115,11 @@ class WindowsHotkeyManager:
         return modifiers, key
 
     @staticmethod
+    def requires_foreground_scope(name: str) -> bool:
+        """Todos los atajos de la aplicación pertenecen al juego en primer plano."""
+        return WindowsHotkeyManager.normalize_key_name(name) is not None
+
+    @staticmethod
     def pressed_supported_keys() -> set[str]:
         if not IS_WINDOWS:
             return set()
@@ -162,7 +173,7 @@ class WindowsHotkeyManager:
         msg = wintypes.MSG()
         user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 0)
 
-        id_to_action: dict[int, str] = {}
+        definitions: dict[int, tuple[str, str, int, int, bool]] = {}
         for hotkey_id, (action, key) in enumerate(self._hotkeys.items(), start=1001):
             parsed = self.split_hotkey(key)
             if parsed is None:
@@ -170,10 +181,37 @@ class WindowsHotkeyManager:
                 continue
             modifiers, base_key = parsed
             vk = _KEY_TO_VK[base_key]
-            if user32.RegisterHotKey(None, hotkey_id, modifiers | MOD_NOREPEAT, vk):
-                id_to_action[hotkey_id] = action
-            else:
-                self.errors.append(f"Windows no pudo registrar {key.upper()} para {action} (puede estar en uso).")
+            definitions[hotkey_id] = (
+                action, key, modifiers | MOD_NOREPEAT, vk,
+                self.requires_foreground_scope(key),
+            )
+
+        id_to_action: dict[int, str] = {}
+        failed_ids: set[int] = set()
+
+        def reconcile_registrations() -> None:
+            try:
+                scoped_active = bool(self.active_predicate())
+            except Exception:
+                scoped_active = False
+            for hotkey_id, (action, key, modifiers, vk, scoped) in definitions.items():
+                desired = bool(scoped_active) if scoped else True
+                registered = hotkey_id in id_to_action
+                if desired and not registered:
+                    if user32.RegisterHotKey(None, hotkey_id, modifiers, vk):
+                        id_to_action[hotkey_id] = action
+                        failed_ids.discard(hotkey_id)
+                    elif hotkey_id not in failed_ids:
+                        failed_ids.add(hotkey_id)
+                        self.errors.append(
+                            f"Windows no pudo registrar {key.upper()} para {action} (puede estar en uso)."
+                        )
+                elif not desired and registered:
+                    user32.UnregisterHotKey(None, hotkey_id)
+                    id_to_action.pop(hotkey_id, None)
+
+        reconcile_registrations()
+        timer_id = int(user32.SetTimer(None, 1, 100, None) or 0)
 
         self._ready.set()
         try:
@@ -188,7 +226,11 @@ class WindowsHotkeyManager:
                             self.callback(action)
                         except Exception:
                             pass
+                elif msg.message == WM_TIMER:
+                    reconcile_registrations()
         finally:
+            if timer_id:
+                user32.KillTimer(None, timer_id)
             for hotkey_id in id_to_action:
                 user32.UnregisterHotKey(None, hotkey_id)
             self._thread_id = None

@@ -20,7 +20,7 @@ def test_sm_uses_same_instant_header_model_as_oras_and_xy() -> None:
     assert DummyManager("oras")._uses_instant_realtime_ui() is True
     assert DummyManager("xy")._uses_instant_realtime_ui() is True
     assert DummyManager("sm")._uses_instant_realtime_ui() is True
-    assert DummyManager("bdsp")._uses_instant_realtime_ui() is False
+    assert DummyManager("bdsp")._uses_instant_realtime_ui() is True
 
 
 def test_sm_legacy_pending_changes_do_not_block_live_capture() -> None:

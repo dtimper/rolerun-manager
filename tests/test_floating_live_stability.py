@@ -95,13 +95,87 @@ def test_floating_signature_hides_pending_fainted_pokemon() -> None:
         project=project,
         _projected_party=lambda: [dead],
         _pokemon_identity=lambda pokemon: "dead",
-        _role_slot_occupants=lambda party: ({"Líbero": party[0]} if party else {}, []),
+        _team_role_grid_layout=lambda party: (
+            {"Líbero": party[0]} if party else {}, [],
+            ({"dead": 0} if party else {}), set(),
+        ),
         _pokemon_visibility_identity=lambda pokemon: "visible",
         _sprite_source=lambda pokemon: None,
+        _floating_health_values=lambda pokemon: (0, 0, 0),
     )
     signature = RoleRunManager._floating_bar_signature(manager)
     # counters + seis casillas; la casilla Líbero queda vacía tras la baja.
     assert signature[4][1] is None
+
+
+def test_floating_signature_places_a_roleless_party_member_in_a_free_slot() -> None:
+    tepig = SimpleNamespace(species_id=498, role="SIN ROL")
+    project = SimpleNamespace(
+        counters={"vidas": 0, "pociones": 0, "medallas": 0, "drafteos": 0},
+        pending_faints=[], hidden_roles={},
+    )
+    manager = SimpleNamespace(
+        project=project,
+        _projected_party=lambda: [tepig],
+        _pokemon_identity=lambda pokemon: "tepig",
+        _team_role_grid_layout=lambda party: ({}, party, {"tepig": 0}, {0}),
+        _effective_role=lambda pokemon: ("SIN ROL", ""),
+        _pokemon_visibility_identity=lambda pokemon: "visible-tepig",
+        _sprite_source=lambda pokemon: object(),
+        _floating_health_values=lambda pokemon: (24, 24, 0) if pokemon else (0, 0, 0),
+    )
+
+    signature = RoleRunManager._floating_bar_signature(manager)
+    assert signature[4][1] == "visible-tepig"
+    assert signature[4][4:7] == (24, 24, 0)
+
+
+def test_floating_health_prefers_the_unique_validated_live_sample() -> None:
+    projected = SimpleNamespace(pid=10, current_hp=0, max_hp=172, status_condition=0)
+    validated = SimpleNamespace(pid=10, current_hp=172, max_hp=172, status_condition=64)
+    manager = SimpleNamespace(
+        _oras_live_health_snapshot=SimpleNamespace(party=[validated]),
+        _pokemon_identity=lambda pokemon: str(pokemon.pid),
+    )
+
+    assert RoleRunManager._floating_health_values(manager, projected) == (172, 172, 64)
+
+
+def test_floating_health_does_not_replace_a_real_zero_from_the_validated_lane() -> None:
+    projected = SimpleNamespace(pid=10, current_hp=172, max_hp=172, status_condition=0)
+    validated = SimpleNamespace(pid=10, current_hp=0, max_hp=172, status_condition=0)
+    manager = SimpleNamespace(
+        _oras_live_health_snapshot=SimpleNamespace(party=[validated]),
+        _pokemon_identity=lambda pokemon: str(pokemon.pid),
+    )
+
+    assert RoleRunManager._floating_health_values(manager, projected) == (0, 172, 0)
+
+
+def test_explicitly_visible_main_window_always_withdraws_the_floating_bar() -> None:
+    calls: list[str] = []
+    bar = SimpleNamespace(
+        winfo_exists=lambda: True,
+        state=lambda: "normal",
+        withdraw=lambda: calls.append("bar-withdraw"),
+    )
+    manager = SimpleNamespace(
+        floating_bar=bar,
+        _floating_bar_is_visible=lambda: True,
+        _foreground_belongs_to_this_process=lambda: False,
+        state=lambda: "zoomed",
+        winfo_viewable=lambda: True,
+        _floating_bar_poll_id=None,
+        _floating_role_reordered=False,
+        _floating_suspended_modal=None,
+        _main_ui_dirty_while_floating=False,
+        _save_floating_bar_position=lambda: calls.append("save-pos"),
+        _set_auto_floating_guard_temporarily=lambda _ms: None,
+        _schedule_pending_faint_picker=lambda _delay: None,
+    )
+    with patch("app.ui.os.name", "nt"):
+        RoleRunManager._on_main_map(manager)
+    assert "bar-withdraw" in calls
 
 
 def test_confirmed_role_write_does_not_render_hidden_main_window() -> None:

@@ -1,0 +1,33 @@
+{
+  "captured_at": "2026-08-22T03:44:49.556+02:00",
+  "game": "Pokemon Ultra Sun",
+  "title_id": "0x00040000001B5000",
+  "rpc_process_id": 11,
+  "azahar_windows_pid": 4204,
+  "source_trace": "diagnostics/manual/usum_alpha60_restart_changed_active_FAIL_20260822_033047.jsonl",
+  "source_trace_sha256": "B0A0CC9EC8D4E82FDA7A1FFAF489579652AA63BB22430E8F22261A4575AFC2EA",
+  "identity_table": {
+    "base": "0x3254EE60",
+    "stride": "0x104",
+    "record": "first 0xE8 bytes parsed as checksum-valid stored PK7",
+    "technical_source": "USUMCheatMenu Sources/pokeutil/pokemon.h: PARTY ON BATTLE INITIAL DATA"
+  },
+  "party_order": [
+    {"slot": 1, "species_id": 379, "pid": "0x8D65562F", "max_hp": 18},
+    {"slot": 2, "species_id": 133, "pid": "0xDB76FD4F", "max_hp": 19},
+    {"slot": 3, "species_id": 115, "pid": "0x8C3FC66A", "max_hp": 149},
+    {"slot": 4, "species_id": 137, "pid": "0xBC0C2B25", "max_hp": 19},
+    {"slot": 5, "species_id": 763, "pid": "0x080D79E3", "max_hp": 101},
+    {"slot": 6, "species_id": 455, "pid": "0x8D826F23", "max_hp": 17}
+  ],
+  "battle_rows": [
+    {"row": 1, "party_slot": 4, "species_id": 137, "pid": "0xBC0C2B25", "max_hp": 19},
+    {"row": 2, "party_slot": 2, "species_id": 133, "pid": "0xDB76FD4F", "max_hp": 19},
+    {"row": 3, "party_slot": 3, "species_id": 115, "pid": "0x8C3FC66A", "max_hp": 149},
+    {"row": 4, "party_slot": 1, "species_id": 379, "pid": "0x8D65562F", "max_hp": 18},
+    {"row": 5, "party_slot": 5, "species_id": 763, "pid": "0x080D79E3", "max_hp": 101},
+    {"row": 6, "party_slot": 6, "species_id": 455, "pid": "0x8D826F23", "max_hp": 17}
+  ],
+  "demonstrated_mapping": [4, 2, 3, 1, 5, 6],
+  "conclusion": "Battle HP rows are in battle order, not party-slot order. Equal Max HP and equal current HP cannot identify rows; the aligned stored-PK7 identity table can."
+}

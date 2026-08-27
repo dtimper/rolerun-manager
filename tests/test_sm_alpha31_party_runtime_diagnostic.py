@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.models import PendingTeamChange
+from app.oras_tm_service import ORASPersonalStats
 from app.realtime.sm_adapter import SMRealTimeAdapter
 from app.save_engine_client import SaveGameData, SavePokemon
 from app.sm_live import (
@@ -18,6 +19,7 @@ from app.sm_live import (
     SMLiveReader,
     SMLiveWriter,
 )
+from app.ui import RoleRunManager
 
 
 def _mon(species: int, pid: int, role: str = "Líbero") -> SavePokemon:
@@ -86,7 +88,7 @@ def test_alpha31_real_game_party_transition_records_full_runtime_slot(tmp_path: 
     latest = tmp_path / "sm_party_runtime_transition_latest.json"
     assert latest.is_file()
     payload = json.loads(latest.read_text(encoding="utf-8"))
-    assert payload["version"] == "0.2.2-alpha.58"
+    assert payload["version"] == "0.2.6-alpha.14"
     assert payload["party_stride"] == SM_PARTY_STRIDE
     assert len(payload["changed_slots"]) == 1
     slot = payload["changed_slots"][0]
@@ -124,3 +126,50 @@ def test_alpha33_adapter_advertises_live_pc_write_modes() -> None:
     assert snapshot.metadata["pc_write_live"] is True
     assert snapshot.metadata["pc_write_modes"] == ("swap-party-box", "party-to-box", "box-to-party")
     assert snapshot.metadata["pc_swap_diagnostic"] is False
+
+
+def test_sm_adapter_publishes_effective_rom_base_stats_in_ui_order() -> None:
+    personal = ORASPersonalStats((78, 107, 75, 70, 100, 100), 3)
+    adapter = SMRealTimeAdapter(
+        SMLiveReader(Path("missing.json"), stable_delay=0),
+        personal_for=lambda species, form: personal if (species, form) == (724, 0) else None,
+    )
+    raw = _raw(_game(_mon(724, 0x11112222)), bytes(6 * SM_PARTY_STRIDE))
+
+    snapshot = adapter._convert(raw, sequence=1)
+
+    assert snapshot.game.party[0].base_stats == {
+        "hp": 78, "attack": 107, "defense": 75,
+        "sp_attack": 100, "sp_defense": 100, "speed": 70,
+    }
+
+
+def test_sm_inspector_reads_base_stats_from_the_effective_profile() -> None:
+    personal = ORASPersonalStats((78, 107, 75, 70, 100, 100), 3)
+    profile = SimpleNamespace(personal_for=lambda species, form: personal)
+    manager = SimpleNamespace(
+        save_engine=SimpleNamespace(key="sm"),
+        _get_sm_rom_tm_profile=lambda prompt=False: profile,
+    )
+    pokemon = SimpleNamespace(species_id=724, form=0, base_stats={})
+
+    assert RoleRunManager._team_pc_base_stats(manager, pokemon) == {
+        "hp": 78, "attack": 107, "defense": 75,
+        "sp_attack": 100, "sp_defense": 100, "speed": 70,
+    }
+
+
+def test_opening_configured_sm_preloads_personal_before_reading_the_save() -> None:
+    calls: list[str] = []
+    source = SimpleNamespace(is_available=True, save_path="main", start_new_run=False)
+    manager = SimpleNamespace(
+        _set_selected_game_engine=lambda key: calls.append(f"engine:{key}") or True,
+        game_source_profiles=SimpleNamespace(get=lambda key: source),
+        _configure_game_sources=lambda *args, **kwargs: calls.append("configure"),
+        _get_sm_rom_tm_profile=lambda prompt=False: calls.append("profile"),
+        select_save=lambda path, force_new_run=False: calls.append(f"save:{path}"),
+    )
+
+    RoleRunManager._open_configured_game(manager, "sm")
+
+    assert calls == ["engine:sm", "profile", "save:main"]

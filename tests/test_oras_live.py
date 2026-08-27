@@ -46,7 +46,9 @@ _BLOCK_POSITION_INVERT = (
 )
 
 
-def make_encrypted_pk6(*, current_hp: int = 23, max_hp: int = 47) -> bytes:
+def make_encrypted_pk6(
+    *, current_hp: int = 23, max_hp: int = 47, status_condition: int = 0,
+) -> bytes:
     data = bytearray(PK6_PARTY_SIZE)
     ec = 0x12345678
     struct.pack_into("<I", data, 0, ec)
@@ -57,14 +59,18 @@ def make_encrypted_pk6(*, current_hp: int = 23, max_hp: int = 47) -> bytes:
     struct.pack_into("<H", data, 0x0E, 54321)
     data[0x14] = 50
     struct.pack_into("<I", data, 0x18, 0x89ABCDEF)
+    data[0x1C] = 3  # Firme: sube Ataque y baja Ataque Especial.
+    data[0x1E:0x24] = bytes((4, 8, 12, 16, 20, 24))
     data[0x2A] = 1
     nickname = "Poochyena".encode("utf-16le")
     data[0x40:0x40 + len(nickname)] = nickname
     struct.pack_into("<4H", data, 0x5A, 33, 44, 0, 0)
     struct.pack_into("<I", data, 0x74, 0x001FFFFF)
     data[0xEC] = 18
+    struct.pack_into("<I", data, 0xE8, int(status_condition))
     struct.pack_into("<H", data, 0xF0, int(current_hp))
     struct.pack_into("<H", data, 0xF2, int(max_hp))
+    struct.pack_into("<5H", data, 0xF4, 31, 29, 27, 25, 23)
     checksum = sum(struct.unpack_from("<112H", data, 8)) & 0xFFFF
     struct.pack_into("<H", data, 6, checksum)
 
@@ -150,6 +156,25 @@ class ORASLiveTests(unittest.TestCase):
         self.assertEqual(pokemon.role, "Líbero")
         self.assertEqual((pokemon.tid, pokemon.sid, pokemon.pid), (12345, 54321, 0x89ABCDEF))
         self.assertEqual((pokemon.current_hp, pokemon.max_hp), (23, 47))
+        self.assertEqual(pokemon.status_condition, 0)
+        self.assertEqual(pokemon.nature, "Firme")
+        self.assertEqual(pokemon.nature_increased, "attack")
+        self.assertEqual(pokemon.nature_decreased, "sp_attack")
+        self.assertEqual(
+            pokemon.stats,
+            {"hp": 47, "attack": 31, "defense": 29, "sp_attack": 25, "sp_defense": 23, "speed": 27},
+        )
+        self.assertEqual(
+            pokemon.evs,
+            {"hp": 4, "attack": 8, "defense": 12, "sp_attack": 20, "sp_defense": 24, "speed": 16},
+        )
+
+    def test_party_parser_exposes_runtime_status_condition(self) -> None:
+        pokemon = parse_pk6_party(
+            make_encrypted_pk6(status_condition=0x40), 1, {33: "Placaje", 44: "Mordisco"},
+        )
+        assert pokemon is not None
+        self.assertEqual(pokemon.status_condition, 0x40)
 
     def test_corrupt_pk6_is_rejected(self) -> None:
         corrupt = bytearray(make_encrypted_pk6())

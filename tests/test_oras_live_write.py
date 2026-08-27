@@ -107,6 +107,17 @@ def make_encrypted_pk6(
     return encrypt_pk6(bytes(data))
 
 
+def make_oras_misc(*, badges: int = 8, money: int = 996_999) -> bytearray:
+    misc = bytearray(ORAS_SAVE_MISC_SIZE)
+    struct.pack_into("<I", misc, ORAS_MISC_MONEY_OFFSET, money)
+    misc[ORAS_MISC_BADGES_OFFSET] = badges
+    struct.pack_into("<H", misc, 0x30, 0)
+    misc[0x44] = 12
+    misc[0x60:0x70] = bytes(range(1, 17))
+    misc[0x90:0xA0] = b"RoleRun-Misc-123"
+    return misc
+
+
 class _WritableFakeClient:
     def __init__(self, slots: tuple[bytes, ...], *, ignore_first_write: bool = False) -> None:
         self.slots = list(slots)
@@ -162,11 +173,12 @@ class _WritableFakeClient:
 class _ExtendedFakeClient(_WritableFakeClient):
     def __init__(self, slots: tuple[bytes, ...], *, pc_slot: bytes) -> None:
         super().__init__(slots)
+        misc_base = ORAS_MONEY_ADDRESS - ORAS_MISC_MONEY_OFFSET
         self.memory: dict[int, bytearray] = {
             ORAS_PC_ADDRESS: bytearray(pc_slot),
             ORAS_ITEMS_POUCH_ADDRESS: bytearray(ORAS_ITEMS_POUCH_SIZE),
             ORAS_MEDICINE_POUCH_ADDRESS: bytearray(ORAS_MEDICINE_POUCH_SIZE),
-            ORAS_MONEY_ADDRESS: bytearray(struct.pack("<I", 1_234)),
+            misc_base: make_oras_misc(money=1_234),
             ORAS_TM_POUCH_ADDRESS: bytearray(ORAS_TM_POUCH_SIZE),
         }
         # Una Poción normal demuestra que el bolsillo es una lista de registros
@@ -244,6 +256,21 @@ class ORASLiveWriteTests(unittest.TestCase):
             }.get(species_id),
         )
 
+    def _live_consistent_slot(
+        self,
+        *,
+        marking: int = 0,
+        evs: tuple[int, int, int, int, int, int] = (0, 0, 0, 0, 0, 0),
+    ) -> bytes:
+        """PK6 de party cuya extensión coincide con el bloque almacenado."""
+        raw = make_encrypted_pk6(marking=marking, evs=evs)
+        plain = bytearray(decrypt_pk6(raw))
+        personal = ORASPersonalStats((35, 55, 35, 35, 30, 30), 0)
+        plain[PK6_STORED_SIZE:] = ORASLiveWriter._party_extension(
+            bytes(plain[:PK6_STORED_SIZE]), personal,
+        )
+        return encrypt_pk6(bytes(plain))
+
     def test_oras_14_pc_base_uses_the_shifted_address(self) -> None:
         # 0x08C9E134 es la base de cajas de ORAS 1.0. El resto del perfil de
         # este lector es 1.4, cuyo bloque de PC está +0x3FF0 bytes.
@@ -276,15 +303,7 @@ class ORASLiveWriteTests(unittest.TestCase):
         handle.close()
         path = Path(handle.name)
         data = bytearray(0x76000)
-        misc = bytearray(ORAS_SAVE_MISC_SIZE)
-        struct.pack_into("<I", misc, 0x08, money)
-        misc[ORAS_MISC_BADGES_OFFSET] = badges
-        struct.pack_into("<H", misc, 0x30, 0)
-        misc[0x44] = 12
-        # Huella suficientemente rica para que la búsqueda independiente de
-        # alpha.35 no dependa de Money/Mochila.
-        misc[0x60:0x70] = bytes(range(1, 17))
-        misc[0x90:0xA0] = b"RoleRun-Misc-123"
+        misc = make_oras_misc(badges=badges, money=money)
         data[ORAS_SAVE_MISC_OFFSET:ORAS_SAVE_MISC_OFFSET + ORAS_SAVE_MISC_SIZE] = misc
         path.write_bytes(data)
         return path
@@ -637,7 +656,8 @@ class ORASLiveWriteTests(unittest.TestCase):
         try:
             # No añadimos ninguna copia SUBE viva al fake. La lectura histórica
             # del main debe seguir evitando el falso 0 de las fuentes antiguas.
-            self.assertEqual(writer.read_badges(save_path), 8)
+            with patch.object(writer, "_locate_misc_base", return_value=None):
+                self.assertEqual(writer.read_badges(save_path), 8)
             self.assertEqual(writer._last_badge_source, "main · equipos de gimnasio")
         finally:
             save_path.unlink(missing_ok=True)
@@ -785,7 +805,8 @@ class ORASLiveWriteTests(unittest.TestCase):
         try:
             # No existe ninguna copia Misc compatible en la RAM falsa: aun así
             # el contador automático debe mostrar el valor real del guardado.
-            self.assertEqual(writer.read_badges(save_path, self._inventory_witnesses()), 8)
+            with patch.object(writer, "_locate_misc_base", return_value=None):
+                self.assertEqual(writer.read_badges(save_path, self._inventory_witnesses()), 8)
         finally:
             save_path.unlink(missing_ok=True)
 
@@ -841,6 +862,63 @@ class ORASLiveWriteTests(unittest.TestCase):
         self.assertEqual(plain[0x62], 14)
         self.assertEqual(plain[0x66], 2)
 
+    def test_live_writer_applies_role_evs_and_recalculates_runtime_stats(self) -> None:
+        initial = self._live_consistent_slot()
+        fake = _WritableFakeClient((initial,) + self.empty_slots)
+        result = self._writer(fake).apply(self.current, [
+            PendingRoleChange(
+                1, "Poochyena", "Poochyena", "Líbero", "Tanque", self._identity(),
+                old_evs=(0, 0, 0, 0, 0, 0),
+                new_evs=(252, 0, 252, 0, 0, 0),
+            ),
+        ])
+
+        pokemon = result.game.party[0]
+        self.assertEqual(pokemon.role, "Tanque")
+        self.assertEqual(
+            tuple(pokemon.evs[key] for key in (
+                "hp", "attack", "defense", "sp_attack", "sp_defense", "speed",
+            )),
+            (252, 0, 252, 0, 0, 0),
+        )
+        before = parse_pk6_party(initial, 1, {})
+        self.assertIsNotNone(before)
+        assert before is not None
+        self.assertGreater(pokemon.max_hp, before.max_hp)
+        self.assertGreater(pokemon.stats["defense"], before.stats["defense"])
+        self.assertEqual(len(fake.writes), 2)
+
+    def test_live_writer_rejects_stale_role_evs_without_writing(self) -> None:
+        initial = self._live_consistent_slot()
+        fake = _WritableFakeClient((initial,) + self.empty_slots)
+
+        with self.assertRaisesRegex(ORASLiveError, "cambió sus EV"):
+            self._writer(fake).apply(self.current, [
+                PendingRoleChange(
+                    1, "Poochyena", "Poochyena", "Líbero", "Tanque", self._identity(),
+                    old_evs=(1, 0, 0, 0, 0, 0),
+                    new_evs=(252, 0, 252, 0, 0, 0),
+                ),
+            ])
+
+        self.assertEqual(fake.writes, [])
+        self.assertEqual(fake.slots[0], initial)
+
+    def test_live_writer_rolls_back_role_evs_when_readback_fails(self) -> None:
+        initial = self._live_consistent_slot()
+        fake = _WritableFakeClient((initial,) + self.empty_slots, ignore_first_write=True)
+
+        with self.assertRaisesRegex(ORASLiveError, "no confirmó"):
+            self._writer(fake).apply(self.current, [
+                PendingRoleChange(
+                    1, "Poochyena", "Poochyena", "Líbero", "Tanque", self._identity(),
+                    old_evs=(0, 0, 0, 0, 0, 0),
+                    new_evs=(252, 0, 252, 0, 0, 0),
+                ),
+            ])
+
+        self.assertEqual(fake.slots[0], initial)
+
     def test_live_writer_applies_role_transfer_in_one_batch(self) -> None:
         second = make_encrypted_pk6(marking=3)  # Tanque = marcador 4
         fake = _WritableFakeClient((self.initial, second) + (bytes(PK6_PARTY_SIZE),) * 4)
@@ -861,7 +939,10 @@ class ORASLiveWriteTests(unittest.TestCase):
                 pokemon_identity=self._identity(), old_role="SIN ROL", new_role="Mago",
             ),
             PendingInventoryChange("rare-candy", "Caramelo Raro", 999, self._inventory_witnesses()),
-            PendingInventoryChange("money-max", "Dinero", 9_999_999, self._inventory_witnesses()),
+            PendingInventoryChange(
+                "money-max", "Dinero", 9_999_999,
+                save_misc_witness=bytes(make_oras_misc(money=1_234)),
+            ),
         ])
         self.assertEqual(result.applied_count, 3)
         self.assertEqual(len(result.memory_watches), 3)
@@ -873,7 +954,11 @@ class ORASLiveWriteTests(unittest.TestCase):
         self.assertEqual(struct.unpack_from("<H", plain, 6)[0], _checksum(plain))
         medicine = fake.memory[ORAS_MEDICINE_POUCH_ADDRESS]
         self.assertEqual(struct.unpack_from("<HH", medicine, 4), (50, 999))
-        self.assertEqual(struct.unpack("<I", fake.memory[ORAS_MONEY_ADDRESS])[0], 9_999_999)
+        misc_base = ORAS_MONEY_ADDRESS - ORAS_MISC_MONEY_OFFSET
+        self.assertEqual(
+            struct.unpack_from("<I", fake.memory[misc_base], ORAS_MISC_MONEY_OFFSET)[0],
+            9_999_999,
+        )
 
     def test_live_writer_accepts_an_inventory_value_already_present_in_ram(self) -> None:
         fake = _ExtendedFakeClient(
@@ -930,6 +1015,82 @@ class ORASLiveWriteTests(unittest.TestCase):
             fake.writes,
         )
         self.assertEqual(result.memory_watches[0].address, ORAS_MEDICINE_POUCH_ADDRESS + delta + 4)
+
+    def test_live_writer_resolves_money_from_misc_independently_of_inventory(self) -> None:
+        fake = _ExtendedFakeClient(
+            (self.initial,) + self.empty_slots,
+            pc_slot=make_encrypted_pk6()[:PK6_STORED_SIZE],
+        )
+        delta = 0x5000
+        active_items = bytearray(ORAS_ITEMS_POUCH_SIZE)
+        active_medicine = bytearray(ORAS_MEDICINE_POUCH_SIZE)
+        struct.pack_into("<HH", active_items, 0, 4, 8)
+        struct.pack_into("<HH", active_items, 4, 5, 3)
+        struct.pack_into("<HH", active_medicine, 0, 17, 5)
+        fake.memory[ORAS_ITEMS_POUCH_ADDRESS + delta] = active_items
+        fake.memory[ORAS_MEDICINE_POUCH_ADDRESS + delta] = active_medicine
+        misc_base = ORAS_MONEY_ADDRESS - ORAS_MISC_MONEY_OFFSET
+        saved_misc = bytes(make_oras_misc(money=1_234))
+
+        result = self._writer(fake).apply(self.current, [
+            PendingInventoryChange(
+                "money-max", "Dinero", 9_999_999,
+                save_misc_witness=saved_misc,
+            ),
+        ])
+
+        self.assertEqual(
+            struct.unpack_from("<I", fake.memory[misc_base], ORAS_MISC_MONEY_OFFSET)[0],
+            9_999_999,
+        )
+        self.assertIn(
+            (ORAS_MONEY_ADDRESS, struct.pack("<I", 9_999_999)),
+            fake.writes,
+        )
+        self.assertEqual(result.memory_watches[0].address, ORAS_MONEY_ADDRESS)
+
+    def test_live_writer_rejects_zero_nominal_misc_and_uses_valid_live_copy(self) -> None:
+        fake = _ExtendedFakeClient(
+            (self.initial,) + self.empty_slots,
+            pc_slot=make_encrypted_pk6()[:PK6_STORED_SIZE],
+        )
+        static_base = ORAS_MONEY_ADDRESS - ORAS_MISC_MONEY_OFFSET
+        fake.memory[static_base] = bytearray(ORAS_SAVE_MISC_SIZE)
+        live_base = static_base - 0x3FF0
+        saved_misc = bytes(make_oras_misc(money=3_792, badges=1))
+        fake.memory[live_base] = bytearray(saved_misc)
+
+        result = self._writer(fake).apply(self.current, [
+            PendingInventoryChange(
+                "money-max", "Dinero", 9_999_999,
+                save_misc_witness=saved_misc,
+            ),
+        ])
+
+        self.assertEqual(
+            struct.unpack_from("<I", fake.memory[live_base], ORAS_MISC_MONEY_OFFSET)[0],
+            9_999_999,
+        )
+        self.assertEqual(bytes(fake.memory[static_base]), bytes(ORAS_SAVE_MISC_SIZE))
+        self.assertIn(
+            (live_base + ORAS_MISC_MONEY_OFFSET, struct.pack("<I", 9_999_999)),
+            fake.writes,
+        )
+        self.assertEqual(
+            result.memory_watches[0].address,
+            live_base + ORAS_MISC_MONEY_OFFSET,
+        )
+
+    def test_live_writer_refuses_money_without_a_saved_misc_fingerprint(self) -> None:
+        fake = _ExtendedFakeClient(
+            (self.initial,) + self.empty_slots,
+            pc_slot=make_encrypted_pk6()[:PK6_STORED_SIZE],
+        )
+        with self.assertRaisesRegex(ORASLiveError, "huella Misc"):
+            self._writer(fake).apply(self.current, [
+                PendingInventoryChange("money-max", "Dinero", 9_999_999),
+            ])
+        self.assertEqual(fake.writes, [])
 
     def test_live_writer_refuses_inventory_without_a_saved_fingerprint(self) -> None:
         fake = _ExtendedFakeClient(
@@ -1073,6 +1234,12 @@ class ORASLiveWriteTests(unittest.TestCase):
                 incoming_pokemon="Zigzagoon", incoming_species="Zigzagoon",
                 incoming_role="Mago", incoming_identity=incoming_identity,
                 outgoing_identity=self._identity(),
+                incoming_snapshot={
+                    "evs": {
+                        "hp": 0, "attack": 0, "defense": 0,
+                        "sp_attack": 252, "sp_defense": 0, "speed": 252,
+                    },
+                },
                 box_witnesses=((1, incoming_identity),),
             ),
         ])
@@ -1089,8 +1256,9 @@ class ORASLiveWriteTests(unittest.TestCase):
 
         plain_party = decrypt_pk6(fake.slots[0])
         self.assertEqual(plain_party[0xEC], 20)
-        # Zigzagoon, IV 31, EV 0 y naturaleza neutra al nivel 20.
-        self.assertEqual(struct.unpack_from("<7H", plain_party, 0xF0), (51, 51, 23, 27, 35, 23, 27))
+        self.assertEqual(bytes(plain_party[0x1E:0x24]), bytes((0, 0, 0, 252, 252, 0)))
+        # Zigzagoon, IV 31, EV 252 en At. Esp. y Vel., naturaleza neutra, nivel 20.
+        self.assertEqual(struct.unpack_from("<7H", plain_party, 0xF0), (51, 51, 23, 27, 47, 35, 27))
         self.assertEqual(len(result.memory_watches), 1)
         self.assertEqual(result.memory_watches[0].kind, "pc-team")
         self.assertEqual(result.memory_watches[0].pokemon_identity, self._identity())

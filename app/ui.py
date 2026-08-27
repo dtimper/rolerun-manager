@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import copy
 import ctypes
+import json
+import math
 import queue
 import subprocess
 import sys
@@ -10,13 +12,14 @@ import threading
 import time
 import unicodedata
 import urllib.request
+import tkinter as tk
 from datetime import datetime
 from dataclasses import replace
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageGrab, ImageTk
 
 from .config import (
     APP_NAME,
@@ -41,22 +44,25 @@ from .config import (
     TEXT,
 )
 from .draft_engine import DraftEngine
+from .role_content import GLOBAL_ROLE_NOTE, ROLE_GUIDE
 from .pc_browser import filter_pc_pokemon, reset_scrollable_to_top
 from .role_rules import (
     ROLE_ORDER, ROLE_OPTIONS, ROLE_SYMBOLS, ROLE_TO_KEY,
     allowed_status_move_ids, canonical_role, damage_move_issue_reason, role_from_markings,
 )
-from .models import PendingChange, PendingDraft, PendingInventoryChange, PendingPCRoleChange, PendingRoleChange, PendingTMTeach, PendingTeamChange, RunSession
+from .models import PendingChange, PendingDraft, PendingInventoryChange, PendingPartyHeal, PendingPCRoleChange, PendingRoleChange, PendingTMTeach, PendingTeamChange, RunSession
 from .save_engine_client import SaveEngineClient, SaveEngineError, SaveGameData, SavePokemon, SavePCData, SaveBox
 from .game_engines import EngineFactory, GameEngineError
 from .save_service import SaveInfo, SaveService
 from .run_service import RunProject, RunProjectService
 from .game_source_service import GameSourceProfile, GameSourceProfileService
 from .win_hotkeys import WindowsHotkeyManager
+from .sdl_gamepad import BUTTON_NAMES, RyujinxInputGate, SDLGamepad
 from .obs_sync import ObsSyncService, SaveFileWatcher
 from .bdsp_tm_service import (
     BDSPTMProfile, discover_personal_masterdatas, load_bdsp_tm_profile, remember_source,
 )
+from .pokemon_stats import STAT_KEYS, STAT_LABELS, stat_dict
 from .oras_tm_service import ORASTMProfile, load_fvx_oras_tm_profile, load_oras_tm_profile
 from .oras_rom_service import (
     ORASRomProfileError,
@@ -68,27 +74,56 @@ from .xy_rom_service import XYRomProfileError, load_xy_rom_tm_profile
 from .sm_rom_service import SMRomProfileError, load_sm_rom_tm_profile
 from .usum_rom_service import USUMRomProfileError, load_usum_rom_tm_profile
 from .live_review import inverse_oras_live_change
+from .ui_components import (
+    IntegratedRoleInfoPopover,
+    IntegratedRunStatePanel,
+    IntegratedWindowSurface,
+    OperationStatusBar,
+    RoleIconProvider,
+)
+from .ui_state import (
+    DEFAULT_PAGE,
+    PRIMARY_NAVIGATION,
+    OperationStatusStore,
+    normalize_navigation_target,
+    primary_page_for,
+    resolve_explorer_target,
+    TeamPCSelectionState,
+    build_fixed_team_slots,
+    resolve_team_pc_drop,
+)
+from .ui_views import (
+    GlobalTMView,
+    IntegratedDraftFlow,
+    IntegratedFormatHelpView,
+    IntegratedTMTeachFlow,
+    UnifiedTeamPCView,
+)
 from .realtime import (
     ORASRealTimeAdapter, XYRealTimeAdapter, XYMultiRealTimeAdapter, SMRealTimeAdapter, USUMRealTimeAdapter,
+    BDSPRealTimeAdapter, B2W2RealTimeAdapter,
     CitraBridge, RealTimeRegistry, RealTimeReplay,
 )
+from .realtime.models import badge_source_is_live
 from .live_party_watch import (
     detect_fainted_transitions,
     diff_live_party,
     infer_incoming_role_assignments,
     infer_unassigned_role_assignments,
 )
-from .xy_live import XYLiveReader, XYLiveWriter, read_xy_saved_misc
-from .sm_live import SMLiveReader, load_sm_move_pp
+from .xy_live import XYLiveReader, XYLiveWriter, load_xy_move_metadata, read_xy_saved_misc
+from .sm_live import SMLiveReader, load_gen7_move_metadata, load_sm_move_pp
 from .usum_live import USUMLiveReader
 from .citra_broker import CitraBrokerClient
 from .oras_live import (
     ORAS_BADGES_ADDRESS, ORAS_INVENTORY_TARGETS, ORAS_PC_ADDRESS, ORAS_PC_BOX_SLOT_COUNT, PK6_STORED_SIZE,
+    ORAS_SAVE_MISC_SIZE, read_oras_saved_misc,
     ORAS_BATTLE_WILD_PLAYER_ADDRESS, ORAS_BATTLE_TRAINER_PLAYER_ADDRESS, ORAS_BATTLE_PARTY_SPAN,
     ORAS_BATTLE_WILD_OPPONENT_ADDRESS, ORAS_BATTLE_TRAINER_OPPONENT_ADDRESS,
     ORAS_BATTLE_WILD_PP_ADDRESS, ORAS_BATTLE_TRAINER_PP_ADDRESS,
     ORASLiveError, ORASLiveReader, ORASLiveWriter, live_party_fingerprint,
-    load_oras_move_pp, parse_oras_badges, parse_oras_battle_state, parse_pk6_boxed,
+    load_oras_move_metadata, load_oras_move_pp, parse_oras_badges,
+    parse_oras_battle_state, parse_pk6_boxed,
 )
 
 
@@ -96,12 +131,27 @@ from .oras_live import (
 ORAS_GRAVEYARD_BOX = 4
 GEN6_REALTIME_GAME_KEYS = {"oras", "xy"}
 GEN7_REALTIME_GAME_KEYS = {"sm", "usum"}
-LIVE_PC_READ_GAME_KEYS = GEN6_REALTIME_GAME_KEYS | {"sm", "usum"}
+DEFERRED_LIVE_TM_INVENTORY_GAME_KEYS = GEN7_REALTIME_GAME_KEYS | {"bdsp"}
+# Solo estos readers publican en esta frontera una matriz completa y enriquecida.
+# SM conserva su contrato incremental de overrides; incluirlo aquí borraría la
+# diferencia viva contra el guardado y alteraría otro backend sin evidencia.
+FULL_MATRIX_LIVE_PC_GAME_KEYS = {"sm", "usum", "bdsp", "b2w2"}
+LIVE_PC_READ_GAME_KEYS = GEN6_REALTIME_GAME_KEYS | GEN7_REALTIME_GAME_KEYS | {"bdsp", "b2w2"}
 AZAHAR_REALTIME_GAME_KEYS = {"oras", "xy", "sm", "usum"}
+REALTIME_READ_GAME_KEYS = AZAHAR_REALTIME_GAME_KEYS | {"bdsp", "b2w2"}
+INSTANT_REALTIME_UI_GAME_KEYS = AZAHAR_REALTIME_GAME_KEYS | {"bdsp", "b2w2"}
 AUTOMATIC_BADGE_GAME_KEYS = {"oras", "xy", "sm", "usum"}
 
 
 class RoleRunManager(ctk.CTk):
+    def _centered_geometry(self, width: int, height: int) -> str:
+        """Centra una geometría normal en la pantalla principal de Windows."""
+        screen_width = max(int(width), int(self.winfo_screenwidth()))
+        screen_height = max(int(height), int(self.winfo_screenheight()))
+        left = max(0, (screen_width - int(width)) // 2)
+        top = max(0, (screen_height - int(height)) // 2)
+        return f"{int(width)}x{int(height)}+{left}+{top}"
+
     def __init__(self) -> None:
         super().__init__()
         ctk.set_appearance_mode("dark")
@@ -116,7 +166,7 @@ class RoleRunManager(ctk.CTk):
             pass
 
         self.title(APP_NAME)
-        self.geometry("1360x860")
+        self.geometry(self._centered_geometry(1360, 860))
         self.minsize(1100, 720)
         self.configure(fg_color=BG)
 
@@ -145,6 +195,10 @@ class RoleRunManager(ctk.CTk):
         self.sync_status = "Sin vigilancia"
         self.oras_live_reader = ORASLiveReader(DATA_DIR / "move_catalog.json")
         self.oras_live_move_pp = load_oras_move_pp(DATA_DIR / "oras_move_pp.json")
+        self.oras_move_metadata = load_oras_move_metadata(
+            DATA_DIR / "oras_move_metadata.json"
+        )
+        self.xy_move_metadata = load_xy_move_metadata(DATA_DIR / "xy_move_metadata.json")
         try:
             self.oras_tm_profile: ORASTMProfile | None = load_oras_tm_profile(DATA_DIR / "oras_tms.json")
         except Exception:
@@ -242,6 +296,7 @@ class RoleRunManager(ctk.CTk):
         # que una party PK7 coincide con el main por identidad fuerte.
         self.sm_live_reader = SMLiveReader(DATA_DIR / "move_catalog.json")
         self.sm_live_move_pp = load_sm_move_pp(DATA_DIR / "sm_move_pp.json")
+        self.gen7_move_metadata = load_gen7_move_metadata(DATA_DIR / "gen7_move_metadata.json")
         self.sm_realtime_adapter = SMRealTimeAdapter(
             self.sm_live_reader,
             move_pp_for=lambda move_id: self.sm_live_move_pp[move_id],
@@ -269,12 +324,27 @@ class RoleRunManager(ctk.CTk):
             ),
             personal_for=self._usum_personal_for_live,
         )
+        # BDSP se incorpora primero como ruta estrictamente de solo lectura.
+        # HostMappedUnsafe evita la penalización física demostrada del GDB Stub;
+        # el adaptador no expone escritores, PC, MT ni progreso todavía.
+        self.bdsp_realtime_adapter = BDSPRealTimeAdapter(
+            role_layout_getter=lambda: self.native_save_engine.role_marker_layout,
+            tm_profile_getter=lambda: self._get_bdsp_tm_profile(prompt=False),
+            trace_path=LOG_DIR / "bdsp_realtime_trace_latest.jsonl",
+        )
+        # v0.2.6-alpha.1: B2/W2 comienza con la única unidad demostrada en
+        # melonDS, party PK5 y PS. No expone writers, PC ni batalla.
+        self.b2w2_realtime_adapter = B2W2RealTimeAdapter(
+            role_layout_getter=lambda: self.native_save_engine.role_marker_layout,
+        )
 
         self.realtime_registry = RealTimeRegistry()
         self.oras_realtime_core = self.realtime_registry.register(self.oras_realtime_adapter)
         self.xy_realtime_core = self.realtime_registry.register(self.xy_realtime_adapter)
         self.sm_realtime_core = self.realtime_registry.register(self.sm_realtime_adapter)
         self.usum_realtime_core = self.realtime_registry.register(self.usum_realtime_adapter)
+        self.bdsp_realtime_core = self.realtime_registry.register(self.bdsp_realtime_adapter)
+        self.b2w2_realtime_core = self.realtime_registry.register(self.b2w2_realtime_adapter)
         # Alias al Core de la Run activa. _set_selected_game_engine lo cambia
         # antes de cargar cada partida, de modo que la UI nunca elige adaptadores.
         self.realtime_core = self.oras_realtime_core
@@ -320,6 +390,16 @@ class RoleRunManager(ctk.CTk):
         self._oras_pc_reconcile_token = 0
         self._oras_pc_reconcile_in_progress = False
         self._oras_pc_reconcile_last_key: tuple | None = None
+        # BDSP no emite un cambio de party cuando el jugador mueve un Pokémon
+        # entre dos cajas. Mientras CAJAS PC está realmente visible mantenemos un
+        # único sondeo acotado; se cancela al salir, minimizar o cambiar de Run.
+        self._bdsp_pc_poll_after_id = None
+        # Una Run creada antes del layout canónico de marcadores debe mover los
+        # bits físicos, no limitarse a reinterpretarlos. BDSP sigue siendo RAM
+        # read-only: la migración se prepara contra el guardado y solo se da por
+        # completa tras verificar el archivo de salida con el layout nuevo.
+        self._bdsp_marker_migration_change_ids: set[int] = set()
+        self._bdsp_marker_migration_expected: dict[str, str] = {}
         # Sol/Luna alpha.30: una sustitución hecha desde el PC puede necesitar
         # escribir el marcador del Pokémon entrante. Esa escritura NO se lanza
         # hasta que la lectura PC de la misma transición haya demostrado de nuevo
@@ -357,6 +437,8 @@ class RoleRunManager(ctk.CTk):
         self._oras_faint_picker_loading = False
         self._oras_faint_picker_loading_token = 0
         self._oras_faint_picker_event_identity: str | None = None
+        self._faint_replacement_mode: dict | None = None
+        self._faint_reopen_requested_identity: str | None = None
         self._oras_faint_picker_suppressed_identity: str | None = None
         self._oras_faint_picker_error_identity: str | None = None
         self._oras_live_death_replacement_ids: set[int] = set()
@@ -417,10 +499,21 @@ class RoleRunManager(ctk.CTk):
             except Exception:
                 self.draft_icon_image = None
 
-        self.active_page = "dashboard"
+        # Equipo y PC sustituyen al antiguo Dashboard como destino principal.
+        # Los identificadores internos ``team``/``pc`` se conservan para no
+        # alterar las rutas funcionales ya validadas de cada superficie.
+        self.active_page = DEFAULT_PAGE
         self.nav_buttons: dict[str, ctk.CTkButton] = {}
+        self._run_state_panel: IntegratedRunStatePanel | None = None
+        self.operation_status_store = OperationStatusStore()
+        self._operation_autocollapse_after_id: str | None = None
         self._capturing_hotkey_action: str | None = None
-        self.hotkey_manager = WindowsHotkeyManager(self._hotkey_action)
+        self.hotkey_manager = WindowsHotkeyManager(
+            self._hotkey_action,
+            # Ningún atajo se registra mientras el usuario escribe o navega en
+            # RoleRun. Solo la ventana real del emulador abre el ámbito global.
+            active_predicate=self._foreground_is_supported_emulator,
+        )
         self.hotkey_registration_errors: list[str] = []
         self.selected_game_key: str | None = None
         self._shell_built = False
@@ -430,6 +523,19 @@ class RoleRunManager(ctk.CTk):
         self._body_rerender_requested: tuple[bool, bool] | None = None
         self._session_generation = 0
         self._loading_overlay = None
+        self._busy_indicator = None
+        self._busy_reasons: dict[str, str] = {}
+        # La apertura de una Run no publica una shell provisional. La barrera se
+        # conserva hasta que cajas, primer enlace realtime (si aplica) y vista
+        # final hayan completado sus propias fronteras.
+        self._initial_shell_waiting = False
+        self._initial_shell_live_probe_complete = True
+        self._initial_shell_pc_data: SavePCData | None = None
+        self._presented_team_pc_view = None
+        self._initial_shell_gate_trace_state = None
+        self._initial_shell_reveal_phase = "idle"
+        self._initial_shell_stable_polls = 0
+        self._initial_shell_stable_signature = None
         self.floating_bar: ctk.CTkToplevel | None = None
         # alpha.37: creación de barra estrictamente singleton. FocusOut, el poll de
         # Azahar y el botón pueden coincidir durante el mapeado del mismo Toplevel;
@@ -445,6 +551,31 @@ class RoleRunManager(ctk.CTk):
         self._floating_bar_drag_origin: tuple[int, int, int, int] | None = None
         self._floating_bar_poll_id: str | None = None
         self._floating_bar_last_signature: tuple | None = None
+        self._floating_launcher: ctk.CTkToplevel | None = None
+        self._game_overlay_active = False
+        self._game_overlay_previous_geometry: str | None = None
+        self._game_overlay_close_button: ctk.CTkButton | None = None
+        self._game_overlay_key_bindings: list[tuple[str, str]] = []
+        self._game_overlay_original_body = None
+        self._game_overlay_previous_page: str | None = None
+        self._game_overlay_last_error: str | None = None
+        self._floating_menu_buttons: list[ctk.CTkButton] = []
+        self._floating_menu_index = 0
+        self._floating_menu_level = "closed"
+        self._floating_menu_control_bindings: list[str] = []
+        self._floating_launcher_close_button: ctk.CTkButton | None = None
+        self._gamepad: SDLGamepad | None = None
+        self._gamepad_previous_buttons: frozenset[str] = frozenset()
+        self._gamepad_reserved_buttons: set[str] = set()
+        self._gamepad_capture_action: str | None = None
+        self._gamepad_capture_callback = None
+        self._ryujinx_input_gate = RyujinxInputGate()
+        # Propiedad independiente del menú flotante: mientras cualquier ventana
+        # de RoleRun sea foreground, Ryujinx BDSP queda retenido para que el
+        # teclado y el mando no ejecuten también el mismo input dentro del juego.
+        self._role_run_foreground_gate_held = False
+        self._gamepad_poll_after_id: str | None = None
+        self._live_health_render_after_id: str | None = None
         # La ventana principal queda withdrawn mientras se juega con la barra.
         # Conservamos este aviso como hijo de la propia barra para confirmar F5
         # sin mostrar ni reconstruir la ventana principal.
@@ -454,6 +585,7 @@ class RoleRunManager(ctk.CTk):
         self._pending_ds_install_stop = threading.Event()
         self._pending_ds_install_thread: threading.Thread | None = None
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._gamepad_poll_after_id = self.after(250, self._poll_gamepad)
         self._splash_image: ctk.CTkImage | None = None
         self._splash_after_id: str | None = None
         self._welcome_card_images: list[ctk.CTkImage] = []
@@ -465,6 +597,8 @@ class RoleRunManager(ctk.CTk):
         self._manual_scroll_after_id: str | None = None
         self._manual_scroll_pending_fraction: float | None = None
         self._help_animation_ids: set[str] = set()
+        self._help_section = "overview"
+        self._format_help_view: IntegratedFormatHelpView | None = None
         self.dashboard_counter_labels: dict[str, ctk.CTkLabel] = {}
         self.dashboard_role_widgets: dict[str, tuple[ctk.CTkFrame, ctk.CTkButton]] = {}
         self.draft_role_buttons: dict[str, ctk.CTkButton] = {}
@@ -478,12 +612,28 @@ class RoleRunManager(ctk.CTk):
         self._pc_cache: SavePCData | None = None
         self._pc_cache_signature: tuple[int, int] | None = None
         self._pc_page_box: int | None = None
+        self._team_pc_selection = TeamPCSelectionState()
+        self._team_pc_view: UnifiedTeamPCView | None = None
+        self._team_pc_pc_loading = False
+        self._team_pc_pending_incoming: tuple[int, int, str] | None = None
+        self._team_pc_pending_outgoing: str | None = None
+        self._tm_teach_flow: IntegratedTMTeachFlow | None = None
+        self._global_tm_view: GlobalTMView | None = None
+        self._global_tm_context: tuple[object, dict[int, int], str] | None = None
+        self._global_tm_load_requested = False
+        self._role_info_popover: IntegratedRoleInfoPopover | None = None
+        self._draft_view: IntegratedDraftFlow | None = None
+        self._navigation_owner = None
+        self._draft_transition_token = 0
+        self._draft_fade_in_pending = False
+        self._moves_return_page: str | None = None
         # Perfil de MTs randomizadas de BDSP. Se carga de forma perezosa y solo
         # se solicita manualmente si el usuario pulsa un + sin poder autodetectarlo.
         self._bdsp_tm_profile: BDSPTMProfile | None = None
         self._bdsp_tm_profile_source: Path | None = None
         self._bdsp_tm_auto_checked = False
         self._role_conflict_dialog: ctk.CTkToplevel | None = None
+        self.role_icons = RoleIconProvider(RESOURCES_DIR / "role_icons", GOLD)
 
         # Historial de edición reversible (1.12.22). Solo contiene estado todavía
         # no consolidado en el guardado. GUARDAR CAMBIOS crea un nuevo punto base.
@@ -516,7 +666,7 @@ class RoleRunManager(ctk.CTk):
         self._floating_role_reordered = False
         # La barra flotante es una vista temporal: al volver se restaura exactamente
         # la pestaña principal desde la que se abrió, no siempre Dashboard.
-        self._last_main_page_before_floating = "dashboard"
+        self._last_main_page_before_floating = DEFAULT_PAGE
         # Si la barra aparece mientras hay un modal (por ejemplo REVISAR CAMBIOS),
         # suspendemos temporalmente su grab. Dejar un grab activo sobre una ventana
         # retirada bloquea todos los clicks y arrastres de la barra en Windows.
@@ -526,6 +676,10 @@ class RoleRunManager(ctk.CTk):
         # Cambio automático entre ventana principal y barra flotante. El guard evita
         # que withdraw/deiconify disparen recursivamente los eventos de minimizado.
         self._auto_floating_guard = False
+        self._floating_enabled = self._load_floating_enabled()
+        self._floating_button_text = ctk.StringVar(
+            value=f"BARRA FLOTANTE · {'ON' if self._floating_enabled else 'OFF'}"
+        )
         self._focus_out_after_id: str | None = None
         self._unmap_after_id: str | None = None
         self._emulator_focus_poll_id: str | None = None
@@ -536,6 +690,7 @@ class RoleRunManager(ctk.CTk):
         self.bind("<Unmap>", self._on_main_unmap, add="+")
         self.bind("<FocusOut>", self._on_main_focus_out, add="+")
         self.bind("<Map>", self._on_main_map, add="+")
+        self.bind_all("<FocusIn>", self._on_role_run_focus_in, add="+")
 
         self._render_startup_splash()
         self.after(100, self._poll_sprite_queue)
@@ -770,6 +925,34 @@ class RoleRunManager(ctk.CTk):
                 extras.append(pokemon)
         return occupants, extras
 
+    def _team_role_grid_layout(
+        self, party: list[SavePokemon] | None = None,
+    ) -> tuple[dict[str, SavePokemon], list[SavePokemon], dict[str, int], set[int]]:
+        """Coloca toda party física de hasta seis miembros en seis celdas.
+
+        Las casillas continúan perteneciendo a los roles. Si una captura importada
+        contiene SIN ROL o un marcador duplicado, ese miembro ocupa visualmente una
+        de las casillas que ha quedado libre en vez de crear una séptima fila. El
+        rol real y el conflicto se conservan: solo desaparece la falsa posición
+        física adicional.
+        """
+        party = list(party if party is not None else self._projected_party())
+        occupants, extras = self._role_slot_occupants(party)
+        positions: dict[str, int] = {}
+        free_indices: list[int] = []
+        for role_index, role_name in enumerate(ROLE_ORDER):
+            member = occupants.get(role_name)
+            if member is None:
+                free_indices.append(role_index)
+            else:
+                positions[self._pokemon_identity(member)] = role_index
+
+        extra_indices: set[int] = set()
+        for member, role_index in zip(extras, free_indices):
+            positions[self._pokemon_identity(member)] = role_index
+            extra_indices.add(role_index)
+        return occupants, extras, positions, extra_indices
+
     def _drop_target_role_at(self, x_root: int, y_root: int, context: str) -> str | None:
         targets = self._floating_role_drop_targets if context == "floating" else self._main_role_drop_targets
         for widget, role in list(targets):
@@ -1002,7 +1185,10 @@ class RoleRunManager(ctk.CTk):
         except Exception:
             pass
 
-    def _move_pokemon_to_role_by_drag(self, source: SavePokemon, target_role: str, context: str = "main") -> None:
+    def _move_pokemon_to_role_by_drag(
+        self, source: SavePokemon, target_role: str, context: str = "main",
+        libero_assignments: dict[str, tuple[str, ...]] | None = None,
+    ) -> None:
         """Mueve Pokémon entre casillas fijas de rol, no mueve los rótulos."""
         source_role, _ = self._effective_role(source)
         if target_role not in ROLE_ORDER or source_role == target_role:
@@ -1010,13 +1196,33 @@ class RoleRunManager(ctk.CTk):
         pending_ids_before = {id(change) for change in self.run.pending_changes}
         party = self._projected_party()
         target = next((p for p in party if p is not source and self._effective_role(p)[0] == target_role), None)
+        libero_assignments = dict(libero_assignments or {})
+        libero_recipient = source if target_role == "Líbero" else (target if source_role == "Líbero" else None)
+        if libero_recipient is not None:
+            recipient_identity = self._pokemon_identity(libero_recipient)
+            if len(libero_assignments.get(recipient_identity, ())) != 2:
+                self._prompt_libero_ev_stats(
+                    libero_recipient,
+                    lambda stats, src=source, dst=target_role, ctx=context, known=libero_assignments: self._move_pokemon_to_role_by_drag(
+                        src, dst, context=ctx,
+                        libero_assignments={**known, self._pokemon_identity(libero_recipient): stats},
+                    ),
+                    context=context,
+                )
+                return
 
         # Primero desplazamos al ocupante del destino a la casilla que deja libre
         # el Pokémon cogido; después colocamos el Pokémon cogido en el destino.
         # No se borran movimientos: su compatibilidad se recalcula con el nuevo rol.
         if target is not None:
-            self._set_projected_member_role(target, source_role if source_role in ROLE_ORDER else "SIN ROL")
-        self._set_projected_member_role(source, target_role)
+            self._set_projected_member_role(
+                target, source_role if source_role in ROLE_ORDER else "SIN ROL",
+                libero_stats=libero_assignments.get(self._pokemon_identity(target), ()),
+            )
+        self._set_projected_member_role(
+            source, target_role,
+            libero_stats=libero_assignments.get(self._pokemon_identity(source), ()),
+        )
 
         left = source.nickname or source.species
         if target is not None:
@@ -1239,6 +1445,45 @@ class RoleRunManager(ctk.CTk):
             pass
         return False
 
+    def _on_role_run_focus_in(self, _event=None) -> None:
+        """Reserva Ryujinx antes de que el primer control llegue a RoleRun."""
+        try:
+            self._sync_role_run_foreground_input_gate()
+            self.after_idle(self._sync_role_run_foreground_input_gate)
+        except Exception:
+            pass
+
+    def _sync_role_run_foreground_input_gate(self) -> bool:
+        """Mantiene un único bloqueo mientras RoleRun posee el primer plano.
+
+        Ryujinx SDL2 está configurado para aceptar mando sin foco. Consumir el
+        control en Tk/SDL no evita por sí solo que el emulador lo consuma también;
+        la frontera segura es retener su proceso durante la interacción con la UI.
+        """
+        should_hold = bool(
+            getattr(getattr(self, "save_engine", None), "key", "") == "bdsp"
+            and getattr(self, "current_game", None) is not None
+            and self._foreground_belongs_to_this_process()
+        )
+        gate = self._ryujinx_input_gate
+        if should_hold:
+            if self._role_run_foreground_gate_held and gate.active:
+                return True
+            self._role_run_foreground_gate_held = False
+            if gate.active or gate.acquire():
+                self._role_run_foreground_gate_held = True
+                return True
+            return False
+
+        if self._role_run_foreground_gate_held:
+            self._role_run_foreground_gate_held = False
+            if (
+                not self._gamepad_reserved_buttons
+                and not self._widget_alive(self._floating_launcher)
+            ):
+                gate.release(all_levels=True)
+        return False
+
     def _configured_emulator_process_tokens(self) -> tuple[str, ...]:
         """Lista ampliable sin recompilar: floating_bar.json puede añadir procesos."""
         tokens = list(self._DEFAULT_EMULATOR_PROCESS_TOKENS)
@@ -1378,7 +1623,19 @@ class RoleRunManager(ctk.CTk):
                 # vuelto a RoleRun. CTk/Windows puede emitirlo al actualizar widgets
                 # ocultos. Si Azahar (u otra app) sigue siendo foreground, conservamos
                 # la barra y retiramos de nuevo la raíz en vez de cerrarla.
-                if os.name == "nt" and not self._foreground_belongs_to_this_process():
+                main_is_explicitly_visible = False
+                try:
+                    main_is_explicitly_visible = bool(
+                        str(self.state()) in {"normal", "zoomed"}
+                        and self.winfo_viewable()
+                    )
+                except Exception:
+                    pass
+                if (
+                    os.name == "nt"
+                    and not main_is_explicitly_visible
+                    and not self._foreground_belongs_to_this_process()
+                ):
                     try:
                         self.withdraw()
                         if self.floating_bar and self.floating_bar.winfo_exists():
@@ -1420,6 +1677,10 @@ class RoleRunManager(ctk.CTk):
             # layout antes de construir el selector pesado de PC. Volver desde la
             # barra reactiva también un selector que el usuario hubiese cerrado.
             self._schedule_pending_faint_picker(700)
+        except Exception:
+            pass
+        try:
+            self._schedule_bdsp_pc_poll(180)
         except Exception:
             pass
 
@@ -1467,11 +1728,19 @@ class RoleRunManager(ctk.CTk):
 
     def _auto_float_if_minimized(self) -> None:
         self._unmap_after_id = None
-        # 1.12.17: minimizar la ventana principal significa minimizar RoleRun
-        # Manager de forma convencional. La barra flotante solo aparece al entrar
-        # en un emulador reconocido mientras la ventana principal está abierta, o
-        # al solicitarla expresamente desde la propia aplicación.
-        return
+        try:
+            minimized = str(self.state()) == "iconic"
+        except Exception:
+            minimized = False
+        if not minimized:
+            return
+        # RoleRun tiene dos modos deliberados: ventana principal maximizada o
+        # barra flotante. El botón nativo de minimizar equivale a entrar en la
+        # barra; nunca deja una tercera representación escondida en la taskbar.
+        if self.current_game and not self._faint_picker_blocks_floating():
+            self.open_floating_bar()
+        else:
+            self._restore_main_window_maximized()
 
     def _on_main_focus_out(self, _event=None) -> None:
         if (
@@ -1544,7 +1813,7 @@ class RoleRunManager(ctk.CTk):
         # "guardar antes de volver": los cambios compatibles se aplican en Azahar
         # al momento y el guardado definitivo lo hace el juego. Los motores que
         # todavía dependen del archivo conservan la confirmación antigua.
-        is_azahar_live_model = getattr(self.save_engine, "key", "") in AZAHAR_REALTIME_GAME_KEYS
+        is_azahar_live_model = getattr(self.save_engine, "key", "") in INSTANT_REALTIME_UI_GAME_KEYS
         role_reorder_only = bool(
             self._floating_role_reordered
             and self.run.pending_changes
@@ -1624,6 +1893,10 @@ class RoleRunManager(ctk.CTk):
                 pass
             self._emulator_focus_poll_id = None
         self.hotkey_manager.stop()
+        self._role_run_foreground_gate_held = False
+        self._ryujinx_input_gate.release(all_levels=True)
+        if self._gamepad is not None:
+            self._gamepad.close()
         self.save_watcher.stop()
         self.destroy()
 
@@ -1635,6 +1908,7 @@ class RoleRunManager(ctk.CTk):
         confirmación de cambios pendientes.
         """
         self._cancel_role_drag()
+        self._close_floating_launcher()
         self._save_floating_bar_position()
         if self._floating_bar_poll_id:
             try:
@@ -1671,6 +1945,57 @@ class RoleRunManager(ctk.CTk):
     def _floating_bar_config_path(self) -> Path:
         return CONFIG_DIR / "floating_bar.json"
 
+    def _load_floating_enabled(self) -> bool:
+        try:
+            raw = json.loads((CONFIG_DIR / "floating_bar.json").read_text(encoding="utf-8-sig"))
+            return bool(raw.get("enabled", True))
+        except Exception:
+            return True
+
+    def _save_floating_enabled(self) -> None:
+        path = self._floating_bar_config_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8-sig"))
+        except Exception:
+            raw = {}
+        raw["enabled"] = bool(self._floating_enabled)
+        path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _toggle_floating_enabled(self) -> None:
+        self._floating_enabled = not bool(self._floating_enabled)
+        self._save_floating_enabled()
+        label = f"BARRA FLOTANTE · {'ON' if self._floating_enabled else 'OFF'}"
+        label_var = getattr(self, "_floating_button_text", None)
+        if label_var is not None:
+            label_var.set(label)
+        if not self._floating_enabled and self._floating_bar_is_visible():
+            self.restore_from_floating_bar()
+        elif self._floating_enabled and self.project and self.current_game:
+            # ON es una acción explícita: abre la barra ahora, además de permitir
+            # que el detector de foreground la muestre en usos posteriores.
+            self.after(0, self.open_floating_bar)
+        if self._widget_alive(getattr(self, "floating_bar_button", None)):
+            self.floating_bar_button.configure(
+                text=label,
+                fg_color="#292315" if self._floating_enabled else "transparent",
+            )
+            # CTk conserva el valor inicial de ``text`` cuando se combina con
+            # ``textvariable`` durante una reconstrucción de cabecera. Retirar
+            # esa asociación hace que el texto recién configurado sea la única
+            # autoridad visual.
+            try:
+                self.floating_bar_button._textvariable = None
+                self.floating_bar_button._text_label.configure(text=label)
+            except Exception:
+                pass
+        # El ON abre la barra en el siguiente ciclo. Forzamos antes el repintado
+        # del botón para que no quede visualmente con el valor anterior mientras
+        # la ventana principal se retira.
+        flush = getattr(self, "update_idletasks", None)
+        if callable(flush):
+            flush()
+
     def _load_floating_bar_position(self) -> tuple[int, int]:
         try:
             import json
@@ -1701,6 +2026,8 @@ class RoleRunManager(ctk.CTk):
             pass
 
     def open_floating_bar(self) -> None:
+        if not bool(getattr(self, "_floating_enabled", True)):
+            return
         if not self.project or not self.current_game:
             messagebox.showinfo("Sin Run activa", "Abre primero una partida para usar la barra flotante.")
             return
@@ -1722,7 +2049,7 @@ class RoleRunManager(ctk.CTk):
         # Si había un modal abierto, liberamos su grab antes de retirar la raíz.
         # Esto conserva el arreglo de alpha.31 sin mezclarlo con el pintado de la barra.
         self._suspend_modal_for_floating_bar()
-        if self.active_page in {"dashboard", "drafts", "team", "pc", "history", "settings", "help"}:
+        if self.active_page in {"dashboard", "drafts", "team", "tms", "pc", "history", "settings", "help"}:
             self._last_main_page_before_floating = self.active_page
         self._floating_role_reordered = False
 
@@ -2060,6 +2387,7 @@ class RoleRunManager(ctk.CTk):
         self._close_from_floating_bar()
 
     def restore_from_floating_bar(self) -> None:
+        self._close_floating_launcher()
         self._save_floating_bar_position()
         if self._floating_bar_poll_id:
             try:
@@ -2075,11 +2403,18 @@ class RoleRunManager(ctk.CTk):
     def _counter_is_automatic(self, key: str) -> bool:
         """Contadores cuyo valor lo gobierna el juego en esta Run.
 
-        En X/Y, ORAS y Sol/Luna, MEDALLAS procede del progreso vivo. Mantener
-        controles manuales crearía dos fuentes de verdad y podría desincronizar
-        OBS/RoleRun.
+        En los backends con progreso RAM demostrado, MEDALLAS procede del juego
+        vivo. Mantener controles manuales crearía dos fuentes de verdad y podría
+        desincronizar OBS/RoleRun.
         """
-        return bool(key == "medallas" and getattr(self.save_engine, "key", "") in AUTOMATIC_BADGE_GAME_KEYS)
+        if key != "medallas":
+            return False
+        engine_key = getattr(self.save_engine, "key", "")
+        if engine_key == "bdsp":
+            # Alpha.77 está demostrada exclusivamente para SP 1.3.0. No se
+            # deshabilita el control manual de Diamante Brillante por analogía.
+            return str(getattr(getattr(self, "current_game", None), "game", "")).upper() == "SP"
+        return bool(engine_key in AUTOMATIC_BADGE_GAME_KEYS)
 
     def _floating_counter_cell(self, parent, key: str, icon: str, column: int, icon_image: ctk.CTkImage | None = None) -> None:
         value = int(self.project.counters.get(key, 0)) if self.project else 0
@@ -2121,16 +2456,693 @@ class RoleRunManager(ctk.CTk):
         if self.project and self.project.pending_faints:
             dead_ids = {str(item.get("identity", "") or "") for item in self.project.pending_faints}
             projected_party = [p for p in projected_party if self._pokemon_identity(p) not in dead_ids]
-        role_occupants, _role_extras = self._role_slot_occupants(projected_party)
+        _occupants, _extras, positions, _extra_indices = self._team_role_grid_layout(
+            projected_party,
+        )
+        pokemon_by_position = {
+            int(positions[self._pokemon_identity(pokemon)]): pokemon
+            for pokemon in projected_party
+            if self._pokemon_identity(pokemon) in positions
+        }
         roles = []
-        for role in ROLE_ORDER:
+        for role_index, role in enumerate(ROLE_ORDER):
             role_key = ROLE_TO_KEY[role]
-            pokemon = role_occupants.get(role)
+            pokemon = pokemon_by_position.get(role_index)
             identity = self._pokemon_visibility_identity(pokemon) if pokemon else None
-            hidden = bool(pokemon and self.project and self.project.hidden_roles.get(role_key) == identity)
+            actual_role = self._effective_role(pokemon)[0] if pokemon else ""
+            hidden = bool(
+                pokemon and actual_role == role and self.project
+                and self.project.hidden_roles.get(role_key) == identity
+            )
             sprite_ready = bool(pokemon and self._sprite_source(pokemon) is not None)
-            roles.append((role_key, identity, hidden, sprite_ready))
+            hp, max_hp, status = self._floating_health_values(pokemon)
+            roles.append((
+                role_key, identity, hidden, sprite_ready,
+                hp, max_hp, status,
+            ))
         return counters + tuple(roles)
+
+    def _floating_health_values(self, pokemon: SavePokemon | None) -> tuple[int, int, int]:
+        """Devuelve salud live demostrada sin convertir una muestra provisional en KO.
+
+        La party proyectada gobierna identidad/roles, pero durante la entrada en
+        combate puede recibir temporalmente HP provisionales. La sonda live ya
+        publica una party validada por identidad; cuando existe una coincidencia
+        única y coherente, esa es la autoridad de salud de la barra flotante.
+        """
+        if pokemon is None:
+            return (0, 0, 0)
+        fallback = (
+            int(getattr(pokemon, "current_hp", 0) or 0),
+            int(getattr(pokemon, "max_hp", 0) or 0),
+            int(getattr(pokemon, "status_condition", 0) or 0),
+        )
+        snapshot = getattr(self, "_oras_live_health_snapshot", None)
+        party = list(getattr(snapshot, "party", []) or [])
+        if not party:
+            return fallback
+        identity = self._pokemon_identity(pokemon)
+        matches = [candidate for candidate in party if self._pokemon_identity(candidate) == identity]
+        if len(matches) != 1:
+            return fallback
+        candidate = matches[0]
+        hp = int(getattr(candidate, "current_hp", 0) or 0)
+        max_hp = int(getattr(candidate, "max_hp", 0) or 0)
+        if max_hp <= 0 or hp < 0 or hp > max_hp:
+            return fallback
+        return (
+            hp,
+            max_hp,
+            int(getattr(candidate, "status_condition", 0) or 0),
+        )
+
+    @staticmethod
+    def _floating_status_style(value: int) -> tuple[str, str] | None:
+        """Color y sigla según PKHeX.Core.StatusCondition (PB8 0x94)."""
+        status = int(value or 0)
+        if 1 <= status <= 7:
+            return "#75C8F0", "DOR"
+        if status in {8, 128}:
+            return "#A45AC7", "ENV"
+        if status == 16:
+            return "#E85B55", "QUE"
+        if status == 32:
+            return "#55D7E8", "CON"
+        if status == 64:
+            return "#E6C84F", "PAR"
+        return None
+
+    @staticmethod
+    def _ryujinx_window_rect() -> tuple[int, int, int, int, int] | None:
+        """Devuelve HWND y rectángulo del Ryujinx BDSP visible en Windows."""
+        if os.name != "nt":
+            return None
+        try:
+            user32 = ctypes.windll.user32
+            result: list[tuple[int, int, int, int, int]] = []
+
+            class RECT(ctypes.Structure):
+                _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                            ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+            callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+            def inspect(hwnd, _lparam):
+                if not user32.IsWindowVisible(hwnd):
+                    return True
+                length = int(user32.GetWindowTextLengthW(hwnd))
+                if length <= 0:
+                    return True
+                buffer = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buffer, length + 1)
+                title = buffer.value.casefold()
+                if "ryujinx" not in title or "010018e011d92000" not in title:
+                    return True
+                rect = RECT()
+                if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                    result.append((int(hwnd), int(rect.left), int(rect.top),
+                                   int(rect.right), int(rect.bottom)))
+                return False
+
+            callback = callback_type(inspect)
+            user32.EnumWindows(callback, 0)
+            return result[0] if result else None
+        except Exception:
+            return None
+
+    def _close_floating_launcher(self, *, resume_game: bool = True) -> None:
+        launcher, self._floating_launcher = self._floating_launcher, None
+        if launcher is not None:
+            try:
+                if launcher.winfo_exists():
+                    try:
+                        launcher.grab_release()
+                    except Exception:
+                        pass
+                    launcher.destroy()
+            except Exception:
+                pass
+        self._floating_menu_level = "closed"
+        self._floating_launcher_close_button = None
+        if resume_game:
+            self._ryujinx_input_gate.release(all_levels=True)
+        bar = getattr(self, "floating_bar", None)
+        if not self._game_overlay_active and bar is not None:
+            try:
+                if bar.winfo_exists() and str(bar.state()) == "withdrawn":
+                    bar.deiconify()
+                    bar.lift()
+            except Exception:
+                pass
+        # El overlay nunca altera pausa, maximizado ni geometría de Ryujinx.
+        # Mantener el Toplevel con foco y grab activo basta para que las flechas
+        # lleguen a RoleRun y no al juego.
+
+    def _open_page_from_floating_launcher(self, page: str) -> None:
+        self._enter_game_overlay(page)
+
+    def _enter_game_overlay(self, page: str) -> None:
+        """Muestra únicamente el contenido funcional sobre el juego pausado."""
+        window = self._ryujinx_window_rect()
+        launcher = self._floating_launcher
+        if window is None or launcher is None or not launcher.winfo_exists():
+            self.restore_from_floating_bar()
+            self.after(80, lambda: self.navigate(page))
+            return
+        _hwnd, _left, _top, _right, _bottom = window
+        self._game_overlay_active = True
+        self._floating_menu_level = "page"
+        self._game_overlay_previous_page = self.active_page
+        self._game_overlay_original_body = self.body
+
+        def compose() -> None:
+            if not self._game_overlay_active:
+                return
+            try:
+                for child in launcher.winfo_children():
+                    child.destroy()
+                overlay_body = ctk.CTkFrame(launcher, fg_color="transparent", corner_radius=0)
+                # El rectángulo Win32 incluye barra de título y menú de Ryujinx.
+                # Reservarlos evita que la primera fila quede bajo el chrome.
+                overlay_body.place(relx=0.02, y=70, relwidth=0.96, relheight=0.88)
+                overlay_body.grid_columnconfigure(0, weight=1)
+                overlay_body.grid_rowconfigure(0, weight=1)
+                launcher.update_idletasks()
+                self.body = overlay_body
+                self.active_page = normalize_navigation_target(page)
+                self.render_page()
+                launcher.update_idletasks()
+                close = ctk.CTkButton(
+                    launcher, text="×", width=48, height=48, corner_radius=14,
+                    fg_color="#151515", hover_color=DANGER, border_width=2,
+                    border_color=GOLD, text_color=TEXT,
+                    font=ctk.CTkFont("Segoe UI", 24, "bold"),
+                    command=self._return_to_floating_menu,
+                )
+                # Fuera de la cabecera de FICHA DEL POKÉMON: antes coincidía
+                # físicamente con su flecha derecha y ambos botones se solapaban.
+                close.place(relx=1.0, x=-18, y=14, anchor="ne")
+                close.lift()
+                self._game_overlay_close_button = close
+                self._bind_floating_menu_keyboard(launcher)
+                try:
+                    launcher.grab_set()
+                except Exception:
+                    pass
+                launcher.focus_force()
+                launcher.update_idletasks()
+            except Exception as exc:
+                self._game_overlay_last_error = f"{type(exc).__name__}: {exc}"
+                self._exit_game_overlay()
+
+        self.after(160, compose)
+
+    def _exit_game_overlay(self) -> None:
+        if not self._game_overlay_active:
+            return
+        self._game_overlay_active = False
+        if self._widget_alive(self._game_overlay_close_button):
+            self._game_overlay_close_button.destroy()
+        self._game_overlay_close_button = None
+        launcher = self._floating_launcher
+        for sequence, binding in self._game_overlay_key_bindings:
+            try:
+                if launcher is not None:
+                    launcher.unbind(sequence, binding)
+            except Exception:
+                pass
+        self._game_overlay_key_bindings.clear()
+        try:
+            if self._draft_view is not None:
+                self._draft_view.destroy(); self._draft_view = None
+            if self._global_tm_view is not None:
+                self._global_tm_view.destroy(); self._global_tm_view = None
+            if self._team_pc_view is not None:
+                try:
+                    destroy = getattr(self._team_pc_view, "destroy", None)
+                    if callable(destroy):
+                        destroy()
+                    elif self._widget_alive(getattr(self._team_pc_view, "frame", None)):
+                        self._team_pc_view.frame.destroy()
+                finally:
+                    self._team_pc_view = None
+            if self._game_overlay_original_body is not None:
+                self.body = self._game_overlay_original_body
+            self._game_overlay_original_body = None
+            if self._game_overlay_previous_page:
+                self.active_page = self._game_overlay_previous_page
+            self._game_overlay_previous_page = None
+            self._close_floating_launcher(resume_game=False)
+        finally:
+            self.open_floating_bar()
+
+    def _return_to_floating_menu(self) -> str:
+        """Vuelve desde una sección al selector sin destruir el overlay."""
+        launcher = self._floating_launcher
+        if launcher is None or not self._widget_alive(launcher):
+            self._exit_game_overlay()
+            return "break"
+        self._game_overlay_active = False
+        if self._widget_alive(self._game_overlay_close_button):
+            self._game_overlay_close_button.destroy()
+        self._game_overlay_close_button = None
+        try:
+            if self._draft_view is not None:
+                self._draft_view.destroy(); self._draft_view = None
+            if self._global_tm_view is not None:
+                self._global_tm_view.destroy(); self._global_tm_view = None
+            if self._team_pc_view is not None:
+                destroy = getattr(self._team_pc_view, "destroy", None)
+                if callable(destroy):
+                    destroy()
+                elif self._widget_alive(getattr(self._team_pc_view, "frame", None)):
+                    self._team_pc_view.frame.destroy()
+                self._team_pc_view = None
+        finally:
+            if self._game_overlay_original_body is not None:
+                self.body = self._game_overlay_original_body
+            self._game_overlay_original_body = None
+            if self._game_overlay_previous_page:
+                self.active_page = self._game_overlay_previous_page
+            self._game_overlay_previous_page = None
+        self._show_floating_menu_home(launcher)
+        return "break"
+
+    def _toggle_floating_launcher(self) -> None:
+        if self._floating_launcher is not None:
+            try:
+                if self._floating_launcher.winfo_exists():
+                    self._close_floating_launcher()
+                    return
+            except Exception:
+                self._floating_launcher = None
+        bar = self.floating_bar
+        if not bar or not bar.winfo_exists() or str(bar.state()) == "withdrawn":
+            self.open_floating_bar()
+            self.after(120, self._toggle_floating_launcher)
+            return
+        window = self._ryujinx_window_rect()
+        launcher = ctk.CTkToplevel(bar)
+        # El overlay consume cruceta/botones del mando. Ryujinx queda retenido
+        # hasta cerrar la capa, sin cambiar tamaño, foco persistente ni ventana.
+        self._ryujinx_input_gate.acquire()
+        self._floating_launcher = launcher
+        launcher.overrideredirect(True)
+        launcher.attributes("-topmost", True)
+        launcher.configure(fg_color="#090909")
+        if window is not None:
+            _hwnd, left, top, right, bottom = window
+            launcher.geometry(f"{right-left}x{bottom-top}+{left}+{top}")
+        else:
+            launcher.geometry("1040x640+240+140")
+        launcher.attributes("-alpha", 0.94)
+        self._show_floating_menu_home(launcher)
+        launcher.after(30, lambda: bar.withdraw() if bar.winfo_exists() else None)
+        try:
+            launcher.grab_set()
+        except Exception:
+            pass
+        launcher.focus_force()
+
+    def _show_floating_menu_home(self, launcher) -> None:
+        """Compone el selector raíz y conserva una sola autoridad de teclado."""
+        for child in launcher.winfo_children():
+            child.destroy()
+        self._floating_menu_level = "home"
+        shell = ctk.CTkFrame(launcher, width=850, height=430, fg_color="#151515",
+                             corner_radius=24, border_width=2, border_color=GOLD)
+        shell.place(relx=.5, rely=.5, anchor="center")
+        shell.grid_propagate(False)
+        shell.grid_columnconfigure((0, 1), weight=1, uniform="floating_menu")
+        shell.grid_rowconfigure((1, 2), weight=1, uniform="floating_menu")
+        ctk.CTkLabel(shell, text="ROLERUN", text_color=GOLD,
+                     font=ctk.CTkFont("Segoe UI", 26, "bold")).grid(
+                         row=0, column=0, columnspan=2, pady=(24, 10))
+        self._floating_menu_buttons = []
+        self._floating_menu_index = 0
+        for index, (label, page) in enumerate((("EQUIPO Y PC", "team"), ("MT", "tms"),
+                                               ("DRAFTEOS", "drafts"), ("BOLSA", "bag"))):
+            row, column = 1 + index // 2, index % 2
+            button = ctk.CTkButton(
+                shell, text=label, height=125, fg_color="#222222", hover_color="#34302A",
+                border_width=1, border_color="#4A3D25", text_color=GOLD,
+                font=ctk.CTkFont("Segoe UI", 20, "bold"),
+                command=(lambda target=page: self._show_overlay_bag(shell)
+                         if target == "bag" else self._open_page_from_floating_launcher(target)),
+            )
+            button.grid(row=row, column=column, sticky="nsew", padx=10, pady=10)
+            self._floating_menu_buttons.append(button)
+        settings = ctk.CTkButton(
+            shell, text="⚙", width=42, height=42, corner_radius=12,
+            fg_color="#222222", hover_color="#34302A", border_width=1,
+            border_color="#4A3D25", text_color=GOLD,
+            font=ctk.CTkFont("Segoe UI Symbol", 21, "bold"),
+            command=self._open_settings_from_floating_launcher,
+        )
+        settings.place(relx=1.0, x=-18, y=18, anchor="ne")
+        self._floating_menu_buttons.append(settings)
+        close = ctk.CTkButton(
+            launcher, text="×", width=44, height=44, corner_radius=13,
+            fg_color="#151515", hover_color=DANGER, border_width=1,
+            border_color=GOLD, command=self._close_floating_launcher,
+        )
+        close.place(relx=1.0, x=-24, y=22, anchor="ne")
+        self._floating_launcher_close_button = close
+        self._bind_floating_menu_keyboard(launcher)
+        self._paint_floating_menu_selection()
+
+    def _bind_floating_menu_keyboard(self, launcher) -> None:
+        def move(_event, delta: int):
+            if not self._floating_menu_buttons:
+                return "break"
+            self._floating_menu_index = (self._floating_menu_index + delta) % len(self._floating_menu_buttons)
+            self._paint_floating_menu_selection()
+            return "break"
+
+        def direction(event, name: str, delta: int):
+            if self._floating_menu_level in {"home", "bag"}:
+                return move(event, delta)
+            return self._dispatch_game_overlay_key(event, name)
+
+        launcher.bind("<KeyPress-Left>", lambda event: direction(event, "left", -1))
+        launcher.bind("<KeyPress-Right>", lambda event: direction(event, "right", 1))
+        launcher.bind("<KeyPress-Up>", lambda event: direction(event, "up", -2))
+        launcher.bind("<KeyPress-Down>", lambda event: direction(event, "down", 2))
+        for sequence in self._floating_menu_control_bindings:
+            try:
+                launcher.unbind(sequence)
+            except Exception:
+                pass
+        self._floating_menu_control_bindings.clear()
+        controls = self.project.menu_keys if self.project else {"accept": "z", "back": "x"}
+        for control, callback in (
+            ("accept", self._accept_floating_overlay_key),
+            ("back", self._back_floating_overlay_key),
+        ):
+            key = str(controls.get(control, "") or "").strip()
+            if not key:
+                continue
+            sequence = f"<KeyPress-{key}>"
+            launcher.bind(sequence, callback)
+            self._floating_menu_control_bindings.append(sequence)
+        launcher.focus_force()
+
+    def _poll_gamepad(self) -> None:
+        """Publica flancos SDL2 y reserva automáticamente cada atajo.
+
+        La asignación visible es siempre un solo botón. En su flanco inicial
+        RoleRun retiene Ryujinx y mantiene la retención hasta soltarlo; dentro
+        del overlay la conserva hasta cerrar el menú.
+        """
+        self._gamepad_poll_after_id = None
+        try:
+            # Debe ocurrir antes de leer o despachar el mando. Así el flanco que
+            # navega RoleRun nunca alcanza también a Ryujinx en segundo plano.
+            role_run_foreground = self._foreground_belongs_to_this_process()
+            self._sync_role_run_foreground_input_gate()
+            if self._gamepad is None:
+                self._gamepad = SDLGamepad.from_ryujinx_process()
+            sample = self._gamepad.sample() if self._gamepad is not None else None
+            current = sample.pressed if sample and sample.connected else frozenset()
+            previous = self._gamepad_previous_buttons
+            pressed = current - previous
+            released = previous - current
+            self._gamepad_previous_buttons = current
+
+            # SDL entrega estado, no una cola de eventos. Generamos repetición
+            # controlada para el D-pad: conserva cada flanco corto y permite
+            # recorrer listas largas manteniendo pulsado, sin depender de que
+            # Windows o Ryujinx fabriquen repeticiones.
+            pressed, repeat_at = self._update_gamepad_navigation_repeat(
+                current=current,
+                previous=previous,
+                repeat_at=getattr(self, "_gamepad_navigation_repeat_at", {}),
+                now=time.monotonic(),
+            )
+            self._gamepad_navigation_repeat_at = repeat_at
+
+            if self._gamepad_capture_action:
+                candidate = next((name for name in BUTTON_NAMES if name in pressed), None)
+                if candidate:
+                    callback, self._gamepad_capture_callback = self._gamepad_capture_callback, None
+                    self._gamepad_capture_action = None
+                    if callable(callback):
+                        callback(candidate)
+                return
+
+            launcher_open = self._widget_alive(self._floating_launcher)
+            if launcher_open:
+                directions = {
+                    "dpad left": "left", "dpad right": "right",
+                    "dpad up": "up", "dpad down": "down",
+                }
+                for button, direction in directions.items():
+                    if button in pressed:
+                        self._dispatch_controller_direction(direction)
+                menu_buttons = (
+                    self.project.controller_menu_buttons
+                    if self.project else {"accept": "a", "back": "b"}
+                )
+                if menu_buttons.get("accept", "a") in pressed:
+                    self._accept_floating_overlay_key()
+                if menu_buttons.get("back", "b") in pressed:
+                    self._back_floating_overlay_key()
+                return
+
+            if role_run_foreground:
+                directions = {
+                    "dpad left": "left", "dpad right": "right",
+                    "dpad up": "up", "dpad down": "down",
+                }
+                for button, direction in directions.items():
+                    if button in pressed:
+                        self._dispatch_game_overlay_key(None, direction)
+                menu_buttons = (
+                    self.project.controller_menu_buttons
+                    if self.project else {"accept": "a", "back": "b"}
+                )
+                if menu_buttons.get("accept", "a") in pressed:
+                    self._accept_floating_overlay_key()
+                if menu_buttons.get("back", "b") in pressed:
+                    self._clear_active_view_selection()
+                return
+
+            if self._foreground_is_supported_emulator():
+                for button in pressed:
+                    action = self._controller_action_for_button(button)
+                    if action and self._ryujinx_input_gate.acquire():
+                        self._gamepad_reserved_buttons.add(button)
+                        self._hotkey_action(action)
+
+            self._gamepad_reserved_buttons.difference_update(released)
+            if (
+                self._ryujinx_input_gate.active
+                and not self._gamepad_reserved_buttons
+                and not self._widget_alive(self._floating_launcher)
+            ):
+                self._ryujinx_input_gate.release(all_levels=True)
+        except Exception:
+            try:
+                if self._gamepad is not None:
+                    self._gamepad.close()
+            except Exception:
+                pass
+            self._gamepad = None
+            self._gamepad_previous_buttons = frozenset()
+            if not self._widget_alive(self._floating_launcher):
+                self._ryujinx_input_gate.release(all_levels=True)
+        finally:
+            if self.winfo_exists():
+                self._gamepad_poll_after_id = self.after(16, self._poll_gamepad)
+
+    @staticmethod
+    def _update_gamepad_navigation_repeat(
+        *, current: frozenset[str], previous: frozenset[str],
+        repeat_at: dict[str, float], now: float,
+    ) -> tuple[frozenset[str], dict[str, float]]:
+        """Convierte estado SDL en un flanco o una repetición inequívoca.
+
+        Un toque humano puede durar algo más de 200 ms. Por eso la repetición no
+        comienza hasta 450 ms: todos los taps cortos generan exactamente un
+        movimiento, mientras una retención deliberada sigue recorriendo listas.
+        """
+        pressed = current - previous
+        released = previous - current
+        updated = dict(repeat_at)
+        for button in ("dpad left", "dpad right", "dpad up", "dpad down"):
+            if button in pressed:
+                updated[button] = float(now) + 0.45
+            elif button in current and float(now) >= float(
+                updated.get(button, float(now) + 1.0)
+            ):
+                pressed = frozenset((*pressed, button))
+                updated[button] = float(now) + 0.070
+            elif button in released:
+                updated.pop(button, None)
+        return frozenset(pressed), updated
+
+    def _controller_action_for_button(self, button: str) -> str | None:
+        if not self.project:
+            return None
+        for action, configured in self.project.controller_hotkeys.items():
+            if configured == button:
+                return action
+        return None
+
+    def _dispatch_controller_direction(self, direction: str) -> None:
+        if self._floating_menu_level in {"home", "bag"}:
+            delta = {"left": -1, "right": 1, "up": -2, "down": 2}[direction]
+            if self._floating_menu_buttons:
+                self._floating_menu_index = (
+                    self._floating_menu_index + delta
+                ) % len(self._floating_menu_buttons)
+                self._paint_floating_menu_selection()
+            return
+        self._dispatch_game_overlay_key(None, direction)
+
+    def _dispatch_game_overlay_key(self, event, direction: str) -> str:
+        view = RoleRunManager._active_navigation_view(self)
+        callback = (getattr(view, "_move_direction_key", None)
+                    or getattr(view, "_move", None)
+                    or getattr(view, "_move_keyboard", None))
+        if callable(callback):
+            callback(event, direction)
+        return "break"
+
+    def _accept_floating_overlay_key(self, event=None) -> str:
+        if self._floating_menu_level in {"home", "bag"}:
+            return self._invoke_floating_menu_selection()
+        view = RoleRunManager._active_navigation_view(self)
+        callback = (getattr(view, "_accept_keyboard_selection", None)
+                    or getattr(view, "_accept", None)
+                    or getattr(view, "_accept_keyboard", None))
+        if callable(callback):
+            callback(event)
+        return "break"
+
+    def _back_floating_overlay_key(self, _event=None) -> str:
+        if self._floating_menu_level == "home":
+            self._close_floating_launcher()
+        elif self._floating_menu_level == "bag":
+            launcher = self._floating_launcher
+            if launcher is not None:
+                self._show_floating_menu_home(launcher)
+        else:
+            self._return_to_floating_menu()
+        return "break"
+
+    def _clear_active_view_selection(self) -> str:
+        view = RoleRunManager._active_navigation_view(self)
+        callback = (getattr(view, "_clear_keyboard_selection", None)
+                    or getattr(view, "_clear", None)
+                    or getattr(view, "_clear_keyboard", None))
+        if callable(callback):
+            callback(None)
+        return "break"
+
+    def _active_navigation_view(self):
+        """Devuelve la única superficie autorizada para teclado y mando.
+
+        Durante un flujo integrado (por ejemplo, elegir qué movimiento olvida
+        una MT) ``active_page`` sigue siendo ``team``. Resolver solo por página
+        enviaba el D-pad a la vista Equipo/PC que permanece debajo, mientras el
+        teclado sí llegaba al flujo superior mediante sus bindings. La autoridad
+        publicada por ``_set_navigation_owner`` es el contrato común real.
+        """
+        owner = getattr(self, "_navigation_owner", None)
+        if owner is not None:
+            return owner
+        return (self._team_pc_view if self.active_page == "team" else
+                self._global_tm_view if self.active_page == "tms" else
+                self._draft_view if self.active_page == "drafts" else None)
+
+    def _paint_floating_menu_selection(self) -> None:
+        for index, button in enumerate(self._floating_menu_buttons):
+            try:
+                selected = index == self._floating_menu_index
+                button.configure(border_color="#73A9FF" if selected else "#4A3D25",
+                                 border_width=3 if selected else 1)
+            except Exception:
+                pass
+
+    def _invoke_floating_menu_selection(self):
+        if self._floating_menu_buttons:
+            self._floating_menu_buttons[self._floating_menu_index].invoke()
+        return "break"
+
+    def _open_settings_from_floating_launcher(self) -> None:
+        """Cierra la capa de juego y abre Configuración en la ventana principal."""
+        self._last_main_page_before_floating = "settings"
+        self._close_floating_launcher(resume_game=False)
+        self._floating_logo_to_dashboard()
+
+    def _show_overlay_bag(self, shell) -> None:
+        for child in shell.winfo_children():
+            child.destroy()
+        self._floating_menu_level = "bag"
+        if self._widget_alive(self._floating_launcher_close_button):
+            self._floating_launcher_close_button.configure(
+                command=lambda: self._show_floating_menu_home(self._floating_launcher)
+            )
+        shell.grid_columnconfigure((0, 1, 2), weight=1, uniform="bag")
+        ctk.CTkLabel(shell, text="BOLSA", text_color=GOLD,
+                     font=ctk.CTkFont("Segoe UI", 28, "bold")).grid(
+                         row=0, column=0, columnspan=3, pady=(38, 18))
+        ctk.CTkButton(
+            shell, text="←  MENÚ", width=110, height=34, fg_color="transparent",
+            hover_color="#30291D", border_width=1, border_color="#4A3D25",
+            text_color=GOLD,
+            command=lambda: self._show_floating_menu_home(self._floating_launcher),
+        ).place(x=22, y=20)
+        definitions = (
+            ("rare-candy.png", "CARAMELOS RAROS\nx999", "rare-candy", "Caramelo Raro", 999),
+            ("max-repel.png", "REPELENTES MÁX.\nx999", "max-repel", "Repelente Máximo", 999),
+            (None, "DINERO\n∞", "money-max", "Dinero máximo", 999999),
+        )
+        self._overlay_bag_images = []
+        self._floating_menu_buttons = []
+        self._floating_menu_index = 0
+        feedback = ctk.CTkLabel(
+            shell, text="Selecciona una utilidad.", text_color=MUTED,
+            font=ctk.CTkFont("Segoe UI", 13, "bold"),
+        )
+        feedback.grid(row=2, column=0, columnspan=3, pady=(2, 22))
+
+        def apply_utility(key: str, name: str, amount: int) -> None:
+            feedback.configure(
+                text=("Aplicando dinero máximo…" if key == "money-max"
+                      else f"Aplicando {name} ×{amount}…"),
+                text_color=GOLD,
+            )
+            feedback.update_idletasks()
+            self.queue_inventory_change(key, name, amount)
+            feedback.configure(
+                text=("Dinero máximo enviado al juego."
+                      if key == "money-max" else f"{name} ×{amount} enviado a la Bolsa."),
+                text_color=SUCCESS,
+            )
+        for column, (filename, label, key, name, amount) in enumerate(definitions):
+            image = None
+            if filename:
+                try:
+                    source = Image.open(RESOURCES_DIR / "item_icons" / filename).convert("RGBA")
+                    source.thumbnail((72, 72), Image.Resampling.LANCZOS)
+                    image = ctk.CTkImage(light_image=source, dark_image=source, size=source.size)
+                    self._overlay_bag_images.append(image)
+                except Exception:
+                    pass
+            button = ctk.CTkButton(
+                shell, text=label, image=image, compound="top", height=230,
+                fg_color="#222222", hover_color="#34302A", border_width=2,
+                border_color="#4A3D25", text_color=GOLD,
+                font=ctk.CTkFont("Segoe UI", 17, "bold"),
+                command=lambda k=key, n=name, a=amount: apply_utility(k, n, a),
+            )
+            button.grid(row=1, column=column, sticky="nsew", padx=12, pady=16)
+            self._floating_menu_buttons.append(button)
+        self._paint_floating_menu_selection()
+        if self._floating_launcher is not None:
+            self._bind_floating_menu_keyboard(self._floating_launcher)
 
     def _schedule_floating_bar_poll(self) -> None:
         if self._floating_bar_poll_id:
@@ -2147,6 +3159,19 @@ class RoleRunManager(ctk.CTk):
             return
         self._render_floating_bar(force=False)
 
+    def _clear_floating_bar_render_children(self, bar) -> None:
+        """Retira solo los widgets reconstruibles de la barra flotante.
+
+        Los diálogos visibles pueden ser hijos lógicos del ``Toplevel`` de la
+        barra para seguir en pantalla mientras el root principal está retirado.
+        Un refresco de contadores/PS no debe destruir esas ventanas auxiliares.
+        """
+        protected = getattr(self, "_floating_modal_windows", ())
+        for child in tuple(bar.winfo_children()):
+            if child in protected:
+                continue
+            child.destroy()
+
     def _render_floating_bar(self, force: bool = False) -> None:
         bar = self.floating_bar
         if not bar or not bar.winfo_exists():
@@ -2156,8 +3181,7 @@ class RoleRunManager(ctk.CTk):
             self._schedule_floating_bar_poll()
             return
         self._floating_bar_last_signature = signature
-        for child in bar.winfo_children():
-            child.destroy()
+        self._clear_floating_bar_render_children(bar)
         self.floating_bar_images.clear()
         self._floating_role_drop_targets = []
         shell = ctk.CTkFrame(bar, fg_color="#111111", corner_radius=14, border_width=2, border_color=GOLD)
@@ -2191,11 +3215,24 @@ class RoleRunManager(ctk.CTk):
         if self.project and self.project.pending_faints:
             dead_ids = {str(item.get("identity", "") or "") for item in self.project.pending_faints}
             projected_party = [p for p in projected_party if self._pokemon_identity(p) not in dead_ids]
-        role_occupants, _role_extras = self._role_slot_occupants(projected_party)
-        for offset, role in enumerate(ROLE_ORDER, start=5):
+        _occupants, _extras, positions, extra_indices = self._team_role_grid_layout(
+            projected_party,
+        )
+        pokemon_by_position = {
+            int(positions[self._pokemon_identity(pokemon)]): pokemon
+            for pokemon in projected_party
+            if self._pokemon_identity(pokemon) in positions
+        }
+        for role_index, role in enumerate(ROLE_ORDER):
+            offset = role_index + 5
             role_key = ROLE_TO_KEY[role]
-            pokemon = role_occupants.get(role)
-            hidden = bool(pokemon and self.project and self.project.hidden_roles.get(role_key) == self._pokemon_visibility_identity(pokemon))
+            pokemon = pokemon_by_position.get(role_index)
+            is_extra = role_index in extra_indices
+            hidden = bool(
+                pokemon and not is_extra and self.project
+                and self.project.hidden_roles.get(role_key)
+                == self._pokemon_visibility_identity(pokemon)
+            )
             frame = ctk.CTkFrame(
                 shell, width=94, height=86,
                 fg_color="#171717" if hidden else "#202020", corner_radius=10,
@@ -2222,7 +3259,7 @@ class RoleRunManager(ctk.CTk):
                 text="" if image else "—",
                 image=image,
                 width=86,
-                height=57,
+                height=45,
                 fg_color="transparent",
                 text_color=MUTED,
                 font=ctk.CTkFont("Segoe UI", 22, "bold"),
@@ -2230,12 +3267,43 @@ class RoleRunManager(ctk.CTk):
             sprite_button.pack(padx=2, pady=(2, 0))
             role_label = ctk.CTkLabel(
                 frame,
-                text=role.upper(),
+                text="SIN ROL" if pokemon and is_extra else role.upper(),
                 text_color=MUTED if hidden else GOLD,
                 font=ctk.CTkFont("Segoe UI", 11, "bold"),
                 height=18,
             )
-            role_label.pack(fill="x", padx=3, pady=(0, 3))
+            role_label.pack(fill="x", padx=3, pady=(0, 0))
+            hp, max_hp, status = self._floating_health_values(pokemon)
+            hp_fraction = max(0.0, min(1.0, hp / max_hp)) if max_hp > 0 else 0.0
+            hp_color = DANGER if hp_fraction <= .25 else (GOLD if hp_fraction <= .5 else SUCCESS)
+            hp_row = ctk.CTkFrame(
+                frame, width=82, height=9, fg_color="transparent", corner_radius=0,
+            )
+            hp_row.pack(fill="x", padx=6, pady=(0, 4))
+            hp_row.pack_propagate(False)
+            # CTkProgressBar conserva un cap redondeado del color de progreso aun
+            # con valor 0. Eso fabricaba la raya roja visible en roles vacíos y
+            # debilitados. Al 0% mostramos solo el carril neutro.
+            if pokemon is not None and hp_fraction > 0.0:
+                hp_bar = ctk.CTkProgressBar(
+                    hp_row, width=54, height=6,
+                    fg_color="#383838", progress_color=hp_color,
+                )
+                hp_bar.pack(side="left", fill="x", expand=True, pady=1)
+                hp_bar.set(hp_fraction)
+            else:
+                ctk.CTkFrame(
+                    hp_row, width=54, height=6,
+                    fg_color="#383838", corner_radius=3,
+                ).pack(side="left", fill="x", expand=True, pady=1)
+            status_style = self._floating_status_style(status)
+            if status_style:
+                color, short = status_style
+                ctk.CTkLabel(
+                    hp_row, text=short, width=20, height=8, corner_radius=3,
+                    fg_color=color, text_color="#101010",
+                    font=ctk.CTkFont("Segoe UI", 6, "bold"),
+                ).pack(side="right", padx=(4, 0))
             # Toda casilla, incluso vacía, es un destino de rol. El rótulo nunca
             # cambia de posición; únicamente cambia el Pokémon que la ocupa.
             self._floating_role_drop_targets.append((frame, role))
@@ -2243,8 +3311,32 @@ class RoleRunManager(ctk.CTk):
                 self._register_role_drag_surface(sprite_button, pokemon, "floating", frame, role)
                 self._register_role_drag_surface(role_label, pokemon, "floating", frame, role)
                 self._register_role_drag_surface(frame, pokemon, "floating", frame, role)
-        ctk.CTkButton(shell, text="×", width=30, height=30, corner_radius=8, fg_color="transparent", hover_color=DANGER, text_color=MUTED, command=self._close_from_floating_bar).grid(row=0, column=11, padx=(3, 7), pady=7, sticky="n")
+        if self._floating_live_actions_available():
+            actions = ctk.CTkFrame(shell, width=64, height=86, fg_color="transparent")
+            actions.grid(row=0, column=11, padx=3, pady=7, sticky="n")
+            actions.grid_propagate(False)
+            ctk.CTkButton(
+                actions, text="♥ CURAR", width=62, height=38, corner_radius=9,
+                fg_color="transparent", hover_color="#303030", text_color=GOLD,
+                border_width=1, border_color=GOLD, command=self._heal_bdsp_party,
+                font=ctk.CTkFont("Segoe UI", 9, "bold"),
+            ).pack(pady=(0, 5))
+            ctk.CTkButton(
+                actions, text="☰ MENÚ", width=62, height=38, corner_radius=9,
+                fg_color="#242424", hover_color="#343434", text_color=GOLD,
+                border_width=1, border_color="#4A3D25", command=self._toggle_floating_launcher,
+                font=ctk.CTkFont("Segoe UI", 8, "bold"),
+            ).pack()
+        ctk.CTkButton(shell, text="×", width=30, height=30, corner_radius=8, fg_color="transparent", hover_color=DANGER, text_color=MUTED, command=self._close_from_floating_bar).grid(row=0, column=12, padx=(3, 7), pady=7, sticky="n")
         self._schedule_floating_bar_poll()
+
+    def _floating_live_actions_available(self) -> bool:
+        """Expone las acciones que el backend activo puede ejecutar en vivo."""
+        return RoleRunManager._live_party_heal_available(self)
+
+    def _live_party_heal_available(self) -> bool:
+        """Centraliza los backends con curación completa ya demostrada."""
+        return self._active_azahar_realtime_key() in {"bdsp", "b2w2", "sm", "usum", "xy", "oras"}
 
     # ---------- WELCOME / GAME SELECTION ----------
 
@@ -2399,6 +3491,13 @@ class RoleRunManager(ctk.CTk):
         if not profile.is_available:
             self._configure_game_sources(game_key, open_after=True)
             return
+        # Sun/Moon necesita Personal de la ROM efectiva para publicar las
+        # estadísticas base y para construir PartyData al mover un PK7 desde
+        # cajas. Se carga antes de arrancar el polling: el callback del writer
+        # es deliberadamente libre de I/O y no puede descubrirla después desde
+        # su hilo. No se usa una tabla genérica si la ROM no valida.
+        if game_key == "sm":
+            self._get_sm_rom_tm_profile(prompt=False)
         self.select_save(profile.save_path, force_new_run=profile.start_new_run)
 
     def _clear_root(self) -> None:
@@ -2420,11 +3519,26 @@ class RoleRunManager(ctk.CTk):
             "content",
             "sidebar", "sidebar_run", "page_title", "page_subtitle",
             "top_status", "header_actions", "floating_controls", "pending_controls", "review_changes_button",
-            "discard_changes_button", "save_changes_button", "body",
+            "discard_changes_button", "save_changes_button", "section_controls",
+            "operation_bar", "body",
         ):
             setattr(self, attr, None)
 
+        self._run_state_panel = None
+        self._team_pc_view = None
+        self._tm_teach_flow = None
+        self._role_info_popover = None
+        self._draft_view = None
+        self._team_pc_pending_incoming = None
+        self._team_pc_pending_outgoing = None
+
+        protected_overlay = getattr(self, "_loading_overlay", None)
         for child in self.winfo_children():
+            # La barrera de apertura es un Toplevel hijo de la raíz. Debe
+            # sobrevivir al reemplazo welcome→shell; destruirla aquí obligaba a
+            # crear otra captura cuando la shell aún estaba a medio componer.
+            if child is protected_overlay and self._widget_alive(protected_overlay):
+                continue
             try:
                 child.destroy()
             except Exception:
@@ -2722,10 +3836,11 @@ class RoleRunManager(ctk.CTk):
         self._update_top_status()
         # En Windows abre la interfaz maximizada para aprovechar toda la pantalla
         # y facilitar su captura directa desde OBS.
-        try:
-            self.after_idle(lambda: self.state("zoomed"))
-        except Exception:
-            pass
+        if not self._initial_shell_waiting:
+            try:
+                self.after_idle(lambda: self.state("zoomed"))
+            except Exception:
+                pass
 
     def _return_to_welcome(self) -> None:
         if self.run.pending_changes and not messagebox.askyesno(
@@ -2756,22 +3871,40 @@ class RoleRunManager(ctk.CTk):
         self.current_game = None
         self.run = RunSession()
         self.selected_game_key = None
-        self.active_page = "dashboard"
+        self.active_page = DEFAULT_PAGE
         self._render_welcome()
 
     # ---------- LAYOUT ----------
 
     def _build_layout(self) -> None:
+        self.grid_columnconfigure(0, minsize=76, weight=0)
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        sidebar = ctk.CTkFrame(self, width=265, corner_radius=0, fg_color="#0B0B0B")
+        sidebar = ctk.CTkFrame(self, width=76, corner_radius=0, fg_color="#0B0B0B")
         sidebar.grid(row=0, column=0, sticky="nsew")
         sidebar.grid_propagate(False)
+        # Los hijos se gestionan con pack. Sin bloquear también esta propagación,
+        # el contenido expandido impone 285 px en el primer tick y hace invisible
+        # cualquier interpolación de ``width``.
+        sidebar.pack_propagate(False)
         self.sidebar = sidebar
+        self.sidebar_expanded = False
+        self.sidebar_scrim = None
+        self.sidebar_scrim_image = None
+        self.sidebar_source_capture = None
+        self.sidebar_animation_id = None
+        self.sidebar_animation_width = 0
+        self.sidebar_drawer_x = -285
+        self._pending_sidebar_navigation = None
+        self._page_transition_overlay = None
+        self._page_transition_image = None
+        self._navigation_transition_overlay = None
+        self._navigation_transition_image = None
+        self._navigation_transition_after_ids: set[str] = set()
+        self._navigation_transition_token = 0
+        self._navigation_source_capture = None
 
-        brand = ctk.CTkFrame(sidebar, fg_color="transparent")
-        brand.pack(fill="x", padx=23, pady=(40, 26))
         self.sidebar_brand_image = None
         sidebar_logo_path = RESOURCES_DIR / "rolerun_icon.png"
         if sidebar_logo_path.exists():
@@ -2785,24 +3918,58 @@ class RoleRunManager(ctk.CTk):
                 )
             except Exception:
                 self.sidebar_brand_image = None
-        ctk.CTkLabel(brand, text="", image=self.sidebar_brand_image, fg_color="transparent").pack(anchor="center", pady=(0, 16))
+
+        self.sidebar_collapsed_logo = ctk.CTkLabel(
+            sidebar, text="", image=self.sidebar_brand_image, fg_color="transparent",
+        )
+        self.sidebar_collapsed_logo.pack(anchor="center", pady=(35, 0))
+
+        # El drawer expandido es una superficie independiente y de ancho fijo.
+        # Permanece precalculado fuera del viewport; la animación solo cambia su
+        # coordenada X. Redimensionar el árbol CTk completo en cada tick era la
+        # causa de los tirones observados en vídeo.
+        self.sidebar_drawer = ctk.CTkFrame(
+            self, width=285, corner_radius=0, fg_color="#0B0B0B",
+        )
+        self.sidebar_drawer.grid_propagate(False)
+        self.sidebar_drawer.pack_propagate(False)
+        self.sidebar_drawer.place(x=-285, y=0, relheight=1.0)
+
+        self.sidebar_expanded_content = ctk.CTkFrame(
+            self.sidebar_drawer, fg_color="transparent",
+        )
+        self.sidebar_expanded_content.pack(fill="both", expand=True, padx=(0, 30))
+        brand = ctk.CTkFrame(self.sidebar_expanded_content, fg_color="transparent")
+        brand.pack(fill="x", padx=23, pady=(34, 22))
+        ctk.CTkLabel(
+            brand, text="", image=self.sidebar_brand_image, fg_color="transparent",
+        ).pack(anchor="center", pady=(0, 12))
         ctk.CTkLabel(brand, text="ROLERUN", text_color=GOLD,
                      font=ctk.CTkFont("Segoe UI", 33, "bold")).pack(anchor="w")
         ctk.CTkLabel(brand, text="MANAGER", text_color=TEXT,
                      font=ctk.CTkFont("Segoe UI", 22, "bold")).pack(anchor="w")
 
-        self.sidebar_run = ctk.CTkLabel(
-            sidebar, text="", text_color=MUTED, justify="left",
-            wraplength=188, font=ctk.CTkFont("Segoe UI", 11, "bold"),
+        self.sidebar_run = ctk.CTkButton(
+            self.sidebar_expanded_content,
+            text="",
+            command=self._open_run_state_from_sidebar,
+            height=92,
+            corner_radius=13,
+            fg_color="#15130F",
+            hover_color="#211B11",
+            border_width=1,
+            border_color="#4A3D25",
+            text_color=MUTED,
+            anchor="w",
+            font=ctk.CTkFont("Segoe UI", 12, "bold"),
         )
+        self.sidebar_run.pack(fill="x", padx=17, pady=(0, 18))
 
-        nav = ctk.CTkFrame(sidebar, fg_color="transparent")
+        nav = ctk.CTkFrame(self.sidebar_expanded_content, fg_color="transparent")
         nav.pack(fill="x", padx=13)
-        items = [("dashboard", "⌂  DASHBOARD"), ("drafts", "◈  DRAFTEOS"),
-                 ("team", "♟  EQUIPO"), ("moves", "⌕  MOVIMIENTOS"),
-                 ("pc", "▣  CAJAS PC"), ("history", "≡  HISTORIAL"),
-                 ("settings", "⚙  CONFIGURACIÓN"), ("help", "?  AYUDA")]
-        for key, label in items:
+        self._sidebar_keyboard_entries: list[tuple[str, ctk.CTkButton]] = []
+        self._sidebar_keyboard_index = 0
+        for key, label in PRIMARY_NAVIGATION:
             button = ctk.CTkButton(
                 nav, text=label, command=lambda page=key: self.navigate(page),
                 height=46, anchor="w", corner_radius=9, fg_color="transparent",
@@ -2811,11 +3978,12 @@ class RoleRunManager(ctk.CTk):
             )
             button.pack(fill="x", pady=4)
             self.nav_buttons[key] = button
+            self._sidebar_keyboard_entries.append((key, button))
 
-        bottom = ctk.CTkFrame(sidebar, fg_color="transparent")
+        bottom = ctk.CTkFrame(self.sidebar_expanded_content, fg_color="transparent")
         bottom.pack(side="bottom", fill="x", padx=18, pady=18)
         ctk.CTkButton(
-            bottom, text="←  CAMBIAR RUN / ARCHIVOS", command=self._return_to_welcome,
+            bottom, text="←  CAMBIAR RUN / ARCHIVOS", command=self._return_to_welcome_from_sidebar,
             height=36, anchor="w", fg_color="transparent", hover_color=PANEL_ALT,
             border_width=1, border_color="#333333", text_color=MUTED,
             font=ctk.CTkFont("Segoe UI", 11, "bold"),
@@ -2823,6 +3991,39 @@ class RoleRunManager(ctk.CTk):
         ctk.CTkLabel(bottom, text=f"Versión {APP_VERSION}",
                      justify="left", text_color=MUTED,
                      font=ctk.CTkFont("Segoe UI", 10)).pack(anchor="w")
+
+        self.sidebar_toggle = ctk.CTkButton(
+            sidebar,
+            text="›",
+            command=self._toggle_sidebar,
+            width=52,
+            height=92,
+            corner_radius=15,
+            fg_color="transparent",
+            hover_color=PANEL_ALT,
+            text_color=GOLD,
+            font=ctk.CTkFont("Segoe UI Symbol", 30, "bold"),
+        )
+        self.sidebar_toggle.place(relx=0.5, rely=0.5, anchor="center")
+        self.sidebar_drawer_toggle = ctk.CTkButton(
+            self.sidebar_drawer,
+            text="‹",
+            command=lambda: self._set_sidebar_expanded(False),
+            width=26,
+            height=92,
+            corner_radius=15,
+            fg_color="transparent",
+            hover_color=PANEL_ALT,
+            text_color=GOLD,
+            font=ctk.CTkFont("Segoe UI Symbol", 30, "bold"),
+        )
+        self.sidebar_drawer_toggle.place(relx=1.0, x=-2, rely=0.5, anchor="e")
+        sidebar.bind("<Button-1>", lambda _event: self._set_sidebar_expanded(True), add="+")
+        sidebar.bind("<Enter>", lambda _event: self._set_collapsed_sidebar_hover(True), add="+")
+        sidebar.bind("<Leave>", lambda _event: self._set_collapsed_sidebar_hover(False), add="+")
+        self.sidebar_collapsed_logo.bind(
+            "<Button-1>", lambda _event: self._set_sidebar_expanded(True), add="+",
+        )
 
         content = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
         content.grid(row=0, column=1, sticky="nsew")
@@ -2833,21 +4034,134 @@ class RoleRunManager(ctk.CTk):
         header = ctk.CTkFrame(content, fg_color=BG, corner_radius=0)
         header.grid(row=0, column=0, sticky="ew", padx=34, pady=(24, 10))
         header.grid_columnconfigure(0, weight=1)
-        self.page_title = ctk.CTkLabel(header, text="Dashboard", text_color=TEXT,
+        header.grid_columnconfigure(1, weight=0)
+        header.grid_columnconfigure(2, weight=0)
+        self.header = header
+        self.page_title = ctk.CTkLabel(header, text="Equipo y PC", text_color=TEXT,
                                       font=ctk.CTkFont("Segoe UI", 34, "bold"))
         self.page_title.grid(row=0, column=0, sticky="w")
-        self.page_subtitle = ctk.CTkLabel(header, text="Aquí vive tu RoleRun.", text_color=MUTED,
-                                         font=ctk.CTkFont("Segoe UI", 17))
+        self.page_subtitle = ctk.CTkLabel(
+            header,
+            text="Gestiona el equipo y las cajas en un mismo espacio.",
+            text_color=MUTED,
+            anchor="w",
+            justify="left",
+            wraplength=720,
+            font=ctk.CTkFont("Segoe UI", 17),
+        )
         self.page_subtitle.grid(row=1, column=0, sticky="w", pady=(3, 0))
 
-        # Acciones globales. En cualquier entorno 3DS gestionado por el Real-Time
-        # Core (ORAS, X/Y y Sol/Luna) la interfaz usa un único modelo instantáneo:
+        # Acciones globales. En cualquier entorno gestionado por el Real-Time
+        # Core (3DS y BDSP) la interfaz usa un único modelo instantáneo:
         # nunca mostramos el antiguo GUARDAR/DESCARTAR de archivo. Las capacidades
         # concretas de escritura dependen del adaptador; si una operación todavía
         # no está demostrada, se bloquea explícitamente en vez de caer a disco.
+        self.header_run_counters = ctk.CTkFrame(
+            header,
+            width=710,
+            height=58,
+            corner_radius=0,
+            fg_color="transparent",
+            border_width=0,
+        )
+        self.header_run_counters.grid_propagate(False)
+        self.header_run_counters.grid_rowconfigure(0, weight=1)
+        self.header_counter_labels: dict[str, ctk.CTkLabel] = {}
+        self.header_counter_controls: dict[str, tuple[ctk.CTkButton, ctk.CTkButton] | None] = {}
+        self.header_draft_icon_image = None
+        header_draft_source = RESOURCES_DIR / "draft.png"
+        if header_draft_source.exists():
+            try:
+                source = Image.open(header_draft_source).convert("RGBA")
+                source.thumbnail((22, 22), Image.Resampling.LANCZOS)
+                self.header_draft_icon_image = ctk.CTkImage(
+                    light_image=source, dark_image=source, size=source.size,
+                )
+            except Exception:
+                self.header_draft_icon_image = None
+        counter_definitions = (
+            ("vidas", "♥", None),
+            ("pociones", "⚕", None),
+            ("medallas", "◆", None),
+            ("drafteos", "", self.header_draft_icon_image),
+        )
+        self.header_utility_images = []
+
+        def utility_image(filename: str):
+            try:
+                source = Image.open(RESOURCES_DIR / "item_icons" / filename).convert("RGBA")
+                source.thumbnail((28, 28), Image.Resampling.LANCZOS)
+                result = ctk.CTkImage(light_image=source, dark_image=source, size=source.size)
+                self.header_utility_images.append(result)
+                return result
+            except Exception:
+                return None
+
+        utility_definitions = (
+            ("999", utility_image("rare-candy.png"), "Caramelos Raros x999", lambda: self.queue_inventory_change("rare-candy", "Caramelo Raro", 999)),
+            ("999", utility_image("max-repel.png"), "Repelentes Máximos x999", lambda: self.queue_inventory_change("max-repel", "Repelente Máximo", 999)),
+            ("₽ ∞", None, "Dinero al máximo", lambda: self.queue_inventory_change("money-max", "Dinero máximo", 999999)),
+        )
+        for column, (label, icon_image, tooltip, command) in enumerate(utility_definitions):
+            self.header_run_counters.grid_columnconfigure(column, weight=0)
+            button = ctk.CTkButton(
+                self.header_run_counters, text=label, image=icon_image, compound="left", width=64, height=50,
+                corner_radius=10, fg_color="#191919", hover_color="#30291D",
+                border_width=1, border_color="#4A3D25", text_color=GOLD,
+                font=ctk.CTkFont("Segoe UI Symbol", 11, "bold"), command=command,
+            )
+            button.grid(row=0, column=column, padx=3, pady=4, sticky="nsew")
+            # El texto largo queda como nombre accesible en el propio callback;
+            # la cabecera conserva una huella compacta a 1920 px.
+        for counter_index, (key, symbol, icon_image) in enumerate(counter_definitions):
+            column = counter_index + len(utility_definitions)
+            self.header_run_counters.grid_columnconfigure(column, weight=1, uniform="header_counters")
+            cell = ctk.CTkFrame(
+                self.header_run_counters,
+                fg_color="#191919",
+                corner_radius=11,
+                border_width=1,
+                border_color="#4A3D25",
+            )
+            cell.grid(row=0, column=column, sticky="nsew", padx=3)
+            cell.grid_columnconfigure(1, weight=1)
+            cell.grid_rowconfigure((0, 1), weight=1)
+            ctk.CTkLabel(
+                cell, text=symbol, image=icon_image, height=23, text_color=GOLD,
+                font=ctk.CTkFont("Segoe UI Symbol", 20, "bold"),
+            ).grid(row=0, column=1, sticky="s", pady=(3, 0))
+            value_label = ctk.CTkLabel(
+                cell, text="—", height=23, text_color=GOLD,
+                font=ctk.CTkFont("Segoe UI", 17, "bold"),
+            )
+            value_label.grid(row=1, column=1, sticky="n", pady=(0, 3))
+            self.header_counter_labels[key] = value_label
+            if key == "medallas":
+                self.header_counter_controls[key] = None
+            else:
+                minus = ctk.CTkButton(
+                    cell, text="−", width=26, height=36, corner_radius=9,
+                    command=lambda counter=key: self.adjust_run_counter(counter, -1, source="cabecera"),
+                    fg_color="#292929", hover_color="#3A3A3A", text_color=TEXT,
+                    font=ctk.CTkFont("Segoe UI", 14, "bold"),
+                )
+                minus.grid(row=0, column=0, rowspan=2, padx=(6, 3), pady=8)
+                plus = ctk.CTkButton(
+                    cell, text="+", width=26, height=36, corner_radius=9,
+                    command=lambda counter=key: self.adjust_run_counter(counter, 1, source="cabecera"),
+                    fg_color=GOLD, hover_color="#D3AF70", text_color="#111111",
+                    font=ctk.CTkFont("Segoe UI", 13, "bold"),
+                )
+                plus.grid(row=0, column=2, rowspan=2, padx=(3, 6), pady=8)
+                self.header_counter_controls[key] = (minus, plus)
+        self.header_run_counters.grid(
+            row=0, column=1, rowspan=2, sticky="e", padx=(18, 14), pady=1,
+        )
+        header.bind("<Configure>", self._update_header_counter_visibility, add="+")
+
         self.header_actions = ctk.CTkFrame(header, fg_color="transparent")
-        self.header_actions.grid(row=0, column=1, rowspan=2, sticky="e", padx=(20, 20))
-        is_azahar_live_model = getattr(self.save_engine, "key", "") in AZAHAR_REALTIME_GAME_KEYS
+        self.header_actions.grid(row=0, column=2, rowspan=2, sticky="e", padx=(0, 20))
+        is_azahar_live_model = getattr(self.save_engine, "key", "") in INSTANT_REALTIME_UI_GAME_KEYS
 
         self.pending_controls = ctk.CTkFrame(self.header_actions, fg_color="transparent")
         self.pending_controls.pack(side="left")
@@ -2887,7 +4201,9 @@ class RoleRunManager(ctk.CTk):
         self.floating_controls = ctk.CTkFrame(self.header_actions, fg_color="transparent")
         self.floating_controls.pack(side="left")
         self.floating_bar_button = ctk.CTkButton(
-            self.floating_controls, text="BARRA FLOTANTE", command=self.open_floating_bar,
+            self.floating_controls,
+            text=f"BARRA FLOTANTE · {'ON' if self._floating_enabled else 'OFF'}",
+            command=self._toggle_floating_enabled,
             width=145, height=36, fg_color="transparent", border_width=1,
             border_color=GOLD, hover_color=PANEL_ALT, text_color=GOLD,
             font=ctk.CTkFont("Segoe UI", 11, "bold"),
@@ -2896,9 +4212,23 @@ class RoleRunManager(ctk.CTk):
 
         self.top_status = ctk.CTkLabel(header, text="Sin Run activa", text_color=MUTED,
                                       justify="right", font=ctk.CTkFont("Segoe UI", 12, "bold"))
-        self.top_status.grid(row=0, column=2, rowspan=2, sticky="e")
+        # El mismo contenido vive ahora en RUN ACTIVA y en la barra inferior.
+        # Conservamos el widget como superficie compatible para callbacks
+        # históricos, pero no ocupa ancho en la cabecera.
+
+        # Navegación secundaria: conserva los renderers originales mientras
+        # Equipo/PC, Ayuda/Movimientos y Configuración/Registro comparten una
+        # única entrada principal.
+        self.section_controls = ctk.CTkFrame(header, fg_color="transparent")
+        self.section_controls.grid(row=2, column=0, columnspan=3, sticky="w", pady=(13, 0))
 
         self.body = self._create_body_widget()
+
+        self.operation_bar = OperationStatusBar(
+            content, on_action=self._handle_operation_bar_action,
+        )
+        self.operation_bar.grid(row=2, column=0, sticky="ew", padx=34, pady=(0, 18))
+        self.operation_bar.show_message(self.operation_status_store.message)
 
         # Un único controlador gobierna el scroll del cuerpo. CustomTkinter ya
         # registra su propia rueda global, así que este binding devuelve "break"
@@ -2906,6 +4236,267 @@ class RoleRunManager(ctk.CTk):
         self.bind("<MouseWheel>", self._on_smooth_mousewheel, add="+")
 
         SPRITE_DIR.mkdir(parents=True, exist_ok=True)
+
+    def _toggle_sidebar(self) -> None:
+        self._sidebar_navigation_selected = False
+        self._set_sidebar_expanded(not bool(getattr(self, "sidebar_expanded", False)))
+
+    def _select_sidebar_from_content(self) -> None:
+        """Convierte el chevrón del borde en el destino más a la izquierda."""
+        self._sidebar_navigation_selected = True
+        self._set_content_navigation_focus(False)
+        try:
+            self.sidebar_toggle.configure(
+                fg_color="#2A2417", border_width=2, border_color="#F2C45E",
+            )
+        except Exception:
+            pass
+
+    def _accept_sidebar_from_content(self) -> bool:
+        if bool(getattr(self, "sidebar_expanded", False)):
+            RoleRunManager._set_content_navigation_focus(self, False)
+            entries = tuple(getattr(self, "_sidebar_keyboard_entries", ()))
+            if entries:
+                page = entries[int(self._sidebar_keyboard_index) % len(entries)][0]
+                self.navigate(page)
+            return True
+        if not bool(getattr(self, "_sidebar_navigation_selected", False)):
+            return False
+        self._sidebar_navigation_selected = False
+        self._set_sidebar_expanded(True)
+        return True
+
+    def _set_navigation_owner(self, view) -> None:
+        """Publica una sola autoridad de teclado aunque sobrevivan vistas debajo."""
+        self._navigation_owner = view
+        if view is None:
+            return
+        view.navigation_guard = lambda current=view: self._navigation_owner is current
+        if hasattr(view, "navigation_intercept"):
+            view.navigation_intercept = self._handle_sidebar_navigation
+
+    def _set_content_navigation_focus(self, active: bool) -> None:
+        owner = getattr(self, "_navigation_owner", None)
+        setter = getattr(owner, "set_external_navigation_focus", None)
+        if callable(setter):
+            setter(not bool(active))
+
+    def _paint_sidebar_keyboard_selection(self) -> None:
+        entries = tuple(getattr(self, "_sidebar_keyboard_entries", ()))
+        selected = int(getattr(self, "_sidebar_keyboard_index", 0)) if entries else -1
+        for index, (page, button) in enumerate(entries):
+            try:
+                button.configure(
+                    fg_color="#2A2417" if index == selected else (
+                        "#242018" if page == self.active_page else "transparent"
+                    ),
+                    border_width=2 if index == selected else 0,
+                    border_color="#F2C45E",
+                    text_color=TEXT if index == selected else MUTED,
+                )
+            except Exception:
+                pass
+
+    def _handle_sidebar_navigation(self, direction: str) -> bool:
+        """Da al drawer foco exclusivo y consume sus flechas."""
+        direction = str(direction)
+        if bool(getattr(self, "sidebar_expanded", False)):
+            # El drawer abierto es un plano vertical exclusivo. Izquierda y
+            # derecha no cierran ni devuelven el foco al contenido: hacerlo al
+            # comienzo de la animación mostraba simultáneamente ambos cursores.
+            RoleRunManager._set_content_navigation_focus(self, False)
+            entries = tuple(getattr(self, "_sidebar_keyboard_entries", ()))
+            if not entries:
+                return True
+            if direction == "up":
+                self._sidebar_keyboard_index = (self._sidebar_keyboard_index - 1) % len(entries)
+            elif direction == "down":
+                self._sidebar_keyboard_index = (self._sidebar_keyboard_index + 1) % len(entries)
+            elif direction == "back":
+                self._set_sidebar_expanded(False)
+            self._paint_sidebar_keyboard_selection()
+            return True
+        if bool(getattr(self, "_sidebar_navigation_selected", False)):
+            if direction in {"right", "back"}:
+                self._sidebar_navigation_selected = False
+                self._set_content_navigation_focus(True)
+                try:
+                    self.sidebar_toggle.configure(
+                        fg_color="transparent", border_width=0,
+                    )
+                except Exception:
+                    pass
+            return True
+        return False
+
+    def _set_collapsed_sidebar_hover(self, hovered: bool) -> None:
+        if bool(getattr(self, "sidebar_expanded", False)):
+            return
+        try:
+            self.sidebar.configure(fg_color="#151515" if hovered else "#0B0B0B")
+        except Exception:
+            pass
+
+    def _set_sidebar_expanded(self, expanded: bool) -> None:
+        sidebar = getattr(self, "sidebar", None)
+        drawer = getattr(self, "sidebar_drawer", None)
+        if not self._widget_alive(sidebar) or not self._widget_alive(drawer):
+            return
+        expanded = bool(expanded)
+        if expanded == bool(getattr(self, "sidebar_expanded", False)):
+            return
+        self.sidebar_expanded = expanded
+        if expanded:
+            self._sidebar_navigation_selected = False
+            self._set_content_navigation_focus(False)
+            entries = tuple(getattr(self, "_sidebar_keyboard_entries", ()))
+            for index, (page, _button) in enumerate(entries):
+                if page == self.active_page:
+                    self._sidebar_keyboard_index = index
+                    break
+            self._paint_sidebar_keyboard_selection()
+        animation_id = getattr(self, "sidebar_animation_id", None)
+        if animation_id:
+            try:
+                self.after_cancel(animation_id)
+            except Exception:
+                pass
+        self.sidebar_animation_id = None
+
+        if expanded and not self._widget_alive(getattr(self, "sidebar_scrim", None)):
+            # Tk no ofrece transparencia real entre widgets hermanos. Capturamos
+            # únicamente el contenido ya pintado y mostramos una copia oscurecida:
+            # la página sigue siendo reconocible, pero la interacción queda
+            # inequívocamente detrás del menú y un click la cierra.
+            try:
+                self.update_idletasks()
+                content = self.content
+                content_x = int(content.winfo_x())
+                content_y = int(content.winfo_y())
+                width = max(1, min(
+                    int(content.winfo_width()), int(self.winfo_width()) - content_x,
+                ))
+                height = max(1, min(
+                    int(content.winfo_height()), int(self.winfo_height()) - content_y,
+                ))
+                capture = ImageGrab.grab(bbox=(
+                    int(content.winfo_rootx()), int(content.winfo_rooty()),
+                    int(content.winfo_rootx()) + width,
+                    int(content.winfo_rooty()) + height,
+                ), all_screens=True).convert("RGB")
+                if capture.size != (width, height):
+                    capture = capture.resize((width, height), Image.Resampling.LANCZOS)
+                # Conservamos también el frame limpio, anterior al oscurecido.
+                # Si el usuario navega desde el drawer, esta será la autoridad
+                # visual de la transición: recapturar tras retirar el scrim podía
+                # mezclar zonas que DWM ya había iluminado con otras todavía oscuras.
+                self.sidebar_source_capture = capture.copy()
+                capture = ImageEnhance.Brightness(capture).enhance(0.28)
+                self.sidebar_scrim_image = ImageTk.PhotoImage(capture)
+                scrim = tk.Label(
+                    self, image=self.sidebar_scrim_image,
+                    borderwidth=0, highlightthickness=0, background="#080808",
+                )
+            except Exception:
+                self.sidebar_source_capture = None
+                content = self.content
+                content_x = int(content.winfo_x())
+                content_y = int(content.winfo_y())
+                width = max(1, min(
+                    int(content.winfo_width()), int(self.winfo_width()) - content_x,
+                ))
+                height = max(1, min(
+                    int(content.winfo_height()), int(self.winfo_height()) - content_y,
+                ))
+                scrim = tk.Frame(self, background="#101010", borderwidth=0)
+            # El rectángulo debe coincidir exactamente con el contenido capturado.
+            # ``x=76`` + ``relwidth=1`` excedía el ancho de la ventana y desplazaba
+            # la imagen oscura, percibida como una ampliación repentina.
+            scrim.place(x=content_x, y=content_y, width=width, height=height)
+            scrim.bind("<Button-1>", lambda _event: self._set_sidebar_expanded(False), add="+")
+            self.sidebar_scrim = scrim
+            scrim.lift()
+
+        if expanded:
+            # El drawer ya está maquetado a 285 px fuera de pantalla. No hay
+            # pack/grid ni redibujado estructural durante la interpolación.
+            start_x = int(getattr(self, "sidebar_drawer_x", -285))
+            drawer.place(x=start_x, y=0, relheight=1.0)
+            drawer.lift()
+        else:
+            start_x = int(getattr(self, "sidebar_drawer_x", 0))
+        self._animate_sidebar_drawer(start_x, 0 if expanded else -285, expanded)
+
+    def _animate_sidebar_drawer(self, start_x: int, target_x: int, opening: bool) -> None:
+        """Desplaza un drawer ya compuesto; nunca redimensiona sus descendientes."""
+        duration_ms = 260
+        started = time.perf_counter()
+        drawer = self.sidebar_drawer
+
+        def frame() -> None:
+            if bool(getattr(self, "sidebar_expanded", False)) != bool(opening):
+                return
+            elapsed = (time.perf_counter() - started) * 1000.0
+            progress = max(0.0, min(1.0, elapsed / duration_ms))
+            # Ease-out cúbico: respuesta inmediata al click y desaceleración
+            # continua al llegar, sin el arranque lento de smoothstep.
+            eased = 1.0 - ((1.0 - progress) ** 3)
+            x = round(start_x + (target_x - start_x) * eased)
+            self.sidebar_drawer_x = x
+            self.sidebar_animation_width = max(0, min(285, 285 + x))
+            try:
+                drawer.place_configure(x=x)
+            except Exception:
+                return
+            if progress < 1.0:
+                # ``place_configure`` invalida el canvas y Tk procesa ese pintado
+                # después de que termine el callback. Añadir aquí otros 16 ms
+                # duplicaba el intervalo real hasta ~31 ms en Windows. Cuatro
+                # milisegundos mantienen varias posiciones disponibles por cada
+                # refresco de 60 Hz sin saturar el mainloop con ticks duplicados.
+                self.sidebar_animation_id = self.after(4, frame)
+                return
+            self.sidebar_animation_id = None
+            self.sidebar_drawer_x = target_x
+            self.sidebar_animation_width = 285 if opening else 0
+            if not opening:
+                # Sacar el drawer del gestor de geometría elimina también su
+                # superficie de dibujo. Dejarlo simplemente en x=-285 conservaba
+                # en algunos frames los píxeles del tirador «‹» junto al «›» real.
+                try:
+                    drawer.place_forget()
+                    self.sidebar.configure(fg_color="#0B0B0B")
+                    self.sidebar.lift()
+                except Exception:
+                    pass
+                scrim = getattr(self, "sidebar_scrim", None)
+                if self._widget_alive(scrim):
+                    scrim.destroy()
+                self.sidebar_scrim = None
+                self.sidebar_scrim_image = None
+                self._sidebar_navigation_selected = False
+                self._set_content_navigation_focus(True)
+                pending_page = getattr(self, "_pending_sidebar_navigation", None)
+                self._pending_sidebar_navigation = None
+                if pending_page is not None:
+                    # Publicamos la captura limpia obtenida antes de oscurecer el
+                    # menú. La barrera se crea en el mismo callback para que DWM
+                    # nunca tenga que recapturar un fondo a medio recomponer.
+                    self._navigation_source_capture = self.sidebar_source_capture
+                    self.sidebar_source_capture = None
+                    self.navigate(pending_page)
+                else:
+                    self.sidebar_source_capture = None
+
+        frame()
+
+    def _open_run_state_from_sidebar(self) -> None:
+        self._set_sidebar_expanded(False)
+        self.after(0, self.open_run_state_panel)
+
+    def _return_to_welcome_from_sidebar(self) -> None:
+        self._set_sidebar_expanded(False)
+        self.after(0, self._return_to_welcome)
 
     def _configure_body_widget(self, body) -> None:
         """Configura cada superficie intercambiable del contenido principal."""
@@ -2990,6 +4581,382 @@ class RoleRunManager(ctk.CTk):
         except Exception:
             pass
         surface.tk.call(action, surface._w, reference_surface._w)
+
+    def _cancel_navigation_transition_callbacks(self) -> None:
+        for after_id in tuple(getattr(self, "_navigation_transition_after_ids", ())):
+            try:
+                self.after_cancel(after_id)
+            except Exception:
+                pass
+        self._navigation_transition_after_ids.clear()
+
+    @staticmethod
+    def _stop_navigation_spinner(overlay) -> None:
+        stop_event = getattr(overlay, "_rolerun_spinner_stop", None)
+        if stop_event is not None:
+            try:
+                stop_event.set()
+            except Exception:
+                pass
+
+    def _start_navigation_spinner(self, overlay, snapshot_label) -> None:
+        """Anima el indicador aunque el hilo Tk esté construyendo la página.
+
+        Crear cientos de widgets es necesariamente síncrono en Tk. Un ``after``
+        ordinario queda detenido durante ese tramo y produciría justo el spinner
+        congelado que queremos evitar. En Windows, un worker dibuja por GDI sobre
+        el HWND independiente del snapshot; no toca estado Tk ni la partida.
+        """
+        if os.name != "nt":
+            tk.Label(
+                overlay, text="⟳  CARGANDO…", background="#151515",
+                foreground=GOLD, font=("Segoe UI", 15, "bold"),
+                padx=20, pady=12,
+            ).place(relx=0.5, rely=0.5, anchor="center")
+            return
+        try:
+            snapshot_label.update_idletasks()
+            hwnd = int(snapshot_label.winfo_id())
+        except Exception:
+            return
+        stop_event = threading.Event()
+        overlay._rolerun_spinner_stop = stop_event
+
+        def rgb(red: int, green: int, blue: int) -> int:
+            return int(red) | (int(green) << 8) | (int(blue) << 16)
+
+        def animate() -> None:
+            class RECT(ctypes.Structure):
+                _fields_ = [
+                    ("left", ctypes.c_long), ("top", ctypes.c_long),
+                    ("right", ctypes.c_long), ("bottom", ctypes.c_long),
+                ]
+
+            try:
+                user32 = ctypes.windll.user32
+                gdi32 = ctypes.windll.gdi32
+                user32.GetDC.argtypes = [ctypes.c_void_p]
+                user32.GetDC.restype = ctypes.c_void_p
+                user32.ReleaseDC.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+                user32.GetClientRect.argtypes = [ctypes.c_void_p, ctypes.POINTER(RECT)]
+                gdi32.CreatePen.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+                gdi32.CreatePen.restype = ctypes.c_void_p
+                gdi32.CreateSolidBrush.argtypes = [ctypes.c_uint]
+                gdi32.CreateSolidBrush.restype = ctypes.c_void_p
+                gdi32.SelectObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+                gdi32.SelectObject.restype = ctypes.c_void_p
+                gdi32.DeleteObject.argtypes = [ctypes.c_void_p]
+                gdi32.MoveToEx.argtypes = [
+                    ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_void_p,
+                ]
+                gdi32.LineTo.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+                gdi32.Ellipse.argtypes = [
+                    ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
+                    ctypes.c_int, ctypes.c_int,
+                ]
+                frame_index = 0
+                while not stop_event.is_set():
+                    rect = RECT()
+                    if not user32.GetClientRect(ctypes.c_void_p(hwnd), ctypes.byref(rect)):
+                        break
+                    hdc = user32.GetDC(ctypes.c_void_p(hwnd))
+                    if not hdc:
+                        break
+                    try:
+                        center_x = max(0, int(rect.right - rect.left)) // 2
+                        center_y = max(0, int(rect.bottom - rect.top)) // 2
+                        background = rgb(21, 21, 21)
+                        background_pen = gdi32.CreatePen(0, 1, background)
+                        background_brush = gdi32.CreateSolidBrush(background)
+                        old_pen = gdi32.SelectObject(hdc, background_pen)
+                        old_brush = gdi32.SelectObject(hdc, background_brush)
+                        gdi32.Ellipse(
+                            hdc, center_x - 39, center_y - 39,
+                            center_x + 39, center_y + 39,
+                        )
+                        gdi32.SelectObject(hdc, old_brush)
+                        gdi32.SelectObject(hdc, old_pen)
+                        gdi32.DeleteObject(background_brush)
+                        gdi32.DeleteObject(background_pen)
+
+                        shades = (
+                            (201, 164, 92), (173, 142, 82), (142, 119, 74),
+                            (111, 96, 67), (82, 75, 61),
+                        )
+                        for spoke in range(12):
+                            distance = (spoke - frame_index) % 12
+                            color = shades[min(distance, len(shades) - 1)]
+                            pen = gdi32.CreatePen(0, 4, rgb(*color))
+                            previous_pen = gdi32.SelectObject(hdc, pen)
+                            angle = ((2.0 * math.pi * spoke) / 12.0) - (math.pi / 2.0)
+                            inner_x = center_x + round(math.cos(angle) * 18)
+                            inner_y = center_y + round(math.sin(angle) * 18)
+                            outer_x = center_x + round(math.cos(angle) * 30)
+                            outer_y = center_y + round(math.sin(angle) * 30)
+                            gdi32.MoveToEx(hdc, inner_x, inner_y, None)
+                            gdi32.LineTo(hdc, outer_x, outer_y)
+                            gdi32.SelectObject(hdc, previous_pen)
+                            gdi32.DeleteObject(pen)
+                        gdi32.GdiFlush()
+                    finally:
+                        user32.ReleaseDC(ctypes.c_void_p(hwnd), hdc)
+                    frame_index = (frame_index + 1) % 12
+                    stop_event.wait(0.055)
+            except Exception:
+                return
+
+        thread = threading.Thread(
+            target=animate, name="RoleRunNavigationSpinner", daemon=True,
+        )
+        overlay._rolerun_spinner_thread = thread
+        thread.start()
+
+    def _destroy_navigation_transition(self, overlay=None) -> None:
+        target = overlay or getattr(self, "_navigation_transition_overlay", None)
+        if target is not None:
+            self._stop_navigation_spinner(target)
+        try:
+            if target is not None and target.winfo_exists():
+                target.destroy()
+        except Exception:
+            pass
+        if getattr(self, "_navigation_transition_overlay", None) is target:
+            self._navigation_transition_overlay = None
+            self._navigation_transition_image = None
+
+    def _create_navigation_transition(self):
+        """Crea una superficie DWM independiente con el último frame estable.
+
+        Una capa hija de la ventana principal comparte el orden de repintado con
+        los canvas internos de CustomTkinter. Al retirarla, Windows podía mostrar
+        durante dos frames un mosaico parcialmente reconstruido. Un Toplevel
+        transitorio conserva su propia superficie compuesta mientras la ventana
+        principal pinta por completo el destino debajo.
+        """
+        self._cancel_navigation_transition_callbacks()
+        self._destroy_navigation_transition()
+        content = getattr(self, "content", None)
+        if not self._widget_alive(content):
+            return None
+        self.update_idletasks()
+        width = max(1, int(content.winfo_width()))
+        height = max(1, int(content.winfo_height()))
+        root_x = int(content.winfo_rootx())
+        root_y = int(content.winfo_rooty())
+        try:
+            cached_capture = getattr(self, "_navigation_source_capture", None)
+            self._navigation_source_capture = None
+            if isinstance(cached_capture, Image.Image):
+                capture = cached_capture.copy().convert("RGB")
+            else:
+                capture = ImageGrab.grab(
+                    bbox=(root_x, root_y, root_x + width, root_y + height),
+                    all_screens=True,
+                ).convert("RGB")
+            if capture.size != (width, height):
+                capture = capture.resize((width, height), Image.Resampling.LANCZOS)
+            # El menú ya comunica que la aplicación entra en un estado modal.
+            # Mantener esa misma lectura visual durante la espera resulta más
+            # coherente que iluminar de nuevo el origen antes de publicar el
+            # destino completo.
+            capture = ImageEnhance.Brightness(capture).enhance(0.42)
+            overlay = tk.Toplevel(self)
+            overlay.withdraw()
+            overlay.overrideredirect(True)
+            overlay.configure(background=BG)
+            try:
+                overlay.transient(self)
+            except Exception:
+                pass
+            overlay.geometry(f"{width}x{height}+{root_x}+{root_y}")
+            image = ImageTk.PhotoImage(capture, master=overlay)
+            snapshot_label = tk.Label(
+                overlay, image=image, borderwidth=0, highlightthickness=0,
+                background=BG,
+            )
+            snapshot_label.pack(fill="both", expand=True)
+            overlay.attributes("-alpha", 1.0)
+            # Hereda el nivel de la ventana principal: en el preview esta es
+            # topmost para poder capturarla, mientras que en uso normal la
+            # barrera no debe quedar por encima de otra aplicación al hacer Alt+Tab.
+            overlay.attributes("-topmost", bool(self.attributes("-topmost")))
+            overlay.deiconify()
+            overlay.lift()
+            self._navigation_transition_image = image
+            self._navigation_transition_overlay = overlay
+            overlay.update_idletasks()
+            self._start_navigation_spinner(overlay, snapshot_label)
+            return overlay
+        except Exception:
+            self._destroy_navigation_transition(locals().get("overlay"))
+            return None
+
+    def _fade_navigation_transition(self, overlay, token: int) -> None:
+        if (
+            token != getattr(self, "_navigation_transition_token", 0)
+            or overlay is not getattr(self, "_navigation_transition_overlay", None)
+            or not self._widget_alive(overlay)
+        ):
+            self._destroy_navigation_transition(overlay)
+            return
+        self._stop_navigation_spinner(overlay)
+        duration_ms = 150
+        started = time.perf_counter()
+        try:
+            start_alpha = float(overlay.attributes("-alpha"))
+        except Exception:
+            start_alpha = 0.992
+
+        def frame() -> None:
+            if (
+                token != getattr(self, "_navigation_transition_token", 0)
+                or overlay is not getattr(self, "_navigation_transition_overlay", None)
+                or not self._widget_alive(overlay)
+            ):
+                self._destroy_navigation_transition(overlay)
+                return
+            progress = max(0.0, min(
+                1.0, ((time.perf_counter() - started) * 1000.0) / duration_ms,
+            ))
+            # El destino ya está completo debajo. La opacidad es la única
+            # propiedad animada, por lo que no hay relayout ni widgets parciales.
+            alpha = start_alpha * ((1.0 - progress) ** 2)
+            try:
+                overlay.attributes("-alpha", alpha)
+            except Exception:
+                self._destroy_navigation_transition(overlay)
+                return
+            if progress >= 1.0:
+                self._destroy_navigation_transition(overlay)
+                return
+            after_id = self.after(16, frame)
+            self._navigation_transition_after_ids.add(after_id)
+
+        frame()
+
+    def _finish_navigation_transition(self, overlay, token: int) -> None:
+        if overlay is None:
+            return
+        # Una ventana totalmente opaca permite que DWM deje de presentar la
+        # superficie que tiene debajo. Al pasarla a 0,992 el destino se compone
+        # ya completo con una contribución visual de solo 0,8 %. Esperamos varios
+        # frames antes del fade perceptible: cualquier primer repintado queda
+        # oculto por el 99,2 % del snapshot estable.
+        try:
+            overlay.lift()
+            overlay.attributes("-alpha", 0.992)
+        except Exception:
+            self._destroy_navigation_transition(overlay)
+            return
+        after_id = self.after(
+            120, lambda: self._fade_navigation_transition(overlay, token),
+        )
+        self._navigation_transition_after_ids.add(after_id)
+
+    def _commit_page_navigation(
+        self, page: str, previous_page: str, overlay, token: int,
+    ) -> None:
+        if token != getattr(self, "_navigation_transition_token", 0):
+            self._destroy_navigation_transition(overlay)
+            return
+        self.active_page = page
+        if previous_page == "pc" and page != "pc":
+            self._cancel_bdsp_pc_poll()
+        try:
+            self._smooth_render_page(
+                reset_scroll=True,
+                _prepared_navigation_overlay=overlay,
+                _navigation_token=token,
+            )
+        except Exception:
+            self._destroy_navigation_transition(overlay)
+            raise
+        if page == "pc" and previous_page != "pc":
+            try:
+                self.after(90, self._schedule_gen6_live_pc_refresh)
+            except Exception:
+                pass
+
+    def _begin_page_navigation(self, page: str, previous_page: str) -> None:
+        self._navigation_transition_token += 1
+        token = self._navigation_transition_token
+        overlay = self._create_navigation_transition()
+        if overlay is None:
+            self._commit_page_navigation(page, previous_page, None, token)
+            return
+        # Devolvemos el control a Tk para que el Toplevel llegue al compositor
+        # antes del trabajo síncrono de construcción de widgets.
+        after_id = self.after(
+            34,
+            lambda: self._commit_page_navigation(page, previous_page, overlay, token),
+        )
+        self._navigation_transition_after_ids.add(after_id)
+
+    def _create_page_transition_overlay(self):
+        """Congela visualmente la página completa mientras nace el árbol nuevo.
+
+        Un ``CTkScrollableFrame`` se compone de varias ventanas Tk internas. Su
+        orden de apilado no forma una transacción: Windows puede pintar canvas y
+        frames nuevos antes de que todos sus hijos estén listos. Esta captura
+        nativa es la barrera atómica; no cambia estado y se destruye tras el
+        primer repintado estable de la página de destino.
+        """
+        previous = getattr(self, "_page_transition_overlay", None)
+        if self._widget_alive(previous):
+            previous.destroy()
+        self._page_transition_overlay = None
+        self._page_transition_image = None
+        content = getattr(self, "content", None)
+        if not self._widget_alive(content):
+            return None
+        self.update_idletasks()
+        content_x = int(content.winfo_x())
+        content_y = int(content.winfo_y())
+        width = max(1, min(
+            int(content.winfo_width()), int(self.winfo_width()) - content_x,
+        ))
+        height = max(1, min(
+            int(content.winfo_height()), int(self.winfo_height()) - content_y,
+        ))
+        try:
+            capture = ImageGrab.grab(bbox=(
+                int(content.winfo_rootx()), int(content.winfo_rooty()),
+                int(content.winfo_rootx()) + width,
+                int(content.winfo_rooty()) + height,
+            ), all_screens=True).convert("RGB")
+            if capture.size != (width, height):
+                capture = capture.resize((width, height), Image.Resampling.LANCZOS)
+            self._page_transition_image = ImageTk.PhotoImage(capture)
+            overlay = tk.Label(
+                self, image=self._page_transition_image,
+                borderwidth=0, highlightthickness=0, background=BG,
+            )
+        except Exception:
+            overlay = tk.Frame(self, background=BG, borderwidth=0)
+            tk.Label(
+                overlay, text="CARGANDO…", background=BG, foreground=GOLD,
+                font=("Segoe UI", 14, "bold"),
+            ).place(relx=0.5, rely=0.5, anchor="center")
+        overlay.place(x=content_x, y=content_y, width=width, height=height)
+        overlay.lift()
+        self._page_transition_overlay = overlay
+        # Resuelve la geometría sin reentrar en el bucle completo de eventos.
+        # ``update()`` podía ejecutar navegación, resize y temporizadores dentro
+        # del propio intercambio de página, dejando viva una captura antigua o
+        # reconstruyendo la vista dos veces. Los idles bastan para mapear y pintar
+        # esta superficie antes de comenzar el render síncrono.
+        self.update_idletasks()
+        return overlay
+
+    def _retire_page_transition_overlay(self, overlay) -> None:
+        try:
+            if overlay is not None and overlay.winfo_exists():
+                overlay.destroy()
+        except Exception:
+            pass
+        if getattr(self, "_page_transition_overlay", None) is overlay:
+            self._page_transition_overlay = None
+            self._page_transition_image = None
 
     def _cancel_help_animations(self) -> None:
         for after_id in list(self._help_animation_ids):
@@ -3306,15 +5273,222 @@ class RoleRunManager(ctk.CTk):
 
     def _render_sidebar(self) -> None:
         if self.current_game and self.project:
-            self.sidebar_run.configure(text=f"RUN ACTIVA\n{self.project.name}", text_color=GOLD)
+            counters = self.project.counters
+            pending_faints = len(self.project.pending_faints)
+            pending_text = f" · {pending_faints} baja(s)" if pending_faints else ""
+            self.sidebar_run.configure(
+                text=(
+                    f"RUN ACTIVA\n{self.project.name}\n"
+                    f"♥ {int(counters.get('vidas', 0))}  ·  ◆ {int(counters.get('medallas', 0))}"
+                    f"{pending_text}"
+                ),
+                text_color=GOLD,
+                state="normal",
+            )
         else:
-            self.sidebar_run.configure(text="Sin Run activa", text_color=MUTED)
+            self.sidebar_run.configure(text="SIN RUN ACTIVA", text_color=MUTED, state="disabled")
         for page, button in self.nav_buttons.items():
-            selected = page == self.active_page
+            selected = page == primary_page_for(self.active_page)
             button.configure(
                 fg_color=PANEL_ALT if selected else "transparent",
                 text_color=GOLD if selected else MUTED,
                 border_width=1 if selected else 0, border_color=GOLD,
+            )
+
+    def _render_context_navigation(self) -> None:
+        controls = getattr(self, "section_controls", None)
+        if not self._widget_alive(controls):
+            return
+        self._clear(controls)
+        if self.active_page in {"team", "pc"}:
+            controls.grid_remove()
+            return
+        elif self.active_page in {"settings", "history"}:
+            items = (("settings", "GENERAL"), ("history", "REGISTRO Y RECUPERACIÓN"))
+        elif self.active_page in {"help", "moves"}:
+            items = (("help", "GUÍA"), ("moves", "CONSULTA DE MOVIMIENTOS"))
+        else:
+            controls.grid_remove()
+            return
+        controls.grid()
+        if self.active_page == "moves" and self._moves_return_page == "drafts":
+            ctk.CTkButton(
+                controls,
+                text="← VOLVER AL DRAFTEO",
+                command=self._return_to_draft_from_moves,
+                height=32,
+                fg_color="#2A2419",
+                hover_color=PANEL_ALT,
+                border_width=1,
+                border_color=GOLD,
+                text_color=GOLD,
+                font=ctk.CTkFont("Segoe UI", 12, "bold"),
+            ).pack(side="left", padx=(0, 14))
+        for page, label in items:
+            selected = self.active_page == page
+            ctk.CTkButton(
+                controls,
+                text=label,
+                command=lambda target=page: self.navigate(target),
+                height=32,
+                fg_color="#2A2419" if selected else "transparent",
+                hover_color=PANEL_ALT,
+                border_width=1,
+                border_color=GOLD if selected else "#3A3A3A",
+                text_color=GOLD if selected else MUTED,
+                font=ctk.CTkFont("Segoe UI", 12, "bold"),
+            ).pack(side="left", padx=(0, 8))
+
+    def _run_state_snapshot(self) -> dict:
+        project = self.project
+        automatic = {
+            key for key in ("vidas", "pociones", "medallas", "drafteos")
+            if self._counter_is_automatic(key)
+        }
+        return {
+            "name": project.name if project else "Sin Run activa",
+            "game": self._game_label(),
+            "counters": dict(project.counters) if project else {},
+            "automatic_counters": automatic,
+            "progress_label": "MEDALLAS",
+            "sync_status": self.sync_status,
+            "pending_changes": len(self.run.pending_changes),
+            "pending_faints": len(project.pending_faints) if project else 0,
+        }
+
+    def open_run_state_panel(self) -> None:
+        if not self.project or not self._shell_built or not self._widget_alive(self.content):
+            return
+        if self._run_state_panel is not None:
+            try:
+                self._run_state_panel.close()
+            except Exception:
+                self._run_state_panel = None
+        self._run_state_panel = IntegratedRunStatePanel(
+            self.content,
+            snapshot=self._run_state_snapshot(),
+            on_close=self._on_run_state_panel_closed,
+            on_adjust_counter=self._adjust_counter_from_run_panel,
+            on_open_floating=self.open_floating_bar,
+        )
+
+    def _on_run_state_panel_closed(self) -> None:
+        self._run_state_panel = None
+
+    def _adjust_counter_from_run_panel(self, counter: str, delta: int) -> None:
+        self.adjust_run_counter(counter, delta)
+        panel = self._run_state_panel
+        if panel is not None:
+            try:
+                panel.close()
+            except Exception:
+                self._run_state_panel = None
+        self.after(0, self.open_run_state_panel)
+
+    def _set_operation_status(
+        self,
+        kind: str,
+        title: str,
+        detail: str,
+        *,
+        actions: tuple[str, ...] = (),
+        persistent: bool | None = None,
+    ) -> None:
+        store = getattr(self, "operation_status_store", None)
+        if store is None:
+            return
+        message = store.publish(
+            kind, title, detail, actions=actions, persistent=persistent,
+        )
+        bar = getattr(self, "operation_bar", None)
+        if self._widget_alive(bar):
+            bar.show_message(message)
+        if self._operation_autocollapse_after_id is not None:
+            try:
+                self.after_cancel(self._operation_autocollapse_after_id)
+            except Exception:
+                pass
+            self._operation_autocollapse_after_id = None
+        if message.may_auto_collapse:
+            revision = message.revision
+
+            def collapse() -> None:
+                self._operation_autocollapse_after_id = None
+                if self.operation_status_store.collapse_if_current(revision):
+                    current_bar = getattr(self, "operation_bar", None)
+                    if self._widget_alive(current_bar):
+                        current_bar.show_message(self.operation_status_store.message)
+
+            self._operation_autocollapse_after_id = self.after(4200, collapse)
+
+    def _handle_operation_bar_action(self, action: str) -> None:
+        key = str(action).strip().casefold()
+        if key in {"ver detalle", "abrir detalle", "estado de la run"}:
+            self.open_run_state_panel()
+        elif key in {"reintentar", "resincronizar"}:
+            self.sync_oras_live()
+        elif key in {"revisar", "revisar cambios"}:
+            self.show_pending_changes()
+        elif key == "elegir sustituto":
+            self._reopen_pending_faint_picker()
+        elif key in {"no sustituir", "dejar hueco libre"}:
+            self._decline_pending_faint_replacement()
+        elif key == "cerrar selector":
+            self._dismiss_integrated_faint_picker()
+        elif key == "cancelar":
+            if self._team_pc_pending_incoming is not None or self._team_pc_pending_outgoing is not None:
+                self._cancel_team_pc_pending_selection()
+            elif self.run.pending_changes:
+                self.discard_pending_changes()
+
+    def _sync_operation_status_from_runtime(self) -> None:
+        store = getattr(self, "operation_status_store", None)
+        if store is None:
+            return
+        current = store.message
+        if current.stays_visible and current.kind in {"failed", "intervention"}:
+            return
+        if self._live_write_in_progress:
+            if current.kind not in {"applying", "verifying"}:
+                self._set_operation_status(
+                    "applying",
+                    "APLICANDO CAMBIO",
+                    "RoleRun está enviando la operación al juego.",
+                )
+            return
+        ready_faint = self._pending_faint_for_reopen()
+        if ready_faint is not None and self._faint_replacement_mode is None:
+            if current.title != "BAJA PENDIENTE":
+                self._set_operation_status(
+                    "warning",
+                    "BAJA PENDIENTE",
+                    (
+                        f"{ready_faint.get('pokemon', 'Un Pokémon')} necesita sustituto. "
+                        "La vida perdida y la baja ya están guardadas."
+                    ),
+                    actions=("Elegir sustituto", "No sustituir"),
+                    persistent=True,
+                )
+            return
+        pending = len(self.run.pending_changes)
+        sync_text = str(self.sync_status or "")
+        if sync_text.startswith("⚠"):
+            self._set_operation_status(
+                "warning", "REVISIÓN NECESARIA", sync_text.lstrip("⚠ "),
+                actions=("Ver detalle",),
+            )
+        elif pending and current.kind not in {"pending", "prepared"}:
+            self._set_operation_status(
+                "pending",
+                "CAMBIOS PENDIENTES",
+                f"Hay {pending} cambio(s) que todavía no están confirmados en el juego.",
+                actions=("Revisar cambios",),
+            )
+        elif sync_text.startswith(("✓", "☠")) and current.kind in {"applying", "verifying", "pending"}:
+            self._set_operation_status(
+                "confirmed",
+                "CAMBIO REALIZADO",
+                sync_text.lstrip("✓☠ "),
             )
 
     def _widget_alive(self, widget) -> bool:
@@ -3346,6 +5520,22 @@ class RoleRunManager(ctk.CTk):
         top_status = getattr(self, "top_status", None)
         if not self._shell_built or not self._widget_alive(top_status):
             return
+
+        counter_surface = getattr(self, "header_run_counters", None)
+        if self._widget_alive(counter_surface):
+            counters = self.project.counters if self.project and self.current_game else {}
+            for key, label in getattr(self, "header_counter_labels", {}).items():
+                label.configure(
+                    text=str(int(counters.get(key, 0))) if counters else "—",
+                    text_color=GOLD if counters else MUTED,
+                )
+            for key, controls in getattr(self, "header_counter_controls", {}).items():
+                if controls is None:
+                    continue
+                automatic = bool(counters) and self._counter_is_automatic(key)
+                enabled = bool(counters) and not automatic
+                for button in controls:
+                    button.configure(state="normal" if enabled else "disabled")
 
         count = len(self.run.pending_changes)
         live_review_count = sum(len(batch) for batch in self._oras_live_review_batches)
@@ -3418,6 +5608,25 @@ class RoleRunManager(ctk.CTk):
                 )
         else:
             top_status.configure(text="Sin Run activa", text_color=MUTED)
+        sync_operation_status = getattr(self, "_sync_operation_status_from_runtime", None)
+        if callable(sync_operation_status):
+            sync_operation_status()
+
+    def _update_header_counter_visibility(self, event=None) -> None:
+        """Reserva el resumen completo para cabeceras donde realmente cabe."""
+        widget = getattr(self, "header_run_counters", None)
+        if not self._widget_alive(widget):
+            return
+        width = int(getattr(event, "width", 0) or 0)
+        if width <= 0:
+            try:
+                width = int(widget.master.winfo_width())
+            except Exception:
+                return
+        if width >= 1380:
+            widget.grid()
+        else:
+            widget.grid_remove()
 
     def _effective_role(self, pokemon: SavePokemon) -> tuple[str, str]:
         symbols = ROLE_SYMBOLS
@@ -3494,6 +5703,19 @@ class RoleRunManager(ctk.CTk):
         live_key = live_key_getter() if callable(live_key_getter) else "oras"
         if live_key not in LIVE_PC_READ_GAME_KEYS:
             return
+        if live_key == "oras":
+            # El adaptador completa naturaleza, IV/EV, estadísticas finales y
+            # stats base con el Personal de la ROM efectiva. Prepararlo antes
+            # de lanzar el worker evita publicar una lectura PK6 válida pero
+            # incompleta durante el arranque o tras F5.
+            prepare_metadata = getattr(self, "_prepare_oras_live_metadata_profile", None)
+            if callable(prepare_metadata):
+                prepare_metadata()
+
+        def record_bdsp(event: str, **fields: object) -> None:
+            recorder = getattr(self, "_record_bdsp_ui_event", None)
+            if callable(recorder):
+                recorder(event, **fields)
 
         before_by_id = {self._pokemon_identity(p): p for p in before.party}
         after_by_id = {self._pokemon_identity(p): p for p in after.party}
@@ -3501,6 +5723,15 @@ class RoleRunManager(ctk.CTk):
         outgoing_ids = [identity for identity in before_by_id if identity not in after_by_id]
         if not incoming_ids and not outgoing_ids and not force:
             return
+
+        record_bdsp(
+            "pc-reconcile-scheduled",
+            force=bool(force),
+            incoming_count=len(incoming_ids),
+            outgoing_count=len(outgoing_ids),
+            before_party=len(before.party),
+            after_party=len(after.party),
+        )
 
         key = (
             live_key, bool(force),
@@ -3518,16 +5749,18 @@ class RoleRunManager(ctk.CTk):
         signature = self._save_file_signature(save_path)
 
         def clone_for_box(source: SavePokemon, live: SavePokemon, box: int, slot: int) -> SavePokemon:
-            clone = replace(source)
-            # Lo que sí vive dentro del PK6 de caja se toma del juego. Las etiquetas
-            # localizadas y el nivel se conservan del último objeto conocido porque
-            # un PK6 almacenado no guarda el nivel actual de party.
-            clone.moves = list(live.moves)
-            clone.move_ids = list(live.move_ids)
-            clone.markings = list(live.markings)
-            clone.role = live.role
-            clone.role_symbol = live.role_symbol
-            clone.pid, clone.tid, clone.sid, clone.form = live.pid, live.tid, live.sid, live.form
+            # El reader vivo ORAS ya publica el PK6 almacenado enriquecido con la
+            # tabla Personal exacta de la ROM. Partimos de él para no perder
+            # naturaleza, stats, base stats, IV ni EV al proyectar un movimiento.
+            clone = copy.deepcopy(live)
+            # Un PK6 almacenado no guarda el nivel de party ni garantiza etiquetas
+            # localizadas. Conservamos únicamente esos fallbacks del objeto conocido.
+            if not str(clone.species or "").strip():
+                clone.species = source.species
+            if not str(clone.nickname or "").strip():
+                clone.nickname = source.nickname
+            if int(clone.level or 0) <= 0:
+                clone.level = source.level
             clone.box, clone.box_slot, clone.slot = int(box), int(slot), int(slot)
             return clone
 
@@ -3570,7 +5803,12 @@ class RoleRunManager(ctk.CTk):
             ):
                 return
 
+            projection_changed = False
             if error or live_slots is None:
+                record_bdsp(
+                    "pc-reconcile-error", force=bool(force),
+                    error=str(error or "sin slots"),
+                )
                 if not force:
                     fallback_inference(pc_data)
                 elif error:
@@ -3592,7 +5830,7 @@ class RoleRunManager(ctk.CTk):
                 # Nunca publicamos entonces la misma identidad fuerte a la vez en
                 # Equipo y PC: conservamos la última vista de cajas y repetimos una
                 # lectura completa contra la party que está publicada AHORA.
-                if live_key in GEN7_REALTIME_GAME_KEYS:
+                if live_key in FULL_MATRIX_LIVE_PC_GAME_KEYS:
                     published_game = getattr(self, "current_game", None)
                     party_ids = {
                         self._pokemon_identity(pokemon)
@@ -3606,6 +5844,9 @@ class RoleRunManager(ctk.CTk):
                     }
                     overlap_ids = party_ids & live_pc_ids
                     if overlap_ids:
+                        record_bdsp(
+                            "pc-reconcile-retry", overlap_count=len(overlap_ids),
+                        )
                         self.sync_status = (
                             f"◌ {self._active_azahar_realtime_label()} · releyendo Equipo/PC tras transición…"
                         )
@@ -3618,46 +5859,91 @@ class RoleRunManager(ctk.CTk):
                             pass
                         return
 
-                # Base física del último guardado. Los overrides resultantes son
-                # exactamente la diferencia entre ese main y las cajas vivas.
-                base_by_pos: dict[tuple[int, int], SavePokemon] = {}
-                known_by_identity: dict[str, SavePokemon] = {}
-                for box in pc_data.boxes:
-                    for pokemon in box.pokemon:
-                        if pokemon.box is None or pokemon.box_slot is None:
-                            continue
-                        pos = (int(pokemon.box), int(pokemon.box_slot))
-                        base_by_pos[pos] = pokemon
+                if live_key in FULL_MATRIX_LIVE_PC_GAME_KEYS:
+                    # BDSP aporta el PB8 completo y USUM el PK7 completo,
+                    # incluidos naturaleza, IV y EV. Comparar solo
+                    # identidad/posición contra el save descarta justamente
+                    # esos metadatos cuando el Pokémon no se ha movido.
+                    live_pc_data = RoleRunManager._pc_data_from_live_slots(
+                        pc_data, live_slots,
+                    )
+                    projection_changed = (
+                        RoleRunManager._pc_presentation_signature(self._pc_cache)
+                        != RoleRunManager._pc_presentation_signature(live_pc_data)
+                    )
+                    pc_data = live_pc_data
+                    self._oras_live_pc_overrides.clear()
+                    self._oras_live_pc_empty_overrides.clear()
+                    new_overrides: dict[tuple[int, int], SavePokemon] = {}
+                    new_empty: set[tuple[int, int]] = set()
+                else:
+                    # Base física del último guardado. Los overrides resultantes son
+                    # exactamente la diferencia entre ese main y las cajas vivas.
+                    base_by_pos: dict[tuple[int, int], SavePokemon] = {}
+                    known_by_identity: dict[str, SavePokemon] = {}
+                    for box in pc_data.boxes:
+                        for pokemon in box.pokemon:
+                            if pokemon.box is None or pokemon.box_slot is None:
+                                continue
+                            pos = (int(pokemon.box), int(pokemon.box_slot))
+                            base_by_pos[pos] = pokemon
+                            known_by_identity[self._pokemon_identity(pokemon)] = pokemon
+                    # Incluimos lo que RoleRun ya sabía de operaciones vivas anteriores
+                    # y ambos estados de party para conservar nombres/niveles localizados.
+                    for pokemon in self._oras_live_pc_overrides.values():
                         known_by_identity[self._pokemon_identity(pokemon)] = pokemon
-                # Incluimos lo que RoleRun ya sabía de operaciones vivas anteriores
-                # y ambos estados de party para conservar nombres/niveles localizados.
-                for pokemon in self._oras_live_pc_overrides.values():
-                    known_by_identity[self._pokemon_identity(pokemon)] = pokemon
-                for pokemon in (*before.party, *after.party):
-                    known_by_identity[self._pokemon_identity(pokemon)] = pokemon
+                    for pokemon in (*before.party, *after.party):
+                        known_by_identity[self._pokemon_identity(pokemon)] = pokemon
 
-                new_overrides: dict[tuple[int, int], SavePokemon] = {}
-                new_empty: set[tuple[int, int]] = set()
-                max_box = int(pc_data.box_count)
-                max_slot = int(pc_data.box_slot_count or ORAS_PC_BOX_SLOT_COUNT)
-                for box_no in range(1, max_box + 1):
-                    for box_slot in range(1, max_slot + 1):
-                        pos = (box_no, box_slot)
-                        live = live_slots.get(pos)
-                        base = base_by_pos.get(pos)
-                        live_id = self._pokemon_identity(live) if live is not None else ""
-                        base_id = self._pokemon_identity(base) if base is not None else ""
-                        if live_id == base_id:
-                            continue
-                        if live is None:
-                            if base is not None:
-                                new_empty.add(pos)
-                            continue
-                        source = known_by_identity.get(live_id, live)
-                        new_overrides[pos] = clone_for_box(source, live, box_no, box_slot)
+                    new_overrides = {}
+                    new_empty = set()
+                    max_box = int(pc_data.box_count)
+                    max_slot = int(pc_data.box_slot_count or ORAS_PC_BOX_SLOT_COUNT)
+                    for box_no in range(1, max_box + 1):
+                        for box_slot in range(1, max_slot + 1):
+                            pos = (box_no, box_slot)
+                            live = live_slots.get(pos)
+                            base = base_by_pos.get(pos)
+                            live_id = self._pokemon_identity(live) if live is not None else ""
+                            base_id = self._pokemon_identity(base) if base is not None else ""
+                            if live_id == base_id:
+                                continue
+                            if live is None:
+                                if base is not None:
+                                    new_empty.add(pos)
+                                continue
+                            source = known_by_identity.get(live_id, live)
+                            new_overrides[pos] = clone_for_box(source, live, box_no, box_slot)
 
-                self._oras_live_pc_overrides = new_overrides
-                self._oras_live_pc_empty_overrides = new_empty
+                    projection_changed = bool(
+                        new_overrides != self._oras_live_pc_overrides
+                        or new_empty != self._oras_live_pc_empty_overrides
+                    )
+                    self._oras_live_pc_overrides = new_overrides
+                    self._oras_live_pc_empty_overrides = new_empty
+                    if live_key == "oras":
+                        # La rama histórica de ORAS calcula diferencias físicas
+                        # respecto al save. Cuando identidad y posición coinciden no
+                        # hay override, pero sí deben publicarse los metadatos ricos
+                        # que solo aporta el reader vivo.
+                        enriched_pc_data = self._pc_data_with_live_presentation(
+                            pc_data, live_slots,
+                        )
+                        projection_changed = bool(
+                            projection_changed
+                            or self._pc_presentation_signature(self._pc_cache)
+                            != self._pc_presentation_signature(enriched_pc_data)
+                        )
+                        pc_data = enriched_pc_data
+                record_bdsp(
+                    "pc-reconcile-applied",
+                    occupied_slots=len(live_slots),
+                    override_slots=len(new_overrides),
+                    emptied_slots=len(new_empty),
+                    before_party=len(before.party),
+                    after_party=len(after.party),
+                    changed=projection_changed,
+                )
 
             self._pc_cache = pc_data
             self._pc_cache_signature = signature
@@ -3669,10 +5955,26 @@ class RoleRunManager(ctk.CTk):
             if live_key in GEN7_REALTIME_GAME_KEYS and not error and live_slots is not None:
                 self._flush_sm_role_transition_after_pc_proof()
 
-            if self._floating_bar_is_visible():
-                self._main_ui_dirty_while_floating = True
-            elif self.active_page == "pc":
-                self._smooth_render_page(preserve_scroll=False)
+            should_render = bool(
+                live_key not in {"bdsp", "b2w2"}
+                or error
+                or live_slots is None
+                or projection_changed
+            )
+            if should_render:
+                if self._floating_bar_is_visible():
+                    self._main_ui_dirty_while_floating = True
+                elif self.active_page in {"pc", "team"}:
+                    self._smooth_render_page(preserve_scroll=False)
+
+            # Un poll no se solapa con otro: el siguiente solo nace cuando la
+            # lectura anterior ya terminó y publicó (o rechazó) su captura. Ante
+            # error detenemos el bucle para no castigar el emulador ni repetir avisos;
+            # volver a entrar en CAJAS PC permite rearmarlo explícitamente.
+            if live_key in {"bdsp", "b2w2"} and not error and live_slots is not None:
+                scheduler = getattr(self, "_schedule_bdsp_pc_poll", None)
+                if callable(scheduler):
+                    scheduler()
 
         self._oras_pc_reconcile_in_progress = True
 
@@ -3684,22 +5986,22 @@ class RoleRunManager(ctk.CTk):
                     else self.save_engine.read_boxes(save_path)
                 )
                 anchors: list[SavePokemon] = []
-                if live_key in GEN7_REALTIME_GAME_KEYS:
-                    # Alpha.21: los Pokémon guardados siguen siendo evidencia útil cuando
-                    # existen, pero ya no son requisito: el reader puede demostrar
-                    # la imagen SAV7SM viva aunque el último main tuviera PC vacío.
+                if live_key in FULL_MATRIX_LIVE_PC_GAME_KEYS:
+                    # Los Pokémon guardados aportan nombre/nivel localizados cuando
+                    # coinciden por identidad fuerte, pero no localizan ni validan
+                    # por sí solos la matriz viva.
                     for box in pc_data.boxes:
                         anchors.extend(list(box.pokemon))
                 else:
                     for box_no in range(1, int(pc_data.box_count) + 1):
                         anchors.extend(self._project_pc_box_pokemon(pc_data, box_no))
 
-                # X/Y y SM: si la party acaba de perder un Pokémon, esa
+                # Si la party acaba de perder un Pokémon, esa
                 # identidad constituye evidencia adicional de presencia en el PC
                 # aunque el último ``main`` tuviera todas las cajas vacías. Se
                 # pasa sin box/slot: sirve para validar una matriz viva ya
                 # localizada, nunca para inventar su posición.
-                if live_key in ({"xy"} | GEN7_REALTIME_GAME_KEYS):
+                if live_key in ({"xy"} | FULL_MATRIX_LIVE_PC_GAME_KEYS):
                     known_anchor_ids = {self._pokemon_identity(pokemon) for pokemon in anchors}
                     for identity in outgoing_ids:
                         source = before_by_id.get(identity)
@@ -3714,7 +6016,7 @@ class RoleRunManager(ctk.CTk):
                     "box_slot_count": int(pc_data.box_slot_count),
                 }
                 if realtime_core is not None:
-                    if live_key in GEN7_REALTIME_GAME_KEYS:
+                    if live_key in FULL_MATRIX_LIVE_PC_GAME_KEYS:
                         _process, _pc_base, live_slots = realtime_core.read_pc(anchors, **pc_kwargs)
                     else:
                         _process, _pc_base, live_slots = realtime_core.read_pc(anchors)
@@ -3724,11 +6026,15 @@ class RoleRunManager(ctk.CTk):
                         reader = getattr(self, "xy_live_reader", None)
                     elif live_key in GEN7_REALTIME_GAME_KEYS:
                         reader = getattr(self, "usum_realtime_adapter" if live_key == "usum" else "sm_realtime_adapter", None)
+                    elif live_key == "bdsp":
+                        reader = getattr(self, "bdsp_realtime_adapter", None)
+                    elif live_key == "b2w2":
+                        reader = getattr(self, "b2w2_realtime_adapter", None)
                     else:
                         reader = getattr(self, "oras_live_reader", None)
                     if reader is None:
                         raise RuntimeError(f"No hay lector vivo de PC disponible para {live_key}.")
-                    if live_key in GEN7_REALTIME_GAME_KEYS:
+                    if live_key in FULL_MATRIX_LIVE_PC_GAME_KEYS:
                         _process, _pc_base, live_slots = reader.read_pc(anchors, **pc_kwargs)
                     else:
                         _process, _pc_base, live_slots = reader.read_pc(anchors)
@@ -3750,16 +6056,81 @@ class RoleRunManager(ctk.CTk):
         ).start()
 
     def _schedule_gen6_live_pc_refresh(self) -> None:
-        """Actualiza CAJAS PC 3DS desde RAM al entrar en la pestaña, sin bloquear Tk."""
+        """Actualiza CAJAS PC live al entrar en la pestaña, sin bloquear Tk."""
+        live_key = self._active_azahar_realtime_key()
+        recorder = getattr(self, "_record_bdsp_ui_event", None)
+        if callable(recorder):
+            recorder(
+                "pc-refresh-requested",
+                live_key=live_key,
+                has_game=bool(self.current_game),
+                live_active=bool(self._oras_live_active),
+                active_page=str(getattr(self, "active_page", "")),
+            )
         if (
             not self.current_game
-            or not self._oras_live_auto_apply_available()
-            or self._active_azahar_realtime_key() not in LIVE_PC_READ_GAME_KEYS
+            or not self._oras_live_active
+            or live_key not in LIVE_PC_READ_GAME_KEYS
+            or (live_key not in {"bdsp", "b2w2"} and not self._oras_live_auto_apply_available())
         ):
             return
         self._schedule_oras_external_pc_reconcile(
             self.current_game, self.current_game, force=True,
         )
+
+    def _cancel_bdsp_pc_poll(self) -> None:
+        after_id = getattr(self, "_bdsp_pc_poll_after_id", None)
+        self._bdsp_pc_poll_after_id = None
+        if after_id:
+            try:
+                self.after_cancel(after_id)
+            except Exception:
+                pass
+
+    def _bdsp_pc_poll_is_active(self) -> bool:
+        if (
+            getattr(self, "active_page", "") != "pc"
+            or not getattr(self, "_oras_live_active", False)
+            or not getattr(self, "current_game", None)
+            or self._active_azahar_realtime_key() not in {"bdsp", "b2w2"}
+            or self._floating_bar_is_visible()
+        ):
+            return False
+        state_getter = getattr(self, "state", None)
+        if callable(state_getter):
+            try:
+                if str(state_getter()) in {"withdrawn", "iconic"}:
+                    return False
+            except Exception:
+                return False
+        return True
+
+    def _schedule_bdsp_pc_poll(self, delay: int = 2500) -> None:
+        """Sondea PC↔PC solo mientras la página live compatible está visible.
+
+        No hay escaneo: reutiliza la matriz completa y el doble read demostrados
+        por el backend activo (BDSP 40×30 o B2/W2 24×30).
+        El siguiente tick se programa al terminar el anterior, por lo que nunca
+        se acumulan workers aunque Ryujinx tarde más de lo habitual.
+        """
+        self._cancel_bdsp_pc_poll()
+        if not self._bdsp_pc_poll_is_active():
+            return
+        generation = self._session_generation
+
+        def poll() -> None:
+            self._bdsp_pc_poll_after_id = None
+            if generation != self._session_generation or not self._bdsp_pc_poll_is_active():
+                return
+            if self._oras_pc_reconcile_in_progress:
+                self._schedule_bdsp_pc_poll(350)
+                return
+            self._record_bdsp_ui_event("pc-poll")
+            self._schedule_oras_external_pc_reconcile(
+                self.current_game, self.current_game, force=True,
+            )
+
+        self._bdsp_pc_poll_after_id = self.after(max(150, int(delay)), poll)
 
     def _apply_project_marker_layout(self, data: SaveGameData | None) -> None:
         """Reinterpreta las seis marcas según el contrato persistido de la Run."""
@@ -3804,6 +6175,58 @@ class RoleRunManager(ctk.CTk):
         self.project.role_marker_layout = 2
         self.native_save_engine.set_role_marker_layout(2)
         self.project_service.save(self.project)
+
+    def _prepare_bdsp_marker_layout_migration(self, game: SaveGameData) -> list[PendingRoleChange]:
+        """Prepara la migración física para el writer runtime de una Run BDSP antigua."""
+        self._bdsp_marker_migration_change_ids.clear()
+        self._bdsp_marker_migration_expected.clear()
+        if (
+            getattr(self.save_engine, "key", "") != "bdsp"
+            or not self.project
+            or int(getattr(self.project, "role_marker_layout", 1) or 1) >= 2
+        ):
+            return []
+        changes = self._oras_marker_layout_migration_changes(game)
+        if not changes:
+            # SIN ROL y Líbero ocupan los mismos bits en ambos contratos.
+            self._complete_role_marker_layout_migration()
+            return []
+        self.run.pending_changes.extend(changes)
+        self._bdsp_marker_migration_change_ids.update(id(change) for change in changes)
+        self._bdsp_marker_migration_expected.update({
+            str(change.pokemon_identity): str(change.new_role) for change in changes
+        })
+        return changes
+
+    def _verify_bdsp_marker_layout_migration(
+        self, game: SaveGameData, changes: list[object],
+    ) -> None:
+        """Demuestra que el archivo preparado contiene los bits del layout 2."""
+        if not self._bdsp_marker_migration_expected:
+            return
+        expected = dict(self._bdsp_marker_migration_expected)
+        # Un cambio de rol posterior y explícito sobre el mismo Pokémon prevalece
+        # sobre el rol semántico que tenía al iniciar la migración.
+        for change in changes:
+            if isinstance(change, PendingRoleChange):
+                identity = str(change.pokemon_identity or "")
+                if identity in expected:
+                    expected[identity] = str(change.new_role)
+        by_identity = {
+            self._pokemon_identity(pokemon): pokemon for pokemon in game.party
+        }
+        for identity, target_role in expected.items():
+            pokemon = by_identity.get(identity)
+            if pokemon is None:
+                raise ValueError(
+                    "La verificación del layout de marcadores no encontró uno de los Pokémon migrados."
+                )
+            actual_role, _symbol = role_from_markings(pokemon.markings, layout=2)
+            if actual_role != target_role:
+                raise ValueError(
+                    f"La migración de marcadores esperaba {target_role} para "
+                    f"{pokemon.nickname or pokemon.species}, pero el readback físico devolvió {actual_role}."
+                )
 
     def _register_party_roles(self, data: SaveGameData | None = None) -> None:
         """Registra como intencionales únicamente los roles de Pokémon activos.
@@ -3875,8 +6298,8 @@ class RoleRunManager(ctk.CTk):
     def _projectable_team_changes(self) -> list[PendingTeamChange]:
         """Cambios Equipo↔PC que pueden adelantarse visualmente.
 
-        En Sol/Luna conectado, estas operaciones se escriben inmediatamente en
-        Azahar y no se proyectan nunca antes de la verificación real. Esto evita
+        En los backends live que escriben inmediatamente (Gen 7 y BDSP), estas
+        operaciones no se proyectan nunca antes de la verificación real. Esto evita
         repetir el falso positivo de alpha.30: Dashboard, barra y PC siguen
         mostrando el último estado confirmado hasta que el writer devuelve una
         captura viva validada. En motores clásicos conserva la proyección previa.
@@ -3887,7 +6310,7 @@ class RoleRunManager(ctk.CTk):
         auto_getter = getattr(self, "_oras_live_auto_apply_available", None)
         live_key = key_getter() if callable(key_getter) else None
         live_auto = bool(auto_getter()) if callable(auto_getter) else False
-        if live_key in GEN7_REALTIME_GAME_KEYS and live_auto:
+        if live_key in (GEN7_REALTIME_GAME_KEYS | {"bdsp"}) and live_auto:
             return []
         return changes
 
@@ -4011,6 +6434,11 @@ class RoleRunManager(ctk.CTk):
             "role_symbol": pokemon.role_symbol, "box": pokemon.box, "box_slot": pokemon.box_slot,
             "pid": pokemon.pid, "tid": pokemon.tid, "sid": pokemon.sid, "form": pokemon.form,
             "current_hp": pokemon.current_hp, "max_hp": pokemon.max_hp,
+            "nature_id": pokemon.nature_id, "stat_nature_id": pokemon.stat_nature_id,
+            "nature": pokemon.nature, "stat_nature": pokemon.stat_nature,
+            "nature_increased": pokemon.nature_increased,
+            "nature_decreased": pokemon.nature_decreased,
+            "stats": dict(pokemon.stats), "ivs": dict(pokemon.ivs), "evs": dict(pokemon.evs),
         }
 
     def _pokemon_from_snapshot(self, raw: dict[str, object], slot: int | None = None, projected: bool = False) -> SavePokemon:
@@ -4028,6 +6456,21 @@ class RoleRunManager(ctk.CTk):
             pid=int(raw.get("pid", 0)), tid=int(raw.get("tid", 0)), sid=int(raw.get("sid", 0)),
             form=int(raw.get("form", 0)), current_hp=int(raw.get("current_hp", 0) or 0),
             max_hp=int(raw.get("max_hp", 0) or 0),
+            nature_id=(int(raw["nature_id"]) if raw.get("nature_id") is not None else None),
+            stat_nature_id=(
+                int(raw["stat_nature_id"]) if raw.get("stat_nature_id") is not None else None
+            ),
+            nature=str(raw.get("nature", "") or ""),
+            stat_nature=str(raw.get("stat_nature", "") or ""),
+            nature_increased=(
+                str(raw["nature_increased"]) if raw.get("nature_increased") else None
+            ),
+            nature_decreased=(
+                str(raw["nature_decreased"]) if raw.get("nature_decreased") else None
+            ),
+            stats={str(k): int(v) for k, v in dict(raw.get("stats", {}) or {}).items()},
+            ivs={str(k): int(v) for k, v in dict(raw.get("ivs", {}) or {}).items()},
+            evs={str(k): int(v) for k, v in dict(raw.get("evs", {}) or {}).items()},
         )
 
     def _incoming_snapshot_for_role(
@@ -4102,6 +6545,42 @@ class RoleRunManager(ctk.CTk):
             for current_slot, member in enumerate(party, start=1):
                 member.slot = current_slot
         return party
+
+    @staticmethod
+    def _party_training_presentation_changed(
+        before: SaveGameData, after: SaveGameData,
+    ) -> bool:
+        """Detecta datos vivos que no forman parte de la huella funcional.
+
+        ``diff_live_party`` omite deliberadamente naturaleza, stats, IV y EV:
+        esos campos no deben parecer un cambio de equipo ni disparar escritores.
+        La UI de BDSP sí los necesita. Si una Run se abrió primero desde el save,
+        un snapshot vivo con la misma identidad podía descartarse y Drafteos
+        recibía para siempre diccionarios vacíos.
+        """
+        def presentation(game: SaveGameData) -> tuple:
+            return tuple(
+                (
+                    (
+                        int(getattr(pokemon, "species_id", 0) or 0),
+                        int(getattr(pokemon, "pid", 0) or 0),
+                        int(getattr(pokemon, "tid", 0) or 0),
+                        int(getattr(pokemon, "sid", 0) or 0),
+                        str(getattr(pokemon, "nickname", "") or getattr(pokemon, "species", "")),
+                    ),
+                    getattr(pokemon, "nature_id", None),
+                    getattr(pokemon, "stat_nature_id", None),
+                    str(getattr(pokemon, "nature", "") or ""),
+                    str(getattr(pokemon, "stat_nature", "") or ""),
+                    tuple(sorted(dict(getattr(pokemon, "stats", {}) or {}).items())),
+                    tuple(sorted(dict(getattr(pokemon, "base_stats", {}) or {}).items())),
+                    tuple(sorted(dict(getattr(pokemon, "ivs", {}) or {}).items())),
+                    tuple(sorted(dict(getattr(pokemon, "evs", {}) or {}).items())),
+                )
+                for pokemon in game.party
+            )
+
+        return presentation(before) != presentation(after)
 
     def _team_role_conflicts(self, party: list[SavePokemon] | None = None) -> dict[str, list[SavePokemon]]:
         party = party if party is not None else self._projected_party()
@@ -4232,7 +6711,26 @@ class RoleRunManager(ctk.CTk):
             else:
                 self._refresh_draft_role_buttons()
             self._update_top_status()
+        if self._shell_built:
+            self._render_sidebar()
+            self._update_top_status()
+        if current_value != previous_value:
+            counter_names = {
+                "vidas": "VIDAS", "pociones": "CURACIONES",
+                "medallas": "PROGRESO", "drafteos": "DRAFTEOS",
+            }
+            self._set_operation_status(
+                "confirmed",
+                "CONTADOR ACTUALIZADO",
+                f"{counter_names.get(counter, counter.upper())}: {previous_value} → {current_value}",
+            )
         self._record_edit_transition()
+        if source == "barra flotante":
+            # La escritura ya era inmediata, pero la barra conservaba el texto
+            # anterior hasta el siguiente poll. Repintar fuera del callback
+            # evita destruir el propio botón mientras Tk procesa el clic.
+            self._floating_bar_last_signature = None
+            self.after(0, lambda: self._render_floating_bar(force=True))
 
     def run_quick_action(self, action: str) -> None:
         if not self.project:
@@ -4270,7 +6768,7 @@ class RoleRunManager(ctk.CTk):
         if not self.project:
             return
         self._capturing_hotkey_action = action
-        overlay = ctk.CTkToplevel(self)
+        overlay = IntegratedWindowSurface(self)
         self._apply_window_icon(overlay)
         overlay.title("Asignar atajo")
         overlay.geometry("470x205")
@@ -4282,7 +6780,10 @@ class RoleRunManager(ctk.CTk):
                      font=ctk.CTkFont("Segoe UI", 15, "bold")).pack(pady=(32, 8))
         status = ctk.CTkLabel(
             overlay,
-            text="Se admiten combinaciones con ALT/CTRL/SHIFT, panel numérico, F1–F12, letras y números.\nESC cancela.",
+            text=(
+                "Puedes usar una tecla individual o una combinación.\n"
+                "Los atajos solo se activan mientras el emulador tiene el foco. ESC cancela."
+            ),
             text_color=MUTED,
             justify="center",
         )
@@ -4290,6 +6791,58 @@ class RoleRunManager(ctk.CTk):
 
         cancelled = {"value": False}
         previous = WindowsHotkeyManager.pressed_supported_keys()
+
+        def commit(name: str) -> bool:
+            normalized = WindowsHotkeyManager.normalize_key_name(name)
+            if normalized is None:
+                status.configure(
+                    text=(
+                        f"{name.upper()} no es una tecla compatible.\n"
+                        "Prueba con una letra, F1–F12, teclado numérico o una combinación."
+                    ),
+                    text_color=DANGER,
+                )
+                return False
+            for existing_action, existing_key in self.project.hotkeys.items():
+                normalized_existing = WindowsHotkeyManager.normalize_key_name(existing_key)
+                if normalized_existing == normalized and existing_action != action:
+                    status.configure(
+                        text=f"{normalized.upper()} ya está asignada a otra acción.",
+                        text_color=DANGER,
+                    )
+                    return False
+            self.project.hotkeys[action] = normalized
+            self.project_service.set_hotkeys(self.project, self.project.hotkeys)
+            self._register_global_hotkeys(show_error=True)
+            cancelled["value"] = True
+            overlay.destroy()
+            self._smooth_render_page()
+            return True
+
+        def capture_event(event):
+            if cancelled["value"]:
+                return "break"
+            keysym = str(getattr(event, "keysym", "") or "").casefold()
+            if keysym == "escape":
+                return cancel(event)
+            aliases = {
+                "return": "enter", "prior": "page up", "next": "page down",
+                "kp_add": "add", "kp_subtract": "subtract",
+                "kp_multiply": "multiply", "kp_divide": "divide",
+                "kp_decimal": "decimal",
+            }
+            key = aliases.get(keysym, keysym)
+            modifiers = []
+            state = int(getattr(event, "state", 0) or 0)
+            if state & 0x0004:
+                modifiers.append("ctrl")
+            if state & 0x0008:
+                modifiers.append("alt")
+            if state & 0x0001:
+                modifiers.append("shift")
+            name = "+".join([*modifiers, key]) if modifiers else key
+            commit(name)
+            return "break"
 
         def cancel(_event=None):
             cancelled["value"] = True
@@ -4305,27 +6858,137 @@ class RoleRunManager(ctk.CTk):
             previous = current
             if newly_pressed:
                 name = sorted(newly_pressed)[0]
-                for existing_action, existing_key in self.project.hotkeys.items():
-                    normalized_existing = WindowsHotkeyManager.normalize_key_name(existing_key)
-                    if normalized_existing == name and existing_action != action:
-                        status.configure(text=f"{name.upper()} ya está asignada a otra acción.", text_color=DANGER)
-                        overlay.after(250, poll_key)
-                        return
-                self.project.hotkeys[action] = name
-                self.project_service.set_hotkeys(self.project, self.project.hotkeys)
-                self._register_global_hotkeys(show_error=True)
-                cancelled["value"] = True
-                overlay.destroy()
-                self._smooth_render_page()
+                if not commit(name):
+                    overlay.after(250, poll_key)
                 return
             overlay.after(25, poll_key)
 
         overlay.bind("<Escape>", cancel)
+        overlay.bind("<KeyPress>", capture_event)
         overlay.protocol("WM_DELETE_WINDOW", cancel)
         overlay.after(180, poll_key)
         overlay.after(100, overlay.focus_force)
 
+    def begin_controller_capture(self, action: str) -> None:
+        if not self.project:
+            return
+        overlay = IntegratedWindowSurface(self)
+        self._apply_window_icon(overlay)
+        overlay.title("Asignar botón de mando")
+        overlay.geometry("500x230")
+        overlay.resizable(False, False)
+        overlay.transient(self)
+        overlay.grab_set()
+        overlay.configure(fg_color=BG)
+        ctk.CTkLabel(
+            overlay, text="PULSA EL BOTÓN QUE QUIERES ASIGNAR",
+            text_color=GOLD, font=ctk.CTkFont("Segoe UI", 15, "bold"),
+        ).pack(pady=(34, 8))
+        status = ctk.CTkLabel(
+            overlay,
+            text=(
+                "Pulsa ahora el botón que prefieras. Se usará en todas las\n"
+                "pantallas de RoleRun donde corresponda esa acción."
+            ),
+            text_color=MUTED, justify="center",
+        )
+        status.pack()
+
+        def finish(button: str) -> None:
+            if not overlay.winfo_exists():
+                return
+            assigned = dict(self.project.controller_hotkeys)
+            assigned.update({f"menu_{key}": value for key, value in self.project.controller_menu_buttons.items()})
+            for existing_action, existing in assigned.items():
+                if existing_action != action and existing == button:
+                    status.configure(
+                        text=f"{button.upper()} ya está asignado a otra acción.",
+                        text_color=DANGER,
+                    )
+                    self._gamepad_capture_action = action
+                    self._gamepad_capture_callback = finish
+                    return
+            if action.startswith("menu_"):
+                self.project.controller_menu_buttons[action.removeprefix("menu_")] = button
+                self.project_service.set_menu_controls(
+                    self.project, self.project.menu_keys,
+                    self.project.controller_menu_buttons,
+                )
+            else:
+                self.project.controller_hotkeys[action] = button
+                self.project_service.set_controller_hotkeys(
+                    self.project, self.project.controller_hotkeys,
+                )
+            overlay.destroy()
+            self._smooth_render_page()
+
+        def cancel(_event=None):
+            self._gamepad_capture_action = None
+            self._gamepad_capture_callback = None
+            if overlay.winfo_exists():
+                overlay.destroy()
+            return "break"
+
+        self._gamepad_capture_action = action
+        self._gamepad_capture_callback = finish
+        overlay.bind("<Escape>", cancel)
+        overlay.protocol("WM_DELETE_WINDOW", cancel)
+        overlay.after(100, overlay.focus_force)
+
+    def begin_menu_key_capture(self, control: str) -> None:
+        if not self.project:
+            return
+        overlay = IntegratedWindowSurface(self)
+        self._apply_window_icon(overlay)
+        overlay.title("Asignar control de menú")
+        overlay.geometry("460x190")
+        overlay.resizable(False, False)
+        overlay.transient(self)
+        overlay.grab_set()
+        overlay.configure(fg_color=BG)
+        ctk.CTkLabel(
+            overlay, text="PULSA LA TECLA QUE QUIERES USAR EN ROLERUN",
+            text_color=GOLD, font=ctk.CTkFont("Segoe UI", 15, "bold"),
+        ).pack(pady=(38, 8))
+        ctk.CTkLabel(
+            overlay, text="Se aplicará a la navegación de la aplicación y del menú sobre el juego. ESC cancela.",
+            text_color=MUTED,
+        ).pack()
+
+        def capture(event):
+            keysym = str(getattr(event, "keysym", "") or "").casefold()
+            if keysym == "escape":
+                overlay.destroy()
+                return "break"
+            aliases = {"return": "enter", "prior": "page up", "next": "page down"}
+            key = aliases.get(keysym, keysym)
+            other = "back" if control == "accept" else "accept"
+            if key and key != self.project.menu_keys.get(other):
+                self.project.menu_keys[control] = key
+                self.project_service.set_menu_controls(
+                    self.project, self.project.menu_keys,
+                    self.project.controller_menu_buttons,
+                )
+                overlay.destroy()
+                self._smooth_render_page()
+            return "break"
+
+        overlay.bind("<KeyPress>", capture)
+        overlay.protocol("WM_DELETE_WINDOW", overlay.destroy)
+        overlay.after(100, overlay.focus_force)
+
     def _hotkey_action(self, action: str) -> None:
+        # Segunda barrera contra carreras de foco: el registro Win32 se retira
+        # al abandonar el emulador, pero un WM_HOTKEY ya encolado no debe poder
+        # ejecutar ninguna acción después de volver a RoleRun u otra aplicación.
+        if not self._foreground_is_supported_emulator():
+            return
+        if action in {"heal_party", "floating_menu"}:
+            if action == "heal_party":
+                self.after(0, self._heal_bdsp_party)
+            else:
+                self.after(0, self._toggle_floating_launcher)
+            return
         if action == "sync_live_game":
             self.after(0, self.sync_oras_live)
             return
@@ -4352,7 +7015,32 @@ class RoleRunManager(ctk.CTk):
         self.after(0, lambda: self.adjust_run_counter(counter, delta, source=f"atajo {key}"))
 
     def _show_live_sync_toast(self, title: str, detail: str, success: bool) -> None:
-        """Aviso no modal para la ventana principal o la barra flotante."""
+        """Traduce los avisos heredados al estado persistente de la shell."""
+        normalized = str(title or "").strip().upper()
+        if any(word in normalized for word in ("APLICANDO", "EN CURSO", "LEYENDO")):
+            kind = "applying"
+            persistent = False
+        elif any(word in normalized for word in ("PREPARADO", "PENDIENTE")):
+            kind = "pending"
+            persistent = False
+        elif success:
+            kind = "confirmed"
+            persistent = False
+        elif any(word in normalized for word in ("NO ESTÁ SINCRONIZADO", "NO DETECTADO", "DESCONECT")):
+            kind = "disconnected"
+            persistent = True
+        elif any(word in normalized for word in ("ESPERA", "PAUSAD")):
+            kind = "warning"
+            persistent = False
+        else:
+            kind = "failed"
+            persistent = True
+        actions = ("Reintentar", "Ver detalle") if kind in {"failed", "disconnected"} else ()
+        set_operation_status = getattr(self, "_set_operation_status", None)
+        if callable(set_operation_status):
+            set_operation_status(
+                kind, title, detail, actions=actions, persistent=persistent,
+            )
         if str(self.state()) in {"withdrawn", "iconic"}:
             # La barra es una HUD de juego, no un panel de diagnóstico. Los avisos
             # verdes de sincronización/recuperación distraen y pueden solaparse con
@@ -4360,24 +7048,6 @@ class RoleRunManager(ctk.CTk):
             if not success:
                 self._show_floating_live_sync_feedback(title, detail, success)
             return
-        try:
-            toast = ctk.CTkFrame(
-                self, fg_color="#151515", corner_radius=16, border_width=2,
-                border_color=SUCCESS if success else DANGER,
-            )
-            toast.place(relx=0.58, rely=0.5, anchor="center")
-            ctk.CTkLabel(
-                toast, text=title, text_color=SUCCESS if success else DANGER,
-                font=ctk.CTkFont("Segoe UI", 15, "bold"),
-            ).pack(padx=28, pady=(17, 3))
-            ctk.CTkLabel(
-                toast, text=detail, text_color=TEXT, wraplength=500, justify="center",
-                font=ctk.CTkFont("Segoe UI", 11, "bold"),
-            ).pack(padx=28, pady=(0, 17))
-            toast.lift()
-            self.after(2200 if not success else 1300, lambda: toast.destroy() if toast.winfo_exists() else None)
-        except Exception:
-            pass
 
     def _show_floating_live_sync_feedback(self, title: str, detail: str, success: bool) -> None:
         """Muestra únicamente errores útiles dentro de la HUD flotante."""
@@ -4458,17 +7128,74 @@ class RoleRunManager(ctk.CTk):
 
     def _active_azahar_realtime_key(self) -> str:
         key = str(getattr(self.save_engine, "key", "") or "").casefold()
-        return key if key in AZAHAR_REALTIME_GAME_KEYS else ""
+        return key if key in REALTIME_READ_GAME_KEYS else ""
+
+    def _record_bdsp_ui_event(self, event: str, **fields: object) -> None:
+        if self._active_azahar_realtime_key() != "bdsp":
+            return
+        recorder = getattr(
+            getattr(self, "bdsp_realtime_adapter", None), "record_ui_event", None,
+        )
+        if callable(recorder):
+            recorder(str(event), **fields)
 
     def _active_azahar_realtime_label(self) -> str:
-        return {"xy": "X/Y", "sm": "Sol/Luna", "usum": "UltraSol/UltraLuna"}.get(self._active_azahar_realtime_key(), "ORAS")
+        return {
+            "xy": "X/Y", "sm": "Sol/Luna", "usum": "UltraSol/UltraLuna",
+            "bdsp": "Perla Reluciente", "b2w2": "Negro 2/Blanco 2",
+        }.get(self._active_azahar_realtime_key(), "ORAS")
 
     def _active_azahar_realtime_display_name(self) -> str:
         return {
             "xy": "Pokémon X/Y",
             "sm": "Pokémon Sol/Luna",
             "usum": "Pokémon UltraSol/UltraLuna",
+            "bdsp": "Pokémon Perla Reluciente",
+            "b2w2": "Pokémon Negro 2/Blanco 2",
         }.get(self._active_azahar_realtime_key(), "Omega Rubí/Zafiro Alfa")
+
+    @staticmethod
+    def _live_runtime_help_text(live_key: str) -> str:
+        """Descripción actual del backend; evita conservar textos de recovery."""
+        descriptions = {
+            "oras": (
+                "ORAS mantiene equipo, roles, movimientos, PC, inventario/MT, "
+                "batalla, bajas y medallas sobre el Real-Time Core."
+            ),
+            "xy": (
+                "X/Y mantiene equipo, roles, movimientos, PC, inventario/MT, "
+                "batalla, bajas y medallas sobre Azahar o Citra. Las operaciones "
+                "que cambian el tamaño del equipo permanecen bloqueadas hasta su "
+                "validación específica."
+            ),
+            "sm": (
+                "Sol/Luna mantiene equipo, roles, movimientos, PC, inventario/MT, "
+                "batalla, bajas y progreso de Kahunas mediante su backend Gen 7 "
+                "validado por identidad, estructura y readback."
+            ),
+            "usum": (
+                "UltraSol/UltraLuna mantiene equipo, roles, movimientos, PC, "
+                "inventario/MT, batalla y bajas físicamente validados. El progreso "
+                "de Kahunas está instrumentado y pendiente de su última prueba física."
+            ),
+            "bdsp": (
+                "Perla Reluciente lee equipo, cajas PC, mochila y HP de batalla "
+                "desde Ryujinx HostMappedUnsafe. Roles y movimientos de la party, "
+                "incluida la enseñanza consumible de MT, usan escritura "
+                "transaccional con readback y rollback. Las medallas se leen de "
+                "los SystemFlags que usa el propio juego. Equipo↔PC, cambios de "
+                "tamaño y sustituciones por baja se aplican sobre los PB8 vivos "
+                "con precondiciones, readback y rollback."
+            ),
+            "b2w2": (
+                "Negro 2/Blanco 2 lee en tiempo real equipo, cajas PC, PS y "
+                "parálisis de combate desde melonDS mediante PK5 validados. "
+                "El movimiento PC→PC usa escritura transaccional validada. "
+                "Equipo↔PC, bajas y progreso permanecen deshabilitados hasta "
+                "disponer de evidencia independiente."
+            ),
+        }
+        return descriptions.get(str(live_key or ""), "Backend realtime no identificado.")
 
     def _uses_instant_realtime_ui(self) -> bool:
         """Indica que la Run usa la experiencia visible del Real-Time Core 3DS.
@@ -4479,7 +7206,7 @@ class RoleRunManager(ctk.CTk):
         """
         return bool(
             str(getattr(self.save_engine, "key", "") or "").casefold()
-            in AZAHAR_REALTIME_GAME_KEYS
+            in INSTANT_REALTIME_UI_GAME_KEYS
         )
 
     def _pending_changes_block_live_capture(self) -> bool:
@@ -4491,7 +7218,7 @@ class RoleRunManager(ctk.CTk):
         """
         return bool(
             self.run.pending_changes
-            and self._active_azahar_realtime_key() not in {"sm", "usum"}
+            and self._active_azahar_realtime_key() not in {"sm", "usum", "bdsp", "b2w2"}
         )
 
     def _cancel_oras_initial_auto_sync(self) -> None:
@@ -4520,7 +7247,7 @@ class RoleRunManager(ctk.CTk):
             or not self.project
             or not self.current_game
             or not self.current_save
-            or getattr(self.save_engine, "key", "") not in AZAHAR_REALTIME_GAME_KEYS
+            or getattr(self.save_engine, "key", "") not in REALTIME_READ_GAME_KEYS
         ):
             return
         generation = self._session_generation
@@ -4578,7 +7305,7 @@ class RoleRunManager(ctk.CTk):
             or self.project.slug != project_slug
             or not self.current_game
             or not self.current_save
-            or getattr(self.save_engine, "key", "") not in AZAHAR_REALTIME_GAME_KEYS
+            or getattr(self.save_engine, "key", "") not in REALTIME_READ_GAME_KEYS
             or self._oras_live_active
         ):
             return
@@ -4599,10 +7326,45 @@ class RoleRunManager(ctk.CTk):
             return
 
         current = self.current_game
+        if self._active_azahar_realtime_key() == "sm":
+            self.sm_live_reader.set_resume_identity_witnesses(
+                tuple(self.project.managed_pokemon_roles)
+            )
+        elif self._active_azahar_realtime_key() == "usum":
+            self.usum_live_reader.set_resume_identity_witnesses(
+                tuple(self.project.managed_pokemon_roles)
+            )
+        self._prepare_oras_live_metadata_profile()
         memory_requests = self._oras_live_memory_requests()
         self._oras_auto_sync_in_progress = True
         live_key = self._active_azahar_realtime_key()
-        transport_label = "AzaharPlus" if live_key in GEN7_REALTIME_GAME_KEYS else ("Azahar/Citra" if live_key == "xy" else "Azahar")
+        if live_key == "sm":
+            try:
+                LOG_DIR.mkdir(parents=True, exist_ok=True)
+                (LOG_DIR / "sm_initial_sync_latest.json").write_text(json.dumps({
+                    "stage": "capture-started",
+                    "created_at": datetime.now().isoformat(timespec="milliseconds"),
+                    "generation": int(generation),
+                    "project": str(project_slug),
+                    "party": [
+                        {
+                            "slot": int(pokemon.slot),
+                            "species_id": int(pokemon.species_id),
+                            "pid": int(pokemon.pid or 0),
+                            "tid": int(pokemon.tid or 0),
+                            "sid": int(pokemon.sid or 0),
+                        }
+                        for pokemon in tuple(getattr(current, "party", ()) or ())
+                    ],
+                }, ensure_ascii=False, indent=2), encoding="utf-8")
+            except OSError:
+                pass
+        transport_label = (
+            "Ryujinx" if live_key == "bdsp" else
+            "melonDS" if live_key == "b2w2" else
+            "AzaharPlus" if live_key in GEN7_REALTIME_GAME_KEYS else
+            "Azahar/Citra" if live_key == "xy" else "Azahar"
+        )
         self.sync_status = f"◌ Esperando {self._active_azahar_realtime_label()} en {transport_label}…"
         self._update_top_status()
 
@@ -4627,13 +7389,38 @@ class RoleRunManager(ctk.CTk):
         self, generation: int, project_slug: str, token: int, snapshot, error: str | None,
     ) -> None:
         self._oras_auto_sync_in_progress = False
+        if self._active_azahar_realtime_key() == "sm":
+            try:
+                LOG_DIR.mkdir(parents=True, exist_ok=True)
+                reader = getattr(self, "sm_live_reader", None)
+                (LOG_DIR / "sm_initial_sync_latest.json").write_text(json.dumps({
+                    "stage": "capture-finished",
+                    "created_at": datetime.now().isoformat(timespec="milliseconds"),
+                    "generation": int(generation),
+                    "project": str(project_slug),
+                    "error": str(error or ""),
+                    "snapshot": snapshot is not None,
+                    "party": [
+                        {
+                            "slot": int(pokemon.slot),
+                            "species_id": int(pokemon.species_id),
+                            "pid": int(pokemon.pid or 0),
+                            "tid": int(pokemon.tid or 0),
+                            "sid": int(pokemon.sid or 0),
+                        }
+                        for pokemon in tuple(getattr(self.current_game, "party", ()) or ())
+                    ],
+                    "resolution": dict(getattr(reader, "_last_resolution", {}) or {}),
+                }, ensure_ascii=False, indent=2), encoding="utf-8")
+            except OSError:
+                pass
         if (
             token != self._oras_auto_sync_token
             or generation != self._session_generation
             or not self.project
             or self.project.slug != project_slug
             or not self.current_game
-            or getattr(self.save_engine, "key", "") not in AZAHAR_REALTIME_GAME_KEYS
+            or getattr(self.save_engine, "key", "") not in REALTIME_READ_GAME_KEYS
             or self._oras_live_active
         ):
             return
@@ -4643,7 +7430,8 @@ class RoleRunManager(ctk.CTk):
             # la cabecera: necesitamos distinguir RPC, proceso y calibración RAM
             # durante la primera validación en una partida física del usuario.
             detail = str(error or "")
-            live_key = self._active_azahar_realtime_key()
+            live_key_getter = getattr(self, "_active_azahar_realtime_key", None)
+            live_key = live_key_getter() if callable(live_key_getter) else "oras"
             if live_key == "xy" and "GDB Stub" in detail:
                 self.sync_status = "◌ X/Y · Azahar no detectado · para Citra activa GDB Stub (24689)"
             elif live_key in GEN7_REALTIME_GAME_KEYS and detail:
@@ -4653,19 +7441,92 @@ class RoleRunManager(ctk.CTk):
                 # distinguir RPC apagado de un proceso cuyo nombre interno haya
                 # cambiado, especialmente en builds oficiales antiguas de Azahar.
                 self.sync_status = f"⚠ ORAS · {detail}"
+            elif live_key == "bdsp" and detail:
+                self.sync_status = f"⚠ Perla Reluciente · {detail}"
             else:
                 self.sync_status = f"◌ Esperando entrada a {self._active_azahar_realtime_label()}…"
             self._update_top_status()
+            # BDSP necesita una captura live para conocer PS fiables. En el
+            # primer enlace con Ryujinx es normal que el transporte todavía no
+            # esté preparado; retirar aquí la barrera enseñaba durante varios
+            # segundos los ceros provisionales procedentes del save. Otros
+            # backends conservan su contrato histórico de poder abrir en modo
+            # no conectado.
+            if live_key in {"bdsp", "sm"} and self._initial_shell_waiting:
+                self._initial_shell_live_probe_complete = False
+                self._show_busy_indicator(
+                    "initial-shell",
+                    (
+                        "Conectando con Ryujinx y validando los PS del equipo…"
+                        if live_key == "bdsp" else
+                        "Conectando con Azahar y validando el equipo de Sol/Luna…"
+                    ),
+                )
+            else:
+                self._initial_shell_live_probe_complete = True
+                if self._initial_shell_waiting:
+                    self.after(0, self._retire_initial_shell_when_ready)
             self._schedule_oras_initial_auto_sync(1600)
             return
 
-        # La misma validación y publicación que antes exigía F5. La caché de
-        # tablas de ROM solo existe para ORAS.
-        if self._active_azahar_realtime_key() == "oras":
-            self._clear_oras_rom_tm_runtime_profile()
+        # La misma validación y publicación que antes exigía F5. El perfil
+        # ORAS ya se preparó antes de capturar y debe sobrevivir para que la
+        # lectura viva del PC use exactamente la misma tabla Personal.
         self._finish_oras_live_sync(
             generation, project_slug, snapshot, None, automatic=True,
         )
+        live_key = self._active_azahar_realtime_key()
+        if live_key in {"xy", "oras"} and self._oras_live_active:
+            # X/Y conserva una proyección diferencial sobre las cajas del save,
+            # por lo que no entra en FULL_MATRIX_LIVE_PC_GAME_KEYS. Si la party
+            # inicial coincide con la ya proyectada, _finish_oras_live_sync no
+            # observa una transición Equipo↔PC y antes nunca solicitaba la matriz
+            # viva: una caja vacía del último main permanecía visible aunque el
+            # reader hubiese demostrado Pokémon en RAM. La captura inicial ya
+            # validada es la frontera correcta para lanzar UNA reconciliación
+            # explícita, después de que _publish_oras_live_snapshot haya marcado
+            # el enlace como activo.
+            self.after(0, self._schedule_gen6_live_pc_refresh)
+        if live_key in {"bdsp", "sm"}:
+            # Terminar capture_full no implica necesariamente que el snapshot
+            # haya sido publicado: una migración de marcadores o una herencia
+            # de rol puede abrir antes una escritura transaccional. La shell
+            # solo queda lista cuando la fuente live es ya autoritativa y cada
+            # miembro declara un par HP/Max HP coherente.
+            self._initial_shell_live_probe_complete = bool(
+                self._oras_live_active
+                and self._party_has_resolved_health(self.current_game)
+            )
+            if not self._initial_shell_live_probe_complete:
+                self._show_busy_indicator(
+                    "initial-shell",
+                    (
+                        "Aplicando la sincronización inicial y verificando los PS…"
+                        if live_key == "bdsp" else
+                        "Componiendo el equipo vivo de Sol/Luna y verificando sus PS…"
+                    ),
+                )
+                self._schedule_oras_initial_auto_sync(250)
+        else:
+            self._initial_shell_live_probe_complete = True
+        if self._initial_shell_waiting:
+            self.after(0, self._retire_initial_shell_when_ready)
+
+    @staticmethod
+    def _party_has_resolved_health(game: SaveGameData | None) -> bool:
+        """Demuestra que toda la party publica pares HP/Max HP utilizables."""
+        party = list(getattr(game, "party", ()) or ())
+        if not party:
+            return False
+        for pokemon in party:
+            try:
+                current_hp = int(getattr(pokemon, "current_hp"))
+                max_hp = int(getattr(pokemon, "max_hp"))
+            except (AttributeError, TypeError, ValueError):
+                return False
+            if max_hp <= 0 or current_hp < 0 or current_hp > max_hp:
+                return False
+        return True
 
     def _clear_oras_live_auto_apply(self) -> None:
         """Cancela la pequeña cola de aplicación inmediata al cambiar de Run."""
@@ -4678,13 +7539,27 @@ class RoleRunManager(ctk.CTk):
                 pass
         self._oras_live_auto_apply_ids.clear()
 
+    def _discard_b2w2_ghost_team_changes(self) -> int:
+        """Retira proyecciones que B2/W2 nunca pudo escribir en la partida."""
+        if self._active_azahar_realtime_key() != "b2w2" or not self.project:
+            return 0
+        pending = list(self.run.pending_changes)
+        ghosts = [change for change in pending if isinstance(change, PendingTeamChange)]
+        if not ghosts:
+            return 0
+        self.run.pending_changes = [
+            change for change in pending if not isinstance(change, PendingTeamChange)
+        ]
+        self.project_service.save(self.project)
+        return len(ghosts)
+
     def _oras_live_auto_apply_available(self) -> bool:
         return bool(
             self.project
             and self.current_save
             and self.current_game
             and self._oras_live_active
-            and getattr(self.save_engine, "key", "") in AZAHAR_REALTIME_GAME_KEYS
+            and getattr(self.save_engine, "key", "") in INSTANT_REALTIME_UI_GAME_KEYS
         )
 
     def _request_oras_live_auto_apply(self, changes) -> None:
@@ -4694,31 +7569,93 @@ class RoleRunManager(ctk.CTk):
         antigua nunca termina escrita parcialmente en la RAM por haber cambiado
         después un rol, un objeto o una marca de caja.
         """
-        if not self._oras_live_auto_apply_available():
-            return
-        current_ids = {id(change) for change in self.run.pending_changes}
         live_key_getter = getattr(self, "_active_azahar_realtime_key", None)
         live_key = live_key_getter() if callable(live_key_getter) else "oras"
+        if not self._oras_live_auto_apply_available():
+            if getattr(getattr(self, "save_engine", None), "key", "") == "bdsp":
+                rejected_ids = {id(change) for change in changes}
+                self.run.pending_changes = [
+                    change for change in self.run.pending_changes
+                    if id(change) not in rejected_ids
+                ]
+                refresh = getattr(self, "_smooth_render_page", None)
+                if callable(refresh):
+                    refresh(preserve_scroll=(getattr(self, "active_page", "") == "team"))
+                toast = getattr(self, "_show_live_sync_toast", None)
+                if callable(toast):
+                    toast(
+                        "RYUJINX NO ESTÁ SINCRONIZADO",
+                        "No se aplicó el cambio y no quedó pendiente para el guardado. "
+                        "Espera a que la cabecera indique Perla Reluciente en vivo y vuelve a intentarlo.",
+                        False,
+                    )
+            return
+        current_ids = {id(change) for change in self.run.pending_changes}
         supported_ids: set[int] = set()
         for change in changes:
             if id(change) not in current_ids:
+                continue
+            if live_key == "bdsp":
+                if isinstance(change, (
+                    PendingRoleChange, PendingPartyHeal, PendingChange, PendingTMTeach,
+                    PendingInventoryChange,
+                )):
+                    supported_ids.add(id(change))
+                elif isinstance(change, PendingTeamChange) and change.operation in {
+                    "swap-party-box", "party-to-box", "box-to-party", "replace-fainted",
+                }:
+                    # El writer BDSP 1↔1 ya valida las identidades party/PC,
+                    # hace readback semántico y rollback. Debe atravesar también
+                    # esta compuerta UI; alpha.80 lo aceptaba más abajo pero lo
+                    # descartaba aquí antes de llegar al writer.
+                    supported_ids.add(id(change))
+                continue
+            if live_key == "b2w2":
+                if (
+                    isinstance(change, PendingTeamChange)
+                    and change.operation in {
+                        "move-box-slot", "swap-party-box", "party-to-box", "box-to-party",
+                    }
+                ):
+                    supported_ids.add(id(change))
                 continue
             if live_key in GEN7_REALTIME_GAME_KEYS:
                 # Alpha.17 omitía PendingTMTeach aquí: la UI proyectaba la MT
                 # pero nunca se lanzaba el writer SM. Alpha.18 la trata igual
                 # que cualquier movimiento live ya soportado por SMLiveWriter.
-                if isinstance(change, (PendingRoleChange, PendingChange, PendingTMTeach, PendingInventoryChange)):
+                if isinstance(change, (
+                    PendingRoleChange, PendingPartyHeal, PendingChange,
+                    PendingTMTeach, PendingInventoryChange,
+                )):
                     supported_ids.add(id(change))
-                elif isinstance(change, PendingTeamChange) and change.operation in {"swap-party-box", "party-to-box", "box-to-party", "replace-fainted"}:
+                elif isinstance(change, PendingTeamChange) and (
+                    change.operation in {"swap-party-box", "party-to-box", "box-to-party", "replace-fainted"}
+                    or (live_key == "usum" and change.operation == "move-box-slot")
+                ):
                     supported_ids.add(id(change))
                 continue
             if live_key == "xy":
-                if isinstance(change, (PendingChange, PendingRoleChange, PendingPCRoleChange, PendingTMTeach, PendingInventoryChange)):
+                if isinstance(change, (
+                    PendingChange, PendingRoleChange, PendingPCRoleChange,
+                    PendingPartyHeal, PendingTMTeach, PendingInventoryChange,
+                )):
                     supported_ids.add(id(change))
-                elif isinstance(change, PendingTeamChange) and change.operation in {"swap-party-box", "replace-fainted"}:
+                elif isinstance(change, PendingTeamChange) and change.operation in {
+                    "swap-party-box", "party-to-box", "box-to-party",
+                    "replace-fainted", "move-box-slot",
+                }:
+                    # X/Y ya valida las variaciones 5↔6 de la party dentro de
+                    # XYLiveWriter (identidades, testigos de caja, count-last,
+                    # readback y rollback). Esta compuerta debe enviarlas al
+                    # writer igual que los swaps 1↔1: de lo contrario la UI
+                    # proyecta el traslado sin escribir RAM y una operación PC
+                    # posterior parte de un origen que nunca existió.
                     supported_ids.add(id(change))
                 continue
-            if isinstance(change, (PendingChange, PendingRoleChange, PendingInventoryChange, PendingPCRoleChange, PendingTMTeach)):
+            if isinstance(change, (
+                PendingChange, PendingRoleChange, PendingInventoryChange,
+                PendingPCRoleChange, PendingTMTeach, PendingPartyHeal,
+            )):
                 supported_ids.add(id(change))
             elif isinstance(change, PendingTeamChange) and change.operation in {"swap-party-box", "replace-fainted"}:
                 supported_ids.add(id(change))
@@ -4836,6 +7773,7 @@ class RoleRunManager(ctk.CTk):
         self._oras_pc_reconcile_token += 1
         self._oras_pc_reconcile_in_progress = False
         self._oras_pc_reconcile_last_key = None
+        self._cancel_bdsp_pc_poll()
         self._sm_pending_role_transition = None
         self._cancel_delayed_faint_callbacks()
         self._oras_live_health_snapshot = None
@@ -4927,8 +7865,15 @@ class RoleRunManager(ctk.CTk):
             parse_oras_battle_state(tuple(getattr(snapshot, "memory_blocks", ()) or ()))
         )
 
-    def _process_oras_badge_value(self, badges: int | None) -> bool:
-        """Sincroniza MEDALLAS con un valor absoluto validado del backend live."""
+    def _process_oras_badge_value(
+        self, badges: int | None, *, source: str | None = None,
+    ) -> bool:
+        """Sincroniza MEDALLAS sin convertir un ``main`` stale en rollback.
+
+        El guardado sigue siendo evidencia suficiente para recuperar progreso
+        hacia arriba. Solo una lectura RAM validada puede reducir el contador,
+        porque ese descenso representa una carga de state/partida anterior.
+        """
         live_key = self._active_azahar_realtime_key()
         max_badges = 4 if live_key in GEN7_REALTIME_GAME_KEYS else 8
         if not self.project or badges is None or not 0 <= int(badges) <= max_badges:
@@ -4937,8 +7882,14 @@ class RoleRunManager(ctk.CTk):
         old = max(0, int(self.project.counters.get("medallas", 0)))
         if old == badges:
             return False
+        if badges < old and not badge_source_is_live(source):
+            return False
         self.project_service.adjust_counter(
-            self.project, "medallas", badges - old, source=f"{self._active_azahar_realtime_label()} en vivo · medallas",
+            self.project, "medallas", badges - old,
+            source=(
+                f"{self._active_azahar_realtime_label()} en vivo · medallas"
+                + (f" · {source}" if source else "")
+            ),
         )
         self.project = self.project_service.load(self.project.slug) or self.project
         self.run.history = self.project_service.history(self.project)
@@ -4958,7 +7909,10 @@ class RoleRunManager(ctk.CTk):
             bytes(block.data) for block in getattr(snapshot, "memory_blocks", ())
             if int(block.address) == int(ORAS_BADGES_ADDRESS)
         ), None)
-        return self._process_oras_badge_value(parse_oras_badges(raw) if raw is not None else None)
+        return self._process_oras_badge_value(
+            parse_oras_badges(raw) if raw is not None else None,
+            source="Misc vivo · contador",
+        )
 
     def _oras_live_memory_watches_match(self, snapshot) -> bool:
         if not self._oras_live_expected_memory_watches:
@@ -5043,7 +7997,7 @@ class RoleRunManager(ctk.CTk):
             and self.project
             and self.current_game
             and self.current_save
-            and getattr(self.save_engine, "key", "") in AZAHAR_REALTIME_GAME_KEYS
+            and getattr(self.save_engine, "key", "") in REALTIME_READ_GAME_KEYS
         )
 
     def _oras_live_reconciliation_can_read(self) -> bool:
@@ -5166,6 +8120,17 @@ class RoleRunManager(ctk.CTk):
             current_role = pokemon.role if pokemon.role in ROLE_TO_KEY else "SIN ROL"
             if current_role == assignment.new_role:
                 continue
+            old_evs = tuple(int(pokemon.evs.get(key, 0)) for key in STAT_KEYS)
+            new_evs = None
+            if (
+                self._active_azahar_realtime_key() in {"bdsp", "oras", "xy", "sm", "usum"}
+                and pokemon.evs
+            ):
+                # Los cinco roles fijos pueden normalizarse sin interacción. En
+                # Líbero la ausencia de ``new_evs`` es deliberada: la frontera
+                # común de escritura detendrá la operación y pedirá al jugador
+                # sus dos estadísticas antes de tocar RAM.
+                new_evs = RoleRunManager._bdsp_role_evs(assignment.new_role)
             result.append(PendingRoleChange(
                 pokemon_slot=int(pokemon.slot),
                 pokemon=pokemon.nickname or pokemon.species,
@@ -5173,8 +8138,78 @@ class RoleRunManager(ctk.CTk):
                 old_role=current_role,
                 new_role=assignment.new_role,
                 pokemon_identity=self._pokemon_identity(pokemon),
+                old_evs=old_evs if new_evs is not None else None,
+                new_evs=new_evs,
             ))
         return result
+
+    def _defer_automatic_libero_role_until_ev_choice(
+        self,
+        changes,
+        *,
+        base_game: SaveGameData | None,
+    ) -> bool:
+        """Impide asignar Líbero automáticamente sin dos EV elegidos.
+
+        Las entradas hechas desde el PC del propio juego convergen aquí desde
+        BDSP, X/Y, SM y USUM. El monitor ya ha demostrado identidad y rol heredado,
+        pero Líbero no tiene una distribución determinista: abrir el selector
+        es por tanto una precondición de la escritura, no un efecto posterior.
+        """
+        if self._active_azahar_realtime_key() not in {"bdsp", "oras", "xy", "sm", "usum"}:
+            return False
+        pending = next((
+            change for change in changes
+            if isinstance(change, PendingRoleChange)
+            and canonical_role(change.new_role) == "Líbero"
+            and change.new_evs is None
+        ), None)
+        if pending is None:
+            return False
+
+        game = base_game if base_game is not None else self.current_game
+        if game is None:
+            return False
+        pokemon = next((
+            member for member in game.party
+            if self._pokemon_identity(member) == str(pending.pokemon_identity or "")
+        ), None)
+        if pokemon is None:
+            return False
+
+        prompt_key = (
+            int(self._session_generation),
+            str(pending.pokemon_identity or ""),
+            int(pending.pokemon_slot),
+        )
+        if getattr(self, "_automatic_libero_ev_prompt_key", None) == prompt_key:
+            return True
+        self._automatic_libero_ev_prompt_key = prompt_key
+        generation = int(self._session_generation)
+        project_slug = self.project.slug if self.project else ""
+        batch = list(changes)
+        captured_game = game
+
+        def apply_choice(selected_stats: tuple[str, ...]) -> None:
+            self._automatic_libero_ev_prompt_key = None
+            if (
+                generation != self._session_generation
+                or not self.project
+                or self.project.slug != project_slug
+            ):
+                return
+            desired = self._bdsp_role_evs("Líbero", selected_stats)
+            if desired is None:
+                return
+            pending.old_evs = tuple(int(pokemon.evs.get(key, 0)) for key in STAT_KEYS)
+            pending.new_evs = desired
+            self._save_oras_live_changes(batch, automatic=True, base_game=captured_game)
+
+        context = "floating" if self._floating_bar_is_visible() else "main"
+        self.sync_status = f"◌ Elige los EV de Líbero para {pokemon.nickname or pokemon.species}"
+        self._update_top_status()
+        self._prompt_libero_ev_stats(pokemon, apply_choice, context=context)
+        return True
 
     def _sm_role_transition_key(self, game: SaveGameData) -> tuple:
         """Huella fuerte del equipo usada mientras se demuestra PC↔party en SM.
@@ -5318,6 +8353,16 @@ class RoleRunManager(ctk.CTk):
             self._oras_faint_picker_after_id = None
 
     def _faint_picker_window_exists(self) -> bool:
+        mode = getattr(self, "_faint_replacement_mode", None)
+        if mode is not None:
+            identity = str(mode.get("identity", "") or "")
+            if identity and self.project and any(
+                str(item.get("identity", "") or "") == identity
+                for item in self.project.pending_faints
+            ):
+                return True
+            self._faint_replacement_mode = None
+            self._oras_faint_picker_event_identity = None
         window = self._oras_faint_replacement_window
         if window is None:
             return False
@@ -5359,11 +8404,11 @@ class RoleRunManager(ctk.CTk):
             return
         save_path = Path(self.current_save.path)
         signature = self._save_file_signature(save_path)
-        live_key = self._active_azahar_realtime_key() if self._oras_live_auto_apply_available() else ""
-        # Sol/Luna siempre refresca el PC live antes de un selector de baja. Una
+        live_key = self._active_azahar_realtime_key() if self._oras_live_active else ""
+        # Los backends de matriz completa refrescan el PC live antes del selector. Una
         # caché válida por firma solo demuestra el mismo ``main`` en disco, no que
         # las cajas en RAM sigan iguales tras capturas/movimientos hechos jugando.
-        if live_key not in GEN7_REALTIME_GAME_KEYS and self._pc_cache is not None and signature == self._pc_cache_signature:
+        if live_key not in FULL_MATRIX_LIVE_PC_GAME_KEYS and self._pc_cache is not None and signature == self._pc_cache_signature:
             return
 
         self._oras_faint_picker_loading = True
@@ -5375,15 +8420,22 @@ class RoleRunManager(ctk.CTk):
         def worker() -> None:
             try:
                 data = self.save_engine.read_boxes(save_path)
-                live_key = self._active_azahar_realtime_key() if self._oras_live_auto_apply_available() else ""
-                if live_key in GEN7_REALTIME_GAME_KEYS:
+                live_key = self._active_azahar_realtime_key() if self._oras_live_active else ""
+                if live_key in FULL_MATRIX_LIVE_PC_GAME_KEYS:
                     anchors = [pokemon for box in data.boxes for pokemon in box.pokemon]
                     realtime_core = getattr(self, "realtime_core", None)
                     kwargs = {"box_count": int(data.box_count), "box_slot_count": int(data.box_slot_count)}
                     if realtime_core is not None:
                         _process, _base, live_slots = realtime_core.read_pc(anchors, **kwargs)
                     else:
-                        adapter = getattr(self, "sm_realtime_adapter", None)
+                        adapter = getattr(
+                            self,
+                            "bdsp_realtime_adapter" if live_key == "bdsp"
+                            else "b2w2_realtime_adapter" if live_key == "b2w2"
+                            else "usum_realtime_adapter" if live_key == "usum"
+                            else "sm_realtime_adapter",
+                            None,
+                        )
                         if adapter is None:
                             raise RuntimeError(f"No hay lector vivo de PC disponible para {self._active_azahar_realtime_label()}.")
                         _process, _base, live_slots = adapter.read_pc(anchors, **kwargs)
@@ -5463,6 +8515,8 @@ class RoleRunManager(ctk.CTk):
         self._oras_faint_picker_loading_token += 1
         self._oras_faint_picker_loading = False
         self._oras_faint_picker_event_identity = None
+        self._faint_replacement_mode = None
+        self._faint_reopen_requested_identity = None
         self._oras_faint_picker_suppressed_identity = None
         self._oras_faint_picker_error_identity = None
         window = self._oras_faint_replacement_window
@@ -5553,7 +8607,7 @@ class RoleRunManager(ctk.CTk):
             self._oras_delayed_faint_payloads.pop(identity, None)
 
     def _process_oras_health_snapshot(self, game: SaveGameData, *, source: str = "overworld") -> None:
-        """Observa PS > 0 -> 0 sin usar HP como motivo de redibujado.
+        """Publica salud viva y observa PS > 0 -> 0.
 
         En ORAS (``source="battle"``) la detección se difiere 1 segundo para
         acompasar la animación. Sol/Luna alpha.41 usa ``battle-visible`` basado
@@ -5562,6 +8616,14 @@ class RoleRunManager(ctk.CTk):
         """
         previous = self._oras_live_health_snapshot
         self._oras_live_health_snapshot = game
+        health_changed = RoleRunManager._merge_live_health_fields(self.current_game, game)
+        if health_changed:
+            self._floating_bar_last_signature = None
+            if self._floating_bar_is_visible():
+                self._render_floating_bar(force=True)
+                self._main_ui_dirty_while_floating = True
+            elif self.active_page == "team" and self._live_health_render_after_id is None:
+                self._live_health_render_after_id = self.after(90, self._refresh_live_health_page)
         if not self.project:
             return
 
@@ -5578,6 +8640,19 @@ class RoleRunManager(ctk.CTk):
         transitions = detect_fainted_transitions(previous, game)
         if not transitions:
             return
+        self._record_bdsp_ui_event(
+            "health-transition",
+            source=source,
+            transitions=[
+                {
+                    "slot": int(item.slot),
+                    "species": int(item.identity[0]),
+                    "previous_hp": int(item.previous_hp),
+                    "current_hp": int(item.current_hp),
+                }
+                for item in transitions
+            ],
+        )
 
         immediate_names: list[str] = []
         immediate_registered = 0
@@ -5618,7 +8693,58 @@ class RoleRunManager(ctk.CTk):
                 immediate_names.append(pokemon.nickname or pokemon.species)
 
         if immediate_registered:
+            self._record_bdsp_ui_event(
+                "faint-registered",
+                source=source,
+                count=int(immediate_registered),
+                pokemon=list(immediate_names),
+            )
             self._publish_registered_faint(immediate_names, immediate_registered)
+
+    @staticmethod
+    def _merge_live_health_fields(target: SaveGameData | None, health: SaveGameData | None) -> bool:
+        """Fusiona solo salud de una identidad fuerte única; nunca mueve slots."""
+        if target is None or health is None:
+            return False
+        samples: dict[tuple[int, int, int, int], SavePokemon] = {}
+        duplicates: set[tuple[int, int, int, int]] = set()
+        for pokemon in health.party:
+            identity = (
+                int(pokemon.species_id), int(pokemon.pid or 0),
+                int(pokemon.tid or 0), int(pokemon.sid or 0),
+            )
+            if identity in samples:
+                duplicates.add(identity)
+            samples[identity] = pokemon
+        changed = False
+        for pokemon in target.party:
+            identity = (
+                int(pokemon.species_id), int(pokemon.pid or 0),
+                int(pokemon.tid or 0), int(pokemon.sid or 0),
+            )
+            sample = None if identity in duplicates else samples.get(identity)
+            if sample is None:
+                continue
+            current_hp = int(getattr(sample, "current_hp", 0) or 0)
+            max_hp = int(getattr(sample, "max_hp", 0) or 0)
+            if max_hp <= 0 or not 0 <= current_hp <= max_hp:
+                continue
+            status = int(getattr(sample, "status_condition", 0) or 0)
+            if (
+                int(getattr(pokemon, "current_hp", 0) or 0) != current_hp
+                or int(getattr(pokemon, "max_hp", 0) or 0) != max_hp
+                or int(getattr(pokemon, "status_condition", 0) or 0) != status
+            ):
+                pokemon.current_hp = current_hp
+                pokemon.max_hp = max_hp
+                pokemon.status_condition = status
+                changed = True
+        return changed
+
+    def _refresh_live_health_page(self) -> None:
+        self._live_health_render_after_id = None
+        if self.active_page == "team" and not self._floating_bar_is_visible():
+            self._smooth_render_page(preserve_scroll=True)
 
     def _pending_faint_party_member(self, event: dict) -> SavePokemon | None:
         if not self.current_game:
@@ -5630,8 +8756,14 @@ class RoleRunManager(ctk.CTk):
         ), None)
 
     def _close_faint_picker_for_identity(self, identity: str) -> None:
-        """Cierra el selector existente si pertenece a esa baja, incluso suspendido."""
+        """Cierra la presentación de esa baja sin alterar el evento persistido."""
         identity = str(identity or "")
+        mode = getattr(self, "_faint_replacement_mode", None)
+        if mode is not None and str(mode.get("identity", "") or "") == identity:
+            self._faint_replacement_mode = None
+            self._oras_faint_picker_event_identity = None
+            if self.active_page in {"team", "pc"}:
+                self._smooth_render_page(preserve_scroll=True)
         window = self._oras_faint_replacement_window
         if window is None or self._oras_faint_picker_event_identity != identity:
             return
@@ -5696,6 +8828,10 @@ class RoleRunManager(ctk.CTk):
         if event is None:
             return
         if self.run.pending_changes:
+            # El selector anterior puede haber iniciado una sustitución que aún
+            # se está aplicando. No perder el turno del siguiente KO de la cola:
+            # volver a comprobarlo cuando esa escritura haya terminado.
+            self._schedule_pending_faint_picker(450)
             return
         if self._live_write_in_progress or self._live_sync_in_progress or self._oras_live_monitor_in_progress:
             self._schedule_pending_faint_picker(450)
@@ -5754,301 +8890,304 @@ class RoleRunManager(ctk.CTk):
 
         self._open_faint_replacement_picker(event, dead, pc_data=pc_data)
 
+    def _pending_faint_for_reopen(self) -> dict | None:
+        if not self.project:
+            return None
+        run = getattr(self, "run", None)
+        replacing = {
+            str(getattr(change, "outgoing_identity", "") or "")
+            for change in list(getattr(run, "pending_changes", ()) or ())
+            if isinstance(change, PendingTeamChange)
+            and str(getattr(change, "operation", "") or "") == "replace-fainted"
+        }
+        return next((
+            item for item in self.project.pending_faints
+            if bool(item.get("battle_ended", False))
+            and str(item.get("identity", "") or "") not in replacing
+        ), None)
+
+    def _reopen_pending_faint_picker(self) -> None:
+        """Reabre una baja persistida sin volver a registrar vida ni muerte."""
+        event = self._pending_faint_for_reopen()
+        if event is None:
+            self._set_operation_status(
+                "neutral", "SIN BAJAS PENDIENTES",
+                "No hay ningún sustituto pendiente de elegir.",
+            )
+            return
+        dead = self._pending_faint_party_member(event)
+        if dead is None:
+            if self.current_game is not None:
+                self._reconcile_pending_faints_against_party(self.current_game)
+            return
+        live_key_getter = getattr(self, "_active_azahar_realtime_key", None)
+        live_key = live_key_getter() if callable(live_key_getter) else ""
+        if live_key not in FULL_MATRIX_LIVE_PC_GAME_KEYS:
+            return False
+        pc_data = self._team_pc_cached_data()
+        if pc_data is None:
+            self._faint_reopen_requested_identity = str(event.get("identity", "") or "")
+            if self.active_page not in {"team", "pc"}:
+                self.navigate(DEFAULT_PAGE)
+            else:
+                self._smooth_render_page(preserve_scroll=True)
+            self._set_operation_status(
+                "applying",
+                "PREPARANDO SUSTITUCIÓN",
+                "RoleRun está cargando las cajas sin bloquear la ventana.",
+            )
+            self.after(20, self._start_team_pc_load)
+            return
+        self._open_faint_replacement_picker(event, dead, pc_data=pc_data)
+
+    def _dismiss_integrated_faint_picker(self) -> None:
+        """Cierra solo la vista; la baja, la vida y el Cementerio no cambian."""
+        mode = self._faint_replacement_mode
+        if mode is None:
+            return
+        identity = str(mode.get("identity", "") or "")
+        self._faint_replacement_mode = None
+        if self._oras_faint_picker_event_identity == identity:
+            self._oras_faint_picker_event_identity = None
+        self._set_auto_floating_guard_temporarily(500)
+        if self.active_page in {"team", "pc"}:
+            self._smooth_render_page(preserve_scroll=True)
+        self._set_operation_status(
+            "warning",
+            "BAJA PENDIENTE",
+            "La vida perdida sigue registrada. Puedes elegir el sustituto cuando estés preparado.",
+            actions=("Elegir sustituto", "No sustituir"),
+            persistent=True,
+        )
+        self._schedule_pending_faint_picker(650)
+
+    def _decline_pending_faint_replacement(self) -> None:
+        """Deja libre el rol sin deshacer la muerte ni el contador de vidas."""
+        mode = getattr(self, "_faint_replacement_mode", None)
+        event = mode if isinstance(mode, dict) else self._pending_faint_for_reopen()
+        if event is None or not self.project:
+            self._set_operation_status(
+                "neutral", "SIN BAJAS PENDIENTES",
+                "No hay ninguna sustitución pendiente que descartar.",
+            )
+            return
+        identity = str(event.get("identity", "") or "")
+        if not self.project_service.decline_detected_faint_replacement(self.project, identity):
+            return
+        self._cancel_pending_faint_picker_request()
+        self._faint_replacement_mode = None
+        if self._oras_faint_picker_event_identity == identity:
+            self._oras_faint_picker_event_identity = None
+        self._set_auto_floating_guard_temporarily(500)
+        if self.active_page in {"team", "pc"}:
+            self._smooth_render_page(preserve_scroll=True)
+        self._set_operation_status(
+            "confirmed",
+            "SUSTITUCIÓN DESCARTADA",
+            "La baja y la vida perdida siguen registradas. Ese rol queda libre.",
+        )
+        if self._pending_faint_for_reopen() is not None:
+            self._schedule_pending_faint_picker(650)
+
     def _open_faint_replacement_picker(
         self, event: dict, dead: SavePokemon, *, pc_data: SavePCData | None = None,
     ) -> None:
-        # La lectura completa del PC debe haber terminado antes de entrar aquí.
-        # Nunca bloqueamos el hilo de Tk con read-boxes al volver de la barra.
+        """Presenta la baja dentro de Equipo y PC; no altera su lógica funcional."""
         if pc_data is None:
             self._prime_pending_faint_pc_data()
             return
-        if pc_data.box_count < 1:
-            return
-        if pc_data.box_count < ORAS_GRAVEYARD_BOX:
-            messagebox.showwarning(
-                "No existe la Caja 4",
-                "RoleRun usa la Caja 4 como Cementerio. Desbloquea al menos cuatro cajas antes de usar la sustitución automática.",
-                parent=self,
+        if int(pc_data.box_count) < ORAS_GRAVEYARD_BOX:
+            self._set_operation_status(
+                "intervention",
+                "NO EXISTE EL CEMENTERIO",
+                "RoleRun necesita que la Caja 4 esté desbloqueada antes de sustituir la baja.",
+                persistent=True,
             )
             return
 
         dead_identity = str(event.get("identity", "") or self._pokemon_identity(dead))
-        if self._faint_picker_window_exists():
-            try:
-                self._oras_faint_replacement_window.lift()
-            except Exception:
-                pass
+        active = self._faint_replacement_mode
+        if active is not None and str(active.get("identity", "") or "") != dead_identity:
             return
+
         self._cancel_pending_faint_picker_request()
-        # Frontera de "mostrar una sola vez": se persiste ANTES de crear el Toplevel.
-        # Aunque el programa se cierre justo después, esta misma baja no reaparecerá.
-        if self.project:
+        if not bool(event.get("prompt_shown", False)) and self.project:
             self.project_service.mark_detected_faint_prompt_shown(self.project, dead_identity)
         event["prompt_shown"] = True
         self._oras_faint_picker_event_identity = dead_identity
+
         dead_role, dead_symbol = self._effective_role(dead)
         if dead_role not in ROLE_ORDER:
             stored_role = str(event.get("role", "SIN ROL") or "SIN ROL")
             dead_role = stored_role if stored_role in ROLE_ORDER else "SIN ROL"
             dead_symbol = self._role_symbol(dead_role)
 
-        window = ctk.CTkToplevel(self)
-        self._oras_faint_replacement_window = window
-        self._apply_window_icon(window)
-        window.title(f"Elegir sustituto de {dead.nickname or dead.species}")
-        window.geometry("1080x850")
-        window.minsize(920, 700)
-        window.configure(fg_color=BG)
-        window.transient(self)
-        window.grab_set()
-        window._faint_images = []
-        close_state = {"controlled": False}
-
-        def close_picker(*, suppress: bool = True) -> None:
-            close_state["controlled"] = True
-            # ``prompt_shown`` ya quedó persistido: cerrar esta ventana es definitivo
-            # para la notificación, pero la baja sigue pendiente hasta que el Pokémon
-            # salga realmente del equipo o una sustitución sea confirmada en Azahar.
-            if self._oras_faint_replacement_window is window:
-                self._oras_faint_replacement_window = None
-            if self._oras_faint_picker_event_identity == dead_identity:
-                self._oras_faint_picker_event_identity = None
-            try:
-                if window.winfo_exists():
-                    window.grab_release()
-                    window.destroy()
-            except Exception:
-                pass
-            self._set_auto_floating_guard_temporarily(500)
-
-        def on_picker_destroy(event_obj) -> None:
-            if getattr(event_obj, "widget", None) is not window:
-                return
-            if self._oras_faint_replacement_window is window:
-                self._oras_faint_replacement_window = None
-            if self._oras_faint_picker_event_identity == dead_identity:
-                self._oras_faint_picker_event_identity = None
-
-        window.bind("<Destroy>", on_picker_destroy, add="+")
-        window.protocol("WM_DELETE_WINDOW", lambda: close_picker(suppress=True))
-
-        ctk.CTkLabel(
-            window,
-            text=f"ELIGE AL SUSTITUTO DE {(dead.nickname or dead.species).upper()}",
-            text_color=TEXT,
-            font=ctk.CTkFont("Segoe UI", 24, "bold"),
-        ).pack(pady=(20, 3))
-        ctk.CTkLabel(
-            window,
-            text=(
-                f"☠ {dead.nickname or dead.species} ha sido debilitado · -1 vida\n"
-                f"El sustituto heredará {dead_symbol + ' ' if dead_symbol else ''}{dead_role}. "
-                f"El debilitado irá al Cementerio (Caja {ORAS_GRAVEYARD_BOX})."
-            ),
-            text_color=GOLD,
-            justify="center",
-            font=ctk.CTkFont("Segoe UI", 12, "bold"),
-        ).pack(pady=(0, 13))
-
-        nav = ctk.CTkFrame(window, fg_color="transparent")
-        nav.pack(fill="x", padx=34, pady=(0, 8))
-        nav.grid_columnconfigure(1, weight=1)
-        source_boxes = [box for box in range(1, int(pc_data.box_count) + 1) if box != ORAS_GRAVEYARD_BOX]
+        self._pc_cache = pc_data
+        source_boxes = [
+            box for box in range(1, int(pc_data.box_count) + 1)
+            if box != ORAS_GRAVEYARD_BOX
+        ]
         if not source_boxes:
+            self._set_operation_status(
+                "intervention",
+                "NO HAY CAJAS DISPONIBLES",
+                "El Cementerio es la única caja disponible y no puede usarse como origen.",
+                persistent=True,
+            )
             return
-        requested_box = int(pc_data.current_box or source_boxes[0])
-        initial_box = requested_box if requested_box in source_boxes else source_boxes[0]
-        box_var = ctk.StringVar(value=str(initial_box))
-        center = ctk.CTkFrame(nav, fg_color="transparent")
-        center.grid(row=0, column=1)
-        ctk.CTkLabel(center, text="CAJA", text_color=MUTED,
-                     font=ctk.CTkFont("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 7))
-        entry = ctk.CTkEntry(
-            center, textvariable=box_var, width=64, height=34, justify="center",
-            fg_color="#191919", border_width=1, border_color=GOLD, text_color=TEXT,
-            font=ctk.CTkFont("Segoe UI", 16, "bold"),
+        requested_box = int(self._pc_page_box or pc_data.current_box or source_boxes[0])
+        self._pc_page_box = (
+            requested_box if requested_box in source_boxes
+            else min(source_boxes, key=lambda value: (abs(value - requested_box), value))
         )
-        entry.pack(side="left")
-        meta = ctk.CTkLabel(center, text="", text_color=MUTED,
-                            font=ctk.CTkFont("Segoe UI", 10, "bold"))
-        meta.pack(side="left", padx=(8, 0))
+        self._faint_replacement_mode = {
+            "identity": dead_identity,
+            "event": event,
+            "dead": dead,
+            "pc_data": pc_data,
+            "role": dead_role,
+            "symbol": dead_symbol,
+        }
+        self._set_operation_status(
+            "warning",
+            "SUSTITUCIÓN DE BAJA",
+            (
+                f"Elige en el PC quién heredará {dead_symbol + ' ' if dead_symbol else ''}{dead_role}. "
+                f"{dead.nickname or dead.species} irá al Cementerio (Caja {ORAS_GRAVEYARD_BOX})."
+            ),
+            actions=("Cerrar selector", "No sustituir"),
+            persistent=True,
+        )
+        if self.active_page not in {"team", "pc"}:
+            self.navigate(DEFAULT_PAGE)
+        else:
+            self._smooth_render_page(reset_scroll=True)
 
-        candidates = ctk.CTkScrollableFrame(window, fg_color=PANEL, corner_radius=16)
-        candidates.pack(fill="both", expand=True, padx=32, pady=(0, 14))
-        candidates.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="faint_pc")
-
-        def current_box() -> int:
-            try:
-                requested = int(box_var.get())
-            except Exception:
-                requested = source_boxes[0]
-            if requested in source_boxes:
-                return requested
-            # La Caja 4 está reservada. Si se escribe manualmente, elegimos la
-            # caja disponible más cercana sin permitir usar el Cementerio.
-            return min(source_boxes, key=lambda box: (abs(box - requested), box))
-
-        def move_box(delta: int) -> None:
-            box_no = current_box()
-            index = source_boxes.index(box_no)
-            index = max(0, min(len(source_boxes) - 1, index + delta))
-            box_var.set(str(source_boxes[index]))
-            render_box()
-
-        def choose_substitute(incoming: SavePokemon) -> None:
-            if not self.project or not self.current_game:
-                return
-            live_dead = self._pending_faint_party_member(event)
-            if live_dead is None:
-                messagebox.showwarning(
-                    "El equipo ha cambiado",
+    def _prepare_faint_replacement(
+        self, incoming: SavePokemon, *, libero_stats: tuple[str, ...] = (),
+    ) -> bool:
+        """Construye exactamente el PendingTeamChange histórico del selector."""
+        mode = self._faint_replacement_mode
+        if mode is None or not self.project or not self.current_game:
+            return False
+        event = mode["event"]
+        dead_identity = str(mode.get("identity", "") or "")
+        live_dead = self._pending_faint_party_member(event)
+        if live_dead is None:
+            self._set_operation_status(
+                "intervention",
+                "EL EQUIPO HA CAMBIADO",
+                (
                     f"{event.get('pokemon', 'Ese Pokémon')} ya no está en el equipo vivo. "
-                    "RoleRun mantiene la baja registrada, pero no moverá ningún dato a ciegas.",
-                    parent=window,
-                )
-                return
-            if incoming.box is None or incoming.box_slot is None:
-                return
-
-            # La Caja 4 actúa como Cementerio fijo. Reservamos el primer hueco
-            # libre que el estado proyectado conoce; el escritor volverá a comprobar
-            # en la RAM viva que siga realmente vacío antes de tocar nada.
-            graveyard_box = ORAS_GRAVEYARD_BOX
-            graveyard_slots = [
-                pos for pos in self._projected_open_pc_slots(pc_data)
-                if int(pos[0]) == graveyard_box
-            ]
-            if not graveyard_slots:
-                messagebox.showwarning(
-                    "Cementerio lleno",
-                    f"La Caja {graveyard_box} (Cementerio) no tiene ningún hueco libre. Libera uno antes de sustituir a {live_dead.nickname or live_dead.species}.",
-                    parent=window,
-                )
-                return
-            graveyard_slot = int(graveyard_slots[0][1])
-
-            role, symbol = self._effective_role(live_dead)
-            if role not in ROLE_ORDER:
-                role = dead_role if dead_role in ROLE_ORDER else "SIN ROL"
-                symbol = self._role_symbol(role)
-            incoming_snapshot = self._incoming_snapshot_for_role(incoming, role, [])
-            outgoing_snapshot = self._pokemon_snapshot(live_dead)
-            outgoing_snapshot["role"] = role
-            outgoing_snapshot["role_symbol"] = symbol
-
-            pending_before = {id(change) for change in self.run.pending_changes}
-            change = PendingTeamChange(
-                operation="replace-fainted",
-                party_slot=int(live_dead.slot),
-                box=int(incoming.box),
-                box_slot=int(incoming.box_slot),
-                outgoing_pokemon=live_dead.nickname or live_dead.species,
-                outgoing_species=live_dead.species,
-                incoming_pokemon=incoming.nickname or incoming.species,
-                incoming_species=incoming.species,
-                incoming_role=role,
-                remove_move_slots=[],
-                incoming_snapshot=incoming_snapshot,
-                outgoing_snapshot=outgoing_snapshot,
-                incoming_identity=self._pokemon_identity(incoming),
-                outgoing_identity=dead_identity,
-                box_witnesses=self._pc_role_witnesses(incoming),
-                graveyard_box=graveyard_box,
-                graveyard_box_slot=graveyard_slot,
+                    "La baja continúa registrada, pero RoleRun no moverá datos sin verificar."
+                ),
+                persistent=True,
             )
-            self.run.pending_changes.append(change)
-            self._oras_live_death_replacement_ids.add(id(change))
-            close_picker(suppress=False)
-            self.sync_status = (
-                f"◷ Sustituyendo a {live_dead.nickname or live_dead.species} por "
-                f"{incoming.nickname or incoming.species}…"
+            return False
+        if incoming.box is None or incoming.box_slot is None:
+            return False
+        if int(incoming.box) == ORAS_GRAVEYARD_BOX:
+            self._set_operation_status(
+                "warning",
+                "DESTINO RESERVADO",
+                "La Caja 4 es el Cementerio y no puede aportar el sustituto.",
+                persistent=True,
             )
-            self._update_top_status()
-            self._request_oras_live_auto_apply_since(pending_before)
+            return False
 
-        def render_box() -> None:
-            self._clear(candidates)
-            box_no = current_box()
-            box_var.set(str(box_no))
-            mons = [pokemon for pokemon in self._project_pc_box_pokemon(pc_data, box_no) if not pokemon.is_egg]
-            meta.configure(text=f"{len(mons)} Pokémon · Caja {ORAS_GRAVEYARD_BOX} = Cementerio")
-            if not mons:
-                ctk.CTkLabel(
-                    candidates, text="No hay Pokémon disponibles en esta caja", text_color=MUTED,
-                    font=ctk.CTkFont("Segoe UI", 15, "bold"),
-                ).grid(row=0, column=0, columnspan=4, pady=80)
-                return
-            pending_sprites: list[tuple[ctk.CTkLabel, SavePokemon]] = []
-            for index, candidate in enumerate(mons):
-                card = ctk.CTkFrame(
-                    candidates, fg_color="#191919", corner_radius=13,
-                    border_width=1, border_color="#353535",
-                )
-                card.grid(row=index // 4, column=index % 4, sticky="nsew", padx=6, pady=6)
-                sprite_label = ctk.CTkLabel(card, text="", height=82)
-                sprite_label.pack(pady=(7, 1))
-                image = self._get_team_sprite(candidate)
-                if image is not None:
-                    window._faint_images.append(image)
-                    sprite_label.configure(image=image)
-                else:
-                    pending_sprites.append((sprite_label, candidate))
-                pc_role, pc_symbol = self._pc_effective_role(candidate)
-                ctk.CTkLabel(
-                    card, text=candidate.nickname or candidate.species, text_color=TEXT,
-                    font=ctk.CTkFont("Segoe UI", 13, "bold"), wraplength=180,
-                ).pack(padx=7)
-                ctk.CTkLabel(
-                    card, text=f"{candidate.species} · Nv. {candidate.level}", text_color=MUTED,
-                    font=ctk.CTkFont("Segoe UI", 8),
-                ).pack()
-                ctk.CTkLabel(
-                    card, text=f"Último rol · {pc_symbol} {pc_role}".strip(),
-                    text_color=GOLD if pc_role != "SIN ROL" else MUTED,
-                    font=ctk.CTkFont("Segoe UI", 8, "bold"),
-                ).pack(pady=(1, 3))
-                ctk.CTkButton(
-                    card, text=f"ELEGIR COMO {dead_role.upper()}" if dead_role in ROLE_ORDER else "ELEGIR",
-                    height=34, command=lambda p=candidate: choose_substitute(p),
-                    fg_color=GOLD, hover_color="#D3AF70", text_color="#111111",
-                    font=ctk.CTkFont("Segoe UI", 9, "bold"),
-                ).pack(fill="x", padx=9, pady=(5, 9))
+        pc_data = mode.get("pc_data") or self._team_pc_cached_data()
+        if pc_data is None:
+            self._set_operation_status(
+                "failed",
+                "EL PC YA NO ESTÁ DISPONIBLE",
+                "La matriz de cajas dejó de estar validada. No se preparó ningún cambio.",
+                actions=("Elegir sustituto",),
+                persistent=True,
+            )
+            return False
+        graveyard_slots = [
+            position for position in self._projected_open_pc_slots(pc_data)
+            if int(position[0]) == ORAS_GRAVEYARD_BOX
+        ]
+        if not graveyard_slots:
+            self._set_operation_status(
+                "intervention",
+                "CEMENTERIO LLENO",
+                (
+                    f"La Caja {ORAS_GRAVEYARD_BOX} no tiene ningún hueco libre. "
+                    f"Libera uno antes de sustituir a {live_dead.nickname or live_dead.species}."
+                ),
+                persistent=True,
+            )
+            return False
+        graveyard_slot = int(graveyard_slots[0][1])
 
-            if pending_sprites:
-                generation = id(candidates)
-                def hydrate() -> None:
-                    if not window.winfo_exists() or not candidates.winfo_exists() or id(candidates) != generation:
-                        return
-                    remaining = []
-                    for label, pokemon in pending_sprites:
-                        try:
-                            image = self._get_team_sprite(pokemon)
-                            if image is None:
-                                self._load_sprite_async(pokemon)
-                                remaining.append((label, pokemon))
-                                continue
-                            window._faint_images.append(image)
-                            label.configure(image=image)
-                        except Exception:
-                            continue
-                    if remaining:
-                        pending_sprites[:] = remaining
-                        window.after(220, hydrate)
-                window.after(140, hydrate)
+        role, symbol = self._effective_role(live_dead)
+        if role not in ROLE_ORDER:
+            fallback_role = str(mode.get("role", "SIN ROL") or "SIN ROL")
+            role = fallback_role if fallback_role in ROLE_ORDER else "SIN ROL"
+            symbol = self._role_symbol(role)
+        live_key = str(getattr(getattr(self, "save_engine", None), "key", ""))
+        if live_key in {"bdsp", "oras", "xy", "sm", "usum"} and role == "Líbero" and len(libero_stats) != 2:
+            context = "floating" if self._floating_bar_is_visible() else "main"
+            self._prompt_libero_ev_stats(
+                incoming,
+                lambda stats, pokemon=incoming: self._prepare_faint_replacement(
+                    pokemon, libero_stats=stats,
+                ),
+                context=context,
+            )
+            return True
+        incoming_snapshot = self._incoming_snapshot_for_role(incoming, role, [])
+        if live_key in {"bdsp", "oras", "xy", "sm", "usum"}:
+            desired_evs = self._bdsp_role_evs(role, libero_stats)
+            if desired_evs is not None:
+                incoming_snapshot["evs"] = dict(zip(STAT_KEYS, desired_evs))
+        outgoing_snapshot = self._pokemon_snapshot(live_dead)
+        outgoing_snapshot["role"] = role
+        outgoing_snapshot["role_symbol"] = symbol
 
-        ctk.CTkButton(
-            nav, text="‹", width=52, height=34,
-            command=lambda: move_box(-1),
-            fg_color="transparent", border_width=1, border_color=GOLD, text_color=GOLD,
-        ).grid(row=0, column=0, sticky="w")
-        ctk.CTkButton(
-            nav, text="›", width=52, height=34,
-            command=lambda: move_box(1),
-            fg_color="transparent", border_width=1, border_color=GOLD, text_color=GOLD,
-        ).grid(row=0, column=2, sticky="e")
-        entry.bind("<Return>", lambda _event: render_box())
-        render_box()
-        window.after(80, window.focus_force)
+        pending_before = {id(change) for change in self.run.pending_changes}
+        change = PendingTeamChange(
+            operation="replace-fainted",
+            party_slot=int(live_dead.slot),
+            box=int(incoming.box),
+            box_slot=int(incoming.box_slot),
+            outgoing_pokemon=live_dead.nickname or live_dead.species,
+            outgoing_species=live_dead.species,
+            incoming_pokemon=incoming.nickname or incoming.species,
+            incoming_species=incoming.species,
+            incoming_role=role,
+            remove_move_slots=[],
+            incoming_snapshot=incoming_snapshot,
+            outgoing_snapshot=outgoing_snapshot,
+            incoming_identity=self._pokemon_identity(incoming),
+            outgoing_identity=dead_identity,
+            box_witnesses=self._pc_role_witnesses(incoming),
+            graveyard_box=ORAS_GRAVEYARD_BOX,
+            graveyard_box_slot=graveyard_slot,
+        )
+        self.run.pending_changes.append(change)
+        self._oras_live_death_replacement_ids.add(id(change))
+        self._faint_replacement_mode = None
+        self._oras_faint_picker_event_identity = None
+        self.sync_status = (
+            f"◷ Sustituyendo a {live_dead.nickname or live_dead.species} por "
+            f"{incoming.nickname or incoming.species}…"
+        )
+        self._set_operation_status(
+            "applying",
+            "APLICANDO SUSTITUCIÓN",
+            (
+                f"{incoming.nickname or incoming.species} heredará {symbol + ' ' if symbol else ''}{role}; "
+                "RoleRun espera la confirmación independiente del juego."
+            ),
+        )
+        self._update_top_status()
+        if self.active_page in {"team", "pc"}:
+            self._smooth_render_page(preserve_scroll=True)
+        self._request_oras_live_auto_apply_since(pending_before)
+        return True
 
     def _publish_oras_live_snapshot(self, snapshot, difference=None) -> None:
         """Publica una captura ya validada en una sola pasada visual.
@@ -6061,18 +9200,24 @@ class RoleRunManager(ctk.CTk):
         process_name = str(getattr(snapshot.process, "name", "") or "").casefold() or None
         if process_name != self._oras_live_process_name:
             live_key = self._active_azahar_realtime_key()
+            # La primera identificación del proceso no es un cambio de
+            # proceso: invalidar aquí el perfil SM que acabamos de precargar
+            # dejaba toda la sesión sin Personal hasta la primera escritura.
+            # Los cambios posteriores sí conservan la invalidación existente.
+            first_process_identification = self._oras_live_process_name is None
             if live_key == "oras":
                 # Cambiar de OR a AS (o reiniciar otro proceso) invalida cualquier
                 # caché de tablas aunque su ruta tenga el mismo nombre.
                 self._clear_oras_rom_tm_runtime_profile()
             elif live_key == "xy":
                 self._clear_xy_rom_tm_runtime_profile()
-            elif live_key == "sm":
+            elif live_key == "sm" and not first_process_identification:
                 self._clear_sm_rom_tm_runtime_profile()
             elif live_key == "usum":
                 self._clear_usum_rom_tm_runtime_profile()
         self._oras_live_process_name = process_name
         self._register_party_roles(snapshot.game)
+        RoleRunManager._ensure_live_pc_matrix_loaded(self)
         for pokemon in snapshot.game.party:
             if pokemon.species_id not in self.sprite_pil_cache:
                 self._load_sprite_async(pokemon)
@@ -6147,7 +9292,13 @@ class RoleRunManager(ctk.CTk):
                 # dejamos de fingir que la conexión sigue viva y volvemos al
                 # detector automático de entrada a partida de alpha.19.
                 self._oras_live_active = False
-                self.sync_status = f"◌ Reconectando {self._active_azahar_realtime_label()} en Azahar…"
+                backend = {
+                    "bdsp": "Ryujinx",
+                    "b2w2": "melonDS",
+                }.get(self._active_azahar_realtime_key(), "Azahar")
+                self.sync_status = (
+                    f"◌ Reconectando {self._active_azahar_realtime_label()} en {backend}…"
+                )
                 self._update_top_status()
                 self._schedule_oras_initial_auto_sync(900)
                 return
@@ -6155,6 +9306,153 @@ class RoleRunManager(ctk.CTk):
             return
 
         self._oras_live_monitor_failures = 0
+
+        if self._active_azahar_realtime_key() == "b2w2":
+            # B2/W2 publica party, PC y el carril de presentación de combate.
+            # KO permanece cerrado: todavía no hay writer de sustitución seguro.
+            before_game = self.current_game
+            probe_state = getattr(battle_probe, "state", "unknown")
+            probe_health = getattr(battle_probe, "health_game", None)
+            if probe_state == "battle" and probe_health is not None:
+                self._oras_battle_probe_last_state = "battle"
+                self._oras_live_health_snapshot = probe_health
+            elif probe_state == "none":
+                self._oras_battle_probe_last_state = "none"
+                self._oras_live_health_snapshot = snapshot.game
+            difference = diff_live_party(before_game, snapshot.game)
+            if difference.changed:
+                self._publish_oras_live_snapshot(snapshot, difference=difference)
+                self.sync_status = (
+                    f"✓ Negro 2/Blanco 2 → RoleRun · {difference.label()} "
+                    "· solo lectura"
+                )
+                self._update_top_status()
+            else:
+                self._sync_live_layout(refresh_floating=True)
+            self._schedule_oras_live_reconciliation(
+                250 if probe_state == "battle" else 950
+            )
+            return
+
+        if self._active_azahar_realtime_key() == "bdsp":
+            # BDSP reproduce el contrato de salud de Gen7 sin compartir ningún
+            # offset: PlayerWork es la party estable y BTL_PARTY la autoridad de
+            # HP durante combate. Una muestra de batalla inválida nunca se
+            # sustituye por los HP stale de PlayerWork.
+            before_game = self.current_game
+            # Alpha.77: se procesa antes de cualquier return por herencia de rol
+            # o cambio de party. El valor es absoluto 0..8 y su procedencia RAM
+            # autoriza también una carga de estado anterior sin mezclar el save.
+            if badge_value is not None:
+                badge_changed = self._process_oras_badge_value(
+                    badge_value, source=badge_source,
+                )
+                if (
+                    0 <= int(badge_value) <= 8
+                    and (
+                        badge_changed
+                        or int(badge_value) == int(
+                            self.project.counters.get("medallas", 0)
+                        )
+                    )
+                ):
+                    self._oras_badge_live_value = int(badge_value)
+                    self._oras_badge_live_source = str(
+                        badge_source or "desconocida"
+                    )
+            probe_state = (
+                getattr(battle_probe, "state", None)
+                if battle_probe is not None else None
+            )
+            probe_health = (
+                getattr(battle_probe, "health_game", None)
+                if battle_probe is not None else None
+            )
+            previous_probe_state = self._oras_battle_probe_last_state
+            if probe_state == "battle":
+                self._oras_battle_probe_last_state = "battle"
+                if probe_health is not None:
+                    if previous_probe_state == "unknown":
+                        self._oras_live_health_snapshot = probe_health
+                    else:
+                        self._process_oras_health_snapshot(
+                            probe_health, source="battle-visible",
+                        )
+                self._process_oras_battle_state("trainer")
+            elif probe_state == "none":
+                self._oras_battle_probe_last_state = "none"
+                self._process_oras_health_snapshot(snapshot.game, source="overworld")
+                self._process_oras_battle_state("none")
+            else:
+                if previous_probe_state != "battle":
+                    self._process_oras_health_snapshot(snapshot.game, source="overworld")
+                self._process_oras_battle_state(None)
+
+            # PlayerWork aporta identidad/party; durante combate BTL_PARTY aporta
+            # los PS visibles. Publicamos una sola fotografía coherente para que
+            # _publish_oras_live_snapshot no restaure después el HP stale.
+            RoleRunManager._merge_live_health_fields(
+                snapshot.game, self._oras_live_health_snapshot,
+            )
+
+            self._reconcile_pending_faints_against_party(snapshot.game)
+            difference = diff_live_party(before_game, snapshot.game)
+            if difference.changed:
+                # Alpha.76: una sustitución hecha dentro del PC de BDSP puede
+                # introducir temporalmente el marcador que el Pokémon tenía en
+                # caja. Publicar esa captura antes de heredar el rol saliente
+                # convierte el conflicto en una séptima tarjeta visual, aunque el
+                # reader haya demostrado exactamente seis miembros. Igual que el
+                # flujo ORAS/X-Y, escribimos y verificamos primero el marcador del
+                # entrante; hasta entonces conservamos la última party confirmada.
+                role_changes = self._incoming_oras_role_changes(before_game, snapshot.game)
+                if role_changes:
+                    generated_ids = {id(change) for change in role_changes}
+                    self._oras_live_system_role_assignment_ids.update(generated_ids)
+                    started = self._save_oras_live_changes(
+                        role_changes, automatic=True, base_game=snapshot.game,
+                    )
+                    if getattr(difference, "party_changed", False):
+                        # El reconciliador PC usa before/after como anclas y su
+                        # barrera de solapamiento repetirá la lectura si termina
+                        # antes que el readback del marcador.
+                        self._schedule_oras_external_pc_reconcile(
+                            before_game, snapshot.game,
+                        )
+                    if started:
+                        self.sync_status = (
+                            "◷ Perla Reluciente · heredando el rol antes de publicar el equipo…"
+                        )
+                        self._update_top_status()
+                        return
+                    self._oras_live_system_role_assignment_ids.difference_update(generated_ids)
+                    self.sync_status = (
+                        "◌ Perla Reluciente · esperando una captura estable para heredar el rol…"
+                    )
+                    self._update_top_status()
+                    self._schedule_oras_live_reconciliation(250)
+                    return
+                self._publish_oras_live_snapshot(snapshot, difference=difference)
+                self.sync_status = f"✓ Perla Reluciente → RoleRun · {difference.label()}"
+                self._update_top_status()
+                # La lectura completa de cajas necesita ambos lados de la
+                # transición. En particular, un Pokémon recién depositado todavía
+                # no existe en el ``main`` guardado: el objeto saliente de la party
+                # es la única ancla demostrada que conserva su nivel. Programamos
+                # después de publicar la nueva party para que la barrera PC↔Equipo
+                # la contraste con el estado visible actual, pero pasamos las dos
+                # capturas originales al worker.
+                if (
+                    getattr(difference, "party_changed", False)
+                    and self._active_azahar_realtime_key() in LIVE_PC_READ_GAME_KEYS
+                ):
+                    self._schedule_oras_external_pc_reconcile(
+                        before_game, snapshot.game,
+                    )
+            self._schedule_oras_live_reconciliation(
+                250 if probe_state == "battle" else 750
+            )
+            return
 
         if self._active_azahar_realtime_key() == "sm":
             before_game = self.current_game
@@ -6169,8 +9467,16 @@ class RoleRunManager(ctk.CTk):
             # procesa antes de cualquier return por herencia de rol/PC para que
             # una transición de equipo no pueda retrasar la medalla. Igual que
             # ORAS/X/Y, una carga de estado anterior puede reducir el contador.
-            self._process_oras_badge_value(badge_value)
-            if badge_value is not None and 0 <= int(badge_value) <= 4:
+            badge_changed = self._process_oras_badge_value(
+                badge_value, source=badge_source,
+            )
+            if (
+                badge_value is not None and 0 <= int(badge_value) <= 4
+                and (
+                    badge_changed
+                    or int(badge_value) == int(self.project.counters.get("medallas", 0))
+                )
+            ):
                 self._oras_badge_live_value = int(badge_value)
                 self._oras_badge_live_source = str(badge_source or "desconocida")
 
@@ -6284,8 +9590,16 @@ class RoleRunManager(ctk.CTk):
 
         self._process_oras_battle_state(probe_state)
         self._reconcile_pending_faints_against_party(snapshot.game)
-        self._process_oras_badge_value(badge_value)
-        if badge_value is not None and 0 <= int(badge_value) <= 8:
+        badge_changed = self._process_oras_badge_value(
+            badge_value, source=badge_source,
+        )
+        if (
+            badge_value is not None and 0 <= int(badge_value) <= 8
+            and (
+                badge_changed
+                or int(badge_value) == int(self.project.counters.get("medallas", 0))
+            )
+        ):
             self._oras_badge_live_value = int(badge_value)
             self._oras_badge_live_source = str(badge_source or "desconocida")
         if self.run.pending_changes:
@@ -6298,6 +9612,12 @@ class RoleRunManager(ctk.CTk):
         actual = live_party_fingerprint(snapshot.game)
         visible = live_party_fingerprint(self.current_game)
         difference = diff_live_party(self.current_game, snapshot.game)
+        training_presentation_changed = bool(
+            self._active_azahar_realtime_key() == "bdsp"
+            and self._party_training_presentation_changed(
+                self.current_game, snapshot.game,
+            )
+        )
         memory_changed = bool(
             self._oras_live_changes_unpersisted
             and not self._oras_live_memory_watches_match(snapshot)
@@ -6365,6 +9685,20 @@ class RoleRunManager(ctk.CTk):
                 self._oras_live_expected_fingerprint = actual
             self._publish_oras_live_snapshot(snapshot, difference=difference)
             self.sync_status = f"✓ Juego → RoleRun · {difference.label()}"
+            self._update_top_status()
+            self._schedule_oras_live_reconciliation(850)
+            return
+
+        # La identidad, los roles y los movimientos pueden coincidir aunque la
+        # Run se hubiera abierto inicialmente desde un save sin presentación
+        # viva. Publicamos este snapshot solo en BDSP y solo cuando aporta una
+        # naturaleza/stat/IV/EV/base stat distinta. No se interpreta como cambio
+        # de equipo ni se ejecuta ninguna escritura.
+        if training_presentation_changed:
+            self._publish_oras_live_snapshot(snapshot)
+            self.sync_status = (
+                "✓ Perla Reluciente en vivo · datos de entrenamiento actualizados"
+            )
             self._update_top_status()
             self._schedule_oras_live_reconciliation(850)
             return
@@ -6465,10 +9799,10 @@ class RoleRunManager(ctk.CTk):
             return
         if not self.project or not self.current_game or not self.current_save:
             return
-        if getattr(self.save_engine, "key", "") not in AZAHAR_REALTIME_GAME_KEYS:
+        if getattr(self.save_engine, "key", "") not in REALTIME_READ_GAME_KEYS:
             self._show_live_sync_toast(
                 "F5 · REAL-TIME CORE",
-                "El tiempo real está disponible para ORAS/X/Y y Sol/Luna mediante AzaharPlus RPC.",
+                "El tiempo real está disponible para los juegos con un backend validado y activo.",
                 False,
             )
             return
@@ -6515,6 +9849,7 @@ class RoleRunManager(ctk.CTk):
         # todavía no usa una tabla de MT runtime propia.
         if self._active_azahar_realtime_key() == "oras":
             self._clear_oras_rom_tm_runtime_profile()
+            self._prepare_oras_live_metadata_profile()
         elif self._active_azahar_realtime_key() == "sm":
             self._clear_sm_rom_tm_runtime_profile()
         elif self._active_azahar_realtime_key() == "usum":
@@ -6562,6 +9897,142 @@ class RoleRunManager(ctk.CTk):
 
         self._cancel_oras_initial_auto_sync()
         self._oras_live_monitor_failures = 0
+
+        if self._active_azahar_realtime_key() == "b2w2":
+            discarded_ghosts = self._discard_b2w2_ghost_team_changes()
+            initial_battle = getattr(snapshot, "battle", None)
+            initial_state = str(getattr(initial_battle, "state", "unknown") or "unknown")
+            initial_health = getattr(initial_battle, "health_game", None)
+            self._oras_battle_probe_last_state = initial_state
+            self._oras_live_health_snapshot = (
+                initial_health if initial_state == "battle" and initial_health is not None
+                else snapshot.game
+            )
+            self._publish_oras_live_snapshot(snapshot)
+            pc_refresh = getattr(self, "_schedule_gen6_live_pc_refresh", None)
+            if callable(pc_refresh):
+                pc_refresh()
+            self.sync_status = (
+                f"✓ Negro 2/Blanco 2 en vivo · {len(snapshot.game.party)} "
+                "Pokémon · melonDS · solo lectura"
+            )
+            self._update_top_status()
+            self._schedule_oras_live_reconciliation(
+                250 if initial_state == "battle" else 950
+            )
+            self._show_live_sync_toast(
+                "NEGRO 2/BLANCO 2 CONECTADO",
+                (
+                    "Equipo y PS leídos desde melonDS en modo seguro de solo lectura."
+                    + (
+                        f" Se retiraron {discarded_ghosts} cambios Equipo↔PC que "
+                        "la versión anterior había proyectado sin escribir."
+                        if discarded_ghosts else ""
+                    )
+                ),
+                True,
+            )
+            return
+
+        if self._active_azahar_realtime_key() == "bdsp":
+            # capture_full incluye BattleProc para que abrir RoleRun dentro de un
+            # combate solo establezca baseline y nunca cobre un KO retrospectivo.
+            initial_battle = getattr(snapshot, "battle", None)
+            initial_battle_state = str(
+                getattr(initial_battle, "state", "unknown") or "unknown"
+            )
+            initial_battle_health = getattr(initial_battle, "health_game", None)
+            if initial_battle_state == "none":
+                self._oras_battle_probe_last_state = "none"
+                self._oras_live_health_snapshot = snapshot.game
+            elif initial_battle_state == "battle":
+                self._oras_battle_probe_last_state = "battle"
+                self._oras_live_health_snapshot = initial_battle_health
+            else:
+                self._oras_battle_probe_last_state = "unknown"
+                self._oras_live_health_snapshot = snapshot.game
+
+            self._reconcile_pending_faints_against_party(snapshot.game)
+            migration_ids = set(getattr(self, "_bdsp_marker_migration_change_ids", set()))
+            marker_migration = [
+                change for change in getattr(getattr(self, "run", None), "pending_changes", ())
+                if id(change) in migration_ids
+            ]
+            if marker_migration:
+                current_ids = {id(change) for change in marker_migration}
+                self._oras_live_role_marker_migration_ids.update(current_ids)
+                self._oras_live_system_role_assignment_ids.update(current_ids)
+                # Declaramos primero la party leída. El writer vuelve a capturarla
+                # y exige que siga igual antes de tocar RAM.
+                self._publish_oras_live_snapshot(snapshot)
+                if self._save_oras_live_changes(
+                    marker_migration, automatic=True, base_game=snapshot.game,
+                ):
+                    self.sync_status = "◷ Perla Reluciente detectada · migrando marcadores en Ryujinx…"
+                    self._update_top_status()
+                    return
+                self._oras_live_role_marker_migration_ids.difference_update(current_ids)
+                self._oras_live_system_role_assignment_ids.difference_update(current_ids)
+
+            # La conexión inicial puede ocurrir después de que el usuario haya
+            # hecho ya el intercambio en el PC. Es la misma transición semántica
+            # que observa el monitor: no publicamos el marcador antiguo del
+            # entrante y, por tanto, tampoco un conflicto como séptima tarjeta.
+            initial_role_changes = self._incoming_oras_role_changes(
+                self.current_game, snapshot.game,
+            )
+            if initial_role_changes:
+                current_ids = {id(change) for change in initial_role_changes}
+                self._oras_live_system_role_assignment_ids.update(current_ids)
+                initial_difference = diff_live_party(self.current_game, snapshot.game)
+                started = self._save_oras_live_changes(
+                    initial_role_changes, automatic=True, base_game=snapshot.game,
+                )
+                if getattr(initial_difference, "party_changed", False):
+                    self._schedule_oras_external_pc_reconcile(
+                        self.current_game, snapshot.game,
+                    )
+                if started:
+                    self.sync_status = (
+                        "◷ Perla Reluciente detectada · heredando el rol antes de publicar el equipo…"
+                    )
+                    self._update_top_status()
+                    return
+                self._oras_live_system_role_assignment_ids.difference_update(current_ids)
+                self.sync_status = (
+                    "◌ Perla Reluciente · esperando una captura estable para heredar el rol…"
+                )
+                self._update_top_status()
+                self._schedule_oras_initial_auto_sync(250)
+                return
+            self._publish_oras_live_snapshot(snapshot)
+            self._record_bdsp_ui_event(
+                "ui-initial-sync",
+                battle_state=initial_battle_state,
+                party_count=len(snapshot.game.party),
+            )
+            # Publicamos el PC inmediatamente después de la captura inicial ya
+            # validada. No se deja detrás de actualizaciones visuales o toasts:
+            # un fallo opcional en esas capas no puede cancelar el carril de PC.
+            pc_refresh = getattr(self, "_schedule_gen6_live_pc_refresh", None)
+            if callable(pc_refresh):
+                pc_refresh()
+            self.sync_status = (
+                f"✓ Perla Reluciente en vivo · {len(snapshot.game.party)} Pokémon · "
+                "Ryujinx HostMappedUnsafe · party/MT transaccional"
+            )
+            self._update_top_status()
+            self._schedule_oras_live_reconciliation(
+                250 if initial_battle_state in {"battle", "unknown"} else 750
+            )
+            self._show_live_sync_toast(
+                "PERLA RELUCIENTE · TIEMPO REAL",
+                f"{len(snapshot.game.party)} Pokémon y el carril de HP están validados. "
+                "Los cambios de rol y movimientos se aplican directamente en Ryujinx; "
+                "RoleRun no modifica el archivo de guardado.",
+                True,
+            )
+            return
 
         # 0.2.2-alpha.5: party, MarkingValue y movimientos PK7 ya son fuente de verdad.
         # Antes de publicar, aplicamos la misma normalización de casillas de rol
@@ -6733,12 +10204,63 @@ class RoleRunManager(ctk.CTk):
 
     def _oras_live_unsupported_changes(self, changes) -> list[str]:
         """Describe operaciones no cubiertas por el adaptador vivo activo."""
+        if self._active_azahar_realtime_key() == "b2w2":
+            labels = {
+                "PendingChange": "cambios de movimientos",
+                "PendingTMTeach": "enseñanza de MT",
+                "PendingRoleChange": "cambios de rol",
+                "PendingPCRoleChange": "roles del PC",
+                "PendingPartyHeal": "curación",
+                "PendingInventoryChange": "inventario",
+                "PendingTeamChange": "cambios Equipo ↔ PC",
+            }
+            result: list[str] = []
+            for change in changes:
+                if (
+                    isinstance(change, PendingTeamChange)
+                    and change.operation in {
+                        "move-box-slot", "swap-party-box", "party-to-box", "box-to-party",
+                    }
+                ):
+                    continue
+                label = labels.get(type(change).__name__, type(change).__name__)
+                if label not in result:
+                    result.append(label)
+            return result
+        if self._active_azahar_realtime_key() == "bdsp":
+            result: list[str] = []
+            for change in changes:
+                if isinstance(change, (
+                    PendingRoleChange, PendingPartyHeal, PendingChange, PendingTMTeach,
+                    PendingInventoryChange,
+                )):
+                    continue
+                if isinstance(change, PendingTeamChange) and change.operation in {
+                    "swap-party-box", "party-to-box", "box-to-party", "replace-fainted",
+                }:
+                    continue
+                label = {
+                    "PendingPCRoleChange": "roles de Pokémon que permanecen en el PC",
+                    "PendingTeamChange": "cambios Equipo ↔ PC",
+                }.get(type(change).__name__, type(change).__name__)
+                if label not in result:
+                    result.append(label)
+            return result
         if self._active_azahar_realtime_key() in GEN7_REALTIME_GAME_KEYS:
             result: list[str] = []
             for change in changes:
-                if isinstance(change, (PendingRoleChange, PendingChange, PendingInventoryChange, PendingTMTeach)):
+                if isinstance(change, (
+                    PendingRoleChange, PendingPartyHeal, PendingChange,
+                    PendingInventoryChange, PendingTMTeach,
+                )):
                     continue
-                if isinstance(change, PendingTeamChange) and change.operation in {"swap-party-box", "party-to-box", "box-to-party", "replace-fainted"}:
+                if isinstance(change, PendingTeamChange) and (
+                    change.operation in {"swap-party-box", "party-to-box", "box-to-party", "replace-fainted"}
+                    or (
+                        self._active_azahar_realtime_key() == "usum"
+                        and change.operation == "move-box-slot"
+                    )
+                ):
                     continue
                 label = {
                     "PendingTMTeach": "enseñanza de MT",
@@ -6752,9 +10274,15 @@ class RoleRunManager(ctk.CTk):
         if self._active_azahar_realtime_key() == "xy":
             result: list[str] = []
             for change in changes:
-                if isinstance(change, (PendingChange, PendingRoleChange, PendingPCRoleChange, PendingTMTeach, PendingInventoryChange)):
+                if isinstance(change, (
+                    PendingChange, PendingRoleChange, PendingPCRoleChange,
+                    PendingPartyHeal, PendingTMTeach, PendingInventoryChange,
+                )):
                     continue
-                if isinstance(change, PendingTeamChange) and change.operation in {"swap-party-box", "replace-fainted"}:
+                if isinstance(change, PendingTeamChange) and change.operation in {
+                    "swap-party-box", "party-to-box", "box-to-party",
+                    "replace-fainted", "move-box-slot",
+                }:
                     continue
                 label = {
                     "PendingInventoryChange": "escritura de utilidades de inventario",
@@ -6785,19 +10313,26 @@ class RoleRunManager(ctk.CTk):
     def _save_oras_live_changes(
         self, changes, *, automatic: bool = False, base_game: SaveGameData | None = None,
     ) -> bool:
-        """Envía el subconjunto seguro de cambios a Azahar en RAM.
+        """Envía el subconjunto seguro de cambios al emulador activo en RAM.
 
         La ruta automática reutiliza exactamente la misma doble captura,
         preflight, verificación y rollback que el botón manual; solo omite el
         diálogo porque la acción ya fue confirmada en la interfaz que la creó.
         """
+        if automatic and self._defer_automatic_libero_role_until_ev_choice(
+            changes, base_game=base_game,
+        ):
+            return True
+
+        live_key = self._active_azahar_realtime_key()
+        emulator_label = "Ryujinx" if live_key == "bdsp" else "Azahar"
         if self._live_write_in_progress:
             if automatic:
                 self._schedule_oras_live_auto_apply(220)
             else:
                 self._show_live_sync_toast(
                     "CAMBIOS EN CURSO",
-                    "Espera a que termine la comprobación de Azahar.",
+                    f"Espera a que termine la comprobación de {emulator_label}.",
                     False,
                 )
             return False
@@ -6819,7 +10354,7 @@ class RoleRunManager(ctk.CTk):
                 self._update_top_status()
                 self._show_live_sync_toast(
                     "CAMBIO PENDIENTE PROTEGIDO",
-                    "Esta operación requiere el flujo manual. No se escribió ningún byte en Azahar.",
+                    f"Esta operación no tiene writer validado. No se escribió ningún byte en {emulator_label}.",
                     False,
                 )
                 return False
@@ -6838,9 +10373,12 @@ class RoleRunManager(ctk.CTk):
                 self.save_pending_changes()
             return False
         if any(isinstance(change, (PendingChange, PendingTMTeach)) for change in changes):
-            live_key = self._active_azahar_realtime_key()
-            move_pp_table = self.sm_live_move_pp if live_key in GEN7_REALTIME_GAME_KEYS else self.oras_live_move_pp
-            if not move_pp_table:
+            move_pp_table = (
+                None if live_key == "bdsp" else
+                self.sm_live_move_pp if live_key in GEN7_REALTIME_GAME_KEYS else
+                self.oras_live_move_pp
+            )
+            if live_key != "bdsp" and not move_pp_table:
                 self._stop_oras_live_auto_apply_for(changes)
                 self._show_live_sync_toast(
                     "TABLA DE MOVIMIENTOS NO DISPONIBLE",
@@ -6859,9 +10397,9 @@ class RoleRunManager(ctk.CTk):
         sm_team_transfers = [
             change for change in changes
             if isinstance(change, PendingTeamChange)
-            and change.operation in {"swap-party-box", "party-to-box", "box-to-party", "replace-fainted"}
+            and change.operation in {"swap-party-box", "party-to-box", "box-to-party", "replace-fainted", "move-box-slot"}
         ]
-        if team_swaps and self._active_azahar_realtime_key() == "oras":
+        if self._oras_changes_require_personal(changes) and self._active_azahar_realtime_key() == "oras":
             profile = self._get_oras_rom_tm_profile(prompt=False)
             if profile is None or not profile.personal_stats:
                 self._stop_oras_live_auto_apply_for(changes)
@@ -6871,6 +10409,13 @@ class RoleRunManager(ctk.CTk):
                     False,
                 )
                 return False
+            # El writer se ejecuta en otro hilo. Conservamos aquí una referencia
+            # fuerte al perfil exacto que superó la precondición, en vez de dejar
+            # que su callback vuelva a consultar la caché mutable de la UI. Esta
+            # caché se invalida legítimamente al reconectar/cambiar de proceso y
+            # no debe transformar una ROM válida en un falso "falta especie" a
+            # mitad del recálculo de estadísticas.
+            self._pin_oras_personal_profile(self.oras_live_writer, profile)
 
         if team_swaps and self._active_azahar_realtime_key() == "xy":
             profile = self._get_xy_rom_tm_profile(prompt=False)
@@ -6922,11 +10467,39 @@ class RoleRunManager(ctk.CTk):
         # RPC simultánea justo al empezar la operación.
         self._cancel_oras_live_reconciliation_timer()
         self._live_write_in_progress = True
-        self.sync_status = (
-            "◷ Aplicando cambio automáticamente en Azahar…"
-            if automatic else "◷ Aplicando cambios verificados en Azahar…"
+        self._show_busy_indicator(
+            "live-write",
+            f"Aplicando y verificando el cambio en {emulator_label}…",
         )
+        self.sync_status = (
+            f"◷ Aplicando cambio automáticamente en {emulator_label}…"
+            if automatic else f"◷ Aplicando cambios verificados en {emulator_label}…"
+        )
+        set_operation_status = getattr(self, "_set_operation_status", None)
+        if callable(set_operation_status):
+            set_operation_status(
+                "applying",
+                "APLICANDO CAMBIO",
+                f"RoleRun está enviando {len(changes)} operación(es) a {emulator_label}.",
+            )
         self._update_top_status()
+
+        def show_verifying() -> None:
+            if (
+                self._live_write_in_progress
+                and generation == self._session_generation
+                and self.project
+                and self.project.slug == project_slug
+            ):
+                set_verifying = getattr(self, "_set_operation_status", None)
+                if callable(set_verifying):
+                    set_verifying(
+                        "verifying",
+                        "VERIFICANDO EN EL JUEGO",
+                        "Esperando una confirmación independiente antes de actualizar el estado visible.",
+                    )
+
+        self.after(260, show_verifying)
 
         def worker() -> None:
             try:
@@ -6944,13 +10517,36 @@ class RoleRunManager(ctk.CTk):
                 generation, project_slug, changes, result, error, automatic,
             ))
 
-        threading.Thread(target=worker, daemon=True, name="RoleRunAzaharWrite").start()
+        threading.Thread(target=worker, daemon=True, name="RoleRunRealtimeWrite").start()
         return True
+
+    @staticmethod
+    def _oras_changes_require_personal(changes) -> bool:
+        """Indica si ORAS tendrá que recalcular estadísticas desde Personal."""
+        return any(
+            (
+                isinstance(change, PendingTeamChange)
+                and change.operation in {"swap-party-box", "replace-fainted"}
+            )
+            or (
+                isinstance(change, PendingRoleChange)
+                and change.new_evs is not None
+            )
+            for change in changes
+        )
+
+    @staticmethod
+    def _pin_oras_personal_profile(writer, profile) -> None:
+        """Fija en el writer el perfil validado durante toda la transacción."""
+        writer.personal_for = profile.personal_for
 
     def _finish_oras_live_write(
         self, generation: int, project_slug: str, changes, result, error: str | None, automatic: bool = False,
     ) -> None:
         self._live_write_in_progress = False
+        hide_busy = getattr(self, "_hide_busy_indicator", None)
+        if callable(hide_busy):
+            hide_busy("live-write")
         # Barrera defensiva para sesiones/fixtures creados antes de alpha.43.
         # En la aplicación normal el set existe desde __init__, pero no debe
         # romper la recuperación de una escritura por faltar metadato migratorio.
@@ -7090,11 +10686,14 @@ class RoleRunManager(ctk.CTk):
                 except Exception:
                     pass
 
-            unavailable = "Azahar no responde por RPC" in detail
+            live_key_getter = getattr(self, "_active_azahar_realtime_key", None)
+            live_key = live_key_getter() if callable(live_key_getter) else "oras"
+            emulator_label = "Ryujinx" if live_key == "bdsp" else "Azahar"
+            unavailable = live_key != "bdsp" and "Azahar no responde por RPC" in detail
             if unavailable:
                 self._oras_live_active = False
                 detail += "\n\nSi has cerrado Azahar, pulsa GUARDAR CAMBIOS otra vez para usar el flujo normal de archivo."
-            self.sync_status = f"⚠ Azahar: {detail}"
+            self.sync_status = f"⚠ {emulator_label}: {detail}"
             self._update_top_status()
             active_label_getter = getattr(self, "_active_azahar_realtime_label", None)
             active_label = active_label_getter() if callable(active_label_getter) else "ORAS"
@@ -7201,7 +10800,7 @@ class RoleRunManager(ctk.CTk):
                     "old_move": change.old_move,
                     "source": "Azahar en vivo",
                     "output": "RAM",
-                    "reusable": True,
+                    "reusable": not bool(change.consumes_item),
                 }
             elif isinstance(change, PendingPCRoleChange):
                 event = {
@@ -7228,6 +10827,34 @@ class RoleRunManager(ctk.CTk):
                     "output": "RAM",
                 }
             elif isinstance(change, PendingTeamChange):
+                if change.operation == "move-box-slot":
+                    source_pos = (int(change.box or 0), int(change.box_slot or 0))
+                    destination_pos = (
+                        int(change.destination_box or 0), int(change.destination_box_slot or 0),
+                    )
+                    moved = self._pokemon_from_snapshot(
+                        change.incoming_snapshot,
+                        slot=destination_pos[1], projected=False,
+                    )
+                    moved.box = destination_pos[0]
+                    moved.box_slot = destination_pos[1]
+                    moved.slot = destination_pos[1]
+                    self._oras_live_pc_overrides.pop(source_pos, None)
+                    self._oras_live_pc_empty_overrides.add(source_pos)
+                    self._oras_live_pc_empty_overrides.discard(destination_pos)
+                    self._oras_live_pc_overrides[destination_pos] = moved
+                    event = {
+                        "type": "pc_moved",
+                        "pokemon": change.incoming_pokemon,
+                        "species": change.incoming_species,
+                        "source_box": source_pos[0], "source_box_slot": source_pos[1],
+                        "box": destination_pos[0], "box_slot": destination_pos[1],
+                        "source": "Azahar en vivo", "output": "RAM",
+                    }
+                    if not system_generated:
+                        self.run.history.append(event)
+                        self.project_service.append_history(self.project, event)
+                    continue
                 confirmed_incoming_role = str(change.incoming_role or "SIN ROL")
                 if change.incoming_identity:
                     confirmed_incoming = next((
@@ -7238,17 +10865,39 @@ class RoleRunManager(ctk.CTk):
                         live_role = canonical_role(confirmed_incoming.role)
                         if live_role in ROLE_ORDER:
                             confirmed_incoming_role = live_role
-                event = {
-                    "type": "team_pc_swap",
-                    "pokemon": change.incoming_pokemon,
-                    "species": change.incoming_species,
-                    "old_pokemon": change.outgoing_pokemon,
-                    "role": confirmed_incoming_role,
-                    "box": change.box,
-                    "box_slot": change.box_slot,
-                    "source": "Azahar en vivo",
-                    "output": "RAM",
-                }
+                if change.operation == "party-to-box":
+                    event = {
+                        "type": "team_to_pc",
+                        "pokemon": change.outgoing_pokemon,
+                        "species": change.outgoing_species,
+                        "box": change.box,
+                        "box_slot": change.box_slot,
+                        "source": "Azahar en vivo",
+                        "output": "RAM",
+                    }
+                elif change.operation == "box-to-party":
+                    event = {
+                        "type": "pc_to_team",
+                        "pokemon": change.incoming_pokemon,
+                        "species": change.incoming_species,
+                        "role": confirmed_incoming_role,
+                        "box": change.box,
+                        "box_slot": change.box_slot,
+                        "source": "Azahar en vivo",
+                        "output": "RAM",
+                    }
+                else:
+                    event = {
+                        "type": "team_pc_swap",
+                        "pokemon": change.incoming_pokemon,
+                        "species": change.incoming_species,
+                        "old_pokemon": change.outgoing_pokemon,
+                        "role": confirmed_incoming_role,
+                        "box": change.box,
+                        "box_slot": change.box_slot,
+                        "source": "Azahar en vivo",
+                        "output": "RAM",
+                    }
                 outgoing_identity = str(change.outgoing_identity or "")
                 outgoing_role = str(change.outgoing_snapshot.get("role", "SIN ROL")) if change.outgoing_snapshot else "SIN ROL"
 
@@ -7349,6 +10998,9 @@ class RoleRunManager(ctk.CTk):
         if marker_migration:
             self.project.role_marker_layout = 2
             self.native_save_engine.set_role_marker_layout(2)
+            if self._active_azahar_realtime_key() == "bdsp":
+                self._bdsp_marker_migration_change_ids.difference_update(current_ids)
+                self._bdsp_marker_migration_expected.clear()
         self.project_service.save(self.project)
 
         # REVISAR CAMBIOS en ORAS trabaja sobre acciones ya confirmadas en RAM.
@@ -7388,6 +11040,37 @@ class RoleRunManager(ctk.CTk):
         ]
         self.current_game = result.game
         self._oras_live_health_snapshot = result.game
+        followup_ev_changes: list[PendingRoleChange] = []
+        if self._active_azahar_realtime_key() in {"bdsp", "oras", "xy", "sm", "usum"}:
+            for team_change in changes:
+                if not isinstance(team_change, PendingTeamChange) or not team_change.incoming_snapshot:
+                    continue
+                desired_map = dict(team_change.incoming_snapshot.get("evs", {}) or {})
+                if set(desired_map) != set(STAT_KEYS):
+                    continue
+                incoming = next((
+                    member for member in result.game.party
+                    if self._pokemon_identity(member) == str(team_change.incoming_identity or "")
+                ), None)
+                if incoming is None:
+                    continue
+                old_evs = tuple(int(incoming.evs.get(key, 0)) for key in STAT_KEYS)
+                new_evs = tuple(int(desired_map[key]) for key in STAT_KEYS)
+                if old_evs == new_evs:
+                    continue
+                role = canonical_role(incoming.role)
+                followup_ev_changes.append(PendingRoleChange(
+                    pokemon_slot=int(incoming.slot),
+                    pokemon=incoming.nickname or incoming.species,
+                    species=incoming.species,
+                    old_role=role,
+                    new_role=role,
+                    pokemon_identity=self._pokemon_identity(incoming),
+                    old_evs=old_evs,
+                    new_evs=new_evs,
+                ))
+            if followup_ev_changes:
+                self.run.pending_changes.extend(followup_ev_changes)
         self._oras_live_active = True
         previous_watches = (
             self._oras_live_expected_memory_watches
@@ -7422,35 +11105,66 @@ class RoleRunManager(ctk.CTk):
             self.sync_status = "✓ Marcadores migrados · Líbero 1 · Asesino 2 · Mago 3 · Tanque 4 · Prisma 5 · Support 6"
         elif system_generated:
             self.sync_status = "✓ Juego → RoleRun · rol libre asignado"
-        elif already_applied:
+        elif changes and all(isinstance(change, PendingPartyHeal) for change in changes):
+            emulator_label = "Ryujinx" if self._active_azahar_realtime_key() == "bdsp" else "Azahar"
             self.sync_status = (
-                f"✓ Ya estaba aplicado en Azahar · {result.applied_count} cambio(s) · "
+                f"✓ Equipo curado en {emulator_label} · {result.applied_count} Pokémon · "
+                "PS, estado y PP verificados"
+            )
+        elif already_applied:
+            emulator_label = "Ryujinx" if self._active_azahar_realtime_key() == "bdsp" else "Azahar"
+            self.sync_status = (
+                f"✓ Ya estaba aplicado en {emulator_label} · {result.applied_count} cambio(s) · "
                 "guarda dentro del juego para persistir"
             )
         else:
+            emulator_label = "Ryujinx" if self._active_azahar_realtime_key() == "bdsp" else "Azahar"
             self.sync_status = (
-                f"✓ Aplicado automáticamente en Azahar · {result.applied_count} cambio(s) · "
+                f"✓ Aplicado automáticamente en {emulator_label} · {result.applied_count} cambio(s) · "
                 "guarda dentro del juego para persistir"
                 if automatic else
-                f"✓ Aplicado en Azahar · {result.applied_count} cambio(s) · "
+                f"✓ Aplicado en {emulator_label} · {result.applied_count} cambio(s) · "
                 "guarda dentro del juego para persistir"
             )
         self._update_top_status()
+        if followup_ev_changes:
+            self.after(140, lambda pending=tuple(followup_ev_changes): self._request_oras_live_auto_apply(pending))
         # Igual que en el monitor juego → RoleRun, una escritura confirmada desde
         # la propia barra NO debe reconstruir la ventana principal retirada. Ese
         # <Map> espurio era la causa de que arrastrar un Pokémon entre roles cerrase
         # la barra. El estado ya está confirmado; dejamos la vista normal pendiente
         # hasta que el usuario vuelva a RoleRun.
-        self._refresh_main_after_oras_live_write()
+        refreshed_global_tm = False
+        if self.active_page == "tms" and self._global_tm_context is not None:
+            profile, cached_inventory, source_detail = self._global_tm_context
+            inventory = dict(cached_inventory)
+            for change in changes:
+                if not isinstance(change, PendingTMTeach):
+                    continue
+                # Este punto solo se alcanza tras el readback completo del
+                # writer. Actualizar antes produciría una cantidad ficticia.
+                if bool(change.consumes_item):
+                    inventory[int(change.item_id)] = max(0, int(change.quantity_before) - 1)
+            self._global_tm_context = (profile, inventory, source_detail)
+            view = self._global_tm_view
+            if view is not None and callable(getattr(view, "update_entries", None)):
+                view.update_entries(
+                    self._global_tm_entries(profile, inventory),
+                    tuple(self._projected_party()[:6]),
+                )
+                refreshed_global_tm = True
+        if not refreshed_global_tm:
+            self._refresh_main_after_oras_live_write()
         self._schedule_team_integrity_check()
         # Las acciones automáticas ya se ven inmediatamente en juego, Manager y
         # barra. No mostramos el antiguo toast verde "CAMBIO APLICADO": era ruido
         # visual y además obligaba a crear una superposición sobre la barra.
         if not automatic:
+            emulator_label = "Ryujinx" if self._active_azahar_realtime_key() == "bdsp" else "Azahar"
             self._show_live_sync_toast(
-                "CAMBIOS YA PRESENTES EN AZAHAR" if already_applied else "CAMBIOS APLICADOS EN AZAHAR",
+                f"CAMBIOS YA PRESENTES EN {emulator_label.upper()}" if already_applied else f"CAMBIOS APLICADOS EN {emulator_label.upper()}",
                 (
-                    f"{result.applied_count} cambio(s) ya coincidían con la RAM de Azahar. "
+                    f"{result.applied_count} cambio(s) ya coincidían con la RAM de {emulator_label}. "
                     "No se escribió ningún byte; el archivo main no se tocó."
                     if already_applied else
                     f"{result.applied_count} cambio(s) verificados en RAM. El archivo main no se tocó; guarda dentro del juego cuando quieras conservarlos."
@@ -7546,6 +11260,13 @@ class RoleRunManager(ctk.CTk):
             return
         self.current_save = info
         self.current_game = data
+        live_key = self._active_azahar_realtime_key()
+        self._record_bdsp_ui_event(
+            "save-watcher-reload",
+            live_active=bool(self._oras_live_active),
+            monitor_scheduled=bool(self._oras_live_monitor_after_id),
+            monitor_in_progress=bool(self._oras_live_monitor_in_progress),
+        )
         # El propio juego ya ha consolidado (o sustituido) main. Desde este
         # momento no debemos conservar como actual la instantánea de RAM previa.
         self._clear_oras_live_auto_apply()
@@ -7561,7 +11282,11 @@ class RoleRunManager(ctk.CTk):
         self._pc_cache_signature = None
         self._smooth_render_page(preserve_scroll=(self.active_page == "team"))
         self._schedule_team_integrity_check()
-        if self._oras_live_active and getattr(self.save_engine, "key", "") == "oras":
+        # El watcher sustituye la vista viva por la copia consolidada y
+        # _clear_oras_live_reconciliation cancela el timer/baseline. Todos los
+        # backends realtime registrados deben rearmar su reader; limitarlo a
+        # ORAS dejó BDSP en live_active=True pero sin Core snapshot ni monitor.
+        if self._oras_live_active and live_key in REALTIME_READ_GAME_KEYS:
             self._schedule_oras_live_reconciliation(650)
 
     def _sync_obs_state(self, data: SaveGameData | None = None) -> dict[str, str]:
@@ -7583,7 +11308,11 @@ class RoleRunManager(ctk.CTk):
                 # En el Real-Time Core 3DS no existe ya un segundo flujo de
                 # guardado desde RoleRun. Las acciones confirmadas viven en el emulador; solo
                 # avisamos por aquellas que todavía quedaron pendientes.
-                emulator_label = "Azahar/Citra" if getattr(self.save_engine, "key", "") == "xy" else "Azahar"
+                emulator_label = (
+                    "Azahar/Citra" if getattr(self.save_engine, "key", "") == "xy" else
+                    "Ryujinx" if getattr(self.save_engine, "key", "") == "bdsp" else
+                    "Azahar"
+                )
                 if not messagebox.askokcancel(
                     "Cambios no aplicados",
                     f"Hay cambios que todavía no han sido confirmados en {emulator_label}. Si cierras RoleRun Manager, esas acciones pendientes se descartarán.\n\n"
@@ -7648,15 +11377,21 @@ class RoleRunManager(ctk.CTk):
         except Exception:
             return False
 
-    def _smooth_render_page(self, preserve_scroll: bool = False, reset_scroll: bool = False) -> None:
-        """Reconstruye una vista mediante dos superficies reales de widgets.
+    def _smooth_render_page(
+        self,
+        preserve_scroll: bool = False,
+        reset_scroll: bool = False,
+        _prepared_navigation_overlay=None,
+        _navigation_token: int | None = None,
+    ) -> None:
+        """Reconstruye una vista mediante doble buffer y una barrera compuesta.
 
         El body visible permanece intacto y por encima mientras un segundo
         CTkScrollableFrame se construye en la misma celda. Solo cuando el árbol nuevo,
         su geometría y su scroll están resueltos se intercambia el orden de apilado.
-        No se congela ningún HWND y no se usa una captura que pueda desaparecer antes
-        del primer repintado real, por lo que la barra flotante queda completamente
-        desacoplada de este mecanismo.
+        Las navegaciones conservan además el último frame completo en un Toplevel
+        DWM independiente hasta que el destino ya está compuesto; los refrescos
+        internos mantienen su barrera local histórica.
         """
         if self._body_swap_in_progress:
             requested = self._body_rerender_requested
@@ -7673,6 +11408,8 @@ class RoleRunManager(ctk.CTk):
         scroll_fraction = self._capture_body_scroll_fraction() if preserve_scroll else 0.0
 
         old_body = self.body
+        old_draft_view = self._draft_view
+        old_team_pc_view = self._team_pc_view
         old_body_visible = bool(
             self._shell_built
             and self._widget_alive(old_body)
@@ -7680,9 +11417,30 @@ class RoleRunManager(ctk.CTk):
             and str(self.state()) not in {"withdrawn", "iconic"}
         )
         new_body = None
+        transition_overlay = _prepared_navigation_overlay
+        external_transition = transition_overlay is not None
         self._body_swap_in_progress = True
         try:
             if old_body_visible:
+                # Una operación (PC, MT, writer) ya mantiene una superficie DWM
+                # independiente encima. Crear además la captura local dejaba dos
+                # barreras con ciclos de retirada distintos; al cerrar MT podía
+                # sobrevivir la copia oscura del selector aunque el loader real
+                # ya hubiera terminado.
+                if transition_overlay is None and not self._widget_alive(self._busy_indicator):
+                    transition_overlay = self._create_page_transition_overlay()
+                # Las vistas antiguas dejan de escuchar teclado/resize, pero sus
+                # widgets permanecen intactos como buffer visual. Destruir aquí
+                # Drafteos era la primera divergencia del glitch entre pestañas:
+                # el body viejo quedaba vacío antes de terminar el nuevo.
+                for view in (old_draft_view, old_team_pc_view):
+                    suspend = getattr(view, "suspend_interaction", None)
+                    if callable(suspend):
+                        suspend()
+                if old_draft_view is not None:
+                    self._draft_view = None
+                if old_team_pc_view is not None:
+                    self._team_pc_view = None
                 new_body = self._create_body_widget(below=old_body)
                 self.body = new_body
             self.render_page()
@@ -7716,15 +11474,59 @@ class RoleRunManager(ctk.CTk):
                 # de que DWM haya pintado el nuevo, visible como un pestañeo.
                 self._stack_body_surface(new_body, old_body, above=True)
 
-                def retire_old_body(widget=old_body) -> None:
+                presented_team_pc_view = self._team_pc_view
+
+                def retire_old_body(
+                    widget=old_body,
+                    committed_body=new_body,
+                    committed_view=presented_team_pc_view,
+                ) -> None:
                     try:
                         if widget.winfo_exists():
                             widget.grid_forget()
                             widget.destroy()
                     except Exception:
                         pass
+                    # Una vista construida no es todavía una vista presentada.
+                    # El callback que retira el body anterior puede quedar detrás
+                    # de la lectura inicial del PC; hasta esta frontera Windows
+                    # continúa enseñando realmente la superficie provisional.
+                    if (
+                        self.body is committed_body
+                        and self._team_pc_view is committed_view
+                    ):
+                        try:
+                            self.update_idletasks()
+                        except Exception:
+                            pass
+                        self._presented_team_pc_view = committed_view
+                        if self._initial_shell_waiting:
+                            self._retire_initial_shell_when_ready()
 
                 self.after(70, retire_old_body)
+            if transition_overlay is not None:
+                if external_transition:
+                    self._finish_navigation_transition(
+                        transition_overlay, int(_navigation_token or 0),
+                    )
+                else:
+                    # Los refrescos internos conservan su barrera local. Las
+                    # navegaciones usan la superficie DWM externa preparada.
+                    self.after(
+                        140,
+                        lambda overlay=transition_overlay: self._retire_page_transition_overlay(overlay),
+                    )
+            if new_body is None:
+                # Durante el primer acceso la raíz permanece retirada para que
+                # Windows no llegue a mostrar el árbol provisional. En ese estado
+                # no existe un body visible que intercambiar, pero render_page() y
+                # update_idletasks() ya han compuesto por completo la superficie
+                # que se publicará al retirar la barrera. No marcarla aquí hacía
+                # imposible satisfacer la propia barrera: los seis PS renderizados
+                # coincidían con RAM, pero `presented` permanecía falso para siempre.
+                self._presented_team_pc_view = self._team_pc_view
+                if self._initial_shell_waiting:
+                    self._retire_initial_shell_when_ready()
         except Exception:
             # Un fallo de render nunca debe dejar una página vacía: conservamos el
             # buffer anterior y retiramos únicamente la construcción incompleta.
@@ -7735,6 +11537,12 @@ class RoleRunManager(ctk.CTk):
                 except Exception:
                     pass
                 self.body = old_body
+                self._draft_view = old_draft_view
+                self._team_pc_view = old_team_pc_view
+            if external_transition:
+                self._destroy_navigation_transition(transition_overlay)
+            else:
+                self._retire_page_transition_overlay(transition_overlay)
             raise
         finally:
             self._body_swap_in_progress = False
@@ -7747,60 +11555,91 @@ class RoleRunManager(ctk.CTk):
 
     def navigate(self, page: str) -> None:
         self._cancel_help_animations()
+        page = normalize_navigation_target(page)
+        sidebar_expanded = bool(getattr(self, "sidebar_expanded", False))
+        sidebar_closing = bool(
+            getattr(self, "sidebar_animation_id", None) and not sidebar_expanded
+        )
+        if sidebar_expanded or sidebar_closing:
+            # Cerrar y renderizar a la vez bloqueaba el hilo de Tk: los callbacks
+            # del drawer no podían ejecutarse y el usuario veía varios árboles a
+            # medio construir. Primero termina el deslizamiento; después cambia
+            # la página con todo el ancho de trabajo ya recuperado.
+            self._pending_sidebar_navigation = page
+            if sidebar_expanded:
+                self._set_sidebar_expanded(False)
+            return
+        # El menú lateral es una capa temporal. Cualquier destino elegido desde
+        # él devuelve inmediatamente el espacio completo a la vista de trabajo.
+        close_sidebar = getattr(self, "_set_sidebar_expanded", None)
+        if callable(close_sidebar):
+            close_sidebar(False)
+        # Enlaces históricos y callbacks antiguos continúan siendo válidos,
+        # pero Dashboard ya no es un destino visual.
+        if page != "moves":
+            self._moves_return_page = None
         previous_page = self.active_page
-        self.active_page = page
-        # El scroll de la nueva pestaña se coloca en 0 mientras el buffer anterior
-        # continúa encima. No hay segundo frame ni corrección diferida visible.
-        self._smooth_render_page(reset_scroll=True)
-        # 0.2.1-alpha.11: al entrar en CAJAS PC desde una sesión Gen 6 viva,
-        # mostramos primero la base del último guardado y reconciliamos la matriz
-        # completa en background. No se repite al redibujar la misma pestaña.
-        if page == "pc" and previous_page != "pc":
-            try:
-                self.after(90, self._schedule_gen6_live_pc_refresh)
-            except Exception:
-                pass
+        if page == previous_page:
+            # Seleccionar la pestaña ya visible solo cierra el drawer. El vídeo
+            # físico alpha.93 demostró que reconstruirla fabricaba un ciclo de
+            # carga completo sin que hubiera cambiado ningún estado.
+            # Si el destino procedía del drawer, la captura limpia ya no tiene
+            # consumidor. Descartarla evita que una navegación posterior use un
+            # frame antiguo como autoridad visual.
+            self._navigation_source_capture = None
+            return
+        self._begin_page_navigation(page, previous_page)
 
     def render_page(self) -> None:
         # Nunca reconstruir widgets mientras el canvas todavía está animándose.
         # Era otra fuente de pequeños flashes/temblores al cambiar de vista.
         self._cancel_smooth_scroll(sync_target=False)
+        if self._draft_view is not None:
+            self._draft_view.destroy()
+            self._draft_view = None
+        if self._global_tm_view is not None:
+            self._global_tm_view.destroy()
+            self._global_tm_view = None
+        self._format_help_view = None
         self._clear(self.body)
         self.step_widgets = {}
         self.sprite_buttons = {}
         self._main_role_drop_targets = []
+        if self.active_page == "dashboard":
+            self.active_page = DEFAULT_PAGE
         self._render_sidebar()
         self._update_top_status()
         titles = {
-            "dashboard": ("Dashboard", "Gestiona y visualiza el estado de tu Run."),
             "drafts": ("Drafteos", "Genera movimientos y añádelos como cambios pendientes."),
-            "team": ("Equipo", "Administra roles, revisa la coherencia y prepara cambios."),
-            "moves": ("Movimientos", "Consulta qué movimientos admite cada rol en el juego actual."),
-            "pc": ("Cajas PC", "Consulta las cajas y reorganiza el equipo sin salir de RoleRun Manager."),
-            "history": ("Historial", "La línea temporal de tu RoleRun."),
+            "team": ("Equipo y PC", "Gestiona el equipo y las cajas en un mismo espacio."),
+            "tms": ("MT", "Elige primero una MT de la mochila y después quién la aprenderá."),
+            "moves": ("Ayuda · Consulta de movimientos", "Comprueba qué movimientos admite cada rol en el juego actual."),
+            "pc": ("Equipo y PC", "Consulta las cajas y reorganiza el equipo desde el mismo espacio."),
+            "history": ("Configuración · Registro y recuperación", "Consulta la línea temporal y las opciones de recuperación de la Run."),
             "settings": ("Configuración", "Preferencias y archivos de la Run."),
             "help": ("Ayuda", ""),
         }
-        title, subtitle = titles.get(self.active_page, titles["dashboard"])
+        title, subtitle = titles.get(self.active_page, titles["team"])
         self.page_title.configure(text=title)
+        responsive_wrap = max(300, min(720, int(self.winfo_width() or 1100) - 700))
+        self.page_subtitle.configure(wraplength=responsive_wrap)
         if self.active_page == "help":
             self.page_subtitle.grid_remove()
         else:
             self.page_subtitle.configure(text=subtitle)
             self.page_subtitle.grid()
-        # Dashboard cabe completo en la ventana y no necesita una barra visible.
-        # El resto de pestañas conserva su desplazamiento normal.
-        self._set_body_scrollbar_visible(self.active_page not in {"dashboard", "pc", "moves"})
-        if self.active_page == "dashboard":
-            self._render_dashboard()
-        elif self.active_page == "drafts":
+        self._render_context_navigation()
+        self._set_body_scrollbar_visible(self.active_page not in {"team", "tms", "pc", "moves", "drafts"})
+        if self.active_page == "drafts":
             self.render_workflow()
         elif self.active_page == "team":
-            self._render_team_page()
+            self._render_team_pc_unified_page()
+        elif self.active_page == "tms":
+            self._render_global_tm_page()
         elif self.active_page == "moves":
             self._render_moves_page()
         elif self.active_page == "pc":
-            self._render_pc_page()
+            self._render_team_pc_unified_page()
         elif self.active_page == "history":
             self._render_history_page()
         elif self.active_page == "settings":
@@ -7822,15 +11661,196 @@ class RoleRunManager(ctk.CTk):
         if not self.current_game:
             self._empty_page("No hay partida cargada", "Abre una Run para utilizar los drafteos.", self._return_to_welcome)
             return
-        # La partida ya es obligatoria para entrar a esta pantalla. El flujo comienza
-        # directamente con el rol y el Pokémon que recibirá el movimiento.
-        self._render_role_step(0)
-        if self.run.role:
-            self._render_pokemon_step(1)
-        if self.run.role and self.selected_pokemon:
-            self._render_move_step(2)
-        if self.run.draft and self.selected_pokemon:
-            self._render_replace_step(3)
+        if self.selected_pokemon is not None:
+            identity = self._pokemon_identity(self.selected_pokemon)
+            fresh = next((
+                pokemon for pokemon in self._projected_party()
+                if self._pokemon_identity(pokemon) == identity
+            ), None)
+            if fresh is None:
+                self._reset_visual_draft_flow()
+            else:
+                self.selected_pokemon = fresh
+        slots = build_fixed_team_slots(
+            self._projected_party(),
+            lambda pokemon: self._effective_role(pokemon)[0],
+            self._pokemon_identity,
+        )
+        self._draft_view = IntegratedDraftFlow(
+            self.body,
+            team_slots=slots,
+            selected_pokemon=self.selected_pokemon,
+            selected_pool=self.run.role,
+            results=self.current_results,
+            selected_draft=self.run.draft,
+            draft_count=int(self.project.counters.get("drafteos", 0)) if self.project else 0,
+            role_names=tuple(self.engine.role_names()),
+            role_for=self._effective_role,
+            sprite_for=self._team_pc_sprite,
+            role_icon_for=self.role_icons.image,
+            move_metadata_for=self._draft_move_metadata,
+            moves_for=self._effective_moves_for_review,
+            on_choose_pokemon=self._draft_choose_visual_pokemon,
+            on_choose_move=self.select_drafted_move,
+            on_reroll=self.reroll_move,
+            on_choose_slot=self.select_move_slot,
+            on_back=self._draft_back,
+            on_cancel=self._draft_cancel,
+            on_open_moves=self._open_moves_from_draft,
+            navigation_keys=self.project.menu_keys if self.project else None,
+            on_left_edge=self._select_sidebar_from_content,
+            on_edge_accept=self._accept_sidebar_from_content,
+        )
+        self._set_navigation_owner(self._draft_view)
+        if self._draft_fade_in_pending:
+            self._draft_fade_in_pending = False
+            draft_view = self._draft_view
+            self.after(0, draft_view.fade_in)
+
+    def _open_moves_from_draft(self) -> None:
+        self._moves_return_page = "drafts"
+        self.navigate("moves")
+
+    def _return_to_draft_from_moves(self) -> None:
+        self._moves_return_page = None
+        self.navigate("drafts")
+
+    def _draft_move_metadata(self, move_id: int) -> dict[str, object]:
+        move_id = int(move_id or 0)
+        if move_id <= 0:
+            return {"category": "unknown", "pp": "—", "power": "—", "accuracy": "—"}
+        key = str(getattr(self.save_engine, "key", "") or "")
+        pp: int | str = "—"
+        power: int | str = "—"
+        accuracy: int | str = "—"
+        description = "Descripción no disponible en la fuente activa."
+        if key == "bdsp":
+            profile = self._get_bdsp_tm_profile(prompt=False)
+            if profile is not None:
+                try:
+                    pp = int(profile.base_pp(move_id)) or "—"
+                    power = int(profile.power(move_id)) or "—"
+                    accuracy = int(profile.accuracy(move_id)) or "—"
+                    raw_description = str(profile.description(move_id) or "").strip()
+                    if raw_description:
+                        language = str(getattr(profile, "description_language", "") or "")
+                        prefix = "EN · " if language.casefold() == "english" else ""
+                        description = prefix + raw_description
+                except (TypeError, ValueError):
+                    pp = power = accuracy = "—"
+        elif key in GEN7_REALTIME_GAME_KEYS:
+            metadata = self.gen7_move_metadata.get(move_id, {})
+            pp = int(metadata.get("pp") or self.sm_live_move_pp.get(move_id, 0)) or "—"
+            power = int(metadata.get("power") or 0) or "—"
+            accuracy = int(metadata.get("accuracy") or 0) or "—"
+            localized_description = str(metadata.get("description_es") or "").strip()
+            if localized_description:
+                description = localized_description
+        elif key == "xy":
+            metadata = self.xy_move_metadata.get(move_id, {})
+            pp = int(metadata.get("pp") or self.oras_live_move_pp.get(move_id, 0)) or "—"
+            power = int(metadata.get("power") or 0) or "—"
+            accuracy = int(metadata.get("accuracy") or 0) or "—"
+            localized_description = str(metadata.get("description_es") or "").strip()
+            if localized_description:
+                description = localized_description
+        elif key in GEN6_REALTIME_GAME_KEYS:
+            metadata = self.oras_move_metadata.get(move_id, {})
+            pp = int(metadata.get("pp") or self.oras_live_move_pp.get(move_id, 0)) or "—"
+            power = int(metadata.get("power") or 0) or "—"
+            accuracy = int(metadata.get("accuracy") or 0) or "—"
+            localized_description = str(metadata.get("description_es") or "").strip()
+            if localized_description:
+                description = localized_description
+        return {
+            "category": self._damage_class_for_move(move_id),
+            "pp": pp,
+            "power": power,
+            "accuracy": accuracy,
+            "description": description,
+        }
+
+    def _draft_choose_visual_pokemon(self, pokemon: SavePokemon, pool_role: str) -> None:
+        if self._team_change_is_locked(show_warning=True):
+            return
+        draft_count = max(0, int(self.project.counters.get("drafteos", 0))) if self.project else 0
+        if draft_count <= 0:
+            self._set_operation_status(
+                "warning", "SIN DRAFTEOS DISPONIBLES",
+                "Aumenta el contador antes de generar opciones.", persistent=True,
+            )
+            return
+        effective_role, _symbol = self._effective_role(pokemon)
+        if effective_role == "SIN ROL" or effective_role not in {*self.engine.role_names(), "Líbero"}:
+            self._set_operation_status(
+                "warning", "POKÉMON EN PREPARACIÓN",
+                "Asigna un rol antes de iniciar un drafteo con este Pokémon.", persistent=True,
+            )
+            return
+        generated = self.engine.generate_role(effective_role)
+        if not generated:
+            self._set_operation_status(
+                "failed", "NO SE GENERARON OPCIONES",
+                "El pool validado no devolvió movimientos. No se consumió ningún drafteo.", persistent=True,
+            )
+            return
+        self.run.role = effective_role
+        self.run.pokemon_slot = int(pokemon.slot)
+        self.run.draft = None
+        self.run.move_slot = None
+        self.selected_pokemon = pokemon
+        self.current_results = generated
+        self._set_operation_status(
+            "neutral", "OPCIONES GENERADAS",
+            "Todavía no se ha consumido ningún drafteo.",
+        )
+        self._draft_transition()
+
+    def _reset_visual_draft_flow(self) -> None:
+        self.run.role = None
+        self.run.draft = None
+        self.run.pokemon_slot = None
+        self.run.move_slot = None
+        self.selected_pokemon = None
+        self.current_results = []
+
+    def _draft_back(self) -> None:
+        if self.run.draft is not None:
+            self.run.draft = None
+            self.run.move_slot = None
+        elif self.selected_pokemon is not None:
+            self._reset_visual_draft_flow()
+        else:
+            self._draft_cancel()
+            return
+        self._draft_transition()
+
+    def _draft_cancel(self) -> None:
+        self._reset_visual_draft_flow()
+        self._set_operation_status(
+            "neutral", "DRAFTEO CANCELADO",
+            "No se ha consumido ningún drafteo ni preparado ningún movimiento.",
+        )
+        if self.active_page == "drafts":
+            self._smooth_render_page()
+
+    def _draft_transition(self) -> None:
+        self._draft_transition_token += 1
+        token = self._draft_transition_token
+
+        def render_next() -> None:
+            if token != self._draft_transition_token or self.active_page != "drafts":
+                return
+            self._draft_fade_in_pending = True
+            self._smooth_render_page()
+
+        # El flujo anima únicamente sus tarjetas, textos e imágenes. Cabecera,
+        # navegación lateral, barra inferior y ventana conservan siempre opacidad 1.
+        draft_view = self._draft_view
+        if draft_view is not None and self._widget_alive(draft_view.frame):
+            draft_view.fade_out(render_next)
+        else:
+            self.after(0, render_next)
 
     def _destroy_draft_steps_from(self, first_step: int) -> None:
         """Destruye solo la parte del flujo que cambia, evitando un flash completo."""
@@ -7910,42 +11930,33 @@ class RoleRunManager(ctk.CTk):
                 pass
 
     def _role_rules_are_active(self) -> bool:
-        return bool(self.project and self.project.role_rules_active)
+        # ``role_rules_active`` se conserva en JSON por compatibilidad, pero el
+        # producto ya no ofrece un estado de reglas desactivadas.
+        return self.project is not None
 
     def _set_role_rules_active(self) -> None:
-        if not self.project or self.project.role_rules_active:
+        if not self.project:
+            self.run.role_rules_activation_pending = False
+            return
+        if self.project.role_rules_active:
             self.run.role_rules_activation_pending = False
             return
         self.project.role_rules_active = True
         self.run.role_rules_activation_pending = False
-        event = {
-            "type": "role_rules_activated",
-            "label": "Reglas de rol activadas",
-            "source": "RoleRun Manager",
-        }
-        self.run.history.append(event)
-        self.project_service.append_history(self.project, event)
+        self.project_service.save(self.project)
 
     def _toggle_role_rules(self) -> None:
-        """Activa o desactiva libremente las restricciones RoleRun de esta Run."""
+        """Compatibilidad con callbacks antiguos: las reglas ya no se apagan."""
         if not self.project:
             return
-        active = not bool(self.project.role_rules_active)
-        self.project.role_rules_active = active
-        # Desde 1.12.18 el modo es un toggle real: no existe un estado irreversible
-        # ni una activación pendiente ligada al siguiente guardado del juego.
+        self.project.role_rules_active = True
         self.run.role_rules_activation_pending = False
         self.project_service.save(self.project)
-        event = {
-            "type": "role_rules_activated" if active else "role_rules_deactivated",
-            "label": "Reglas de rol activadas" if active else "Reglas de rol desactivadas",
-            "source": "RoleRun Manager",
-        }
-        self.run.history.append(event)
-        self.project_service.append_history(self.project, event)
-        self._sync_live_layout()
-        self._smooth_render_page(preserve_scroll=(self.active_page == "team"))
-        self._show_rules_mode_toast(active)
+        self._set_operation_status(
+            "neutral",
+            "REGLAS ROLERUN ACTIVAS",
+            "Los Pokémon SIN ROL siguen disponibles para preparar el equipo, pero no deben combatir todavía.",
+        )
 
     def _show_rules_mode_toast(self, active: bool) -> None:
         toast = ctk.CTkFrame(
@@ -8042,7 +12053,7 @@ class RoleRunManager(ctk.CTk):
         self._open_rules_activation_review(issues)
 
     def _open_rules_activation_review(self, issues: list[dict]) -> None:
-        window = ctk.CTkToplevel(self)
+        window = IntegratedWindowSurface(self)
         self._apply_window_icon(window)
         window.title("Activar reglas de rol")
         window.geometry("780x620")
@@ -8354,6 +12365,879 @@ class RoleRunManager(ctk.CTk):
                 self._register_role_drag_tree(extra, pokemon, "main", extra, "SIN ROL")
 
 
+    @staticmethod
+    def _inventory_money_max_for_engine(engine_key: str) -> int:
+        return 999_999 if str(engine_key) == "bdsp" else 9_999_999
+
+    def _resolve_global_tm_profile(self):
+        """Resuelve únicamente fuentes ya usadas por el selector individual."""
+        key = str(getattr(self.save_engine, "key", "") or "")
+        if key not in {"bdsp", "oras", "xy", "sm", "usum"} or not self.current_save:
+            return None
+        if not self._oras_live_active:
+            messagebox.showinfo(
+                "Tiempo real no disponible",
+                "Abre el juego y espera a que RoleRun confirme la conexión antes de consultar la mochila de MT.",
+                parent=self._dialog_parent(),
+            )
+            return None
+        if key == "bdsp":
+            return self._get_bdsp_tm_profile(prompt=True)
+        if key == "xy":
+            return self._get_xy_rom_tm_profile(prompt=False) or self._get_xy_rom_tm_profile(prompt=True)
+        if key == "sm":
+            return self._get_sm_rom_tm_profile(prompt=False) or self._get_sm_rom_tm_profile(prompt=True)
+        if key == "usum":
+            return self._get_usum_rom_tm_profile(prompt=False) or self._get_usum_rom_tm_profile(prompt=True)
+        profile = self._get_oras_rom_tm_profile(prompt=False)
+        if profile is None and bool(str(getattr(self.project, "oras_fvx_tm_log", "") or "").strip()):
+            profile = self._get_oras_fvx_tm_profile(prompt=False)
+        if profile is None:
+            profile = self._get_oras_rom_tm_profile(prompt=True)
+        return profile
+
+    def _load_global_tm_context(self) -> None:
+        if self._global_tm_load_requested or self.active_page != "tms":
+            return
+        profile = self._resolve_global_tm_profile()
+        if profile is None:
+            return
+        self._global_tm_load_requested = True
+
+        def loaded(profile, inventory, source) -> None:
+            self._global_tm_load_requested = False
+            if self.active_page != "tms":
+                return
+            detail = f"{getattr(getattr(profile, 'source', None), 'name', 'fuente validada')} · {source}"
+            self._global_tm_context = (profile, dict(inventory), detail)
+            self._smooth_render_page(reset_scroll=True)
+
+        self._start_live_tm_inventory_load(
+            None, 1, replace_existing=True, profile=profile, on_loaded=loaded,
+            on_failed=lambda: setattr(self, "_global_tm_load_requested", False),
+        )
+
+    def _global_tm_entries(self, profile, inventory: dict[int, int]) -> tuple[dict[str, object], ...]:
+        party = tuple(self._projected_party()[:6])
+        compatible_by_move: dict[int, set[str]] = {}
+        known_by_move: dict[int, set[str]] = {}
+        for pokemon in party:
+            _names, move_ids = self._effective_moves_for_review(pokemon)
+            identity = self._pokemon_identity(pokemon)
+            for move_id in move_ids:
+                if int(move_id or 0) > 0:
+                    known_by_move.setdefault(int(move_id), set()).add(identity)
+            for candidate in self._tm_flow_candidates(pokemon, profile, inventory, move_ids):
+                move_id = int(candidate["move_id"])
+                compatible_by_move.setdefault(move_id, set()).add(identity)
+
+        entries: list[dict[str, object]] = []
+        for number in sorted(getattr(profile, "tms", {})):
+            tm = profile.tm(number)
+            if tm is None:
+                continue
+            quantity = int(inventory.get(int(tm.item_id), 0))
+            if quantity <= 0:
+                continue
+            metadata = self._draft_move_metadata(int(tm.move_id))
+            move = self.engine.move(int(tm.move_id))
+            entries.append({
+                "number": int(number), "item_id": int(tm.item_id), "move_id": int(tm.move_id),
+                "move_name": str(move.get("name_es", f"Movimiento #{int(tm.move_id)}")),
+                "quantity": quantity, "owned": quantity > 0,
+                "category": {
+                    "physical": "FÍSICO", "special": "ESPECIAL", "status": "ESTADO",
+                }.get(str(self._damage_class_for_move(int(tm.move_id))), "NO DISPONIBLE"),
+                "power": metadata.get("power", "—"), "accuracy": metadata.get("accuracy", "—"),
+                "pp": self._tm_pp_for_profile(profile, int(tm.move_id)) or "—",
+                "description": metadata.get("description", "No disponible"),
+                "compatible": tuple(sorted(compatible_by_move.get(int(tm.move_id), set()))),
+                "known": tuple(sorted(known_by_move.get(int(tm.move_id), set()))),
+            })
+        return tuple(entries)
+
+    def _render_global_tm_page(self) -> None:
+        self._clear(self.body)
+        if not self.current_game:
+            self._empty_page("No hay partida cargada", "Abre una Run para consultar sus MT.", self._return_to_welcome)
+            return
+        context = self._global_tm_context
+        if context is None:
+            panel = ctk.CTkFrame(self.body, height=520, fg_color="#151515", corner_radius=16,
+                                 border_width=1, border_color="#3A3A3A")
+            panel.grid(row=0, column=0, sticky="nsew")
+            panel.grid_propagate(False)
+            ctk.CTkLabel(panel, text="COMPROBANDO LA MOCHILA DE MT…", text_color=GOLD,
+                         font=ctk.CTkFont("Segoe UI", 18, "bold")).place(relx=.5, rely=.46, anchor="center")
+            ctk.CTkLabel(panel, text="RoleRun mostrará únicamente datos demostrados por el juego activo.",
+                         text_color=MUTED, font=ctk.CTkFont("Segoe UI", 12)).place(relx=.5, rely=.52, anchor="center")
+            self.after(20, self._load_global_tm_context)
+            return
+        profile, inventory, source_detail = context
+        party = tuple(self._projected_party()[:6])
+        self._global_tm_view = GlobalTMView(
+            self.body, entries=self._global_tm_entries(profile, inventory), party=party,
+            identity_for=self._pokemon_identity, role_for=self._effective_role,
+            sprite_for=self._team_pc_sprite, role_icon_for=self.role_icons.image,
+            on_choose=lambda entry, pokemon: self._open_global_tm_choice(profile, inventory, source_detail, entry, pokemon),
+            source_detail=source_detail,
+            navigation_keys=self.project.menu_keys if self.project else None,
+            on_left_edge=self._select_sidebar_from_content,
+            on_edge_accept=self._accept_sidebar_from_content,
+        )
+        self._set_navigation_owner(self._global_tm_view)
+
+    def _open_global_tm_choice(self, profile, inventory, source_detail, entry, pokemon) -> None:
+        if entry is None:
+            return
+        self._open_integrated_tm_flow(
+            pokemon, profile, inventory, source_detail,
+            initial_move_id=int(entry["move_id"]), return_page="tms",
+        )
+
+    def _render_team_pc_unified_page(self) -> None:
+        """Compone Equipo, Caja PC e inspector sin duplicar lógica funcional."""
+        if not self.current_game:
+            self._empty_page(
+                "No hay equipo cargado",
+                "Abre una Run para consultar el equipo y sus cajas.",
+                self.select_save,
+            )
+            return
+
+        projected_party = list(self._projected_party())
+        team_slots = build_fixed_team_slots(
+            projected_party,
+            lambda pokemon: self._effective_role(pokemon)[0],
+            self._pokemon_identity,
+        )
+        pc_data = self._team_pc_cached_data()
+        box_count = int(pc_data.box_count) if pc_data is not None else 1
+        slot_count = int(pc_data.box_slot_count) if pc_data is not None else ORAS_PC_BOX_SLOT_COUNT
+        requested_box = int(self._pc_page_box or (pc_data.current_box if pc_data is not None else 1) or 1)
+        faint_mode = self._faint_replacement_mode
+        if faint_mode is not None and requested_box == ORAS_GRAVEYARD_BOX:
+            requested_box = 1 if box_count >= 1 else requested_box
+        box_number = max(1, min(requested_box, box_count))
+        self._pc_page_box = box_number
+        members = self._team_pc_box_members(pc_data, box_number)
+
+        # El estado inferior ya comunica la sustitución. El segundo aviso rojo
+        # duplicaba la información y, además, activaba el layout compacto que
+        # recortaba el botón de reemplazo de la ficha.
+        mode_banner = None
+        self._team_pc_view = UnifiedTeamPCView(
+            self.body,
+            team_slots=team_slots,
+            pc_members=members,
+            pc_box=box_number,
+            pc_box_count=box_count,
+            pc_slot_count=slot_count,
+            selection=self._team_pc_selection,
+            identity_for=self._pokemon_identity,
+            role_for=self._team_pc_role_for,
+            sprite_for=self._team_pc_sprite,
+            role_icon_for=self.role_icons.image,
+            base_stats_for=self._team_pc_base_stats,
+            pending_for=self._team_pc_pokemon_has_pending_change,
+            move_issues_for=self._collect_pokemon_move_issues,
+            on_box_change=self._team_pc_change_box,
+            on_search=self._team_pc_global_search,
+            on_action=self._team_pc_action,
+            on_role_info=self._show_role_information,
+            on_heal_party=(
+                self._heal_bdsp_party
+                if faint_mode is None and self._live_party_heal_available()
+                else None
+            ),
+            on_drop=None if faint_mode is not None else self._team_pc_drop,
+            can_drop=None if faint_mode is not None else self._team_pc_can_drop,
+            on_select=self._team_pc_select,
+            on_composed=self._team_pc_view_composed,
+            on_cancel=(
+                self._dismiss_integrated_faint_picker
+                if faint_mode is not None else self._cancel_team_pc_pending_selection
+            ),
+            interaction_mode="faint-replacement" if faint_mode is not None else "normal",
+            mode_banner=mode_banner,
+            excluded_boxes={ORAS_GRAVEYARD_BOX} if faint_mode is not None else set(),
+            compact=self.winfo_width() <= 1160,
+            navigation_keys=self.project.menu_keys if self.project else None,
+            on_left_edge=self._select_sidebar_from_content,
+            on_edge_accept=self._accept_sidebar_from_content,
+        )
+        # La vista conserva la firma de los PS que realmente compuso. Durante
+        # el arranque BDSP ``current_game`` puede recibir la party live mientras
+        # esta instancia todavía representa el save provisional. Sin esta
+        # frontera, comprobar solo ``is_fully_composed`` autorizaba a retirar el
+        # loader sobre el árbol antiguo y el repintado correcto aparecía varios
+        # segundos después.
+        self._team_pc_view._source_health_signature = self._party_health_signature(
+            projected_party
+        )
+        self._set_navigation_owner(self._team_pc_view)
+
+        if pc_data is None and not self._team_pc_pc_loading:
+            self.after(20, self._start_team_pc_load)
+        else:
+            self._ensure_live_pc_matrix_loaded()
+
+    def _team_pc_base_stats(self, pokemon) -> dict[str, int]:
+        """Lee la tabla Personal efectiva; nunca reconstruye stats raciales."""
+        embedded = dict(getattr(pokemon, "base_stats", {}) or {})
+        if embedded:
+            return embedded
+        engine_key = str(getattr(self.save_engine, "key", "") or "")
+        if engine_key == "bdsp":
+            profile = self._get_bdsp_tm_profile(prompt=False)
+        elif engine_key == "oras":
+            profile = self._get_oras_rom_tm_profile(prompt=False)
+        elif engine_key == "sm":
+            profile = self._get_sm_rom_tm_profile(prompt=False)
+        elif engine_key == "usum":
+            profile = self._get_usum_rom_tm_profile(prompt=False)
+        else:
+            return {}
+        if profile is None:
+            return {}
+        if engine_key in {"oras", "sm", "usum"}:
+            personal = profile.personal_for(
+                int(getattr(pokemon, "species_id", 0) or 0),
+                int(getattr(pokemon, "form", 0) or 0),
+            )
+            values = personal.base_stats if personal is not None else None
+        else:
+            values = profile.base_stats(
+                int(getattr(pokemon, "species_id", 0) or 0),
+                int(getattr(pokemon, "form", 0) or 0),
+            )
+        if engine_key in {"oras", "sm", "usum"} and values is not None:
+            # Personal Gen 6/7 conserva el orden binario
+            # PS, Atq., Def., Vel., At. Esp., Def. Esp.; la UI usa Velocidad
+            # al final, igual que SavePokemon.stats/ivs/evs.
+            values = tuple(values[index] for index in (0, 1, 2, 4, 5, 3))
+        return stat_dict(values) if values is not None else {}
+
+    def _team_pc_view_composed(self, view) -> None:
+        """Recibe la frontera final desde la vista que realmente se presentará."""
+        if view is not getattr(self, "_team_pc_view", None):
+            return
+        if self._initial_shell_waiting:
+            self._retire_initial_shell_when_ready()
+
+    def _team_pc_cached_data(self) -> SavePCData | None:
+        if self._pc_cache is None:
+            return None
+        if self.current_save is None:
+            return self._pc_cache
+        signature = self._save_file_signature(Path(self.current_save.path))
+        if self._pc_cache_signature is None or signature == self._pc_cache_signature:
+            return self._pc_cache
+        return None
+
+    def _ensure_live_pc_matrix_loaded(self) -> bool:
+        """Agenda la matriz PC viva cuando la vista aún conserva datos del save.
+
+        La conexión puede quedar marcada como activa antes de publicar el primer
+        snapshot. Por ello esta garantía se evalúa tras cada publicación validada
+        y no depende de detectar una transición ``False -> True``.
+        """
+        live_key_getter = getattr(self, "_active_azahar_realtime_key", None)
+        live_key = live_key_getter() if callable(live_key_getter) else ""
+        if live_key not in FULL_MATRIX_LIVE_PC_GAME_KEYS:
+            return False
+        pc_data = self._team_pc_cached_data()
+        needs_live_matrix = bool(
+            self._oras_live_active
+            and self.active_page in {"team", "pc"}
+            and not bool((getattr(pc_data, "raw", None) or {}).get("live_matrix"))
+        )
+        if (
+            needs_live_matrix
+            and not self._team_pc_pc_loading
+            and not getattr(self, "_pc_selector_live_refresh_in_progress", False)
+        ):
+            self.after(20, self._start_team_pc_load)
+            return True
+        return False
+
+    def _start_team_pc_load(self) -> None:
+        if self._team_pc_pc_loading or not self.current_save or not self.current_game or not self.project:
+            return
+        if getattr(self, "_pc_selector_live_refresh_in_progress", False):
+            self.after(180, self._start_team_pc_load)
+            return
+        self._team_pc_pc_loading = True
+        self._show_busy_indicator("pc-load", "Cargando las cajas del PC…")
+        self._set_operation_status(
+            "applying",
+            "CARGANDO CAJAS PC",
+            "RoleRun está obteniendo la matriz de cajas sin bloquear la ventana.",
+        )
+        live_key = self._active_azahar_realtime_key()
+        if live_key in FULL_MATRIX_LIVE_PC_GAME_KEYS and self._oras_live_active:
+            if live_key == "usum":
+                # El cambio de proceso invalida correctamente Personal antes del
+                # primer snapshot. Hay que volver a demostrar/cargar el perfil
+                # ANTES de leer el PK7 de caja: sin él, el reader conserva IV/EV
+                # pero no puede calcular las stats que PK7 almacenado no contiene.
+                self._get_usum_rom_tm_profile(prompt=False)
+            self._open_pc_selector_from_live_matrix(
+                replace_pokemon=None,
+                forced_role=None,
+                browse_only=True,
+                on_loaded=self._finish_team_pc_load,
+                on_error=self._fail_team_pc_load,
+            )
+            return
+
+        generation = self._session_generation
+        project_slug = self.project.slug
+        save_path = Path(self.current_save.path)
+        signature = self._save_file_signature(save_path)
+
+        def worker() -> None:
+            try:
+                data = self.save_engine.read_boxes(save_path)
+                error = None
+            except Exception as exc:
+                data = None
+                error = str(exc)
+            self.after(0, lambda: finish(data, error))
+
+        def finish(data: SavePCData | None, error: str | None) -> None:
+            if (
+                generation != self._session_generation
+                or not self.project
+                or self.project.slug != project_slug
+            ):
+                self._team_pc_pc_loading = False
+                self._hide_busy_indicator("pc-load")
+                return
+            if error or data is None:
+                self._fail_team_pc_load(error or "No se obtuvo una matriz de cajas válida.")
+                return
+            self._pc_cache = data
+            self._pc_cache_signature = signature
+            self._finish_team_pc_load(data)
+            if live_key in LIVE_PC_READ_GAME_KEYS:
+                self._schedule_gen6_live_pc_refresh()
+
+        threading.Thread(
+            target=worker, daemon=True, name="RoleRunUnifiedPCLoad",
+        ).start()
+
+    def _finish_team_pc_load(self, data: SavePCData) -> None:
+        self._team_pc_pc_loading = False
+        self._pc_cache = data
+        if getattr(self, "_initial_shell_waiting", False):
+            # La barrera inicial debe componer y publicar exactamente la matriz
+            # live que acaba de ser demostrada, nunca la lectura antigua del save.
+            self._initial_shell_pc_data = data
+        self._set_operation_status(
+            "confirmed",
+            "CAJAS PC DISPONIBLES",
+            f"RoleRun cargó {int(data.box_count)} caja(s) y mantiene la ventana lista para usar.",
+        )
+        requested_identity = self._faint_reopen_requested_identity
+        self._faint_reopen_requested_identity = None
+        if requested_identity and self.project:
+            event = next((
+                item for item in self.project.pending_faints
+                if str(item.get("identity", "") or "") == requested_identity
+                and bool(item.get("battle_ended", False))
+            ), None)
+            dead = self._pending_faint_party_member(event) if event is not None else None
+            if event is not None and dead is not None:
+                self._open_faint_replacement_picker(event, dead, pc_data=data)
+                self._hide_busy_indicator("pc-load")
+                return
+        if self.active_page in {"team", "pc"}:
+            self._smooth_render_page()
+        # _smooth_render_page puede encolar el trabajo si otro intercambio está
+        # activo. La barrera solo se retira tras observar la vista final real.
+        self._retire_team_pc_loader_when_ready(data)
+
+    def _retire_team_pc_loader_when_ready(
+        self, data: SavePCData, attempt: int = 0, stable_frames: int = 0,
+    ) -> None:
+        view = getattr(self, "_team_pc_view", None)
+        frame = getattr(view, "frame", None)
+        ready = bool(
+            not self._body_swap_in_progress
+            and view is not None
+            and self._widget_alive(frame)
+            and int(getattr(view, "pc_box_count", 0) or 0) == int(data.box_count)
+            and int(frame.winfo_width() or 0) > 400
+            and int(frame.winfo_height() or 0) > 400
+        )
+        stable_frames = stable_frames + 1 if ready else 0
+        if stable_frames >= 3:
+            self._hide_busy_indicator("pc-load")
+            return
+        if attempt >= 120:
+            self._hide_busy_indicator("pc-load")
+            self._set_operation_status(
+                "failed", "LA VISTA NO TERMINÓ DE COMPONERSE",
+                "Las cajas se leyeron, pero Equipo/PC no alcanzó un estado visual estable.",
+                persistent=True,
+            )
+            return
+        self.after(35, lambda: self._retire_team_pc_loader_when_ready(
+            data, attempt + 1, stable_frames,
+        ))
+
+    def _fail_team_pc_load(self, error: str) -> None:
+        self._team_pc_pc_loading = False
+        self._hide_busy_indicator("pc-load")
+        self._set_operation_status(
+            "failed",
+            "NO SE PUDIERON ABRIR LAS CAJAS",
+            str(error),
+            actions=("Reintentar", "Ver detalle"),
+            persistent=True,
+        )
+
+    def _team_pc_box_members(
+        self, pc_data: SavePCData | None, box_number: int,
+    ) -> dict[int, SavePokemon]:
+        if pc_data is None or not (1 <= int(box_number) <= int(pc_data.box_count)):
+            return {}
+        return {
+            int(pokemon.box_slot or pokemon.slot): pokemon
+            for pokemon in self._project_pc_box_pokemon(pc_data, int(box_number))
+            if int(pokemon.box_slot or pokemon.slot or 0) > 0
+        }
+
+    def _team_pc_change_box(self, box_number: int) -> tuple[int, dict[int, SavePokemon]]:
+        pc_data = self._team_pc_cached_data()
+        if pc_data is None:
+            return 1, {}
+        target = max(1, min(int(box_number), int(pc_data.box_count)))
+        if self._faint_replacement_mode is not None and target == ORAS_GRAVEYARD_BOX:
+            choices = [
+                value for value in range(1, int(pc_data.box_count) + 1)
+                if value != ORAS_GRAVEYARD_BOX
+            ]
+            if choices:
+                target = min(choices, key=lambda value: (abs(value - target), value))
+        self._pc_page_box = target
+        return target, self._team_pc_box_members(pc_data, target)
+
+    def _team_pc_global_search(self, query: str) -> list[tuple[int, int, SavePokemon]]:
+        pc_data = self._team_pc_cached_data()
+        if pc_data is None or not str(query).strip():
+            return []
+        results: list[tuple[int, int, SavePokemon]] = []
+        for box_number in range(1, int(pc_data.box_count) + 1):
+            members = self._project_pc_box_pokemon(pc_data, box_number)
+            for pokemon in filter_pc_pokemon(members, query):
+                results.append((
+                    box_number,
+                    int(pokemon.box_slot or pokemon.slot or 0),
+                    pokemon,
+                ))
+        return results
+
+    def _team_pc_role_for(self, pokemon: SavePokemon, context: str) -> tuple[str, str]:
+        if context == "pc":
+            return self._pc_effective_role(pokemon)
+        return self._effective_role(pokemon)
+
+    def _team_pc_sprite(
+        self, pokemon: SavePokemon | None, size: tuple[int, int],
+    ) -> ctk.CTkImage | None:
+        if pokemon is None:
+            return None
+        source = self._sprite_source(pokemon)
+        if source is None:
+            return None
+        source.thumbnail(size, Image.Resampling.LANCZOS)
+        return ctk.CTkImage(
+            light_image=source, dark_image=source, size=source.size,
+        )
+
+    def _team_pc_pokemon_has_pending_change(self, pokemon: SavePokemon, context: str) -> bool:
+        identity = self._pokemon_identity(pokemon)
+        box = int(pokemon.box or 0)
+        box_slot = int(pokemon.box_slot or 0)
+        for change in self.run.pending_changes:
+            identities = {
+                str(getattr(change, name, "") or "")
+                for name in ("pokemon_identity", "incoming_identity", "outgoing_identity")
+            }
+            if identity and identity in identities:
+                return True
+            if context == "pc" and (
+                int(getattr(change, "box", 0) or 0) == box
+                and int(getattr(change, "box_slot", 0) or 0) == box_slot
+            ):
+                return True
+        return False
+
+    def _team_pc_action(self, action: str, pokemon: SavePokemon) -> None:
+        if action.startswith("replace_move:"):
+            self._open_tm_selector(pokemon, int(action.partition(":")[2]), replace_existing=True)
+            return
+        if action.startswith("delete_move:"):
+            slot = int(action.partition(":")[2])
+            role, _symbol = self._effective_role(pokemon)
+            issue = next((
+                item for item in self._collect_pokemon_move_issues(pokemon, role)
+                if int(item["move_slot"]) == slot
+            ), None)
+            if issue is not None:
+                self._queue_invalid_move_removals([issue])
+            return
+        if action == "replace_fainted":
+            self._prepare_faint_replacement(pokemon)
+        elif action == "move_help":
+            self.navigate("moves")
+        elif action == "change_role":
+            self.open_role_editor(pokemon)
+        elif action == "swap_with_pc":
+            self._team_pc_pending_outgoing = self._pokemon_identity(pokemon)
+            self._set_operation_status(
+                "prepared",
+                "ELIGE UN POKÉMON DEL PC",
+                f"Selecciona en la caja quién sustituirá a {pokemon.nickname or pokemon.species}. Pulsa Escape para cancelar.",
+                actions=("Cancelar",),
+                persistent=True,
+            )
+        elif action == "send_to_pc":
+            self.send_pokemon_to_pc(pokemon, ask=False)
+        elif action == "pc_to_team":
+            if len(self._projected_party()) < 6:
+                self._team_pc_execute_change(pokemon, None)
+            else:
+                self._team_pc_pending_incoming = (
+                    int(pokemon.box or self._pc_page_box or 1),
+                    int(pokemon.box_slot or pokemon.slot or 0),
+                    self._pokemon_identity(pokemon),
+                )
+                self._set_operation_status(
+                    "prepared",
+                    "ELIGE LA CASILLA DEL EQUIPO",
+                    f"Selecciona el Pokémon al que sustituirá {pokemon.nickname or pokemon.species}. Pulsa Escape para cancelar.",
+                    actions=("Cancelar",),
+                    persistent=True,
+                )
+        elif action == "teach_tm":
+            _moves, move_ids = self._effective_moves_for_review(pokemon)
+            try:
+                slot_index = next(index for index, move_id in enumerate(move_ids[:4], start=1) if int(move_id or 0) == 0)
+            except StopIteration:
+                slot_index = 1
+            self._open_tm_selector(
+                pokemon,
+                slot_index,
+                replace_existing=bool(int(move_ids[slot_index - 1] or 0)),
+            )
+
+    def _heal_bdsp_party(self) -> None:
+        """Cura toda la party como una sola transacción PB8 verificada."""
+        if not RoleRunManager._live_party_heal_available(self) or not self.current_game:
+            return
+        pending_ids_before = {id(change) for change in self.run.pending_changes}
+        self.run.pending_changes.extend(
+            PendingPartyHeal(
+                pokemon_slot=int(pokemon.slot),
+                pokemon=pokemon.nickname or pokemon.species,
+                species=pokemon.species,
+                pokemon_identity=self._pokemon_identity(pokemon),
+            )
+            for pokemon in self.current_game.party
+        )
+        self._set_operation_status(
+            "applying", "CURANDO EL EQUIPO",
+            "Restaurando PS, problemas de estado y PP; después se hará readback completo.",
+        )
+        self._request_oras_live_auto_apply_since(pending_ids_before)
+
+    def _team_pc_select(self, context: str, pokemon: SavePokemon) -> None:
+        if self._faint_replacement_mode is not None:
+            return
+        if context == "pc" and self._team_pc_pending_outgoing is not None:
+            outgoing = self._find_projected_pokemon_by_identity(self._team_pc_pending_outgoing)
+            if outgoing is None:
+                self._team_pc_pending_outgoing = None
+                self._set_operation_status(
+                    "failed", "EL EQUIPO HA CAMBIADO",
+                    "El Pokémon saliente ya no pertenece al equipo confirmado. No se preparó nada.",
+                    persistent=True,
+                )
+                return
+            self._team_pc_execute_change(pokemon, outgoing)
+            return
+        if context != "team" or self._team_pc_pending_incoming is None:
+            return
+        incoming = self._team_pc_pending_pokemon()
+        if incoming is None:
+            self._team_pc_pending_incoming = None
+            self._set_operation_status(
+                "failed",
+                "EL PC HA CAMBIADO",
+                "El Pokémon elegido ya no ocupa la posición validada. No se preparó ningún cambio.",
+                persistent=True,
+            )
+            return
+        self._team_pc_execute_change(incoming, pokemon)
+
+    def _cancel_team_pc_pending_selection(self) -> None:
+        if self._team_pc_pending_incoming is None and self._team_pc_pending_outgoing is None:
+            return
+        self._team_pc_pending_incoming = None
+        self._team_pc_pending_outgoing = None
+        self._set_operation_status(
+            "neutral", "SELECCIÓN CANCELADA", "No se ha preparado ningún cambio Equipo↔PC.",
+        )
+
+    def _team_pc_pending_pokemon(self) -> SavePokemon | None:
+        pending = self._team_pc_pending_incoming
+        data = self._team_pc_cached_data()
+        if pending is None or data is None:
+            return None
+        box, slot, identity = pending
+        candidate = next((
+            pokemon for pokemon in self._project_pc_box_pokemon(data, int(box))
+            if int(pokemon.box_slot or pokemon.slot or 0) == int(slot)
+        ), None)
+        if candidate is None or self._pokemon_identity(candidate) != identity:
+            return None
+        return candidate
+
+    def _team_pc_execute_change(
+        self,
+        incoming: SavePokemon,
+        outgoing: SavePokemon | None,
+        *,
+        target_role: str | None = None,
+        libero_stats: tuple[str, ...] = (),
+    ) -> bool:
+        """Invoca el modelo Equipo↔PC existente desde botones o drag."""
+        if (
+            self._active_azahar_realtime_key() == "b2w2"
+            and outgoing is None
+            and len(self._projected_party()) >= 6
+        ):
+            self._team_pc_pending_incoming = None
+            self._team_pc_pending_outgoing = None
+            self._set_operation_status(
+                "warning",
+                "ESCRITURA B2/W2 AÚN CERRADA",
+                "No se proyectó ningún intercambio: RoleRun seguirá mostrando "
+                "exactamente el equipo y el PC reales hasta validar el writer PK5.",
+                persistent=True,
+            )
+            return False
+        if (
+            outgoing is None
+            and self._active_azahar_realtime_key() == "oras"
+            and self._oras_live_auto_apply_available()
+        ):
+            self._set_operation_status(
+                "warning",
+                "OPERACIÓN NO HABILITADA",
+                f"{self._active_azahar_realtime_label()} solo tiene demostrado el intercambio directo Equipo↔PC.",
+                persistent=True,
+            )
+            return False
+        projected = self._projected_party()
+        effective_target_role = target_role
+        if outgoing is not None:
+            effective_target_role = self._effective_role(outgoing)[0]
+        elif effective_target_role not in ROLE_ORDER:
+            occupied = {self._effective_role(member)[0] for member in projected}
+            effective_target_role = next((role for role in ROLE_ORDER if role not in occupied), None)
+        if effective_target_role == "Líbero" and len(libero_stats) != 2:
+            self._prompt_libero_ev_stats(
+                incoming,
+                lambda stats, inc=incoming, out=outgoing, role=target_role: self._team_pc_execute_change(
+                    inc, out, target_role=role, libero_stats=stats,
+                ),
+            )
+            return True
+        pending_before = {id(change) for change in self.run.pending_changes}
+        try:
+            verb = self._prepare_pc_team_change(
+                incoming,
+                outgoing,
+                incoming_role_override=target_role,
+                incoming_libero_stats=libero_stats,
+            )
+        except RuntimeError as exc:
+            self._set_operation_status(
+                "failed", "NO SE PUDO PREPARAR EL CAMBIO", str(exc), persistent=True,
+            )
+            return False
+        created = [change for change in self.run.pending_changes if id(change) not in pending_before]
+        self._team_pc_pending_incoming = None
+        self._team_pc_pending_outgoing = None
+        self._pc_cache = None
+        self._update_top_status()
+        self._sync_live_layout()
+        self.active_page = DEFAULT_PAGE
+        self._smooth_render_page(preserve_scroll=True)
+        if created:
+            self._set_operation_status(
+                "applying" if self._oras_live_auto_apply_available() else "prepared",
+                "APLICANDO CAMBIO" if self._oras_live_auto_apply_available() else verb,
+                (
+                    "RoleRun ha enviado la misma operación transaccional del botón y espera readback del juego."
+                    if self._oras_live_auto_apply_available()
+                    else f"{incoming.nickname or incoming.species} está preparado para el flujo de guardado."
+                ),
+            )
+        return True
+
+    def _team_pc_drop(
+        self,
+        source_context: str,
+        source: SavePokemon,
+        target_context: str,
+        target: dict[str, object],
+    ) -> None:
+        target_pokemon = target.get("pokemon")
+        if source_context == target_context == "team":
+            target_role = str(target.get("slot_role") or "")
+            if target_role in ROLE_ORDER:
+                self._move_pokemon_to_role_by_drag(source, target_role, context="main")
+            return
+        intent = resolve_team_pc_drop(
+            source_context,
+            target_context,
+            target_occupied=target_pokemon is not None,
+            team_count=len(self._projected_party()),
+        )
+        if intent.operation is None:
+            self._set_operation_status(
+                "warning",
+                "DESTINO NO HABILITADO",
+                intent.reason or "No existe una escritura demostrada para ese movimiento.",
+                persistent=True,
+            )
+            return
+        if intent.operation == "party-to-box":
+            exact_destination = None
+            if self._active_azahar_realtime_key() in (*GEN7_REALTIME_GAME_KEYS, "xy", "b2w2"):
+                box = int(target.get("box") or 0)
+                slot = int(target.get("slot") or 0)
+                if box > 0 and slot > 0:
+                    exact_destination = (box, slot)
+            self.send_pokemon_to_pc(source, ask=False, destination=exact_destination)
+            return
+        if intent.operation == "box-to-party":
+            self._team_pc_execute_change(
+                source,
+                None,
+                target_role=str(target.get("slot_role") or "") or None,
+            )
+            return
+        if intent.operation == "move-box-slot":
+            if self._active_azahar_realtime_key() not in {"usum", "xy", "b2w2"}:
+                game_label = self._active_azahar_realtime_label()
+                self._set_operation_status(
+                    "warning", "DESTINO NO HABILITADO",
+                    f"{game_label} ya lee y sigue el PC, pero todavía no tiene "
+                    "una escritura PC→PC validada. No se proyectó ningún cambio.",
+                    persistent=True,
+                )
+                return
+            source_box = int(getattr(source, "box", 0) or 0)
+            source_slot = int(getattr(source, "box_slot", 0) or getattr(source, "slot", 0) or 0)
+            destination_box = int(target.get("box") or 0)
+            destination_slot = int(target.get("slot") or 0)
+            if min(source_box, source_slot, destination_box, destination_slot) <= 0:
+                self._set_operation_status(
+                    "failed", "DESTINO INVÁLIDO",
+                    "No se pudo demostrar el origen y el destino exactos del PC.", persistent=True,
+                )
+                return
+            if (source_box, source_slot) == (destination_box, destination_slot):
+                return
+            pending_ids_before = {id(change) for change in self.run.pending_changes}
+            self.run.pending_changes.append(PendingTeamChange(
+                operation="move-box-slot", party_slot=0,
+                box=source_box, box_slot=source_slot,
+                destination_box=destination_box, destination_box_slot=destination_slot,
+                incoming_pokemon=source.nickname or source.species,
+                incoming_species=source.species,
+                incoming_snapshot=self._pokemon_snapshot(source),
+                incoming_identity=self._pokemon_identity(source),
+                box_witnesses=(
+                    self._pc_box_witnesses(source_box, source_slot)
+                    if self._active_azahar_realtime_key() == "xy"
+                    else self._pc_role_witnesses(source)
+                ),
+            ))
+            self._request_oras_live_auto_apply_since(pending_ids_before)
+            self._set_operation_status(
+                "applying", "MOVIENDO EN EL PC",
+                f"Verificando Caja {source_box}, posición {source_slot} → Caja {destination_box}, posición {destination_slot}.",
+            )
+            return
+        if source_context == "team":
+            incoming = target_pokemon
+            outgoing = source
+        else:
+            incoming = source
+            outgoing = target_pokemon
+        if incoming is None or outgoing is None:
+            self._set_operation_status(
+                "failed", "DESTINO INVÁLIDO", "La ocupación cambió antes de soltar. No se preparó nada.",
+                persistent=True,
+            )
+            return
+        self._team_pc_execute_change(incoming, outgoing)
+
+    def _team_pc_can_drop(
+        self,
+        source_context: str,
+        _source: SavePokemon,
+        target_context: str,
+        target: dict[str, object],
+    ) -> bool:
+        if source_context == target_context == "team":
+            return str(target.get("slot_role") or "") in ROLE_ORDER
+        intent = resolve_team_pc_drop(
+            source_context,
+            target_context,
+            target_occupied=target.get("pokemon") is not None,
+            team_count=len(self._projected_party()),
+        )
+        if intent.operation is None:
+            return False
+        if intent.operation == "move-box-slot":
+            return (
+                self._active_azahar_realtime_key() in {"usum", "xy"}
+                and self._oras_live_auto_apply_available()
+            )
+        if (
+            intent.operation in {"party-to-box", "box-to-party"}
+            and self._active_azahar_realtime_key() in GEN6_REALTIME_GAME_KEYS
+            and self._oras_live_auto_apply_available()
+        ):
+            # X/Y dispone de transacción de cambio de tamaño validada: bloque
+            # PK6, compactación de party y contador 0x08CE1C74 con commit final.
+            # ORAS continúa cerrado hasta demostrar su contador propio.
+            return self._active_azahar_realtime_key() == "xy"
+        return True
+
+    def _show_role_information(self, role: str) -> None:
+        if role not in ROLE_GUIDE or not self._widget_alive(getattr(self, "content", None)):
+            return
+        previous = self._role_info_popover
+        if previous is not None:
+            previous.close()
+
+        def closed() -> None:
+            self._role_info_popover = None
+
+        self._role_info_popover = IntegratedRoleInfoPopover(
+            self.content, role, on_close=closed,
+            on_open_moves=lambda: self.navigate("moves"),
+        )
+
     def _render_team_page(self) -> None:
         if not self.current_game:
             self._empty_page("No hay equipo cargado", "Abre una Run desde el Dashboard.", self.select_save)
@@ -8440,7 +13324,7 @@ class RoleRunManager(ctk.CTk):
         ).pack(anchor="w", padx=18, pady=(14, 3))
         ctk.CTkLabel(
             utilities,
-            text=("Añade recursos de comodidad. En ORAS, X/Y y Sol/Luna conectados se aplican al instante en el emulador y quedan definitivos "
+            text=("Añade recursos de comodidad. En ORAS, X/Y, Sol/Luna y BDSP conectados se aplican al instante en el emulador y quedan definitivos "
                   "cuando guardes dentro del juego; en los motores clásicos se mantienen como cambios pendientes."),
             text_color=MUTED, wraplength=820, justify="left",
             font=ctk.CTkFont("Segoe UI", 13),
@@ -8468,6 +13352,9 @@ class RoleRunManager(ctk.CTk):
 
         rare_candy_image = utility_icon("rare-candy.png")
         max_repel_image = utility_icon("max-repel.png")
+        bdsp_money_max = self._inventory_money_max_for_engine(
+            getattr(self.save_engine, "key", ""),
+        )
         ctk.CTkButton(
             utility_actions, text="x999", image=rare_candy_image, compound="left",
             command=lambda: self.queue_inventory_change("rare-candy", "Caramelo Raro", 999),
@@ -8484,7 +13371,9 @@ class RoleRunManager(ctk.CTk):
         ).grid(row=0, column=1, sticky="ew", padx=6)
         ctk.CTkButton(
             utility_actions, text="₽  +∞",
-            command=lambda: self.queue_inventory_change("money-max", "Dinero", 9_999_999),
+            command=lambda amount=bdsp_money_max: self.queue_inventory_change(
+                "money-max", "Dinero", amount,
+            ),
             fg_color=GOLD, hover_color="#D3AF70", text_color="#111111",
             height=58, corner_radius=12,
             font=ctk.CTkFont("Segoe UI Symbol", 21, "bold"),
@@ -8503,14 +13392,13 @@ class RoleRunManager(ctk.CTk):
         # hueco proyectado, el botón sigue ofreciendo elegir un sustituto.
         can_complete_pending_pc = bool(pending_team_changes and len(projected_party) < 6)
         self.team_sprite_images = {}
-        role_occupants, role_extras = self._role_slot_occupants(projected_party)
+        role_occupants, role_extras, display_index_by_identity, extra_role_indices = (
+            self._team_role_grid_layout(projected_party)
+        )
         display_party = [role_occupants[role] for role in ROLE_ORDER if role in role_occupants] + role_extras
-        display_index_by_identity: dict[str, int] = {}
         for role_index, role_name in enumerate(ROLE_ORDER):
             member = role_occupants.get(role_name)
-            if member is not None:
-                display_index_by_identity[self._pokemon_identity(member)] = role_index
-            else:
+            if member is None and role_index not in extra_role_indices:
                 # La casilla sigue existiendo aunque el rol esté libre.
                 empty_role = ctk.CTkFrame(
                     grid, fg_color="#151515", corner_radius=18, border_width=1, border_color="#3A3A3A",
@@ -8532,9 +13420,6 @@ class RoleRunManager(ctk.CTk):
                     empty_role, text="AÑADIR DESDE PC · O ARRASTRA AQUÍ UN POKÉMON", text_color=MUTED,
                     font=ctk.CTkFont("Segoe UI", 11, "bold"), wraplength=250, justify="center",
                 ).pack(padx=18, pady=(7, 36))
-        for extra_index, member in enumerate(role_extras, start=6):
-            display_index_by_identity[self._pokemon_identity(member)] = extra_index
-
         # La disponibilidad de MTs se calcula como máximo una vez por render.
         # Así seis tarjetas no releen seis veces la mochila ni la ROM.
         tm_context_loaded = False
@@ -8551,8 +13436,8 @@ class RoleRunManager(ctk.CTk):
             # Equipo. El botón SUSTITUIR solo abre el selector; la existencia
             # real de una MT compatible se valida al pulsarlo, fuera del render.
             # Dejar el botón disponible no autoriza ninguna escritura.
-            if getattr(self.save_engine, "key", "") in GEN7_REALTIME_GAME_KEYS:
-                available = bool(self._oras_live_active)
+            if getattr(self.save_engine, "key", "") in DEFERRED_LIVE_TM_INVENTORY_GAME_KEYS:
+                available = self._tm_replacement_can_load_on_click()
                 tm_replacement_cache[key] = available
                 return available
 
@@ -8768,7 +13653,7 @@ class RoleRunManager(ctk.CTk):
         # distintos. Si aún caben Pokémon, ofrecemos añadirlos sin inventar una
         # séptima "casilla de rol": entrarán SIN ROL, como hasta ahora.
         if len(projected_party) < 6:
-            add_row = 2 + ((len(role_extras) + 2) // 3)
+            add_row = 2
             add_panel = ctk.CTkFrame(grid, fg_color="#171717", corner_radius=14, border_width=1, border_color="#3A3A3A")
             add_panel.grid(row=add_row, column=0, columnspan=3, sticky="ew", padx=6, pady=(8, 4))
             add_panel.grid_columnconfigure(0, weight=1)
@@ -8847,6 +13732,17 @@ class RoleRunManager(ctk.CTk):
         self._oras_rom_tm_profile_source = None
         self._oras_rom_tm_profile_process = None
         self._oras_rom_tm_last_error = None
+
+    def _prepare_oras_live_metadata_profile(self) -> ORASTMProfile | None:
+        """Carga el Personal ORAS antes de publicar equipo o PC vivos.
+
+        El callback del adaptador es deliberadamente de solo consulta para no
+        descubrir ni persistir rutas desde un worker. Por eso esta preparación
+        ocurre en el hilo de UI, antes de iniciar cualquier captura.
+        """
+        if getattr(self.save_engine, "key", "") != "oras":
+            return None
+        return self._get_oras_rom_tm_profile(prompt=False)
 
     def _remember_oras_rom_tm_profile(self, profile: ORASTMProfile, process_name: str | None) -> ORASTMProfile:
         """Asocia una ROM ORAS validada a la Run sin guardar datos del juego."""
@@ -9338,12 +14234,19 @@ class RoleRunManager(ctk.CTk):
     def _effective_tm_inventory(self) -> dict[int, int]:
         if not self.current_save:
             return {}
-        inventory = dict(self.save_engine.read_inventory(self.current_save.path))
-        # Las MTs ya preparadas todavía siguen físicamente en el save. Restamos
-        # esas unidades para que una MT x1 no pueda seleccionarse dos veces antes
-        # de pulsar GUARDAR CAMBIOS.
+        return self._pending_adjusted_tm_inventory(
+            dict(self.save_engine.read_inventory(self.current_save.path))
+        )
+
+    def _pending_adjusted_tm_inventory(
+        self, inventory: dict[int, int],
+    ) -> dict[int, int]:
+        inventory = dict(inventory)
+        # Las MT consumibles ya preparadas todavía siguen físicamente en el
+        # save. Solo BDSP reserva esa unidad: ORAS/X/Y/SM/USUM usan MT
+        # reutilizables y deben seguir apareciendo disponibles.
         for change in self.run.pending_changes:
-            if isinstance(change, PendingTMTeach):
+            if isinstance(change, PendingTMTeach) and bool(change.consumes_item):
                 inventory[change.item_id] = max(0, inventory.get(change.item_id, 0) - 1)
         return inventory
 
@@ -9398,10 +14301,10 @@ class RoleRunManager(ctk.CTk):
         if engine_key not in {"bdsp", "oras", "xy", "sm", "usum"} or not self.current_save:
             return None
         try:
-            if engine_key in GEN7_REALTIME_GAME_KEYS:
+            if engine_key in GEN7_REALTIME_GAME_KEYS or engine_key == "bdsp":
                 # Alpha.18: esta función es exclusivamente pasiva (se usa al
-                # pintar tarjetas). La mochila SM nunca se demuestra desde un
-                # render: el selector explícito la carga en segundo plano.
+                # pintar tarjetas). Una mochila viva nunca se demuestra desde
+                # un render: el selector explícito la carga en segundo plano.
                 return None
             elif engine_key == "oras":
                 if not self._oras_live_active:
@@ -9446,19 +14349,40 @@ class RoleRunManager(ctk.CTk):
             return None
         return profile, inventory
 
-    def _start_sm_tm_inventory_load(
-        self, pokemon: SavePokemon, move_slot: int, *, replace_existing: bool, profile: ORASTMProfile,
-    ) -> None:
-        """Valida la mochila Gen7 fuera del hilo de Tk y abre después el selector.
+    def _tm_replacement_can_load_on_click(self) -> bool:
+        """Permite el botón cuando la mochila se validará tras el clic."""
+        return bool(
+            self._oras_live_active
+            and getattr(self.save_engine, "key", "")
+            in DEFERRED_LIVE_TM_INVENTORY_GAME_KEYS
+        )
 
-        SM y USUM comparten este coordinador UI, pero cada Real-Time Core usa sus
-        propios offsets/validadores. Ningún escaneo FCRAM pesado ocurre en render.
+    def _start_live_tm_inventory_load(
+        self, pokemon: SavePokemon | None, move_slot: int, *, replace_existing: bool,
+        profile: ORASTMProfile | BDSPTMProfile,
+        on_loaded=None,
+        on_failed=None,
+    ) -> None:
+        """Valida una mochila live fuera de Tk y abre después el selector.
+
+        Cada Real-Time Core conserva sus propios offsets/validadores. BDSP usa
+        su array ``saveItem`` y Gen7 sus bloques propios; ninguno se lee al pintar.
         """
         engine_key = str(getattr(self.save_engine, "key", "") or "")
-        if engine_key not in GEN7_REALTIME_GAME_KEYS:
+        if engine_key not in (*GEN7_REALTIME_GAME_KEYS, "bdsp", "oras", "xy"):
+            if on_failed is not None:
+                on_failed()
             return
-        label = "UltraSol/UltraLuna" if engine_key == "usum" else "Sol/Luna"
+        label = {
+            "usum": "UltraSol/UltraLuna",
+            "sm": "Sol/Luna",
+            "bdsp": "Perla Reluciente",
+            "oras": "Omega Rubí/Zafiro Alfa",
+            "xy": "Pokémon X/Y",
+        }[engine_key]
         if self._sm_tm_inventory_load_in_progress:
+            if on_failed is not None:
+                on_failed()
             self._show_live_sync_toast(
                 "MOCHILA MT EN CURSO",
                 f"RoleRun ya está validando la mochila viva de {label}. La ventana sigue operativa mientras termina.",
@@ -9476,14 +14400,20 @@ class RoleRunManager(ctk.CTk):
                     and self.project.slug == project_slug
                     and getattr(self.save_engine, "key", "") == engine_key
                 ):
-                    self._start_sm_tm_inventory_load(
+                    self._start_live_tm_inventory_load(
                         pokemon, move_slot, replace_existing=replace_existing, profile=profile,
+                        on_loaded=on_loaded, on_failed=on_failed,
                     )
 
             self.after(220, retry_when_idle)
             return
         realtime_core = getattr(self, "realtime_core", None)
-        if realtime_core is None or not self.current_save or not self.project:
+        inventory_reader = realtime_core
+        if inventory_reader is None and engine_key == "oras":
+            inventory_reader = getattr(self, "oras_live_writer", None)
+        if inventory_reader is None or not self.current_save or not self.project:
+            if on_failed is not None:
+                on_failed()
             messagebox.showerror(
                 f"No se pudo leer la mochila {label}",
                 f"El Real-Time Core de {label} no está disponible para esta Run.",
@@ -9494,29 +14424,54 @@ class RoleRunManager(ctk.CTk):
         generation = self._session_generation
         project_slug = self.project.slug
         save_path = Path(self.current_save.path)
-        identity = self._pokemon_identity(pokemon)
+        identity = self._pokemon_identity(pokemon) if pokemon is not None else None
         previous_status = self.sync_status
         self._sm_tm_inventory_load_token += 1
         token = self._sm_tm_inventory_load_token
         self._sm_tm_inventory_load_in_progress = True
+        self._show_busy_indicator(
+            "tm-inventory", "Comprobando las MT de la mochila…", freeze_source=True,
+        )
         self.sync_status = f"◷ {label} · validando mochila de MT en segundo plano…"
         self._update_top_status()
 
         def worker() -> None:
             try:
-                inventory, _process, _attempt = realtime_core.read_tm_inventory(
-                    {}, save_path=save_path,
-                )
-                result = dict(inventory)
+                saved_witness: dict[int, int] = {}
+                if engine_key in {"oras", "xy"}:
+                    # El save es únicamente un testigo para localizar y validar
+                    # la mochila viva. Nunca puede sustituir una lectura RAM que
+                    # haya fallado: enseñaríamos una MT sobre posesión obsoleta.
+                    saved_witness = dict(self.save_engine.read_inventory(save_path))
+                elif engine_key == "bdsp":
+                    try:
+                        saved_witness = dict(self.save_engine.read_inventory(save_path))
+                    except Exception:
+                        # El save es únicamente un testigo diagnóstico. Una
+                        # lectura RAM estructuralmente válida no depende de él.
+                        saved_witness = {}
+                try:
+                    inventory, _process, _attempt = inventory_reader.read_tm_inventory(
+                        saved_witness, save_path=save_path,
+                    )
+                except TypeError:
+                    # El writer ORAS histórico no acepta ``save_path``; el
+                    # Real-Time Core moderno sí lo usa para BDSP.
+                    inventory, _process, _attempt = inventory_reader.read_tm_inventory(saved_witness)
+                inventory_source = "RAM viva validada"
+                result = self._pending_adjusted_tm_inventory(dict(inventory))
                 error = None
             except Exception as exc:
                 result = None
+                inventory_source = None
                 error = str(exc)
 
             def finish() -> None:
                 if token != self._sm_tm_inventory_load_token:
+                    self._hide_busy_indicator("tm-inventory")
                     return
                 self._sm_tm_inventory_load_in_progress = False
+                self._hide_busy_indicator("tm-inventory")
                 if self.sync_status.startswith(f"◷ {label} · validando mochila de MT"):
                     self.sync_status = previous_status
                     self._update_top_status()
@@ -9527,13 +14482,20 @@ class RoleRunManager(ctk.CTk):
                     or getattr(self.save_engine, "key", "") != engine_key
                     or not self._oras_live_active
                 ):
+                    if on_failed is not None:
+                        on_failed()
                     return
                 if error or result is None:
+                    if on_failed is not None:
+                        on_failed()
                     messagebox.showerror(
                         f"No se pudo demostrar la mochila {label}",
                         "RoleRun no usará el último guardado como si fuera tiempo real.\n\n" + (error or "Lectura no confirmada."),
                         parent=self._dialog_parent(),
                     )
+                    return
+                if on_loaded is not None:
+                    on_loaded(profile, result, inventory_source)
                     return
                 fresh = next(
                     (member for member in self._projected_party() if self._pokemon_identity(member) == identity),
@@ -9548,22 +14510,240 @@ class RoleRunManager(ctk.CTk):
                     return
                 self._open_tm_selector(
                     fresh, move_slot, replace_existing=replace_existing,
-                    _sm_preloaded_profile=profile, _sm_preloaded_inventory=result,
+                    _live_preloaded_profile=profile, _live_preloaded_inventory=result,
+                    _live_preloaded_inventory_source=inventory_source,
                 )
 
             try:
                 self.after(0, finish)
             except Exception:
                 self._sm_tm_inventory_load_in_progress = False
+                try:
+                    self.after(0, lambda: self._hide_busy_indicator("tm-inventory"))
+                except Exception:
+                    pass
 
         threading.Thread(
             target=worker, daemon=True, name=f"RoleRun{engine_key.upper()}TMInventory",
         ).start()
 
+    def _tm_pp_for_profile(self, profile, move_id: int) -> int | None:
+        """Devuelve PP solo desde una fuente ya validada para el juego activo."""
+        getter = getattr(profile, "base_pp", None)
+        if callable(getter):
+            try:
+                value = int(getter(int(move_id)))
+                if value > 0:
+                    return value
+            except (TypeError, ValueError, KeyError):
+                pass
+        key = str(getattr(self.save_engine, "key", "") or "")
+        table = self.sm_live_move_pp if key in GEN7_REALTIME_GAME_KEYS else self.oras_live_move_pp
+        try:
+            value = int(table[int(move_id)])
+            return value if value > 0 else None
+        except (TypeError, ValueError, KeyError):
+            return None
+
+    def _tm_flow_candidates(
+        self,
+        pokemon: SavePokemon,
+        profile,
+        inventory: dict[int, int],
+        move_ids: list[int],
+    ) -> tuple[dict[str, object], ...]:
+        """Une las MT válidas de los cuatro destinos y conserva sus slots.
+
+        La validez se sigue calculando por ``_build_tm_candidates``; esta función
+        no introduce una segunda regla, solo agrega el resultado por hueco para
+        que el usuario pueda elegir la MT antes del movimiento que olvidará.
+        """
+        by_move: dict[int, dict[str, object]] = {}
+        for slot in range(1, 5):
+            for raw in self._build_tm_candidates(
+                pokemon, slot, profile, inventory, move_ids,
+            ):
+                move_id = int(raw["move_id"])
+                candidate = by_move.setdefault(move_id, dict(raw))
+                valid_slots = set(int(value) for value in candidate.get("valid_slots", ()))
+                valid_slots.add(slot)
+                candidate["valid_slots"] = tuple(sorted(valid_slots))
+                candidate["pp"] = self._tm_pp_for_profile(profile, move_id) or "—"
+                metadata_getter = getattr(self, "_draft_move_metadata", None)
+                metadata = metadata_getter(move_id) if callable(metadata_getter) else {}
+                candidate["power"] = metadata.get("power", "—")
+                candidate["accuracy"] = metadata.get("accuracy", "—")
+                candidate.setdefault("type", "—")
+                candidate["description"] = metadata.get("description", "No disponible")
+                candidate["consumes_item"] = (
+                    str(getattr(self.save_engine, "key", "") or "") == "bdsp"
+                )
+        return tuple(
+            sorted(by_move.values(), key=lambda item: (int(item["number"]), int(item["move_id"])))
+        )
+
+    def _tm_flow_moves(
+        self, pokemon: SavePokemon, profile,
+    ) -> tuple[dict[str, object], ...]:
+        names, ids = self._effective_moves_for_review(pokemon)
+        result: list[dict[str, object]] = []
+        for index in range(4):
+            move_id = int(ids[index] or 0)
+            metadata = self._draft_move_metadata(move_id)
+            result.append({
+                "name": names[index] if move_id else "—",
+                "move_id": move_id,
+                "category": self._damage_class_for_move(move_id) if move_id else "unknown",
+                "pp": self._tm_pp_for_profile(profile, move_id) or "—" if move_id else "—",
+                "power": metadata.get("power", "—"),
+                "accuracy": metadata.get("accuracy", "—"),
+                "description": metadata.get("description", "No disponible"),
+            })
+        return tuple(result)
+
+    def _open_integrated_tm_flow(
+        self,
+        pokemon: SavePokemon,
+        profile,
+        inventory: dict[int, int],
+        profile_description: str,
+        *,
+        initial_move_id: int | None = None,
+        return_page: str = "team",
+    ) -> None:
+        _names, move_ids = self._effective_moves_for_review(pokemon)
+        candidates = self._tm_flow_candidates(pokemon, profile, inventory, move_ids)
+        role, _symbol = self._effective_role(pokemon)
+
+        def close_flow() -> None:
+            flow = self._tm_teach_flow
+            self._show_busy_indicator(
+                "tm-flow", "Volviendo a MT…" if return_page == "tms" else "Volviendo a Equipo y PC…",
+                freeze_source=True,
+            )
+
+            def finish_close() -> None:
+                self._tm_teach_flow = None
+                if flow is not None:
+                    flow.destroy()
+                self._set_navigation_owner(
+                    self._global_tm_view if return_page == "tms" else self._team_pc_view
+                )
+                # IntegratedTMTeachFlow solo cubre la vista Equipo/PC; esta
+                # permanece mapeada e intacta debajo. Reconstruirla aquí era la
+                # causa del mosaico negro: se destruía una página ya correcta
+                # para fabricar otra idéntica. Basta revelar la superficie que
+                # nunca dejó de estar compuesta.
+                self.update_idletasks()
+                self.after_idle(self._retire_tm_close_when_ready)
+
+            # Permite que la barrera independiente llegue a DWM antes de retirar
+            # el flujo y evita publicar una mezcla de sus dos árboles.
+            self.after(34, finish_close)
+
+        def apply(slot: int, candidate: dict[str, object]) -> None:
+            self._set_operation_status(
+                "prepared",
+                "MT PREPARADA",
+                f"Se ha validado MT{int(candidate['number']):02d} para el hueco {int(slot)}. La escritura empieza ahora.",
+            )
+            flow = self._tm_teach_flow
+            self._tm_teach_flow = None
+            if flow is not None:
+                flow.destroy()
+            self._set_navigation_owner(
+                self._global_tm_view if return_page == "tms" else self._team_pc_view
+            )
+            # La página global ya está completa debajo del flujo. Mantenerla
+            # intacta evita publicar el estado intermedio "comprobando mochila";
+            # cantidad, moveset y compatibilidad se actualizan solo después del
+            # readback confirmado en _finalize_oras_live_changes().
+            self._queue_tm_teach(
+                pokemon, int(slot), candidate, None,
+                preserve_page=(return_page == "tms"),
+            )
+
+        self._show_busy_indicator(
+            "tm-flow", "Abriendo el selector de MT…", freeze_source=True,
+        )
+
+        def build_flow() -> None:
+            previous = self._tm_teach_flow
+            if previous is not None:
+                previous.destroy()
+            self._tm_teach_flow = IntegratedTMTeachFlow(
+                self.body,
+                pokemon=pokemon,
+                role=role,
+                moves=self._tm_flow_moves(pokemon, profile),
+                candidates=candidates,
+                source_detail=profile_description,
+                on_apply=apply,
+                on_close=close_flow,
+                on_open_moves=lambda: self.navigate("moves"),
+                navigation_keys=self.project.menu_keys if self.project else None,
+            )
+            self._set_navigation_owner(self._tm_teach_flow)
+            if initial_move_id is not None:
+                try:
+                    self._tm_teach_flow.state.select_tm(int(initial_move_id))
+                    self._tm_teach_flow._render()
+                except ValueError:
+                    self._tm_teach_flow.destroy()
+                    self._tm_teach_flow = None
+                    self._hide_busy_indicator("tm-flow")
+                    messagebox.showinfo(
+                        "MT no disponible",
+                        "Ese Pokémon ya no puede aprender la MT seleccionada con su estado actual.",
+                        parent=self._dialog_parent(),
+                    )
+                    return
+            self.update_idletasks()
+            self._retire_tm_open_when_ready(self._tm_teach_flow)
+
+        self.after(34, build_flow)
+
+    def _retire_tm_open_when_ready(self, flow) -> None:
+        if flow is not self._tm_teach_flow:
+            return
+        ready = bool(
+            flow is not None
+            and callable(getattr(flow, "is_fully_composed", None))
+            and flow.is_fully_composed()
+        )
+        if ready:
+            self._hide_busy_indicator("tm-flow")
+            return
+        self.after(35, lambda: self._retire_tm_open_when_ready(flow))
+
+    def _retire_tm_close_when_ready(self) -> None:
+        if self.active_page == "tms":
+            view = getattr(self, "_global_tm_view", None)
+            ready = bool(
+                not self._body_swap_in_progress and view is not None
+                and callable(getattr(view, "is_fully_composed", None))
+                and view.is_fully_composed()
+            )
+            if ready:
+                self._hide_busy_indicator("tm-flow")
+            return
+        view = getattr(self, "_team_pc_view", None)
+        pc_data = self._team_pc_cached_data()
+        ready = bool(
+            not self._body_swap_in_progress
+            and pc_data is not None
+            and view is not None
+            and callable(getattr(view, "is_fully_composed", None))
+            and view.is_fully_composed(int(pc_data.box_count))
+        )
+        if ready:
+            self._hide_busy_indicator("tm-flow")
+
     def _open_tm_selector(
         self, pokemon: SavePokemon, move_slot: int, *, replace_existing: bool = False,
-        _sm_preloaded_profile: ORASTMProfile | None = None,
-        _sm_preloaded_inventory: dict[int, int] | None = None,
+        _live_preloaded_profile: ORASTMProfile | BDSPTMProfile | None = None,
+        _live_preloaded_inventory: dict[int, int] | None = None,
+        _live_preloaded_inventory_source: str | None = None,
     ) -> None:
         engine_key = getattr(self.save_engine, "key", "")
         is_oras = engine_key == "oras"
@@ -9598,11 +14778,11 @@ class RoleRunManager(ctk.CTk):
                 )
                 return
             if is_usum:
-                profile = _sm_preloaded_profile or self._get_usum_rom_tm_profile(prompt=False)
+                profile = _live_preloaded_profile or self._get_usum_rom_tm_profile(prompt=False)
                 last_error = self._usum_rom_tm_last_error
                 profile_loader = self._get_usum_rom_tm_profile
             else:
-                profile = _sm_preloaded_profile or self._get_sm_rom_tm_profile(prompt=False)
+                profile = _live_preloaded_profile or self._get_sm_rom_tm_profile(prompt=False)
                 last_error = self._sm_rom_tm_last_error
                 profile_loader = self._get_sm_rom_tm_profile
             if profile is None:
@@ -9618,12 +14798,12 @@ class RoleRunManager(ctk.CTk):
                 profile = profile_loader(prompt=True)
                 if profile is None:
                     return
-            if _sm_preloaded_inventory is None:
-                self._start_sm_tm_inventory_load(
+            if _live_preloaded_inventory is None:
+                self._start_live_tm_inventory_load(
                     pokemon, move_slot, replace_existing=replace_existing, profile=profile,
                 )
                 return
-            inventory = dict(_sm_preloaded_inventory)
+            inventory = dict(_live_preloaded_inventory)
             source_detail = " · ".join(profile.source_detail[:3])
             profile_description = (
                 f"ROM {label} efectiva · {source_detail or profile.source.name} · RAM viva validada · "
@@ -9684,29 +14864,13 @@ class RoleRunManager(ctk.CTk):
                         if not confirmed:
                             return
                         self._oras_tm_standard_confirmation_slug = current_slug
-            try:
-                # Preferimos las MT que están realmente en la RAM de Azahar.
-                # Si la lectura viva no está disponible durante un frame/menú,
-                # el selector puede caer al último ``main`` porque la escritura
-                # de la MT ya no depende de esa calibración.
-                saved_inventory = dict(self.save_engine.read_inventory(self.current_save.path))
-                try:
-                    # Alpha.45: usa la MISMA copia viva de la mochila que ya
-                    # demuestra las medallas. El reader antiguo leía siempre la
-                    # dirección nominal y podía ver una copia histórica vacía.
-                    realtime_core = getattr(self, "realtime_core", None)
-                    if realtime_core is not None:
-                        inventory, _process, _attempt = realtime_core.read_tm_inventory(saved_inventory)
-                    else:
-                        inventory, _process, _attempt = self.oras_live_writer.read_tm_inventory(saved_inventory)
-                    inventory = dict(inventory)
-                    tm_inventory_source = "RAM viva validada"
-                except Exception:
-                    inventory = saved_inventory
-                    tm_inventory_source = "último guardado (respaldo)"
-            except Exception as exc:
-                messagebox.showerror("No se pudo leer la mochila", str(exc), parent=self._dialog_parent())
+            if _live_preloaded_inventory is None:
+                self._start_live_tm_inventory_load(
+                    pokemon, move_slot, replace_existing=replace_existing, profile=profile,
+                )
                 return
+            inventory = dict(_live_preloaded_inventory)
+            tm_inventory_source = _live_preloaded_inventory_source or "RAM viva validada"
             if profile.source_kind == "rom":
                 source_detail = " · ".join(profile.source_detail[:2])
                 profile_description = (
@@ -9739,156 +14903,45 @@ class RoleRunManager(ctk.CTk):
                 profile = self._get_xy_rom_tm_profile(prompt=True)
                 if profile is None:
                     return
-            try:
-                saved_inventory = dict(self.save_engine.read_inventory(self.current_save.path))
-                realtime_core = getattr(self, "realtime_core", None)
-                if realtime_core is None:
-                    raise RuntimeError("El Real-Time Core de X/Y no está disponible.")
-                inventory, _process, _attempt = realtime_core.read_tm_inventory(saved_inventory)
-                inventory = dict(inventory)
-            except Exception as exc:
-                messagebox.showerror(
-                    "No se pudo leer la mochila X/Y",
-                    f"RoleRun no usará el último guardado como si fuera tiempo real.\n\n{exc}",
-                    parent=self._dialog_parent(),
+            if _live_preloaded_inventory is None:
+                self._start_live_tm_inventory_load(
+                    pokemon, move_slot, replace_existing=replace_existing, profile=profile,
                 )
                 return
+            inventory = dict(_live_preloaded_inventory)
             source_detail = " · ".join(profile.source_detail[:3])
             profile_description = (
                 f"ROM X/Y efectiva · {source_detail or profile.source.name} · RAM viva validada · "
                 "MT reutilizable · escritura directa al Pokémon"
             )
         else:
-            profile = self._get_bdsp_tm_profile(prompt=True)
+            if not self._oras_live_active:
+                messagebox.showinfo(
+                    "Perla Reluciente todavía no está enlazado",
+                    "Entra en Pokémon Perla Reluciente en Ryujinx y RoleRun se sincronizará automáticamente. Si quieres forzarlo, pulsa F5.",
+                    parent=self._dialog_parent(),
+                )
+                return
+            profile = _live_preloaded_profile or self._get_bdsp_tm_profile(prompt=True)
             if profile is None:
                 return
-            try:
-                inventory = self._effective_tm_inventory()
-            except Exception as exc:
-                messagebox.showerror("No se pudo leer la mochila", str(exc))
+            if _live_preloaded_inventory is None:
+                self._start_live_tm_inventory_load(
+                    pokemon, move_slot, replace_existing=replace_existing, profile=profile,
+                )
                 return
-            profile_description = f"Datos randomizados: {profile.source.name}"
+            inventory = dict(_live_preloaded_inventory)
+            profile_description = (
+                f"Datos randomizados: {profile.source.name} · RAM viva validada · "
+                "escritura inmediata al PB8 + consumo verificado de la MT"
+            )
 
-        role, _symbol = self._effective_role(pokemon)
-        candidates = self._build_tm_candidates(pokemon, move_slot, profile, inventory, move_ids)
-
-        # Diagnóstico visible: si una futura ROM/randomizer vuelve a producir
-        # cero candidatos, una captura distingue inmediatamente entre mochila
-        # vacía, movimiento no válido para el juego y filtro de rol.
-        owned_tm_count = 0
-        game_valid_tm_count = 0
-        role_tm_count = 0
-        allowed_ids = self.engine.allowed_move_ids
-        for tm_number in sorted(getattr(profile, "tms", {})):
-            tm = profile.tm(tm_number)
-            if tm is None or int(inventory.get(tm.item_id, 0)) <= 0:
-                continue
-            owned_tm_count += 1
-            if allowed_ids is not None and int(tm.move_id) not in allowed_ids:
-                continue
-            game_valid_tm_count += 1
-            if self._tm_move_compatible_with_role(pokemon, role, tm.move_id, move_slot):
-                role_tm_count += 1
-
-        window = ctk.CTkToplevel(self)
-        self._apply_window_icon(window)
-        window.title("Sustituir por MT" if slot_occupied else "Enseñar MT")
-        window.geometry("920x700")
-        window.minsize(760, 560)
-        window.transient(self)
-        window.grab_set()
-        window.configure(fg_color=BG)
-        ctk.CTkLabel(
-            window, text=f"{'SUSTITUIR POR MT' if slot_occupied else 'ENSEÑAR MT'} · {pokemon.nickname or pokemon.species}", text_color=GOLD,
-            font=ctk.CTkFont("Segoe UI", 26, "bold"),
-        ).pack(anchor="w", padx=28, pady=(24, 4))
-        role_text = (
-            "SIN ROL · se muestran todas las MTs disponibles en este juego que tengas en la mochila"
-            if role == "SIN ROL"
-            else f"ROL: {role.upper()} · la compatibilidad de especie se ignora; mandan las reglas del rol"
+        self._open_integrated_tm_flow(
+            pokemon,
+            profile,
+            inventory,
+            profile_description,
         )
-        ctk.CTkLabel(
-            window, text=role_text, text_color=MUTED, wraplength=820, justify="left",
-            font=ctk.CTkFont("Segoe UI", 12),
-        ).pack(anchor="w", padx=28, pady=(0, 14))
-        ctk.CTkLabel(
-            window, text=f"{profile_description} · HUECO {move_slot}",
-            text_color=SUCCESS, font=ctk.CTkFont("Segoe UI", 10, "bold"),
-        ).pack(anchor="w", padx=28, pady=(0, 12))
-
-        scroll = ctk.CTkScrollableFrame(window, fg_color="#151515", corner_radius=14)
-        scroll.pack(fill="both", expand=True, padx=24, pady=(0, 16))
-        scroll.grid_columnconfigure((0, 1), weight=1, uniform="tms")
-        category_names = {"physical": "FÍSICO", "special": "ESPECIAL", "status": "ESTADO", "unknown": "SIN CLASIFICAR"}
-        if not candidates:
-            ctk.CTkLabel(
-                scroll,
-                text=(
-                    "No hay ninguna MT de tu mochila que exista en este juego y cumpla el rol actual.\n\n"
-                    f"Diagnóstico · MTs detectadas: {owned_tm_count} · válidas para el juego: {game_valid_tm_count} · compatibles con {role}: {role_tm_count}"
-                ),
-                text_color=MUTED, wraplength=700, justify="center",
-                font=ctk.CTkFont("Segoe UI", 15, "bold"),
-            ).grid(row=0, column=0, columnspan=2, padx=30, pady=70)
-        for i, candidate in enumerate(candidates):
-            box = ctk.CTkFrame(scroll, fg_color=PANEL_ALT, corner_radius=12, border_width=1, border_color="#3A3A3A")
-            box.grid(row=i // 2, column=i % 2, sticky="nsew", padx=6, pady=6)
-            box.grid_columnconfigure(0, weight=1)
-            ctk.CTkLabel(
-                box, text=f"MT{int(candidate['number']):02d} · {candidate['move_name']}",
-                text_color=TEXT, anchor="w", font=ctk.CTkFont("Segoe UI", 16, "bold"),
-            ).grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 1))
-            ctk.CTkLabel(
-                box, text=(
-                    f"MT reutilizable · {category_names.get(str(candidate['category']), 'SIN CLASIFICAR')}"
-                    if (is_oras or is_xy or is_sm) else
-                    f"x{candidate['quantity']} en la mochila · {category_names.get(str(candidate['category']), 'SIN CLASIFICAR')}"
-                ),
-                text_color=SUCCESS if role != "SIN ROL" else MUTED, anchor="w",
-                font=ctk.CTkFont("Segoe UI", 10, "bold"),
-            ).grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 10))
-            ctk.CTkButton(
-                box, text="SUSTITUIR" if slot_occupied else "ENSEÑAR", height=36,
-                command=lambda c=candidate, w=window, p=pokemon, slot=move_slot: self._queue_tm_teach(p, slot, c, w),
-                fg_color=GOLD, hover_color="#D3AF70", text_color="#111111",
-                font=ctk.CTkFont("Segoe UI", 11, "bold"),
-            ).grid(row=0, column=1, rowspan=2, padx=(4, 12), pady=12)
-
-        footer = ctk.CTkFrame(window, fg_color="transparent")
-        footer.pack(fill="x", padx=24, pady=(0, 18))
-        if is_oras and profile.source_kind == "rom":
-            ctk.CTkButton(
-                footer, text="CAMBIAR ROM",
-                command=lambda w=window: (w.destroy(), self._choose_new_oras_rom_tm_source(pokemon, move_slot, replace_existing=slot_occupied)),
-                height=36, fg_color="transparent", border_width=1, border_color="#505050",
-                hover_color=PANEL_ALT, text_color=MUTED,
-            ).pack(side="left")
-        elif is_oras and profile.source_kind == "fvx":
-            ctk.CTkButton(
-                footer, text="CAMBIAR LOG FVX (LEGADO)",
-                command=lambda w=window: (w.destroy(), self._choose_new_oras_fvx_tm_source(pokemon, move_slot, replace_existing=slot_occupied)),
-                height=36, fg_color="transparent", border_width=1, border_color="#505050",
-                hover_color=PANEL_ALT, text_color=MUTED,
-            ).pack(side="left")
-        elif is_oras:
-            ctk.CTkButton(
-                footer, text="ELEGIR ROM EN SU LUGAR",
-                command=lambda w=window: (w.destroy(), self._choose_new_oras_rom_tm_source(pokemon, move_slot, replace_existing=slot_occupied)),
-                height=36, fg_color="transparent", border_width=1, border_color="#505050",
-                hover_color=PANEL_ALT, text_color=MUTED,
-            ).pack(side="left")
-        elif not is_oras:
-            ctk.CTkButton(
-                footer, text="CAMBIAR ARCHIVO DE RANDOMIZACIÓN",
-                command=lambda w=window: (w.destroy(), self._choose_new_bdsp_tm_source(pokemon, move_slot, replace_existing=slot_occupied)),
-                height=36, fg_color="transparent", border_width=1, border_color="#505050",
-                hover_color=PANEL_ALT, text_color=MUTED,
-            ).pack(side="left")
-        ctk.CTkButton(
-            footer, text="CERRAR", command=window.destroy, width=110, height=36,
-            fg_color="transparent", border_width=1, border_color="#505050",
-            hover_color=PANEL_ALT, text_color=MUTED,
-        ).pack(side="right")
 
     def _choose_new_bdsp_tm_source(self, pokemon: SavePokemon, move_slot: int, *, replace_existing: bool = False) -> None:
         selected = filedialog.askopenfilename(
@@ -9919,7 +14972,10 @@ class RoleRunManager(ctk.CTk):
             return
         self._open_tm_selector(pokemon, move_slot, replace_existing=replace_existing)
 
-    def _queue_tm_teach(self, pokemon: SavePokemon, move_slot: int, candidate: dict[str, object], window=None) -> None:
+    def _queue_tm_teach(
+        self, pokemon: SavePokemon, move_slot: int, candidate: dict[str, object], window=None,
+        *, preserve_page: bool = False,
+    ) -> None:
         pending_ids_before = {id(change) for change in self.run.pending_changes}
         names, ids = self._effective_moves_for_review(pokemon)
         idx = move_slot - 1
@@ -9972,13 +15028,15 @@ class RoleRunManager(ctk.CTk):
             item_name=f"MT{int(candidate['number']):02d}",
             quantity_before=int(candidate["quantity"]),
             inventory_witnesses=inventory_witnesses,
+            consumes_item=bool(candidate.get("consumes_item", False)),
         ))
         if window is not None and window.winfo_exists():
             window.destroy()
         scroll_px = self._capture_body_scroll_px()
         scroll_fraction = self._capture_body_scroll_fraction()
         self._update_top_status()
-        self._smooth_render_page(preserve_scroll=True)
+        if not preserve_page:
+            self._smooth_render_page(preserve_scroll=True)
         self.after(40, self._show_change_toast)
         self._request_oras_live_auto_apply_since(pending_ids_before)
 
@@ -9994,9 +15052,10 @@ class RoleRunManager(ctk.CTk):
     def _effective_moves_for_review(self, pokemon: SavePokemon) -> tuple[list[str], list[int]]:
         """Devuelve el moveset de la previsualización actual.
 
-        current_game ya incorpora los cambios pendientes de movimientos para que la
-        interfaz muestre exactamente lo que se guardará. No hay que reaplicarlos aquí:
-        hacerlo dos veces podía desplazar slots al revisar borrados.
+        ``current_game`` conserva siempre la última evidencia física. Todos los
+        cambios pendientes se proyectan aquí, en su orden real, para que un nuevo
+        snapshot realtime no los borre ni el comparador confunda una edición local
+        con un cambio producido dentro del juego.
         """
         names = list(pokemon.moves[:4])
         ids = [int(move_id or 0) for move_id in pokemon.move_ids[:4]]
@@ -10005,12 +15064,12 @@ class RoleRunManager(ctk.CTk):
         while len(ids) < 4:
             ids.append(0)
 
-        # Las MTs se mantienen como una operación atómica pendiente y no mutan
-        # current_game hasta guardar. Las proyectamos aquí para que la tarjeta,
-        # las validaciones y un posible cambio de rol vean el resultado real.
+        # MTs y cambios clásicos permanecen como operaciones pendientes y no
+        # mutan current_game. La proyección reproduce la compactación que ejecuta
+        # el SaveEngine cuando new_move_id=0.
         identity = self._pokemon_identity(pokemon)
         for change in self.run.pending_changes:
-            if not isinstance(change, PendingTMTeach):
+            if not isinstance(change, (PendingChange, PendingTMTeach)):
                 continue
             if not (
                 (change.pokemon_identity and change.pokemon_identity == identity)
@@ -10019,8 +15078,14 @@ class RoleRunManager(ctk.CTk):
                 continue
             idx = int(change.move_slot) - 1
             if 0 <= idx < 4:
-                names[idx] = change.new_move
-                ids[idx] = int(change.new_move_id)
+                if int(change.new_move_id or 0) == 0:
+                    names.pop(idx)
+                    ids.pop(idx)
+                    names.append("—")
+                    ids.append(0)
+                else:
+                    names[idx] = change.new_move
+                    ids[idx] = int(change.new_move_id)
         return names, ids
 
     def _support_damage_candidates(self, pokemon: SavePokemon, role: str = "Support") -> list[dict]:
@@ -10138,7 +15203,7 @@ class RoleRunManager(ctk.CTk):
         if not self.current_game:
             return
         issues, unassigned = self._collect_team_move_issues()
-        window = ctk.CTkToplevel(self)
+        window = IntegratedWindowSurface(self)
         self._apply_window_icon(window)
         window.title("Revisión de equipo")
         window.geometry("800x650")
@@ -10311,10 +15376,11 @@ class RoleRunManager(ctk.CTk):
                 p for p in self.current_game.party
                 if self._pokemon_identity(p) == pokemon_identity
             ), issue_pokemon)
-            if index < 0 or index >= len(pokemon.move_ids):
+            effective_names, effective_ids = self._effective_moves_for_review(pokemon)
+            if index < 0 or index >= len(effective_ids):
                 continue
-            current_id = int(pokemon.move_ids[index] or 0)
-            current_name = pokemon.moves[index] if index < len(pokemon.moves) else "—"
+            current_id = int(effective_ids[index] or 0)
+            current_name = effective_names[index] if index < len(effective_names) else "—"
             if current_id == 0:
                 continue
 
@@ -10331,24 +15397,6 @@ class RoleRunManager(ctk.CTk):
                 pokemon_identity=pokemon_identity,
             ))
 
-            pokemon.moves.pop(index)
-            pokemon.move_ids.pop(index)
-            pokemon.moves.append("—")
-            pokemon.move_ids.append(0)
-
-            # Para un miembro incorporado desde el PC, current_game todavía no lo
-            # contiene. Actualizamos su snapshot provisional para que la tarjeta
-            # muestre el borrado inmediatamente y siga siendo editable sin guardar.
-            if pokemon is issue_pokemon:
-                for team_change in reversed(self._pending_team_changes()):
-                    if not team_change.incoming_snapshot:
-                        continue
-                    incoming = self._pokemon_from_snapshot(team_change.incoming_snapshot)
-                    if self._pokemon_identity(incoming) != pokemon_identity:
-                        continue
-                    team_change.incoming_snapshot["moves"] = list(pokemon.moves)
-                    team_change.incoming_snapshot["move_ids"] = list(pokemon.move_ids)
-                    break
             resolved += 1
         return resolved
 
@@ -10363,7 +15411,7 @@ class RoleRunManager(ctk.CTk):
             )
             return
 
-        window = ctk.CTkToplevel(parent if parent is not None else self)
+        window = IntegratedWindowSurface(parent if parent is not None else self)
         self._apply_window_icon(window)
         window.title("Elegir movimientos del Support")
         window.geometry("650x560")
@@ -10524,21 +15572,259 @@ class RoleRunManager(ctk.CTk):
         self._pc_cache_signature = signature
         return data
 
-    def send_pokemon_to_pc(self, pokemon: SavePokemon, ask: bool = False) -> None:
+    @staticmethod
+    def _pc_data_from_live_slots(
+        base: SavePCData, live_slots: dict[tuple[int, int], SavePokemon],
+    ) -> SavePCData:
+        """Materializa una matriz PC cuya ocupación procede solo de RAM viva."""
+        boxes: list[SaveBox] = []
+        open_slots: list[tuple[int, int]] = []
+        names = {int(box.index): str(box.name) for box in base.boxes}
+        for box_no in range(1, int(base.box_count) + 1):
+            members: list[SavePokemon] = []
+            for slot_no in range(1, int(base.box_slot_count) + 1):
+                pokemon = live_slots.get((box_no, slot_no))
+                if pokemon is None:
+                    open_slots.append((box_no, slot_no))
+                    continue
+                clone = copy.deepcopy(pokemon)
+                clone.box = box_no
+                clone.box_slot = slot_no
+                clone.slot = slot_no
+                members.append(clone)
+            boxes.append(SaveBox(
+                index=box_no,
+                name=names.get(box_no, f"Caja {box_no}"),
+                pokemon=members,
+            ))
+        first_open = open_slots[0] if open_slots else (None, None)
+        raw = dict(base.raw or {})
+        raw["live_matrix"] = True
+        return SavePCData(
+            game=base.game,
+            box_count=int(base.box_count),
+            box_slot_count=int(base.box_slot_count),
+            current_box=int(base.current_box or 1),
+            boxes=boxes,
+            next_open_box=first_open[0],
+            next_open_box_slot=first_open[1],
+            open_slots=open_slots,
+            raw=raw,
+        )
+
+    def _pc_data_with_live_presentation(
+        self, base: SavePCData,
+        live_slots: dict[tuple[int, int], SavePokemon],
+    ) -> SavePCData:
+        """Fusiona metadatos vivos sin alterar la topología física del save.
+
+        ORAS sigue usando el save como matriz base y los overrides para cambios de
+        posición. Para un Pokémon que permanece en su mismo slot, esta función
+        sustituye solo su representación por el PK6 vivo enriquecido cuando la
+        identidad fuerte coincide.
+        """
+        merged = copy.deepcopy(base)
+        for box in merged.boxes:
+            for index, stored in enumerate(box.pokemon):
+                box_no = int(stored.box or box.index)
+                slot_no = int(stored.box_slot or stored.slot or 0)
+                if slot_no <= 0:
+                    continue
+                live = live_slots.get((box_no, slot_no))
+                if live is None:
+                    continue
+                stored_identity = self._pokemon_identity(stored)
+                if not stored_identity or stored_identity != self._pokemon_identity(live):
+                    continue
+                clone = copy.deepcopy(live)
+                if not str(clone.species or "").strip():
+                    clone.species = stored.species
+                if not str(clone.nickname or "").strip():
+                    clone.nickname = stored.nickname
+                if int(clone.level or 0) <= 0:
+                    clone.level = stored.level
+                clone.box = box_no
+                clone.box_slot = slot_no
+                clone.slot = slot_no
+                box.pokemon[index] = clone
+        raw = dict(merged.raw or {})
+        raw["live_presentation"] = True
+        merged.raw = raw
+        return merged
+
+    @staticmethod
+    def _pc_presentation_signature(data: SavePCData | None) -> tuple:
+        """Firma de todo dato PC que puede modificar una ficha visible.
+
+        Se omite ``raw`` para evitar repintados por diagnóstico. A diferencia
+        de la comparación histórica por identidad, esta firma detecta la llegada
+        de naturaleza, stats, IV y EV para un Pokémon que no se ha movido.
+        """
+        if data is None:
+            return ()
+        rows: list[tuple] = []
+        for box in data.boxes:
+            for pokemon in box.pokemon:
+                rows.append((
+                    int(pokemon.box or box.index),
+                    int(pokemon.box_slot or pokemon.slot or 0),
+                    int(pokemon.species_id), int(pokemon.pid),
+                    int(pokemon.tid), int(pokemon.sid), int(pokemon.form),
+                    str(pokemon.nickname), int(pokemon.level),
+                    str(pokemon.held_item), str(pokemon.ability),
+                    tuple(int(value) for value in pokemon.move_ids),
+                    tuple(bool(value) for value in pokemon.markings),
+                    str(pokemon.nature), str(pokemon.stat_nature),
+                    tuple(sorted(
+                        (str(key), int(value)) for key, value in pokemon.stats.items()
+                    )),
+                    tuple(sorted(
+                        (str(key), int(value)) for key, value in pokemon.ivs.items()
+                    )),
+                    tuple(sorted(
+                        (str(key), int(value)) for key, value in pokemon.evs.items()
+                    )),
+                ))
+        return tuple(rows)
+
+    @staticmethod
+    def _pc_reconcile_publishes_full_matrix(live_key: str) -> bool:
+        """Indica que el reader vivo aporta el slot completo, no solo identidad."""
+        return str(live_key or "").strip().lower() in FULL_MATRIX_LIVE_PC_GAME_KEYS
+
+    def _open_pc_selector_from_live_matrix(
+        self, *, replace_pokemon: SavePokemon | None, forced_role: str | None,
+        browse_only: bool, on_loaded=None, on_error=None,
+    ) -> None:
+        """Carga el PC completo fuera de Tk antes de abrir un selector mutable."""
+        if getattr(self, "_pc_selector_live_refresh_in_progress", False):
+            return
+        if not self.current_save or not self.current_game or not self.project:
+            return
+        self._pc_selector_live_refresh_in_progress = True
+        generation = self._session_generation
+        project_slug = self.project.slug
+        save_path = Path(self.current_save.path)
+        signature = self._save_file_signature(save_path)
+        live_key = self._active_azahar_realtime_key()
+        self.sync_status = f"◷ Leyendo Cajas PC de {self._active_azahar_realtime_label()} en vivo…"
+        self._update_top_status()
+        self._record_bdsp_ui_event("pc-selector-live-start")
+
+        def worker() -> None:
+            try:
+                base = self.save_engine.read_boxes(save_path)
+                # El save y estados anteriores solo aportan nombres/nivel. La
+                # ocupación y las coordenadas siempre salen del reader vivo.
+                anchors = [pokemon for box in base.boxes for pokemon in box.pokemon]
+                try:
+                    saved_game = self.save_engine.read(save_path)
+                    anchors.extend(saved_game.party)
+                except Exception:
+                    pass
+                anchors.extend(tuple(self.current_game.party))
+                anchors.extend(tuple(self._oras_live_pc_overrides.values()))
+                realtime_core = getattr(self, "realtime_core", None)
+                kwargs = {
+                    "box_count": int(base.box_count),
+                    "box_slot_count": int(base.box_slot_count),
+                }
+                if realtime_core is not None:
+                    _process, _base, live_slots = realtime_core.read_pc(anchors, **kwargs)
+                else:
+                    adapter = getattr(
+                        self,
+                        "bdsp_realtime_adapter" if live_key == "bdsp"
+                        else "b2w2_realtime_adapter" if live_key == "b2w2"
+                        else "usum_realtime_adapter" if live_key == "usum"
+                        else "sm_realtime_adapter",
+                        None,
+                    )
+                    if adapter is None:
+                        raise RuntimeError("No hay lector vivo de PC disponible.")
+                    _process, _base, live_slots = adapter.read_pc(anchors, **kwargs)
+                data = self._pc_data_from_live_slots(base, live_slots)
+                error = None
+            except Exception as exc:
+                data = None
+                error = str(exc)
+            try:
+                self.after(0, lambda: finish(data, error))
+            except Exception:
+                pass
+
+        def finish(data: SavePCData | None, error: str | None) -> None:
+            self._pc_selector_live_refresh_in_progress = False
+            if (
+                generation != self._session_generation
+                or not self.project or self.project.slug != project_slug
+            ):
+                return
+            if error or data is None:
+                self._record_bdsp_ui_event(
+                    "pc-selector-live-error", error=str(error or "lectura fallida"),
+                )
+                self.sync_status = f"⚠ No se pudo leer el PC vivo: {error or 'lectura fallida'}"
+                self._update_top_status()
+                self._show_live_sync_toast(
+                    "SELECTOR PC NO ABIERTO",
+                    (error or "No se obtuvo una matriz viva completa.")
+                    + "\n\nRoleRun no mostrará la copia obsoleta del guardado como si fuera el PC actual.",
+                    False,
+                )
+                if callable(on_error):
+                    on_error(error or "No se obtuvo una matriz viva completa.")
+                return
+            # La caché pasa a representar exactamente la matriz publicada. No se
+            # deben superponer overrides calculados contra el save anterior.
+            self._pc_cache = data
+            self._pc_cache_signature = signature
+            self._oras_live_pc_overrides.clear()
+            self._oras_live_pc_empty_overrides.clear()
+            self._record_bdsp_ui_event(
+                "pc-selector-live-ready",
+                occupied_slots=sum(len(box.pokemon) for box in data.boxes),
+            )
+            if callable(on_loaded):
+                on_loaded(data)
+            else:
+                self.open_pc_selector(
+                    replace_pokemon=replace_pokemon,
+                    forced_role=forced_role,
+                    browse_only=browse_only,
+                    embedded=False,
+                    _live_pc_data=data,
+                )
+
+        threading.Thread(
+            target=worker, daemon=True, name="RoleRunLivePCSelector",
+        ).start()
+
+    def send_pokemon_to_pc(
+        self,
+        pokemon: SavePokemon,
+        ask: bool = False,
+        destination: tuple[int, int] | None = None,
+    ) -> None:
         if not self.current_game:
             return
 
-        # En una sesión Gen 6 en vivo el escritor transaccional solo tiene
-        # validado el intercambio 1↔1. Alpha.11 dejaba crear igualmente un
-        # ``party-to-box`` pendiente: la proyección quitaba el Pokémon de RoleRun
-        # y de la barra flotante aunque ningún byte pudiera escribirse en Citra.
-        # Nunca volvemos a proyectar una operación que el backend vivo no puede
-        # confirmar. El traslado sigue disponible desde el PC del propio juego,
-        # que el reconciliador vivo refleja de vuelta en RoleRun.
+        # ORAS sigue cerrado para cambios de tamaño hasta demostrar su contador
+        # de party. X/Y usa su writer transaccional específico y nunca proyecta
+        # el resultado antes del readback vivo.
         live_key_getter = getattr(self, "_active_azahar_realtime_key", None)
         live_key = live_key_getter() if callable(live_key_getter) else None
-        if (
-            live_key in GEN6_REALTIME_GAME_KEYS
+        if getattr(getattr(self, "save_engine", None), "key", "") == "bdsp":
+            projected_party = self._projected_party()
+            if not self._oras_live_auto_apply_available():
+                messagebox.showinfo(
+                    "Enviar al PC desde RoleRun",
+                    "Perla Reluciente no está sincronizada en tiempo real. "
+                    "No se ha cambiado ni RoleRun ni el juego.",
+                )
+                return
+        elif (
+            live_key == "oras"
             and self._oras_live_auto_apply_available()
         ):
             messagebox.showinfo(
@@ -10549,8 +15835,9 @@ class RoleRunManager(ctk.CTk):
                 "No se ha cambiado ni RoleRun ni el juego.",
             )
             return
+        else:
+            projected_party = self._projected_party()
 
-        projected_party = self._projected_party()
         if len(projected_party) <= 1:
             messagebox.showwarning(
                 "No se puede vaciar el equipo",
@@ -10567,9 +15854,26 @@ class RoleRunManager(ctk.CTk):
         # una caché visual. Alpha.37 deja box/slot sin fijar y el writer demuestra
         # la matriz PC actual dentro de la propia transacción, escogiendo allí el
         # primer hueco realmente libre. Esto hace ENVIAR AL PC autosuficiente.
-        if live_key in GEN7_REALTIME_GAME_KEYS and self._oras_live_auto_apply_available():
-            destination_box = None
-            destination_slot = None
+        if (live_key in (*GEN7_REALTIME_GAME_KEYS, "xy", "bdsp", "b2w2")) and self._oras_live_auto_apply_available():
+            if live_key in GEN7_REALTIME_GAME_KEYS and destination is not None:
+                destination_box, destination_slot = map(int, destination)
+            elif live_key in {"xy", "b2w2"}:
+                if destination is None:
+                    # La ocupación visible de estos backends procede de RAM.
+                    # Volver al save aquí puede elegir una casilla distinta.
+                    pc_data = self._team_pc_cached_data()
+                    if pc_data is None:
+                        return
+                    destination = self._next_projected_open_pc_slot(pc_data)
+                if destination is None:
+                    messagebox.showwarning(
+                        "PC lleno", "No hay ningún hueco libre escribible en el PC para enviar este Pokémon."
+                    )
+                    return
+                destination_box, destination_slot = map(int, destination)
+            else:
+                destination_box = None
+                destination_slot = None
         else:
             # Motores clásicos: el destino sigue derivándose del PC del guardado.
             pc_data = self._read_pc_data(force=True)
@@ -10599,6 +15903,11 @@ class RoleRunManager(ctk.CTk):
             outgoing_species=pokemon.species,
             outgoing_snapshot=outgoing_snapshot,
             outgoing_identity=self._pokemon_identity(pokemon),
+            box_witnesses=(
+                self._pc_box_witnesses(int(destination_box), int(destination_slot))
+                if live_key == "xy" and destination_box is not None and destination_slot is not None
+                else ()
+            ),
         ))
         self._request_oras_live_auto_apply_since(pending_ids_before)
         self._pc_cache = None
@@ -10609,22 +15918,21 @@ class RoleRunManager(ctk.CTk):
         # de modificar el estado y la reaplicamos mientras termina el relayout.
         self.active_page = "team"
         self._smooth_render_page(preserve_scroll=True)
-        if not (self._active_azahar_realtime_key() in GEN7_REALTIME_GAME_KEYS and self._oras_live_auto_apply_available()):
+        if not (
+            self._active_azahar_realtime_key() in (*GEN7_REALTIME_GAME_KEYS, "xy", "bdsp", "b2w2")
+            and self._oras_live_auto_apply_available()
+        ):
             self._show_team_management_toast("ENVÍO AL PC PREPARADO", pokemon.nickname or pokemon.species)
 
     def _show_team_management_toast(self, title: str, subtitle: str) -> None:
-        toast = ctk.CTkFrame(self, fg_color="#151515", corner_radius=16, border_width=2, border_color=GOLD)
-        toast.place(relx=0.57, rely=0.5, anchor="center")
-        ctk.CTkLabel(
-            toast, text=f"✓  {title}", text_color=SUCCESS,
-            font=ctk.CTkFont("Segoe UI", 16, "bold"),
-        ).pack(padx=30, pady=(17, 2))
-        ctk.CTkLabel(
-            toast, text=subtitle, text_color=TEXT,
-            font=ctk.CTkFont("Segoe UI", 11, "bold"),
-        ).pack(padx=30, pady=(0, 17))
-        toast.lift()
-        self.after(1400, toast.destroy)
+        # El aviso central antiguo afirmaba éxito antes del readback. La barra
+        # inferior distingue preparación de confirmación y permanece visible.
+        self._set_operation_status(
+            "prepared",
+            str(title),
+            str(subtitle),
+            actions=("Revisar cambios",) if self.run.pending_changes else (),
+        )
 
     def _resolve_pc_role_for_target_slot(self, pokemon: SavePokemon, target_role: str | None, parent) -> tuple[bool, str]:
         """Resuelve qué rol tendrá un Pokémon del PC al ocupar una casilla fija.
@@ -10681,7 +15989,10 @@ class RoleRunManager(ctk.CTk):
                 font=ctk.CTkFont("Segoe UI", 8 if small else 10, "bold"),
             ).pack(padx=3, pady=4 if small else 6)
 
-    def _open_team_to_pc_swap_picker(self, pokemon: SavePokemon | None, target_role: str | None = None) -> None:
+    def _open_team_to_pc_swap_picker(
+        self, pokemon: SavePokemon | None, target_role: str | None = None,
+        _live_pc_data: SavePCData | None = None,
+    ) -> None:
         """Selector contextual Equipo ↔ PC con la casilla de destino visible arriba.
 
         También sirve para el botón + de una casilla vacía: en ese caso no sale
@@ -10690,7 +16001,22 @@ class RoleRunManager(ctk.CTk):
         self._cancel_role_drag()
         if not self.current_game or not self.current_save:
             return
-        pc_data = self._read_pc_data(force=True)
+        live_key = self._active_azahar_realtime_key() if self._oras_live_active else ""
+        if (
+            _live_pc_data is None
+            and live_key in FULL_MATRIX_LIVE_PC_GAME_KEYS
+            and self._oras_live_auto_apply_available()
+        ):
+            self._open_pc_selector_from_live_matrix(
+                replace_pokemon=pokemon,
+                forced_role=target_role,
+                browse_only=False,
+                on_loaded=lambda data: self._open_team_to_pc_swap_picker(
+                    pokemon, target_role=target_role, _live_pc_data=data,
+                ),
+            )
+            return
+        pc_data = _live_pc_data if _live_pc_data is not None else self._read_pc_data(force=True)
         if pc_data is None:
             return
 
@@ -10711,7 +16037,7 @@ class RoleRunManager(ctk.CTk):
             current_target_role, _ = self._effective_role(source)
             if target_role not in ROLE_ORDER and current_target_role in ROLE_ORDER:
                 target_role = current_target_role
-        window = ctk.CTkToplevel(self)
+        window = IntegratedWindowSurface(self)
         self._apply_window_icon(window)
         window.title("Cambiar Pokémon del equipo por uno del PC")
         window.geometry("1080x880")
@@ -10808,14 +16134,16 @@ class RoleRunManager(ctk.CTk):
                 candidate_role, _ = self._effective_role(projected_outgoing)
                 slot_role = candidate_role if candidate_role in ROLE_ORDER else None
 
+            direct_replacement = projected_outgoing is not None
             sm_live_swap = bool(
-                projected_outgoing is not None
+                direct_replacement
                 and self._active_azahar_realtime_key() in GEN7_REALTIME_GAME_KEYS
                 and self._oras_live_auto_apply_available()
             )
-            if sm_live_swap:
-                # En sustitución directa la casilla manda sin diálogo: el
-                # entrante hereda exactamente el rol del saliente.
+            if direct_replacement:
+                # En toda sustitución directa la casilla manda sin diálogo: el
+                # entrante hereda exactamente el rol del saliente. En BDSP la
+                # marca se escribirá mediante el writer seguro del guardado.
                 desired_role = slot_role if slot_role in ROLE_ORDER else "SIN ROL"
                 accepted = True
             else:
@@ -10864,7 +16192,7 @@ class RoleRunManager(ctk.CTk):
             self._pc_cache = None
             self._sync_live_layout()
             close_picker()
-            self.active_page = "team"
+            self.active_page = DEFAULT_PAGE
             self._smooth_render_page(preserve_scroll=True)
             if not sm_live_swap:
                 self._show_team_management_toast(
@@ -10949,7 +16277,106 @@ class RoleRunManager(ctk.CTk):
                       fg_color="transparent", border_width=1, border_color="#4A4A4A", hover_color=PANEL_ALT, text_color=MUTED).pack(pady=(0, 16))
         render_box()
 
-    def _set_projected_member_role(self, pokemon: SavePokemon, role: str) -> None:
+    def _create_libero_ev_window(self, context: str):
+        """Crea el selector en la superficie que el usuario puede ver.
+
+        La barra flotante vive en un ``Toplevel`` mientras el root principal
+        permanece retirado. Un ``IntegratedWindowSurface`` alojado en ese root
+        seguía existiendo, pero era invisible hasta restaurar RoleRun. En ese
+        contexto el selector debe ser una ventana real hija de la barra.
+        """
+        bar = getattr(self, "floating_bar", None)
+        floating_visible = (
+            context == "floating"
+            and bar is not None
+            and bool(bar.winfo_exists())
+            and str(bar.state()) != "withdrawn"
+        )
+        if not floating_visible:
+            return IntegratedWindowSurface(self)
+
+        window = ctk.CTkToplevel(bar)
+        window.configure(fg_color="#111111")
+        window.resizable(False, False)
+        window.attributes("-topmost", True)
+        window.transient(bar)
+        width, height = 620, 430
+        screen_width = max(width, int(bar.winfo_screenwidth()))
+        screen_height = max(height, int(bar.winfo_screenheight()))
+        left = max(0, (screen_width - width) // 2)
+        top = max(0, (screen_height - height) // 2)
+        window.geometry(f"{width}x{height}+{left}+{top}")
+        window.after(0, window.lift)
+        window.after(20, window.focus_force)
+        return window
+
+    def _prompt_libero_ev_stats(self, pokemon: SavePokemon, callback, *, context: str = "main") -> None:
+        window = self._create_libero_ev_window(context)
+        floating_modal = context == "floating" and not isinstance(window, IntegratedWindowSurface)
+        if floating_modal:
+            modal_windows = getattr(self, "_floating_modal_windows", None)
+            if modal_windows is None:
+                modal_windows = set()
+                self._floating_modal_windows = modal_windows
+            modal_windows.add(window)
+        self._apply_window_icon(window)
+        window.title("EV de Líbero")
+        window.geometry("620x430")
+        if not floating_modal:
+            window.transient(self)
+        window.grab_set()
+        selected: set[str] = set()
+        buttons: dict[str, ctk.CTkButton] = {}
+        ctk.CTkLabel(
+            window, text=f"ELIGE 2 STATS PARA {pokemon.nickname or pokemon.species}",
+            text_color=TEXT, font=ctk.CTkFont("Segoe UI", 21, "bold"),
+        ).pack(pady=(26, 5))
+        ctk.CTkLabel(
+            window, text="Ambas quedarán en 252 EV; las otras cuatro quedarán en 0.",
+            text_color=MUTED,
+        ).pack(pady=(0, 18))
+        grid = ctk.CTkFrame(window, fg_color="transparent")
+        grid.pack(fill="both", expand=True, padx=34)
+        grid.grid_columnconfigure((0, 1, 2), weight=1, uniform="libero_evs")
+        confirm = ctk.CTkButton(window, text="APLICAR", state="disabled", height=42)
+
+        def toggle(key: str) -> None:
+            if key in selected:
+                selected.remove(key)
+            elif len(selected) < 2:
+                selected.add(key)
+            for stat_key, button in buttons.items():
+                chosen = stat_key in selected
+                button.configure(
+                    fg_color=GOLD if chosen else PANEL_ALT,
+                    text_color="#111111" if chosen else TEXT,
+                )
+            confirm.configure(
+                state="normal" if len(selected) == 2 else "disabled",
+                fg_color=GOLD if len(selected) == 2 else "#3A3428",
+            )
+
+        for index, key in enumerate(STAT_KEYS):
+            button = ctk.CTkButton(
+                grid, text=STAT_LABELS[key], height=62,
+                command=lambda value=key: toggle(value),
+                fg_color=PANEL_ALT, hover_color="#332B1D", border_width=1,
+                border_color=GOLD, text_color=TEXT,
+            )
+            button.grid(row=index // 3, column=index % 3, sticky="nsew", padx=5, pady=5)
+            buttons[key] = button
+        def apply_selection() -> None:
+            if floating_modal:
+                self._floating_modal_windows.discard(window)
+            window.destroy()
+            callback(tuple(key for key in STAT_KEYS if key in selected))
+
+        confirm.configure(command=apply_selection)
+        confirm.pack(fill="x", padx=38, pady=(16, 28))
+
+    def _set_projected_member_role(
+        self, pokemon: SavePokemon, role: str, *, libero_stats: tuple[str, ...] = (),
+    ) -> None:
         """Cambia el rol de un miembro activo aunque el equipo esté proyectado."""
         identity = self._pokemon_identity(pokemon)
         # Si llegó del PC durante esta misma reorganización, el rol forma parte de
@@ -10963,20 +16390,30 @@ class RoleRunManager(ctk.CTk):
             change.incoming_role = role
             change.incoming_snapshot["role"] = role
             change.incoming_snapshot["role_symbol"] = self._role_symbol(role)
+            desired_evs = self._bdsp_role_evs(role, libero_stats)
+            if desired_evs is not None:
+                change.incoming_snapshot["evs"] = dict(zip(STAT_KEYS, desired_evs))
             return
         # Si ya estaba en la party original, usa su slot original: los cambios de
         # rol se aplican antes de los movimientos Equipo ↔ PC al guardar.
         original = next((p for p in self.current_game.party if self._pokemon_identity(p) == identity), None) if self.current_game else None
         if original is not None:
-            self._apply_role_assignment(original, role, None, refresh=False)
+            self._apply_role_assignment(original, role, None, refresh=False, libero_stats=libero_stats)
 
     def _prepare_pc_team_change(
         self, pokemon: SavePokemon, replacement: SavePokemon | None = None,
         incoming_role_override: str | None = None,
+        incoming_libero_stats: tuple[str, ...] = (),
     ) -> str:
         """Añade otro paso a la reorganización Equipo ↔ PC sin bloquear la UI."""
         if not self.current_game:
             raise RuntimeError("No hay un equipo cargado.")
+        if getattr(getattr(self, "save_engine", None), "key", "") == "bdsp":
+            if not self._oras_live_auto_apply_available():
+                raise RuntimeError(
+                    "Los cambios Equipo↔PC en BDSP requieren que Perla Reluciente esté conectada "
+                    "en tiempo real. No se ha preparado ningún cambio diferido."
+                )
         if pokemon.box is None or pokemon.box_slot is None:
             raise RuntimeError("Ese Pokémon no tiene una posición válida dentro del PC proyectado.")
         pending_ids_before = {id(change) for change in self.run.pending_changes}
@@ -11009,7 +16446,7 @@ class RoleRunManager(ctk.CTk):
             # primer rol libre de izquierda a derecha, independientemente del rol
             # que el Pokémon tuviera registrado en el PC o del + que se pulsó.
             if (
-                self._active_azahar_realtime_key() in GEN7_REALTIME_GAME_KEYS
+                self._active_azahar_realtime_key() in (*GEN7_REALTIME_GAME_KEYS, "xy", "bdsp")
                 and self._oras_live_auto_apply_available()
             ):
                 occupied_roles = {
@@ -11033,15 +16470,19 @@ class RoleRunManager(ctk.CTk):
             outgoing_snapshot["role"] = role
             outgoing_snapshot["role_symbol"] = symbol
             # Regla nuclear de RoleRun: una sustitución 1↔1 hereda siempre el
-            # rol de la casilla saliente. Sol/Luna alpha.30 no acepta overrides
-            # que puedan crear un séptimo rol lógico o una transición SIN ROL.
-            if (
-                self._active_azahar_realtime_key() in GEN7_REALTIME_GAME_KEYS
-                and self._oras_live_auto_apply_available()
-            ):
-                incoming_role = role if role in ROLE_ORDER else "SIN ROL"
-                incoming_snapshot = self._incoming_snapshot_for_role(pokemon, incoming_role, [])
+            # rol de la casilla saliente, también en los writers de guardado.
+            # Un override del llamador no puede conservar la marca antigua del PC.
+            incoming_role = role if role in ROLE_ORDER else "SIN ROL"
+            incoming_snapshot = self._incoming_snapshot_for_role(pokemon, incoming_role, [])
             verb = "SUSTITUCIÓN PREPARADA"
+
+        desired_evs = RoleRunManager._bdsp_role_evs(
+            incoming_role,
+            incoming_libero_stats,
+        )
+        backend_key = str(getattr(getattr(self, "save_engine", None), "key", ""))
+        if backend_key in {"bdsp", "oras", "xy", "sm", "usum"} and desired_evs is not None:
+            incoming_snapshot["evs"] = dict(zip(STAT_KEYS, desired_evs))
 
         self.run.pending_changes.append(PendingTeamChange(
             operation=operation,
@@ -11058,7 +16499,11 @@ class RoleRunManager(ctk.CTk):
             outgoing_snapshot=outgoing_snapshot,
             incoming_identity=self._pokemon_identity(pokemon),
             outgoing_identity=(self._pokemon_identity(replacement) if replacement is not None else ""),
-            box_witnesses=self._pc_role_witnesses(pokemon),
+            box_witnesses=(
+                self._pc_box_witnesses(int(pokemon.box), int(pokemon.box_slot))
+                if backend_key == "xy"
+                else self._pc_role_witnesses(pokemon)
+            ),
         ))
         # Sol/Luna live: primero agenda la escritura y mantiene la UI en el
         # último estado confirmado. La nueva composición solo aparecerá cuando
@@ -11100,12 +16545,45 @@ class RoleRunManager(ctk.CTk):
                 break
         return tuple(result)
 
+    def _pc_box_witnesses(self, box: int, exclude_slot: int) -> tuple[tuple[int, str], ...]:
+        """Identidades ocupadas que demuestran una caja X/Y y su stride.
+
+        El destino vacío no puede demostrar por sí mismo qué candidato RAM es
+        la matriz PC real. Se aportan hasta tres vecinos ocupados de la misma
+        caja, excluyendo siempre la casilla que recibirá al Pokémon.
+        """
+        data = self._pc_cache or self._read_pc_data()
+        if data is None or not 1 <= int(box) <= len(data.boxes):
+            return ()
+        # La cuadrícula puede proceder de la matriz viva y diferir del último
+        # ``main``. Usar solo ``data.boxes`` hacía que la UI mostrase vecinos
+        # ocupados pero enviase cero testigos al writer. Reutilizamos exactamente
+        # la misma proyección viva que alimenta la pantalla de PC.
+        candidates = [
+            pokemon for pokemon in self._project_pc_box_pokemon(data, int(box))
+            if int(pokemon.box_slot or pokemon.slot or 0) != int(exclude_slot)
+        ]
+        candidates.sort(key=lambda pokemon: (
+            abs(int(pokemon.box_slot or pokemon.slot or 0) - int(exclude_slot)),
+            int(pokemon.box_slot or pokemon.slot or 0),
+        ))
+        return tuple(
+            (
+                int(pokemon.box_slot or pokemon.slot or 0),
+                self._pokemon_identity(pokemon),
+            )
+            for pokemon in candidates[:3]
+        )
+
     def _queue_pc_role_change(self, pokemon: SavePokemon, role: str) -> None:
         if not self.project or pokemon.box is None or pokemon.box_slot is None:
             return
         if (
-            self._active_azahar_realtime_key() in GEN7_REALTIME_GAME_KEYS
-            and self._oras_live_auto_apply_available()
+            getattr(getattr(self, "save_engine", None), "key", "") == "bdsp"
+            or (
+                self._active_azahar_realtime_key() in GEN7_REALTIME_GAME_KEYS
+                and self._oras_live_auto_apply_available()
+            )
         ):
             label_fn = getattr(self, "_active_azahar_realtime_label", None)
             live_label = (
@@ -11114,8 +16592,14 @@ class RoleRunManager(ctk.CTk):
             )
             messagebox.showinfo(
                 f"Roles del PC de {live_label} · escritura bloqueada",
-                f"{live_label} permite mover Pokémon entre Equipo y PC desde RoleRun, pero cambiar directamente el rol "
-                "de un Pokémon que permanece dentro de la caja sigue bloqueado. No se escribió ningún byte.",
+                (
+                    "Los roles y movimientos de la party ya son inmediatos, pero "
+                    "los cambios sobre Pokémon que permanecen en las cajas siguen bloqueados. "
+                    if self._active_azahar_realtime_key() == "bdsp" else
+                    f"{live_label} permite mover Pokémon entre Equipo y PC desde RoleRun, pero "
+                    "cambiar directamente el rol de un Pokémon que permanece dentro de la caja sigue bloqueado. "
+                )
+                + "No se escribió ningún byte.",
             )
             return
         pending_ids_before = {id(change) for change in self.run.pending_changes}
@@ -11164,7 +16648,7 @@ class RoleRunManager(ctk.CTk):
         if pokemon.box is None or pokemon.box_slot is None:
             return
         current_role, current_symbol = self._pc_effective_role(pokemon)
-        window = ctk.CTkToplevel(parent)
+        window = IntegratedWindowSurface(parent)
         self._apply_window_icon(window)
         window.title(f"Rol de {pokemon.nickname or pokemon.species} · PC")
         window.geometry("750x710")
@@ -11280,6 +16764,7 @@ class RoleRunManager(ctk.CTk):
         forced_role: str | None = None,
         browse_only: bool = False,
         embedded: bool = False,
+        _live_pc_data: SavePCData | None = None,
     ) -> None:
         """Abre el PC como visor y gestor de equipo.
 
@@ -11289,6 +16774,20 @@ class RoleRunManager(ctk.CTk):
         """
         self._cancel_role_drag()
         if not self.current_game or not self.current_save:
+            return
+
+        live_key = self._active_azahar_realtime_key() if self._oras_live_active else ""
+        if (
+            not embedded
+            and _live_pc_data is None
+            and live_key in FULL_MATRIX_LIVE_PC_GAME_KEYS
+            and self._oras_live_auto_apply_available()
+        ):
+            self._open_pc_selector_from_live_matrix(
+                replace_pokemon=replace_pokemon,
+                forced_role=forced_role,
+                browse_only=browse_only,
+            )
             return
 
         pending_team_changes = self._pending_team_changes()
@@ -11304,7 +16803,7 @@ class RoleRunManager(ctk.CTk):
             )
             return
 
-        pc_data = self._read_pc_data()
+        pc_data = _live_pc_data if _live_pc_data is not None else self._read_pc_data()
         if pc_data is None:
             return
 
@@ -11316,17 +16815,32 @@ class RoleRunManager(ctk.CTk):
             window._pc_images = []
             header = ctk.CTkFrame(window, fg_color="#121212", corner_radius=14, border_width=1, border_color="#333333")
             header.pack(fill="x", pady=(2, 0))
-            subtitle = (
-                "Consulta tus cajas, asigna roles y reorganiza Equipo ↔ PC. Los cambios compatibles se aplican y verifican al instante en el juego."
-                if self._oras_live_auto_apply_available() else
-                "Consulta tus cajas, asigna roles y reorganiza Equipo ↔ PC. Nada se escribe en el guardado hasta pulsar GUARDAR CAMBIOS."
-            )
+            if (
+                self._active_azahar_realtime_key() == "bdsp"
+                and self._oras_live_auto_apply_available()
+            ):
+                subtitle = (
+                    "Consulta tus cajas en tiempo real. CAMBIAR CON PC, añadir, retirar "
+                    "y sustituir una baja se aplican y verifican al instante; cambiar "
+                    "el rol de un Pokémon que permanece en la caja sigue bloqueado y "
+                    "nunca usa el guardado como fallback."
+                )
+            elif self._oras_live_auto_apply_available():
+                subtitle = (
+                    "Consulta tus cajas, asigna roles y reorganiza Equipo ↔ PC. "
+                    "Los cambios compatibles se aplican y verifican al instante en el juego."
+                )
+            else:
+                subtitle = (
+                    "Consulta tus cajas, asigna roles y reorganiza Equipo ↔ PC. "
+                    "Nada se escribe en el guardado hasta pulsar GUARDAR CAMBIOS."
+                )
             ctk.CTkLabel(
                 header, text=subtitle, text_color=MUTED,
                 font=ctk.CTkFont("Segoe UI", 13), wraplength=1000, justify="left", anchor="w",
             ).pack(fill="x", padx=20, pady=14)
         else:
-            window = ctk.CTkToplevel(self)
+            window = IntegratedWindowSurface(self)
             dialog_parent = window
             self._apply_window_icon(window)
             window.title("PC de la partida")
@@ -11501,9 +17015,13 @@ class RoleRunManager(ctk.CTk):
                 if replacement_role in ROLE_ORDER:
                     target_role = replacement_role
 
-            accepted, desired_role = self._resolve_pc_role_for_target_slot(
-                pokemon, target_role, dialog_parent,
-            )
+            if replacement_target is not None:
+                accepted = True
+                desired_role = target_role if target_role in ROLE_ORDER else "SIN ROL"
+            else:
+                accepted, desired_role = self._resolve_pc_role_for_target_slot(
+                    pokemon, target_role, dialog_parent,
+                )
             if not accepted:
                 return
 
@@ -11561,7 +17079,7 @@ class RoleRunManager(ctk.CTk):
             if not candidates:
                 queue_selection(pokemon)
                 return
-            picker = ctk.CTkToplevel(dialog_parent)
+            picker = IntegratedWindowSurface(dialog_parent)
             self._apply_window_icon(picker)
             picker.title("Elegir Pokémon a sustituir")
             picker.geometry("930x760")
@@ -12271,7 +17789,7 @@ class RoleRunManager(ctk.CTk):
             except Exception:
                 pass
         role, pokemon_list = next(iter(conflicts.items()))
-        window = ctk.CTkToplevel(self)
+        window = IntegratedWindowSurface(self)
         self._apply_window_icon(window)
         self._role_conflict_dialog = window
         window.title("Conflicto de roles")
@@ -12339,7 +17857,7 @@ class RoleRunManager(ctk.CTk):
         if not free:
             messagebox.showwarning("Sin roles libres", "No hay ningún rol libre al que mover este Pokémon. Envíalo al PC o reorganiza antes otro miembro.")
             return
-        window = ctk.CTkToplevel(self)
+        window = IntegratedWindowSurface(self)
         self._apply_window_icon(window)
         window.title("Elegir rol libre")
         window.geometry("560x430")
@@ -12362,7 +17880,7 @@ class RoleRunManager(ctk.CTk):
         ctk.CTkButton(window, text="CANCELAR", command=window.destroy, height=36, fg_color="transparent", border_width=1, border_color="#444444", text_color=MUTED).pack(pady=(8, 20))
 
     def _open_unassigned_resolution(self, pokemon: SavePokemon) -> None:
-        window = ctk.CTkToplevel(self)
+        window = IntegratedWindowSurface(self)
         self._apply_window_icon(window)
         window.title("Pokémon sin rol")
         window.geometry("610x390")
@@ -12524,13 +18042,30 @@ class RoleRunManager(ctk.CTk):
 
     def queue_inventory_change(self, item_key: str, item_name: str, quantity: int) -> None:
         engine_key = getattr(self.save_engine, "key", "")
+        is_bdsp_live = bool(engine_key == "bdsp" and self._oras_live_active)
+        if engine_key == "bdsp" and not is_bdsp_live:
+            self._show_live_sync_toast(
+                "RYUJINX NO ESTÁ SINCRONIZADO",
+                (
+                    "Espera a que la cabecera indique Perla Reluciente en vivo y "
+                    "vuelve a pulsar la utilidad. No quedó ningún cambio pendiente "
+                    "ni se escribió ningún byte."
+                ),
+                False,
+            )
+            return
         is_oras_live = bool(engine_key == "oras" and self._oras_live_active)
         is_xy_live = bool(engine_key == "xy" and self._oras_live_active)
         is_sm_live = bool(engine_key in GEN7_REALTIME_GAME_KEYS and self._oras_live_active)
         is_gen6_live = is_oras_live or is_xy_live
+        # Los bolsillos ORAS/X/Y se calibran con testigos de inventario. El
+        # dinero vive en el bloque Misc independiente y usa su propia huella.
+        needs_inventory_witnesses = bool(
+            (is_oras_live or is_xy_live) and item_key != "money-max"
+        )
         inventory_witnesses = (
             self._oras_inventory_witnesses(item_key)
-            if is_gen6_live and item_key != "money-max" else ()
+            if needs_inventory_witnesses else ()
         )
         save_misc_witness = b""
         save_inventory_witness = b""
@@ -12538,6 +18073,8 @@ class RoleRunManager(ctk.CTk):
         desired_misc_witness = b""
         if is_xy_live and item_key == "money-max" and self.current_save is not None:
             save_misc_witness = bytes(read_xy_saved_misc(self.current_save.path) or b"")
+        if is_oras_live and item_key == "money-max" and self.current_save is not None:
+            save_misc_witness = bytes(read_oras_saved_misc(self.current_save.path) or b"")
         if is_sm_live:
             try:
                 (
@@ -12554,10 +18091,17 @@ class RoleRunManager(ctk.CTk):
                 )
                 return
 
-        if is_gen6_live and item_key != "money-max" and not inventory_witnesses:
+        if needs_inventory_witnesses and not inventory_witnesses:
             self._show_live_sync_toast(
                 "MOCHILA SIN CALIBRAR",
                 "Guarda normalmente dentro del juego y vuelve a intentarlo cuando RoleRun haya recuperado la sincronización automática. También puedes pulsar F5 para forzarla. No se escribió ningún byte.",
+                False,
+            )
+            return
+        if is_oras_live and item_key == "money-max" and len(save_misc_witness) != ORAS_SAVE_MISC_SIZE:
+            self._show_live_sync_toast(
+                "BLOQUE DE DINERO SIN VALIDAR",
+                "RoleRun no pudo obtener la huella Misc completa de ORAS. Guarda dentro del juego, pulsa F5 y vuelve a intentarlo. No se escribió ningún byte.",
                 False,
             )
             return
@@ -12577,6 +18121,19 @@ class RoleRunManager(ctk.CTk):
             desired_inventory_witness=desired_inventory_witness,
             desired_misc_witness=desired_misc_witness,
         ))
+        if is_bdsp_live:
+            self._smooth_render_page(preserve_scroll=(self.active_page == "team"))
+            self._show_live_sync_toast(
+                "APLICANDO EN PERLA RELUCIENTE",
+                (
+                    "Dinero máximo"
+                    if item_key == "money-max"
+                    else f"{item_name} ×{quantity}"
+                ),
+                True,
+            )
+            self._request_oras_live_auto_apply_since(pending_ids_before)
+            return
         self._smooth_render_page(preserve_scroll=(self.active_page == "team"))
         toast = ctk.CTkFrame(self, fg_color="#151515", corner_radius=16, border_width=2, border_color=GOLD)
         toast.place(relx=0.57, rely=0.5, anchor="center")
@@ -12607,7 +18164,7 @@ class RoleRunManager(ctk.CTk):
         if not self.project:
             return
         current_role, current_symbol = self._effective_role(pokemon)
-        window = ctk.CTkToplevel(self)
+        window = IntegratedWindowSurface(self)
         self._apply_window_icon(window)
         window.title(f"Rol de {pokemon.nickname or pokemon.species}")
         window.geometry("760x720")
@@ -12628,6 +18185,11 @@ class RoleRunManager(ctk.CTk):
         ).pack(padx=24, pady=(0, 14))
 
         selected_role = ctk.StringVar(value=current_role)
+        selected_libero_stats = {
+            key for key in STAT_KEYS if int(pokemon.evs.get(key, 0)) == 252
+        }
+        if len(selected_libero_stats) != 2:
+            selected_libero_stats.clear()
         pokemon_identity = self._pokemon_identity(pokemon)
         occupied_by_others = {
             self._effective_role(member)[0]
@@ -12693,6 +18255,43 @@ class RoleRunManager(ctk.CTk):
                     box, text=move_name or "—", text_color=DANGER if bad else (GOLD if support_choice else TEXT),
                     font=ctk.CTkFont("Segoe UI", 15, "bold"), wraplength=260, justify="center",
                 ).place(relx=0.5, rely=0.5, anchor="center")
+            ev_frame = ctk.CTkFrame(preview, fg_color="transparent")
+            ev_frame.pack(fill="x", padx=18, pady=(0, 12))
+            ctk.CTkLabel(
+                ev_frame, text="EV AL APLICAR EL ROL", text_color=GOLD,
+                font=ctk.CTkFont("Segoe UI", 11, "bold"),
+            ).pack(pady=(0, 6))
+            ev_grid = ctk.CTkFrame(ev_frame, fg_color="transparent")
+            ev_grid.pack(fill="x")
+            ev_grid.grid_columnconfigure(tuple(range(6)), weight=1, uniform="evstats")
+            fixed = {
+                "Asesino": {"attack", "speed"},
+                "Mago": {"sp_attack", "speed"},
+                "Tanque": {"hp", "defense"},
+                "Prisma": {"hp", "sp_defense"},
+                "Support": {"defense", "sp_defense"},
+            }.get(role, set())
+
+            def toggle_libero(key: str) -> None:
+                if key in selected_libero_stats:
+                    selected_libero_stats.remove(key)
+                elif len(selected_libero_stats) < 2:
+                    selected_libero_stats.add(key)
+                render_preview("Líbero")
+
+            for column, key in enumerate(STAT_KEYS):
+                active = key in (selected_libero_stats if role == "Líbero" else fixed)
+                button = ctk.CTkButton(
+                    ev_grid,
+                    text=f"{STAT_LABELS[key]}\n{'252' if active else '0'}",
+                    command=(lambda k=key: toggle_libero(k)) if role == "Líbero" else None,
+                    height=48, corner_radius=9,
+                    fg_color=GOLD if active else PANEL_ALT,
+                    text_color="#111111" if active else MUTED,
+                    hover_color="#D3AF70" if role == "Líbero" else (GOLD if active else PANEL_ALT),
+                    font=ctk.CTkFont("Segoe UI", 10, "bold"),
+                )
+                button.grid(row=0, column=column, sticky="ew", padx=3)
 
         for index, (role, symbol) in enumerate(ROLE_OPTIONS):
             role_text = f"{symbol}  {role.upper()}" + ("  ·  LIBRE" if role in free_roles else "")
@@ -12714,19 +18313,43 @@ class RoleRunManager(ctk.CTk):
         ).pack(side="left", fill="x", expand=True, padx=(0, 5))
         ctk.CTkButton(
             actions, text="ACEPTAR ROL",
-            command=lambda: self.assign_role(pokemon, selected_role.get(), window),
+            command=lambda: self.assign_role(
+                pokemon, selected_role.get(), window,
+                tuple(key for key in STAT_KEYS if key in selected_libero_stats),
+            ),
             height=42, fg_color=GOLD, hover_color="#D3AF70", text_color="#111111",
             font=ctk.CTkFont("Segoe UI", 11, "bold"),
         ).pack(side="left", fill="x", expand=True, padx=(5, 0))
         render_preview(current_role)
 
-    def assign_role(self, pokemon: SavePokemon, role: str, window=None) -> None:
+    def assign_role(
+        self, pokemon: SavePokemon, role: str, window=None,
+        libero_stats: tuple[str, ...] = (),
+    ) -> None:
         if not self.project:
             return
 
         old_role, _ = self._effective_role(pokemon)
         target_role = pokemon.role if role == "AUTO" else role
-        if target_role == old_role:
+        if target_role == "Líbero" and len(libero_stats) != 2:
+            messagebox.showwarning(
+                "Distribución EV incompleta",
+                "Líbero necesita exactamente dos estadísticas seleccionadas.",
+                parent=window,
+            )
+            return
+        pokemon_evs = dict(getattr(pokemon, "evs", {}) or {})
+        old_ev_tuple = tuple(int(pokemon_evs.get(key, 0)) for key in STAT_KEYS)
+        target_ev_tuple = RoleRunManager._bdsp_role_evs(target_role, libero_stats)
+        active_realtime_key = getattr(self, "_active_azahar_realtime_key", None)
+        reconcile_usum_stats = (
+            callable(active_realtime_key)
+            and active_realtime_key() == "usum"
+            and target_ev_tuple is not None
+        )
+        if not reconcile_usum_stats and target_role == old_role and (
+            target_ev_tuple is None or target_ev_tuple == old_ev_tuple
+        ):
             if window is not None and window.winfo_exists():
                 window.destroy()
             return
@@ -12751,9 +18374,32 @@ class RoleRunManager(ctk.CTk):
         # Los movimientos incompatibles ya no bloquean el cambio de rol ni se
         # eliminan automáticamente. La tarjeta del equipo los marcará en rojo y
         # ofrecerá SUSTITUIR o ELIMINAR ATAQUE como acciones voluntarias.
-        self._apply_role_assignment(pokemon, role, window)
+        if libero_stats:
+            self._apply_role_assignment(pokemon, role, window, libero_stats=libero_stats)
+        else:
+            self._apply_role_assignment(pokemon, role, window)
 
-    def _apply_role_assignment(self, pokemon: SavePokemon, role: str, window=None, refresh: bool = True) -> str:
+    @staticmethod
+    def _bdsp_role_evs(
+        role: str, libero_stats: tuple[str, ...] = (),
+    ) -> tuple[int, int, int, int, int, int] | None:
+        selected = {
+            "Asesino": {"attack", "speed"},
+            "Mago": {"sp_attack", "speed"},
+            "Tanque": {"hp", "defense"},
+            "Prisma": {"hp", "sp_defense"},
+            "Support": {"defense", "sp_defense"},
+        }.get(role)
+        if role == "Líbero":
+            selected = set(libero_stats) if len(set(libero_stats)) == 2 else None
+        if selected is None:
+            return None
+        return tuple(252 if key in selected else 0 for key in STAT_KEYS)  # type: ignore[return-value]
+
+    def _apply_role_assignment(
+        self, pokemon: SavePokemon, role: str, window=None, refresh: bool = True,
+        libero_stats: tuple[str, ...] = (),
+    ) -> str:
         if not self.project:
             return "SIN ROL"
         pending_ids_before = {id(change) for change in self.run.pending_changes}
@@ -12800,7 +18446,12 @@ class RoleRunManager(ctk.CTk):
             self.project_service.save(self.project)
             new_role = base_role
         else:
-            if role != base_role:
+            old_evs = tuple(int(pokemon.evs.get(key, 0)) for key in STAT_KEYS)
+            new_evs = None
+            if self._active_azahar_realtime_key() in {"bdsp", "oras", "xy", "sm", "usum"} and pokemon.evs:
+                new_evs = self._bdsp_role_evs(role, libero_stats)
+            reconcile_gen7_stats = self._active_azahar_realtime_key() in {"sm", "usum"} and new_evs is not None
+            if role != base_role or (new_evs is not None and new_evs != old_evs) or reconcile_gen7_stats:
                 old_role = visible_old_role if visible_old_role in {*ROLE_TO_KEY, "SIN ROL"} else base_role
                 self.run.pending_changes.append(PendingRoleChange(
                     pokemon_slot=pokemon.slot,
@@ -12809,6 +18460,8 @@ class RoleRunManager(ctk.CTk):
                     old_role=old_role,
                     new_role=role,
                     pokemon_identity=identity,
+                    old_evs=old_evs if new_evs is not None else None,
+                    new_evs=new_evs,
                 ))
             self.project.role_overrides.pop(key, None)
             self.project_service.save(self.project)
@@ -12877,7 +18530,7 @@ class RoleRunManager(ctk.CTk):
         moveset del antiguo propietario. Si el jugador elige un rol ocupado, el
         anterior Pokémon queda SIN ROL y puede seguir en el equipo como preparación.
         """
-        dialog = ctk.CTkToplevel(self)
+        dialog = IntegratedWindowSurface(self)
         self._apply_window_icon(dialog)
         dialog.title("Rol ocupado")
         dialog.geometry("690x470")
@@ -12961,7 +18614,7 @@ class RoleRunManager(ctk.CTk):
         ).pack(fill="x", padx=28, pady=(0, 20))
 
     def _open_displaced_role_resolution(self, pokemon: SavePokemon, freed_role: str) -> None:
-        window = ctk.CTkToplevel(self)
+        window = IntegratedWindowSurface(self)
         self._apply_window_icon(window)
         window.title("Resolver Pokémon sin rol")
         window.geometry("650x500")
@@ -12993,7 +18646,7 @@ class RoleRunManager(ctk.CTk):
         self, pokemon: SavePokemon, requested_role: str, target_role: str,
         old_role: str, issues: list[dict], role_window=None,
     ) -> None:
-        dialog = ctk.CTkToplevel(self)
+        dialog = IntegratedWindowSurface(self)
         self._apply_window_icon(dialog)
         dialog.title("Cambio de rol")
         dialog.geometry("690x520")
@@ -13198,54 +18851,36 @@ class RoleRunManager(ctk.CTk):
             return
         self._smooth_render_page()
 
+    def _show_help_section(self, section: str) -> None:
+        self._help_section = section if section in {"overview", "format"} else "overview"
+        if self.active_page != "help":
+            self.navigate("help")
+        else:
+            self._smooth_render_page(reset_scroll=True)
+
     def _open_what_is_rolerun(self) -> None:
-        window = ctk.CTkToplevel(self)
-        self._apply_window_icon(window)
-        window.title("¿Qué es RoleRun?")
-        window.geometry("1120x790")
-        window.minsize(940, 680)
-        window.configure(fg_color=BG)
-        window.transient(self)
-        window.grab_set()
-        top = ctk.CTkFrame(window, fg_color="#15120D", corner_radius=0)
-        top.pack(fill="x")
-        ctk.CTkLabel(top, text="POKÉMON ROLERUN", text_color=GOLD, width=1040, anchor="w", font=ctk.CTkFont("Segoe UI", 31, "bold")).pack(fill="x", padx=32, pady=(25, 2))
-        ctk.CTkLabel(top, text="Pokémon con clases de RPG: cada miembro del equipo cumple un rol distinto y cada rol limita los movimientos que puede utilizar.", text_color=TEXT, width=1040, anchor="w", wraplength=1010, justify="left", font=ctk.CTkFont("Segoe UI", 17, "bold")).pack(fill="x", padx=32)
-        ctk.CTkLabel(top, text="El reto pone el foco en construir un equipo estratégico, sobrevivir con tus Pokémon y aprovechar los drafteos para mejorar sus herramientas. Las limitaciones concretas de Líbero, Asesino, Mago, Tanque, Prisma y Support están explicadas en la parte inferior de AYUDA.", text_color=MUTED, width=1040, anchor="w", wraplength=1010, justify="left", font=ctk.CTkFont("Segoe UI", 13)).pack(fill="x", padx=32, pady=(6, 24))
-        scroll = ctk.CTkScrollableFrame(window, fg_color=BG, corner_radius=0)
-        scroll.pack(fill="both", expand=True, padx=24, pady=18)
-        scroll.grid_columnconfigure((0, 1), weight=1, uniform="intro")
-        cards = [
-            ("01", "SEIS ROLES · UN EQUIPO", "Líbero, Asesino, Mago, Tanque, Prisma y Support. Cada rol restringe qué tipos de movimientos puede utilizar. Los Pokémon listos para combatir deben tener un rol y no puede haber dos iguales. Un Pokémon puede quedarse SIN ROL mientras lo preparas, pero no debe combatir hasta recibir uno. Consulta las limitaciones exactas al final de AYUDA.", GOLD),
-            ("02", "FASE DE PREPARACIÓN", "Antes del primer líder puedes preparar el equipo libremente. Justo antes de combatir por la primera medalla activas las restricciones de rol.", SUCCESS),
-            ("03", "DRAFTEOS", "Los Revivir y los entrenadores importantes conceden drafteos. El Manager genera herramientas compatibles; el derecho se consume solo al confirmar el movimiento que se sustituirá.", "#73A9FF"),
-            ("04", "SUPERVIVENCIA", "Los Pokémon debilitados se consideran muertos. Las vidas representan el margen que le queda a la Run antes de perder el reto.", DANGER),
-            ("05", "MENOS TEDIO, MÁS DECISIONES", "Curación libre fuera de combate y economía facilitada: el protagonismo está en los roles, las capturas y las decisiones tácticas.", "#D7B972"),
-            ("06", "ROLERUN MANAGER", "Lee el guardado, arbitra la composición, revisa movimientos, gestiona drafteos, Equipo y PC, y sincroniza información con OBS.", SUCCESS),
-        ]
-        for i, (num, title, text, accent) in enumerate(cards):
-            box = ctk.CTkFrame(scroll, fg_color=PANEL, corner_radius=16, border_width=1, border_color="#39352C")
-            box.grid(row=i//2, column=i%2, sticky="nsew", padx=7, pady=7)
-            ctk.CTkLabel(box, text=num, text_color=accent, font=ctk.CTkFont("Segoe UI", 22, "bold")).pack(anchor="w", padx=18, pady=(16, 2))
-            ctk.CTkLabel(box, text=title, text_color=TEXT, font=ctk.CTkFont("Segoe UI", 15, "bold")).pack(anchor="w", padx=18)
-            ctk.CTkLabel(
-                box, text=text, text_color=MUTED, width=455, anchor="w",
-                wraplength=445, justify="left", font=ctk.CTkFont("Segoe UI", 12),
-            ).pack(fill="x", padx=18, pady=(5, 18))
-        ctk.CTkLabel(scroll, text="EL CICLO DE UNA RUN", text_color=GOLD, font=ctk.CTkFont("Segoe UI", 18, "bold")).grid(row=3, column=0, columnspan=2, sticky="w", padx=8, pady=(22, 10))
-        cycle = ctk.CTkFrame(scroll, fg_color="#121212", corner_radius=15, border_width=1, border_color="#383838")
-        cycle.grid(row=4, column=0, columnspan=2, sticky="ew", padx=7, pady=(0, 14))
-        for col, (title, sub) in enumerate((("CAPTURA", "Construye"), ("ASIGNA ROL", "Especializa"), ("COMBATE", "Sobrevive"), ("DRAFTEA", "Mejora"), ("REORGANIZA", "Adáptate"))):
-            cell = ctk.CTkFrame(cycle, fg_color="transparent")
-            cell.grid(row=0, column=col, sticky="nsew", padx=5, pady=13)
-            cycle.grid_columnconfigure(col, weight=1)
-            ctk.CTkLabel(cell, text=title, text_color=TEXT, font=ctk.CTkFont("Segoe UI", 11, "bold")).pack()
-            ctk.CTkLabel(cell, text=sub, text_color=MUTED, font=ctk.CTkFont("Segoe UI", 9)).pack(pady=(2, 0))
-        ctk.CTkButton(window, text="ENTENDIDO", command=window.destroy, height=42, fg_color=GOLD, hover_color="#D3AF70", text_color="#111111", font=ctk.CTkFont("Segoe UI", 11, "bold")).pack(pady=(0, 22))
+        """Navega a la guía integrada; nunca crea una ventana secundaria."""
+        self._show_help_section("format")
+
+    def _render_integrated_format_help(self) -> None:
+        self._format_help_view = IntegratedFormatHelpView(
+            self.body,
+            logo_path=RESOURCES_DIR / "rolerun_icon.png",
+            role_order=tuple(ROLE_ORDER),
+            role_guide=ROLE_GUIDE,
+            global_role_note=GLOBAL_ROLE_NOTE,
+            role_symbols=ROLE_SYMBOLS,
+            on_back=lambda: self._show_help_section("overview"),
+            on_open_team=lambda: self.navigate(DEFAULT_PAGE),
+            on_open_moves=lambda: self.navigate("moves"),
+        )
 
     def _render_help_page(self) -> None:
         self._cancel_help_animations()
         self.help_images = []
+        if self._help_section == "format":
+            self._render_integrated_format_help()
+            return
 
         hero = ctk.CTkFrame(
             self.body, fg_color="#17140E", corner_radius=20,
@@ -13357,21 +18992,20 @@ class RoleRunManager(ctk.CTk):
                     font=ctk.CTkFont("Segoe UI", 13),
                 ).pack(side="left", fill="x", expand=True)
 
-        section(4, "⌂", "Dashboard", "La vista rápida de tu Run.", [
-            "Ajusta vidas, curaciones y drafteos con los botones + y −. En ORAS, las medallas se sincronizan automáticamente desde el juego.",
-            "El ojo de cada Pokémon permite mostrarlo u ocultarlo.",
+        section(4, "◆", "Estado de la Run", "La información esencial siempre accesible.", [
+            "Pulsa RUN ACTIVA en la barra lateral para consultar vidas, curaciones, progreso, drafteos y sincronización.",
+            "Los contadores automáticos se muestran como tales y solo el juego puede modificarlos.",
             "La Barra Flotante reúne las acciones principales mientras juegas con un solo monitor.",
         ])
         section(5, "♟", "Equipo, PC y roles", "Construye el equipo sin romper la jerarquía de RoleRun.", [
-            "Antes de la primera medalla estás en FASE DE PREPARACIÓN: puedes organizar Equipo y PC sin que las restricciones sean obligatorias.",
-            "El modo REGLAS DE ROL se controla desde el Dashboard con un botón ON/OFF. Puedes activarlo o desactivarlo cuando lo necesites.",
-            "Con las reglas activas, los Pokémon que vayan a combatir deben tener un rol único. No es obligatorio llevar seis Pokémon y también puedes mantener temporalmente miembros SIN ROL para entrenarlos o preparar su moveset.",
+            "Las reglas RoleRun están siempre activas. Los Pokémon que vayan a combatir deben tener un rol único.",
+            "No es obligatorio llevar seis Pokémon y puedes mantener temporalmente miembros SIN ROL para entrenarlos o preparar su moveset; todavía no son aptos para combatir.",
             "En el PC, RoleRun recuerda el ÚLTIMO ROL UTILIZADO por cada Pokémon. Ese dato sirve para recuperar su contexto al volver al equipo; sus movimientos nunca se borran automáticamente.",
             "Si eliges un rol que ya pertenece a otro miembro, los dos Pokémon intercambian automáticamente sus roles para mantener las seis casillas sin crear un miembro SIN ROL adicional.",
-            "Los huecos libres muestran un + para abrir el selector rápido del PC. Para gestionar todas las cajas, asignar roles y hacer cambios libremente, utiliza la pestaña CAJAS PC.",
+            "Los huecos libres muestran un + para abrir el selector rápido del PC. Equipo y Cajas PC comparten ahora una sola sección principal.",
             "Si el juego carga dos Pokémon con el mismo rol, el Manager detecta el conflicto. Un Pokémon SIN ROL puede mantenerse temporalmente en el equipo para prepararlo, pero no es apto para combate hasta asignarle uno.",
             "La legalidad del moveset se comprueba automáticamente: los movimientos incompatibles aparecen en rojo. Cada ataque rojo ofrece SUSTITUIR por una MT de tu mochila compatible con el ROL; RoleRun ignora la compatibilidad de especie del juego. Si no existe ninguna MT válida para el rol, SUSTITUIR queda apagado.",
-            "La pestaña MOVIMIENTOS permite elegir un rol, buscar entre todos los movimientos que existen en el juego cargado y verlos separados en COMPATIBLES e INCOMPATIBLES.",
+            "AYUDA → CONSULTA DE MOVIMIENTOS permite elegir un rol, buscar en el catálogo del juego y separar movimientos compatibles e incompatibles.",
         ])
         section(6, "◈", "Drafteos", "El flujo guiado para enseñar movimientos.", [
             "Selecciona un rol y después el Pokémon de ese rol o el Líbero.",
@@ -13405,40 +19039,7 @@ class RoleRunManager(ctk.CTk):
             text_color=MUTED, font=ctk.CTkFont("Segoe UI", 13),
         ).pack(anchor="w", padx=20, pady=(0, 13))
 
-        role_rules = {
-            "Líbero": {
-                "summary": "El rol libre: no tiene restricciones propias de movimientos ni de objetos.",
-                "allowed": "Movimientos de daño físico, movimientos de daño especial y cualquier movimiento de estado.",
-                "limits": "No tiene limitaciones propias del rol.",
-            },
-            "Tanque": {
-                "summary": "Defensor físico: puede atacar por cualquier lado, pero sus herramientas de estado deben reforzar la Defensa física.",
-                "allowed": "Movimientos de daño físico o especial que no recuperen PS; protecciones; Acua Aro y Arraigo; y boosts que aumenten la Defensa física sin aumentar nunca la Defensa Especial (por ejemplo, Corpulencia o Danza Triunfal).",
-                "limits": "No puede recuperar PS con movimientos de daño ni con curación directa. Un movimiento de estado que aumente Defensa Especial es ilegal aunque también aumente Defensa física, por lo que Masa Cósmica no es válida.",
-            },
-            "Asesino": {
-                "summary": "Atacante físico centrado en potenciar su Ataque y romper la Defensa rival.",
-                "allowed": "Movimientos de daño físico; boosts que aumenten al menos el Ataque; movimientos que reduzcan al menos la Defensa del rival; y Sustituto.",
-                "limits": ("No puede usar movimientos de daño especial, boosts defensivos, movimientos que reduzcan los ataques "
-                           "del rival ni ningún otro movimiento de estado que no cumpla las condiciones indicadas."),
-            },
-            "Mago": {
-                "summary": "Atacante especial centrado en potenciar su Ataque Especial y romper la Defensa Especial rival.",
-                "allowed": "Movimientos de daño especial; boosts que aumenten al menos el Ataque Especial; movimientos que reduzcan al menos la Defensa Especial del rival; y Sustituto.",
-                "limits": ("No puede usar movimientos de daño físico, boosts defensivos, movimientos que reduzcan los ataques "
-                           "del rival ni ningún otro movimiento de estado que no cumpla las condiciones indicadas."),
-            },
-            "Support": {
-                "summary": "Rol de utilidad para estados, hazards, pantallas, curación y control del combate.",
-                "allowed": "Movimientos de utilidad, problemas de estado, hazards, pantallas y curación; además, un máximo de 2 movimientos de daño en su set, físicos o especiales.",
-                "limits": "No puede usar movimientos de protección ni movimientos que aumenten sus propias estadísticas, salvo la excepción global de Velocidad.",
-            },
-            "Prisma": {
-                "summary": "Defensor especial: puede atacar por cualquier lado, pero sus boosts deben incluir Defensa Especial sin aumentar Defensa física.",
-                "allowed": "Movimientos de daño físico o especial que no recuperen PS; protecciones; Acua Aro y Arraigo; y boosts que aumenten Defensa Especial pudiendo aumentar además otras estadísticas salvo Defensa física (por ejemplo, Paz Mental o Danza Aleteo).",
-                "limits": "No puede recuperar PS con movimientos de daño ni con curación directa. Cualquier boost que aumente Defensa física es ilegal, incluso si también aumenta Defensa Especial; Masa Cósmica no es válida.",
-            },
-        }
+        role_rules = ROLE_GUIDE
 
         role_row = ctk.CTkFrame(roles, fg_color="transparent")
         role_row.pack(fill="x", padx=16, pady=(0, 12))
@@ -13533,11 +19134,7 @@ class RoleRunManager(ctk.CTk):
                 font=ctk.CTkFont("Segoe UI", 13),
             ).pack(fill="x", padx=15, pady=(0, 13))
 
-            global_note = (
-                "REGLA GLOBAL · Líbero, Asesino, Mago y Support conservan la excepción de movimientos de estado de Velocidad. "
-                "Asesino y Mago también pueden utilizar Sustituto. Tanque y Prisma no: un movimiento de estado solo es legal si cumple su requisito defensivo. "
-                "Los efectos secundarios de un movimiento de daño no cambian su categoría de rol."
-            )
+            global_note = "REGLA GLOBAL · " + GLOBAL_ROLE_NOTE
             ctk.CTkLabel(
                 detail_host, text=global_note, text_color=MUTED, wraplength=830,
                 justify="left", anchor="w", font=ctk.CTkFont("Segoe UI", 12, "bold"),
@@ -13646,19 +19243,54 @@ class RoleRunManager(ctk.CTk):
                 f"Listo. Si algo falla en tiempo real, pásame este ZIP:\n\n{result}",
             )
 
-    def _open_realtime_diagnostics_folder(self) -> None:
-        folder = self._realtime_diagnostics_folder()
+    def _open_path_in_explorer(self, value: str | Path | None) -> bool:
+        """Abre una ruta visible mediante un único flujo con error comprensible."""
+        target = resolve_explorer_target(value)
+        if not target.exists or target.open_path is None:
+            self._set_operation_status(
+                "failed",
+                "LA RUTA NO EXISTE",
+                f"RoleRun no encuentra: {target.requested}",
+                persistent=True,
+            )
+            return False
         try:
-            os.startfile(folder)
-        except Exception:
-            messagebox.showinfo("Diagnóstico", str(folder))
+            if os.name == "nt" and target.select_file:
+                subprocess.Popen(["explorer.exe", f"/select,{target.requested}"])
+            elif os.name == "nt":
+                os.startfile(target.open_path)
+            elif sys.platform == "darwin":
+                arguments = (
+                    ["open", "-R", str(target.requested)]
+                    if target.select_file else ["open", str(target.open_path)]
+                )
+                subprocess.Popen(arguments)
+            else:
+                subprocess.Popen(["xdg-open", str(target.open_path)])
+        except Exception as exc:
+            self._set_operation_status(
+                "failed",
+                "NO SE PUDO ABRIR LA RUTA",
+                str(exc),
+                persistent=True,
+            )
+            return False
+        self._set_operation_status(
+            "neutral",
+            "RUTA ABIERTA",
+            str(target.requested if target.select_file else target.open_path),
+        )
+        return True
+
+    def _open_realtime_diagnostics_folder(self) -> None:
+        self._open_path_in_explorer(self._realtime_diagnostics_folder())
 
     def _show_realtime_diagnostic_report(self) -> None:
         core = getattr(self, "realtime_core", None)
         if core is None:
             return
         report = core.diagnostic_report()
-        window = ctk.CTkToplevel(self)
+        window = IntegratedWindowSurface(self)
         window.title("Real-Time Core · Diagnóstico")
         window.geometry("820x650")
         window.minsize(680, 500)
@@ -13725,18 +19357,57 @@ class RoleRunManager(ctk.CTk):
         )
 
     def _render_settings_page(self) -> None:
-        cards=[("Idioma", "Español (nombres oficiales de PKHeX.Core)"),
-               ("Guardado activo", str(self.current_save.path) if self.current_save else "Ninguno"),
-               ("Carpeta de datos", str(USER_DATA_DIR)),
-               ("Carpeta de Runs", str(RUNS_DIR)),
-               ("Seguridad", "Backups automáticos y validación tras cada guardado") ]
         row = 0
-        for title,value in cards:
-            card=ctk.CTkFrame(self.body,fg_color=PANEL,corner_radius=13)
-            card.grid(row=row,column=0,sticky="ew",pady=5)
-            ctk.CTkLabel(card,text=title,text_color=TEXT,font=ctk.CTkFont("Segoe UI",13,"bold")).pack(anchor="w",padx=16,pady=(13,2))
-            ctk.CTkLabel(card,text=value,text_color=MUTED,wraplength=760,justify="left").pack(anchor="w",padx=16,pady=(0,13))
+
+        def section(title: str, subtitle: str) -> None:
+            nonlocal row
+            ctk.CTkLabel(
+                self.body, text=title, text_color=GOLD,
+                font=ctk.CTkFont("Segoe UI", 18, "bold"),
+            ).grid(row=row, column=0, sticky="w", pady=(16 if row else 2, 2))
             row += 1
+            ctk.CTkLabel(
+                self.body, text=subtitle, text_color=MUTED,
+                font=ctk.CTkFont("Segoe UI", 13),
+            ).grid(row=row, column=0, sticky="w", pady=(0, 8))
+            row += 1
+
+        def setting_card(title: str, value: str, path: str | Path | None = None) -> None:
+            nonlocal row
+            card = ctk.CTkFrame(self.body, fg_color=PANEL, corner_radius=13)
+            card.grid(row=row, column=0, sticky="ew", pady=5)
+            card.grid_columnconfigure(0, weight=1)
+            ctk.CTkLabel(
+                card, text=title, text_color=TEXT,
+                font=ctk.CTkFont("Segoe UI", 13, "bold"),
+            ).grid(row=0, column=0, sticky="w", padx=16, pady=(12, 1))
+            ctk.CTkLabel(
+                card, text=value, text_color=MUTED, wraplength=820,
+                justify="left", font=ctk.CTkFont("Segoe UI", 12),
+            ).grid(row=1, column=0, sticky="w", padx=16, pady=(0, 12))
+            if path is not None:
+                ctk.CTkButton(
+                    card, text="ABRIR", width=78, height=32,
+                    command=lambda target=path: self._open_path_in_explorer(target),
+            fg_color="#292315" if self._floating_enabled else "transparent", hover_color=PANEL_ALT,
+                    border_width=1, border_color=GOLD, text_color=GOLD,
+                    font=ctk.CTkFont("Segoe UI", 11, "bold"),
+                ).grid(row=0, column=1, rowspan=2, padx=14, pady=10)
+            row += 1
+
+        section("GENERAL", "Preferencias generales y garantías de seguridad.")
+        setting_card("Idioma", "Español (nombres oficiales de PKHeX.Core)")
+        setting_card("Seguridad", "Backups automáticos y validación tras cada guardado")
+
+        section("ARCHIVOS Y CARPETAS", "Accesos directos a las ubicaciones utilizadas por esta Run.")
+        active_save = self.current_save.path if self.current_save else None
+        setting_card("Guardado activo", str(active_save) if active_save else "Ninguno", active_save)
+        setting_card("Carpeta de datos", str(USER_DATA_DIR), USER_DATA_DIR)
+        setting_card("Carpeta de Runs", str(RUNS_DIR), RUNS_DIR)
+        setting_card("Backups", str(BACKUP_DIR), BACKUP_DIR)
+        setting_card("Diagnósticos", str(self._realtime_diagnostics_folder()), self._realtime_diagnostics_folder())
+
+        section("ARCHIVOS DEL JUEGO", "Partida y ROM configuradas para el backend activo.")
 
         if self.selected_game_key:
             source_profile = self.game_source_profiles.get(self.selected_game_key)
@@ -13759,16 +19430,33 @@ class RoleRunManager(ctk.CTk):
                 ),
                 text_color=source_color, wraplength=760, justify="left",
             ).pack(anchor="w", padx=18, pady=(0, 10))
+            source_actions = ctk.CTkFrame(source_card, fg_color="transparent")
+            source_actions.pack(fill="x", padx=18, pady=(0, 15))
             ctk.CTkButton(
-                source_card, text="CAMBIAR ARCHIVOS", height=34,
+                source_actions, text="CAMBIAR ARCHIVOS", height=34,
                 command=lambda key=self.selected_game_key: self._configure_game_sources(key),
                 fg_color="transparent", hover_color=PANEL_ALT, border_width=1,
                 border_color=GOLD, text_color=GOLD,
                 font=ctk.CTkFont("Segoe UI", 10, "bold"),
-            ).pack(anchor="w", padx=18, pady=(0, 15))
+            ).pack(side="left", padx=(0, 7))
+            ctk.CTkButton(
+                source_actions, text="ABRIR PARTIDA", height=34,
+                command=lambda p=source_profile.save_path: self._open_path_in_explorer(p),
+                fg_color="transparent", hover_color=PANEL_ALT, border_width=1,
+                border_color="#4A4A4A", text_color=MUTED,
+                font=ctk.CTkFont("Segoe UI", 10, "bold"),
+            ).pack(side="left", padx=(0, 7))
+            ctk.CTkButton(
+                source_actions, text="ABRIR JUEGO", height=34,
+                command=lambda p=source_profile.game_path: self._open_path_in_explorer(p),
+                fg_color="transparent", hover_color=PANEL_ALT, border_width=1,
+                border_color="#4A4A4A", text_color=MUTED,
+                font=ctk.CTkFont("Segoe UI", 10, "bold"),
+            ).pack(side="left")
             row += 1
 
         if self.project:
+            section("OBS Y BARRA FLOTANTE", "Archivos de captura y estado de sincronización.")
             obs_path = self.project_service.active_obs_directory() or GLOBAL_OBS_DIR
             obs_card = ctk.CTkFrame(self.body, fg_color=PANEL, corner_radius=14, border_width=1, border_color=PANEL_ALT)
             obs_card.grid(row=row, column=0, sticky="ew", pady=(16, 5))
@@ -13776,34 +19464,24 @@ class RoleRunManager(ctk.CTk):
             ctk.CTkLabel(obs_card, text=f"Estado: {self.sync_status}\nCarpeta: {obs_path}", text_color=MUTED, wraplength=760, justify="left").pack(anchor="w", padx=18, pady=(0, 10))
             actions = ctk.CTkFrame(obs_card, fg_color="transparent")
             actions.pack(fill="x", padx=18, pady=(0, 16))
-            ctk.CTkButton(actions, text="ABRIR CARPETA OBS", command=lambda p=obs_path: os.startfile(p), fg_color=GOLD, hover_color="#D3AF70", text_color="#111111").pack(side="left")
+            ctk.CTkButton(actions, text="ABRIR CARPETA OBS", command=lambda p=obs_path: self._open_path_in_explorer(p), fg_color=GOLD, hover_color="#D3AF70", text_color="#111111").pack(side="left")
             row += 1
 
-        if self.project and getattr(self.save_engine, "key", "") in AZAHAR_REALTIME_GAME_KEYS:
+        if self.project and getattr(self.save_engine, "key", "") in REALTIME_READ_GAME_KEYS:
+            section("DIAGNÓSTICO AVANZADO", "Estado en vivo y herramientas manuales de captura y replay.")
             live_key = self._active_azahar_realtime_key()
             live_label = self._active_azahar_realtime_label()
             live_card = ctk.CTkFrame(self.body, fg_color=PANEL, corner_radius=14, border_width=1, border_color=GOLD)
             live_card.grid(row=row, column=0, sticky="ew", pady=(16, 5))
-            ctk.CTkLabel(live_card, text=f"AZAHAR · {live_label} EN VIVO · REAL-TIME CORE", text_color=GOLD,
+            backend_label = "RYUJINX" if live_key == "bdsp" else "AZAHAR"
+            ctk.CTkLabel(live_card, text=f"{backend_label} · {live_label} EN VIVO · REAL-TIME CORE", text_color=GOLD,
                          font=ctk.CTkFont("Segoe UI", 16, "bold")).pack(anchor="w", padx=18, pady=(16, 2))
             ctk.CTkLabel(
                 live_card,
                 text=(
-                    (
-                        "ORAS es la implementación de referencia ya validada: equipo, roles, movimientos, PC, inventario/MT, "
-                        "batalla, bajas y medallas funcionan sobre el Real-Time Core y se mantienen sincronizados con Azahar. "
-                        "F5 queda como resincronización manual de emergencia.\n"
-                        "Los cambios compatibles se escriben y verifican en RAM; RoleRun no fuerza el guardado main. Tú eliges cuándo guardar dentro del juego.\n"
-                        if live_key == "oras" else
-                        (
-                            "Sol/Luna en 0.2.2-alpha.10 mantiene el lector sparse validado y restaura la transacción de roles de alpha.4. Si una escritura no se confirma, se genera automáticamente un diagnóstico RAM en Documentos\\RoleRun Manager\\Logs. "
-                            "La dirección solo se acepta si checksum/estructura son válidos y la party coincide con el main por especie+PID+TID+SID. "
-                            "Solo los cambios de rol están habilitados en esta build de recuperación. Movimientos, MT, PC, bajas, progreso e inventario siguen bloqueados hasta revalidar esta base.\n"
-                            if live_key in GEN7_REALTIME_GAME_KEYS else
-                            "X/Y usa el segundo adaptador maduro del mismo Core, con paridad funcional de tiempo real sobre AzaharPlus RPC. "
-                            "Las operaciones soportadas se escriben y verifican en RAM; F5 queda como resincronización manual.\n"
-                        )
-                    )
+                    self._live_runtime_help_text(live_key)
+                    + " Los cambios compatibles se verifican en RAM; F5 queda como "
+                    "resincronización manual de emergencia.\n"
                     + f"Estado: {self.sync_status}"
                 ),
                 text_color=MUTED, wraplength=760, justify="left",
@@ -13865,17 +19543,22 @@ class RoleRunManager(ctk.CTk):
             ).pack(side="left")
             row += 1
 
+        section("ATAJOS", "Controles globales disponibles mientras juegas.")
         hotkey_card = ctk.CTkFrame(self.body, fg_color=PANEL, corner_radius=14, border_width=1, border_color=PANEL_ALT)
         hotkey_card.grid(row=row, column=0, sticky="ew", pady=(16, 5))
         ctk.CTkLabel(hotkey_card, text="ATAJOS GLOBALES", text_color=TEXT,
                      font=ctk.CTkFont("Segoe UI", 16, "bold")).pack(anchor="w", padx=18, pady=(16, 2))
-        ctk.CTkLabel(hotkey_card, text="Funcionan incluso mientras juegas en el emulador. Pulsa ASIGNAR y después la tecla deseada.",
+        ctk.CTkLabel(hotkey_card, text="Cada acción admite una tecla y un botón de mando independientes. Los atajos se reservan únicamente mientras el emulador compatible está en primer plano; fuera del juego vuelven a funcionar con normalidad.",
                      text_color=MUTED, wraplength=760, justify="left").pack(anchor="w", padx=18, pady=(0, 12))
         if not self.project:
             ctk.CTkLabel(hotkey_card, text="Abre una Run para configurar sus atajos.", text_color=MUTED).pack(anchor="w", padx=18, pady=(0, 16))
             return
         labels = [
+            ("menu_accept", "Aceptar / seleccionar en RoleRun"),
+            ("menu_back", "Atrás / cancelar en RoleRun"),
             ("sync_live_game", "Resincronizar juego desde Azahar"),
+            ("heal_party", "Curar por completo el equipo"),
+            ("floating_menu", "Abrir/cerrar menú flotante"),
             ("vidas_mas", "Sumar vida"), ("vidas_menos", "Restar vida"),
             ("pociones_mas", "Sumar curación"), ("pociones_menos", "Restar curación"),
             ("drafteos_mas", "Sumar drafteo"), ("drafteos_menos", "Restar drafteo"),
@@ -13884,21 +19567,51 @@ class RoleRunManager(ctk.CTk):
             ("toggle_prisma", "Mostrar/ocultar Prisma"), ("toggle_support", "Mostrar/ocultar Support"),
         ]
         if not self._counter_is_automatic("medallas"):
-            labels[5:5] = [("medallas_mas", "Sumar medalla"), ("medallas_menos", "Restar medalla")]
+            labels[7:7] = [("medallas_mas", "Sumar medalla"), ("medallas_menos", "Restar medalla")]
         grid = ctk.CTkFrame(hotkey_card, fg_color="transparent")
         grid.pack(fill="x", padx=14, pady=(0, 16))
-        grid.grid_columnconfigure((0, 1), weight=1)
+        grid.grid_columnconfigure(0, weight=1)
+        headings = ctk.CTkFrame(grid, fg_color="transparent")
+        headings.grid(row=0, column=0, sticky="ew", padx=4, pady=(0, 3))
+        headings.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(headings, text="ACCIÓN", text_color=GOLD,
+                     font=ctk.CTkFont("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", padx=12)
+        ctk.CTkLabel(headings, text="TECLADO", width=180, text_color=GOLD,
+                     font=ctk.CTkFont("Segoe UI", 10, "bold")).grid(row=0, column=1)
+        ctk.CTkLabel(headings, text="MANDO", width=200, text_color=GOLD,
+                     font=ctk.CTkFont("Segoe UI", 10, "bold")).grid(row=0, column=2)
         for i, (action, label) in enumerate(labels):
             cell = ctk.CTkFrame(grid, fg_color=PANEL_ALT, corner_radius=10)
-            cell.grid(row=i//2, column=i%2, sticky="ew", padx=4, pady=4)
+            cell.grid(row=i + 1, column=0, sticky="ew", padx=4, pady=4)
             cell.grid_columnconfigure(0, weight=1)
             ctk.CTkLabel(cell, text=label, text_color=TEXT, font=ctk.CTkFont("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w", padx=12, pady=10)
-            key = self.project.hotkeys.get(action, "Sin asignar")
+            is_menu_control = action.startswith("menu_")
+            menu_control = action.removeprefix("menu_") if is_menu_control else ""
+            key = (
+                self.project.menu_keys.get(menu_control, "Sin asignar")
+                if is_menu_control else self.project.hotkeys.get(action, "Sin asignar")
+            )
+            keyboard_command = (
+                (lambda c=menu_control: self.begin_menu_key_capture(c))
+                if is_menu_control else (lambda a=action: self.begin_hotkey_capture(a))
+            )
             ctk.CTkButton(cell, text=key.upper(), width=88, height=30, fg_color="transparent",
                           border_width=1, border_color=GOLD, text_color=GOLD,
-                          command=lambda a=action: self.begin_hotkey_capture(a)).grid(row=0, column=1, padx=(6, 4))
+                          command=keyboard_command).grid(row=0, column=1, padx=(6, 4))
             ctk.CTkButton(cell, text="ASIGNAR", width=78, height=30, fg_color=GOLD, hover_color="#D3AF70",
-                          text_color="#111111", command=lambda a=action: self.begin_hotkey_capture(a)).grid(row=0, column=2, padx=(4, 10))
+                          text_color="#111111", command=keyboard_command).grid(row=0, column=2, padx=(4, 10))
+            controller = (
+                self.project.controller_menu_buttons.get(menu_control, "")
+                if is_menu_control else self.project.controller_hotkeys.get(action, "")
+            )
+            controller_text = controller.upper() if controller else "ASIGNAR"
+            ctk.CTkButton(
+                cell, text=controller_text, width=200, height=30,
+                state="normal", fg_color="transparent",
+                hover_color=PANEL, border_width=1, border_color=GOLD,
+                text_color=GOLD,
+                command=lambda a=action: self.begin_controller_capture(a),
+            ).grid(row=0, column=3, padx=(4, 10))
 
     def _empty_page(self, title: str, subtitle: str, command) -> None:
         card=ctk.CTkFrame(self.body,fg_color=PANEL,corner_radius=18)
@@ -14273,51 +19986,235 @@ class RoleRunManager(ctk.CTk):
             ).grid(row=0, column=i - 1, sticky="ew", padx=5)
 
     def _show_change_toast(self) -> None:
-        """Muestra una confirmación breve por encima de toda la interfaz."""
-        previous = getattr(self, "_change_toast", None)
-        if previous is not None and previous.winfo_exists():
-            previous.destroy()
+        """Publica el estado real sin confundir cola local con readback."""
+        if self._live_write_in_progress or self._oras_live_auto_apply_available():
+            self._set_operation_status(
+                "applying",
+                "APLICANDO CAMBIO",
+                "La operación se ha enviado; todavía falta la verificación independiente del juego.",
+            )
+        else:
+            self._set_operation_status(
+                "prepared",
+                "CAMBIO PREPARADO",
+                "La operación está en la cola pendiente y aún no se ha aplicado al juego.",
+                actions=("Revisar cambios",),
+            )
 
-        toast = ctk.CTkFrame(
-            self,
-            width=340,
-            height=105,
-            corner_radius=18,
-            fg_color="#171F19",
-            border_width=2,
-            border_color=SUCCESS,
+
+    def _create_activity_overlay(
+        self, message: str, *, content_only: bool, freeze_source: bool = False,
+        independent: bool = False,
+    ) -> object | None:
+        """Presenta una pantalla estable que no depende del árbol sustituido.
+
+        Una captura de CTk no es una barrera fiable durante un relayout: Windows
+        puede entregarla entre el canvas y sus ventanas hijas. Las operaciones
+        usan por ello una superficie opaca propia. Solo la navegación ordinaria,
+        cuyo origen ya está asentado, conserva el efecto de frame congelado.
+        """
+        surface = getattr(self, "content", None) if content_only else self
+        if not self._widget_alive(surface):
+            surface = self
+        try:
+            self.update_idletasks()
+            width = max(1, int(surface.winfo_width()))
+            height = max(1, int(surface.winfo_height()))
+            root_x = int(surface.winfo_rootx())
+            root_y = int(surface.winfo_rooty())
+            overlay = tk.Toplevel(self)
+            overlay.withdraw()
+            overlay.overrideredirect(True)
+            overlay.configure(background=BG)
+            if not independent:
+                try:
+                    overlay.transient(self)
+                except Exception:
+                    pass
+            overlay.geometry(f"{width}x{height}+{root_x}+{root_y}")
+            activity_image = None
+            if freeze_source:
+                capture = ImageGrab.grab(
+                    bbox=(root_x, root_y, root_x + width, root_y + height),
+                    all_screens=True,
+                ).convert("RGB")
+                if capture.size != (width, height):
+                    capture = capture.resize((width, height), Image.Resampling.LANCZOS)
+                capture = ImageEnhance.Brightness(capture).enhance(0.42)
+                activity_image = ImageTk.PhotoImage(capture, master=overlay)
+            snapshot_label = tk.Label(
+                overlay, text="", image=activity_image,
+                borderwidth=0, highlightthickness=0, background="#151515",
+            )
+            snapshot_label.pack(fill="both", expand=True)
+            if not freeze_source:
+                tk.Label(
+                    overlay, text="ROLERUN\nMANAGER", background="#151515",
+                    foreground=GOLD, justify="center",
+                    font=("Segoe UI", 28, "bold"),
+                ).place(relx=0.5, rely=0.5, y=-105, anchor="center")
+            message_label = tk.Label(
+                overlay, text=str(message), background="#151515",
+                foreground=TEXT, font=("Segoe UI", 13, "bold"),
+                width=54, anchor="center", justify="center", padx=18, pady=8,
+            )
+            message_label.place(relx=0.5, rely=0.5, y=58, anchor="n")
+            overlay._rolerun_message_label = message_label
+            overlay._rolerun_activity_image = activity_image
+            # La raíz puede cambiar de tamaño después de construir la shell
+            # definitiva. Conservar la superficie autoritativa permite que la
+            # barrera siga cubriéndola por completo durante ese relayout.
+            overlay._rolerun_surface = surface
+            overlay.attributes("-alpha", 1.0)
+            overlay.attributes("-topmost", bool(self.attributes("-topmost")))
+            overlay.deiconify()
+            if independent:
+                # El cargador inicial conserva el tamaño normal de RoleRun y no
+                # monopoliza el escritorio. Sigue siendo una superficie propia,
+                # pero el usuario puede cambiar a cualquier otra ventana.
+                overlay.attributes("-topmost", False)
+                overlay._rolerun_lock_geometry = False
+            overlay.lift()
+            overlay.update_idletasks()
+            self._start_navigation_spinner(overlay, snapshot_label)
+            return overlay
+        except Exception:
+            self._destroy_activity_overlay(locals().get("overlay"))
+            return None
+
+    def _sync_activity_overlay_geometry(self, overlay) -> bool:
+        """Alinea una barrera viva con la geometría actual de su superficie."""
+        if not self._widget_alive(overlay):
+            return False
+        if bool(getattr(overlay, "_rolerun_lock_geometry", False)):
+            try:
+                overlay.lift()
+                return True
+            except Exception:
+                return False
+        surface = getattr(overlay, "_rolerun_surface", None)
+        if not self._widget_alive(surface):
+            surface = self
+        try:
+            self.update_idletasks()
+            width = max(1, int(surface.winfo_width()))
+            height = max(1, int(surface.winfo_height()))
+            root_x = int(surface.winfo_rootx())
+            root_y = int(surface.winfo_rooty())
+            geometry = f"{width}x{height}+{root_x}+{root_y}"
+            overlay.geometry(geometry)
+            overlay._rolerun_surface_geometry = geometry
+            overlay.lift()
+            return True
+        except Exception:
+            return False
+
+    def _reveal_initial_shell_behind_overlay(self, overlay) -> None:
+        """Mapea la raíz transparente y recompone para su geometría final."""
+        try:
+            # El cargador permanece en geometría normal. Solo cuando ya existe
+            # una partida válida se maximiza la raíz como ventana de Windows
+            # (``zoomed``), nunca como fullscreen/F11.
+            self.attributes("-alpha", 0.0)
+            self.deiconify()
+            try:
+                self.state("zoomed")
+            except Exception:
+                try:
+                    self.attributes("-zoomed", True)
+                except Exception:
+                    pass
+            self._force_native_main_maximize()
+            self.update_idletasks()
+            if self._widget_alive(overlay):
+                overlay.attributes("-topmost", False)
+                overlay.lift()
+            self._smooth_render_page()
+        except Exception:
+            self._initial_shell_reveal_phase = "failed"
+
+    def _finish_initial_shell_reveal(self, overlay) -> None:
+        """Retira la barrera después de que DWM haya presentado la raíz final."""
+        if self._widget_alive(overlay):
+            try:
+                overlay.attributes("-topmost", False)
+                overlay.lift()
+            except Exception:
+                pass
+        self._hide_busy_indicator("initial-shell")
+
+    def _publish_initial_shell(self, overlay) -> None:
+        """Publica una raíz ya asentada sin retirar aún su cobertura DWM."""
+        try:
+            self.attributes("-alpha", 1.0)
+            self.update_idletasks()
+            if self._widget_alive(overlay):
+                overlay.attributes("-topmost", False)
+                overlay.lift()
+        finally:
+            # La cobertura permanece varios ciclos de compositor; ya no hay
+            # ningún relayout pendiente debajo, solo la presentación del HWND.
+            self.after(
+                260,
+                lambda barrier=overlay: self._finish_initial_shell_reveal(barrier),
+            )
+
+    def _destroy_activity_overlay(self, overlay) -> None:
+        if overlay is None:
+            return
+        self._stop_navigation_spinner(overlay)
+        try:
+            if overlay.winfo_exists():
+                overlay.destroy()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _update_activity_overlay_message(overlay, message: str) -> None:
+        label = getattr(overlay, "_rolerun_message_label", None)
+        try:
+            if label is not None and label.winfo_exists():
+                label.configure(text=str(message))
+                label.lift()
+                # La siguiente operación puede bloquear Tk inmediatamente. Forzar
+                # ahora el repintado del rectángulo fijo evita que sobrevivan
+                # fragmentos del mensaje anterior bajo el nuevo.
+                label.update_idletasks()
+        except Exception:
+            pass
+
+    def _show_loading_overlay(self, message: str = "Cargando Run..."):
+        return self._create_activity_overlay(
+            message, content_only=False, independent=True,
         )
-        toast.place(relx=0.5, rely=0.5, anchor="center")
-        toast.pack_propagate(False)
-        toast.lift()
-        self._change_toast = toast
 
-        ctk.CTkLabel(
-            toast,
-            text="✓  CAMBIO REALIZADO",
-            text_color=SUCCESS,
-            font=ctk.CTkFont("Segoe UI", 20, "bold"),
-        ).pack(expand=True, fill="both", padx=20, pady=20)
+    def _show_busy_indicator(
+        self, reason: str, message: str, *, freeze_source: bool = False,
+    ) -> None:
+        """Muestra actividad de background sin congelar ni abrir otra ventana."""
+        self._busy_reasons[str(reason)] = str(message)
+        content = getattr(self, "content", None)
+        if not self._widget_alive(content):
+            return
+        if self._widget_alive(self._busy_indicator):
+            self._update_activity_overlay_message(self._busy_indicator, message)
+            return
+        self._busy_indicator = self._create_activity_overlay(
+            message, content_only=True, freeze_source=freeze_source,
+        )
 
-        def close_toast() -> None:
-            if toast.winfo_exists():
-                toast.destroy()
-            if getattr(self, "_change_toast", None) is toast:
-                self._change_toast = None
-
-        self.after(1000, close_toast)
-
-
-    def _show_loading_overlay(self, message: str = "Cargando Run...") -> ctk.CTkFrame:
-        overlay = ctk.CTkFrame(self, fg_color="#101010", corner_radius=18, border_width=1, border_color=GOLD)
-        overlay.place(relx=0.5, rely=0.5, anchor="center")
-        ctk.CTkLabel(overlay, text="ROLERUN MANAGER", text_color=GOLD,
-                     font=ctk.CTkFont("Segoe UI", 13, "bold")).pack(padx=34, pady=(22, 5))
-        ctk.CTkLabel(overlay, text=message, text_color=TEXT,
-                     font=ctk.CTkFont("Segoe UI", 20, "bold")).pack(padx=34, pady=(0, 22))
-        overlay.lift()
-        self.update_idletasks()
-        return overlay
+    def _hide_busy_indicator(self, reason: str) -> None:
+        self._busy_reasons.pop(str(reason), None)
+        if self._busy_reasons:
+            if self._widget_alive(self._busy_indicator):
+                newest_reason = next(reversed(self._busy_reasons))
+                self._update_activity_overlay_message(
+                    self._busy_indicator, self._busy_reasons[newest_reason],
+                )
+            return
+        indicator = self._busy_indicator
+        self._busy_indicator = None
+        self._destroy_activity_overlay(indicator)
 
     # ---------- ACTIONS ----------
 
@@ -14347,6 +20244,17 @@ class RoleRunManager(ctk.CTk):
         # vigilante antiguo repinte la pantalla de bienvenida mientras se carga.
         self._session_generation += 1
         generation = self._session_generation
+        self._initial_shell_waiting = False
+        self._initial_shell_live_probe_complete = True
+        self._initial_shell_pc_data = None
+        self._presented_team_pc_view = None
+        self._initial_shell_gate_trace_state = None
+        self._initial_shell_reveal_phase = "hidden"
+        self._initial_shell_stable_polls = 0
+        self._initial_shell_stable_signature = None
+        self._global_tm_context = None
+        self._global_tm_load_requested = False
+        self._busy_reasons.pop("initial-shell", None)
         self._cancel_oras_initial_auto_sync()
         self._clear_oras_live_auto_apply()
         self._clear_oras_live_reconciliation()
@@ -14362,6 +20270,19 @@ class RoleRunManager(ctk.CTk):
         self.hotkey_manager.stop()
         loading_overlay = self._show_loading_overlay("Leyendo partida y cargando equipo...")
         self._loading_overlay = loading_overlay
+        # La ventana principal no puede publicar ningún widget de la shell
+        # hasta que la barrera semántica autorice el primer frame. El cargador
+        # es independiente, así que permanece visible mientras la raíz está
+        # retirada y se reconstruye fuera de pantalla.
+        self._initial_shell_waiting = True
+        if self._widget_alive(loading_overlay):
+            try:
+                loading_overlay.attributes("-topmost", False)
+                loading_overlay.lift()
+                loading_overlay.update_idletasks()
+                self.withdraw()
+            except Exception:
+                pass
 
         if not self.save_engine.available:
             self._finish_save_load_error(
@@ -14375,22 +20296,20 @@ class RoleRunManager(ctk.CTk):
                 info = self.save_service.inspect(path)
                 data = self.save_engine.read(info.path)
                 allowed_move_ids = self.save_engine.valid_moves(info.path)
+                pc_data = self.save_engine.read_boxes(info.path)
                 error = None
             except Exception as exc:
-                info = data = allowed_move_ids = None
+                info = data = allowed_move_ids = pc_data = None
                 error = str(exc)
             self.after(0, lambda: self._finish_save_load(
-                generation, loading_overlay, info, data, allowed_move_ids, error, force_new_run,
+                generation, loading_overlay, info, data, allowed_move_ids,
+                pc_data, error, force_new_run,
             ))
 
         threading.Thread(target=worker, daemon=True, name="RoleRunSaveLoader").start()
 
     def _destroy_loading_overlay(self, overlay) -> None:
-        try:
-            if overlay is not None and overlay.winfo_exists():
-                overlay.destroy()
-        except Exception:
-            pass
+        self._destroy_activity_overlay(overlay)
         if self._loading_overlay is overlay:
             self._loading_overlay = None
         self.floating_bar: ctk.CTkToplevel | None = None
@@ -14410,10 +20329,16 @@ class RoleRunManager(ctk.CTk):
             self._destroy_loading_overlay(overlay)
             return
         self._destroy_loading_overlay(overlay)
+        self._initial_shell_waiting = False
+        try:
+            self.deiconify()
+            self.state("zoomed")
+        except Exception:
+            pass
         (messagebox.showwarning if warning else messagebox.showerror)(title, message)
 
     def _finish_save_load(
-        self, generation: int, loading_overlay, info, data, allowed_move_ids,
+        self, generation: int, loading_overlay, info, data, allowed_move_ids, pc_data,
         error: str | None, force_new_run: bool = False,
     ) -> None:
         if generation != self._session_generation:
@@ -14424,10 +20349,10 @@ class RoleRunManager(ctk.CTk):
                 generation, loading_overlay, "No se pudo cargar la partida", error
             )
             return
-        if info is None or data is None or allowed_move_ids is None:
+        if info is None or data is None or allowed_move_ids is None or pc_data is None:
             self._finish_save_load_error(
                 generation, loading_overlay, "No se pudo cargar la partida",
-                "El motor no devolvió todos los datos necesarios.",
+                "El motor no devolvió equipo, movimientos y cajas completas.",
             )
             return
 
@@ -14453,6 +20378,11 @@ class RoleRunManager(ctk.CTk):
             # interprete con el orden histórico durante el arranque.
             self._apply_project_marker_layout(data)
             game_key = str(getattr(self.save_engine, "key", self.selected_game_key or "") or "")
+            if game_key == "bdsp":
+                self._prepare_bdsp_marker_layout_migration(data)
+            else:
+                self._bdsp_marker_migration_change_ids.clear()
+                self._bdsp_marker_migration_expected.clear()
             configured_source = self.game_source_profiles.get(game_key)
             # Si el usuario sustituyó solo el guardado desde la interfaz, la
             # ROM previamente asociada se conserva y la próxima apertura ya
@@ -14479,26 +20409,224 @@ class RoleRunManager(ctk.CTk):
             self.run.reset_after_save_change()
             self.current_results = []
             self.selected_pokemon = None
-            self.active_page = "dashboard"
-            self._destroy_loading_overlay(loading_overlay)
+            self.active_page = "team"
+            # La primera construcción recibe ya la matriz real. Antes se creaba
+            # conscientemente una caja ficticia 1/1 y se intentaba tapar su
+            # sustitución posterior con temporizadores: esa era la primera
+            # divergencia visible del arranque.
+            self._pc_cache = pc_data
+            self._pc_cache_signature = self._save_file_signature(Path(info.path))
+            # La misma barrera que protege la lectura del save debe permanecer
+            # encima mientras la raíz sustituye Bienvenida por la shell. Crear
+            # una segunda ventana después de renderizar dejaba un intervalo
+            # observable con widgets parciales.
+            if self._widget_alive(loading_overlay):
+                try:
+                    loading_overlay.attributes("-topmost", False)
+                    loading_overlay.lift()
+                except Exception:
+                    pass
             self._enter_app_shell()
-            self._pc_cache = None
-            self._pc_cache_signature = None
+            self._sync_activity_overlay_geometry(loading_overlay)
             self.render_page()
+            self._loading_overlay = None
+            if self._widget_alive(loading_overlay):
+                self._update_activity_overlay_message(
+                    loading_overlay, "Preparando Equipo y PC…",
+                )
+                loading_overlay._rolerun_surface = self
+                self._sync_activity_overlay_geometry(loading_overlay)
+                self._busy_indicator = loading_overlay
+            else:
+                self._busy_indicator = self._create_activity_overlay(
+                    "Preparando Equipo y PC…", content_only=False,
+                )
+            self._busy_reasons["initial-shell"] = "Preparando Equipo y PC…"
+            self._initial_shell_waiting = True
+            self._initial_shell_reveal_phase = "hidden"
+            self._initial_shell_stable_polls = 0
+            self._initial_shell_stable_signature = None
+            self._initial_shell_pc_data = pc_data
+            self._initial_shell_live_probe_complete = game_key not in REALTIME_READ_GAME_KEYS
             self._reset_edit_history()
             self._schedule_team_integrity_check()
-            if game_key in AZAHAR_REALTIME_GAME_KEYS:
-                self._schedule_oras_initial_auto_sync(280)
+            if game_key in REALTIME_READ_GAME_KEYS:
+                self._schedule_oras_initial_auto_sync(150)
                 # Solo las bajas nuevas (contrato alpha.37) pueden mostrar el modal.
                 # Las que ya enseñaron su selector en alpha.35/26 se migran como
                 # prompt_shown y jamás reaparecen tras cerrar/reabrir el programa.
                 if self._next_unshown_pending_faint() is not None:
                     self._prime_pending_faint_pc_data()
                     self._schedule_pending_faint_picker(950)
+            self._retire_initial_shell_when_ready()
         except Exception as exc:
             self._finish_save_load_error(
                 generation, loading_overlay, "No se pudo abrir la Run", str(exc)
             )
+
+    def _retire_initial_shell_when_ready(self, attempt: int = 0) -> None:
+        """Publica la primera página solo después de sus fronteras reales."""
+        if not self._initial_shell_waiting:
+            return
+        indicator = getattr(self, "_busy_indicator", None)
+        if self._widget_alive(indicator):
+            # Una activación de Ryujinx o un relayout de la raíz no puede dejar
+            # la barrera detrás de la aplicación mientras aún protege el inicio.
+            try:
+                self._sync_activity_overlay_geometry(indicator)
+                indicator.attributes("-topmost", False)
+                indicator.lift()
+            except Exception:
+                pass
+        pc_data = self._initial_shell_pc_data
+        live_key_getter = getattr(self, "_active_azahar_realtime_key", None)
+        live_key = live_key_getter() if callable(live_key_getter) else ""
+        live_pc_ready = bool(
+            live_key != "sm"
+            or bool((getattr(pc_data, "raw", None) or {}).get("live_matrix"))
+        )
+        view = getattr(self, "_team_pc_view", None)
+        projected_party_getter = getattr(self, "_projected_party", None)
+        projected_party = (
+            projected_party_getter()
+            if callable(projected_party_getter)
+            else list(getattr(self.current_game, "party", ()) or ())
+        )
+        # Equipo y PC no materializa las bajas pendientes: esas identidades ya
+        # han dejado su rol aunque el reader conserve todavía el PK6 en la party
+        # física hasta que el usuario elija (o descarte) un sustituto. La barrera
+        # debe contrastar la misma proyección que renderiza la vista; comparar la
+        # party física completa con las tarjetas visibles bloqueaba para siempre
+        # el arranque de X/Y después de una baja pendiente.
+        expected_health = self._party_health_signature(projected_party)
+        view_health_matches = bool(
+            expected_health
+            and getattr(view, "rendered_team_health_signature", ()) == expected_health
+        )
+        composed = bool(
+            pc_data is not None
+            and not self._body_swap_in_progress
+            and view is not None
+            and view is getattr(self, "_presented_team_pc_view", None)
+            and callable(getattr(view, "is_fully_composed", None))
+            and view.is_fully_composed(int(pc_data.box_count))
+            and view_health_matches
+        )
+        # Los sprites se hidratan en segundo plano y cada llegada puede pedir
+        # una recomposición completa de Equipo y PC. Publicar entre dos de esas
+        # recomposiciones exponía el árbol parcialmente destruido (tarjetas
+        # negras, stats ausentes y barras provisionales). La frontera visual
+        # final exige que todos los sprites de la party ya estén materializados
+        # y que no quede otro refresh de página encolado.
+        expected_species = {
+            int(getattr(pokemon, "species_id", 0) or 0)
+            for pokemon in tuple(projected_party)
+            if int(getattr(pokemon, "species_id", 0) or 0) > 0
+        }
+        cached_species = set(getattr(self, "sprite_pil_cache", {}) or {})
+        sprites_ready = bool(
+            expected_species.issubset(cached_species)
+            and not bool(getattr(self, "_sprite_refresh_scheduled", False))
+        )
+        ready = bool(
+            composed
+            and self._initial_shell_live_probe_complete
+            and live_pc_ready
+            and sprites_ready
+        )
+        phase = getattr(self, "_initial_shell_reveal_phase", "hidden")
+        if ready and phase == "hidden":
+            # Primera frontera: datos y vista oculta correctos. Todavía NO se
+            # publica. Mapeamos transparente y obligamos a componer otra vista
+            # usando la geometría maximizada real.
+            self._initial_shell_reveal_phase = "mapping"
+            self._initial_shell_stable_polls = 0
+            self._initial_shell_stable_signature = None
+            self._reveal_initial_shell_behind_overlay(indicator)
+            self.after(35, lambda: self._retire_initial_shell_when_ready(attempt + 1))
+            return
+        if ready and phase == "mapping":
+            try:
+                geometry_signature = (
+                    int(self.winfo_width()),
+                    int(self.winfo_height()),
+                    int(view.frame.winfo_width()),
+                    int(view.frame.winfo_height()),
+                    int(view.team_panel.winfo_width()),
+                    int(view.pc_panel.winfo_width()),
+                    int(view.inspector_panel.winfo_width()),
+                    getattr(view, "rendered_team_health_signature", ()),
+                )
+            except Exception:
+                geometry_signature = None
+            if geometry_signature == self._initial_shell_stable_signature:
+                self._initial_shell_stable_polls += 1
+            else:
+                self._initial_shell_stable_signature = geometry_signature
+                self._initial_shell_stable_polls = 1 if geometry_signature else 0
+            if self._initial_shell_stable_polls < 4:
+                self.after(45, lambda: self._retire_initial_shell_when_ready(attempt + 1))
+                return
+
+            # Segunda frontera: el body recompuesto en tamaño final ha mantenido
+            # geometría y PS estables durante cuatro sondeos consecutivos.
+            self._record_bdsp_ui_event(
+                "ui-initial-shell-retired",
+                attempt=int(attempt),
+                expected_health=expected_health,
+                rendered_health=getattr(view, "rendered_team_health_signature", ()),
+                pc_boxes=int(pc_data.box_count),
+            )
+            self._initial_shell_waiting = False
+            self._initial_shell_pc_data = None
+            self._initial_shell_reveal_phase = "published"
+            self._publish_initial_shell(indicator)
+            return
+        gate_state = (
+            expected_health,
+            getattr(view, "rendered_team_health_signature", ()),
+            bool(view is getattr(self, "_presented_team_pc_view", None)),
+            bool(self._body_swap_in_progress),
+            bool(self._initial_shell_live_probe_complete),
+            bool(live_pc_ready),
+            bool(sprites_ready),
+            bool(composed),
+            bool(self._widget_alive(indicator)),
+        )
+        if gate_state != getattr(self, "_initial_shell_gate_trace_state", None):
+            self._initial_shell_gate_trace_state = gate_state
+            self._record_bdsp_ui_event(
+                "ui-initial-shell-gate",
+                attempt=int(attempt),
+                expected_health=expected_health,
+                rendered_health=getattr(view, "rendered_team_health_signature", ()),
+                presented=bool(view is getattr(self, "_presented_team_pc_view", None)),
+                body_swap=bool(self._body_swap_in_progress),
+                live_probe=bool(self._initial_shell_live_probe_complete),
+                live_pc_ready=bool(live_pc_ready),
+                sprites_ready=bool(sprites_ready),
+                composed=bool(composed),
+                overlay_alive=bool(self._widget_alive(indicator)),
+            )
+        # No se publica una página incompleta por timeout. Si una frontera no
+        # termina, la barrera permanece y el diagnóstico de esa frontera sigue
+        # visible; así el fallo no se disfraza como una UI utilizable.
+        self.after(35, lambda: self._retire_initial_shell_when_ready(attempt + 1))
+
+    @staticmethod
+    def _party_health_signature(game) -> tuple[tuple[int, int], ...]:
+        """Firma los PS que una vista concreta ha llegado a materializar."""
+        rows: list[tuple[int, int]] = []
+        party = game if isinstance(game, (list, tuple)) else getattr(game, "party", ())
+        for pokemon in list(party or ()):
+            try:
+                rows.append((
+                    int(getattr(pokemon, "current_hp")),
+                    int(getattr(pokemon, "max_hp")),
+                ))
+            except (AttributeError, TypeError, ValueError):
+                return ()
+        return tuple(rows)
 
     def _migrate_saved_role_overrides(self, data: SaveGameData) -> None:
         """Convierte las asignaciones de la v0.7.0 en cambios reales pendientes de guardar."""
@@ -14555,6 +20683,9 @@ class RoleRunManager(ctk.CTk):
             pool_key=result["pool_key"], move_id=int(result["move_id"]), move=result["move"],
         )
         self.run.move_slot = None
+        if self.active_page == "drafts" and self._draft_view is not None:
+            self._draft_transition()
+            return
         self._refresh_draft_move_selection()
         self._destroy_draft_steps_from(4)
         self._render_replace_step(3)
@@ -14574,6 +20705,9 @@ class RoleRunManager(ctk.CTk):
             self.run.draft = None
             self.run.move_slot = None
             self._destroy_draft_steps_from(4)
+        if self.active_page == "drafts" and self._draft_view is not None:
+            self._draft_transition()
+            return
         self._refresh_draft_move_selection()
         self._schedule_body_scroll_redraw()
 
@@ -14673,9 +20807,6 @@ class RoleRunManager(ctk.CTk):
             )
         ]
         self.run.pending_changes.append(change)
-        pokemon.moves[move_index] = draft.move
-        pokemon.move_ids[move_index] = draft.move_id
-
         # Este es el momento definitivo del drafteo: ya se ha elegido tanto el
         # movimiento nuevo como el hueco que va a sustituir. Solo ahora se consume.
         self.adjust_run_counter("drafteos", -1, source="Drafteo confirmado")
@@ -14701,12 +20832,16 @@ class RoleRunManager(ctk.CTk):
             headline, subtitle = "MOCHILA", "UTILIDAD DE LA RUN"
             before, after = (("Saldo anterior", "Dinero máximo") if change.item_key == "money-max"
                              else ("Cantidad anterior", f"{change.item_name} ×{change.quantity}"))
+        elif isinstance(change, PendingPartyHeal):
+            headline = f"{change.pokemon} · {change.species}"
+            subtitle = "CURACIÓN COMPLETA"
+            before, after = "PS · ESTADO · PP", "RESTAURADOS"
         elif isinstance(change, PendingTMTeach):
             headline = f"{change.pokemon} · {change.species}"
             subtitle = (
-                f"{change.item_name} · HUECO {change.move_slot} · REUTILIZABLE EN ORAS"
-                if getattr(self.save_engine, "key", "") == "oras" else
                 f"{change.item_name} · HUECO {change.move_slot} · CONSUME 1"
+                if bool(change.consumes_item) else
+                f"{change.item_name} · HUECO {change.move_slot} · REUTILIZABLE"
             )
             before, after = change.old_move or "—", change.new_move
         elif isinstance(change, PendingPCRoleChange):
@@ -14733,6 +20868,15 @@ class RoleRunManager(ctk.CTk):
         return str(headline), str(subtitle), str(before), str(after)
 
     def _inverse_oras_live_change(self, change):
+        # En BDSP una MT consumible modifica dos autoridades. Restaurar solo el
+        # movimiento regalaría/perdería inventario; restaurar una cantidad vieja
+        # podría pisar usos posteriores. La acción confirmada queda revisable,
+        # pero no ofrece DESHACER automático.
+        if (
+            isinstance(change, PendingTMTeach)
+            and bool(change.consumes_item)
+        ):
+            return None
         return inverse_oras_live_change(change)
 
     def _oras_live_batch_is_reversible(self, batch) -> bool:
@@ -14777,7 +20921,7 @@ class RoleRunManager(ctk.CTk):
         if not self.run.pending_changes and not self._oras_live_review_batches:
             messagebox.showinfo("Revisar cambios", "No hay cambios de RoleRun que revisar.")
             return
-        window = ctk.CTkToplevel(self)
+        window = IntegratedWindowSurface(self)
         self._apply_window_icon(window)
         window.title("Revisar cambios")
         window.geometry("790x610")
@@ -14913,6 +21057,14 @@ class RoleRunManager(ctk.CTk):
             ctk.CTkFrame(card, fg_color="transparent", height=5).pack()
 
     def remove_pending_change(self, change, window=None) -> None:
+        if id(change) in self._bdsp_marker_migration_change_ids:
+            messagebox.showinfo(
+                "Migración de marcadores",
+                "Este cambio forma parte de la migración atómica de los seis marcadores. "
+                "Puedes descartar todos los cambios, pero no dejar el equipo con dos órdenes físicos mezclados.",
+                parent=window,
+            )
+            return
         self.run.pending_changes = [c for c in self.run.pending_changes if c is not change]
         self._reload_preview_from_saved_state()
         if self.run.role_rules_activation_pending and not self.run.pending_changes:
@@ -14932,22 +21084,7 @@ class RoleRunManager(ctk.CTk):
     def _reload_preview_from_saved_state(self) -> None:
         if not self.current_save:
             return
-        data = self.save_engine.read(self.current_save.path)
-        for change in self.run.pending_changes:
-            if isinstance(change, (PendingInventoryChange, PendingPCRoleChange, PendingTeamChange, PendingRoleChange, PendingTMTeach)):
-                continue
-            target = next((p for p in data.party if p.slot == change.pokemon_slot), None)
-            if target and 1 <= change.move_slot <= len(target.moves):
-                idx = change.move_slot - 1
-                change.old_move = target.moves[idx]
-                change.old_move_id = target.move_ids[idx]
-                if int(change.new_move_id or 0) == 0:
-                    target.moves.pop(idx); target.move_ids.pop(idx)
-                    target.moves.append("—"); target.move_ids.append(0)
-                else:
-                    target.moves[idx] = change.new_move
-                    target.move_ids[idx] = change.new_move_id
-        self.current_game = data
+        self.current_game = self.save_engine.read(self.current_save.path)
 
     def discard_pending_changes(self) -> None:
         if not self.run.pending_changes:
@@ -14955,6 +21092,8 @@ class RoleRunManager(ctk.CTk):
         if not messagebox.askyesno("Descartar cambios", "¿Quieres descartar todos los cambios pendientes?"):
             return
         self.run.pending_changes.clear()
+        self._bdsp_marker_migration_change_ids.clear()
+        self._bdsp_marker_migration_expected.clear()
         self.run.role_rules_activation_pending = False
         try:
             self.current_game = self.save_engine.read(self.current_save.path)
@@ -14998,12 +21137,19 @@ class RoleRunManager(ctk.CTk):
         changes = list(self.run.pending_changes)
         engine_key = getattr(self.save_engine, "key", "")
         if engine_key in GEN6_REALTIME_GAME_KEYS and self._oras_live_active:
-            # En ORAS toda la superficie viva ya validada pasa por RPC. X/Y alpha.6
-            # admite además rol de PC y enseñanza de MT al PK6; las operaciones
-            # estructurales Equipo ↔ PC y utilidades de mochila siguen protegidas.
+            # En ORAS toda la superficie viva ya validada pasa por RPC. X/Y
+            # admite además roles/MT/utilidades y las cinco operaciones de PC
+            # que su writer valida de forma transaccional.
             if engine_key == "oras" or all(
                 isinstance(change, (PendingChange, PendingRoleChange, PendingPCRoleChange, PendingTMTeach))
-                or (isinstance(change, PendingTeamChange) and change.operation == "swap-party-box")
+                or (
+                    engine_key == "xy"
+                    and isinstance(change, PendingTeamChange)
+                    and change.operation in {
+                        "swap-party-box", "party-to-box", "box-to-party",
+                        "replace-fainted", "move-box-slot",
+                    }
+                )
                 for change in changes
             ):
                 self._save_oras_live_changes(changes)
@@ -15085,7 +21231,8 @@ class RoleRunManager(ctk.CTk):
                 generated.append(output)
                 current_input = output
 
-            self.save_engine.read(prepared_output)
+            prepared_game = self.save_engine.read(prepared_output)
+            self._verify_bdsp_marker_layout_migration(prepared_game, changes)
             self.save_service.inspect(prepared_output)
             visible_previous = self.save_service.create_visible_previous_copy(self.current_save)
             try:
@@ -15244,7 +21391,19 @@ class RoleRunManager(ctk.CTk):
         backup: Path | None,
         deferred: bool,
     ) -> None:
+        marker_migration_complete = bool(self._bdsp_marker_migration_expected)
+        if marker_migration_complete and self.project:
+            # El readback previo ya demostró cada bit usando layout=2. Solo ahora
+            # cambiamos el contrato persistido y reinterpretamos la captura final.
+            self.project.role_marker_layout = 2
+            self.native_save_engine.set_role_marker_layout(2)
+            self._apply_project_marker_layout(verified)
         for change in changes:
+            if id(change) in self._bdsp_marker_migration_change_ids:
+                # El rol semántico no cambió: solo se movió su bit físico. No
+                # fabricamos un evento de usuario "Asesino → Tanque" durante la
+                # conversión del contrato histórico.
+                continue
             if isinstance(change, PendingInventoryChange):
                 event = {"type": "inventory_changed", "item": change.item_name, "quantity": change.quantity, "source": "guardado", "output": str(source)}
             elif isinstance(change, PendingTMTeach):
@@ -15349,6 +21508,8 @@ class RoleRunManager(ctk.CTk):
         self._pc_cache_signature = None
         self._sync_obs_state(verified)
         self.run.pending_changes.clear()
+        self._bdsp_marker_migration_change_ids.clear()
+        self._bdsp_marker_migration_expected.clear()
         self.run.reset_after_save_change()
         self.current_results = []
         self.selected_pokemon = None
@@ -15370,7 +21531,7 @@ class RoleRunManager(ctk.CTk):
         if not self.project:
             return
         events = self.project_service.history(self.project)
-        window = ctk.CTkToplevel(self)
+        window = IntegratedWindowSurface(self)
         self._apply_window_icon(window)
         window.title(f"Historial · {self.project.name}")
         window.geometry("760x560")

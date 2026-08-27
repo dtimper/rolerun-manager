@@ -10,12 +10,13 @@ from typing import Callable, Sequence
 
 from .azahar_rpc import AzaharProcess, AzaharRPCClient, AzaharRPCError
 from .config import APP_VERSION, LOG_DIR
-from .models import PendingChange, PendingInventoryChange, PendingRoleChange, PendingTMTeach, PendingTeamChange
+from .models import PendingChange, PendingInventoryChange, PendingPartyHeal, PendingRoleChange, PendingTMTeach, PendingTeamChange
 from .oras_live import decrypt_pk6, encrypt_pk6, decrypt_pk6_stored, encrypt_pk6_stored
 from .role_rules import ROLE_ORDER, ROLE_TO_MARKING, canonical_role, role_from_markings
 from .save_engine_client import SaveGameData, SavePokemon
 from .sm_rom_service import sm_tm_item_id
 from .boxed_metadata import ability_name, boxed_level, level_for_experience, item_name
+from .pokemon_stats import nature_presentation, stat_dict
 from .oras_tm_service import ORASPersonalStats
 from .win_process_memory import HostPartyTarget, WindowsProcessMemory, WindowsProcessMemoryError
 
@@ -172,11 +173,13 @@ SM_ITEM_RECORD_SIZE = 4
 SM_ZCRYSTAL_KEY_MIN = 807
 SM_ZCRYSTAL_KEY_MAX = 835
 SM_KAHUNA_ZCRYSTAL_KEY_IDS = (813, 819, 822, 815)
-# La referencia LiveHeX de BoxPokemon ya se usa únicamente como candidata
-# validada. El espejo SAV7SM conserva Items en offset 0 y BoxPokemon en 0x4E00;
-# por tanto esta es SOLO una candidata rápida para Items. Nunca se publica si
-# no supera doble lectura estable + validación estructural contra el main real.
-SM_ITEMS_LIVEHEX_REFERENCE = SM_PC_LIVEHEX_B1S1_REFERENCE - SM_SAVE_PC_BLOCK_OFFSET
+# PKMN-NTR (Helpers/LookupTable.cs) documenta para Sun/Moon el bloque Items
+# guest en 0x330D5934 y un tamaño de 0xDE0. Es una dirección independiente de
+# BoxPokemon: la relación relativa de ambos bloques dentro de SAV7SM NO se
+# conserva en RAM viva. RoleRun la trata únicamente como candidata y exige,
+# para la sesión concreta, party host demostrada, doble lectura estable y
+# concordancia byte a byte host==guest antes de publicar o escribir nada.
+SM_ITEMS_LIVEHEX_REFERENCE = 0x330D5934
 
 
 def parse_sm_zcrystal_keys(raw: bytes) -> frozenset[int] | None:
@@ -412,6 +415,15 @@ def parse_pk7_party(raw: bytes, slot: int, move_names: dict[int, str]) -> SavePo
         for move_id in move_ids
     ]
     iv32 = struct.unpack_from("<I", data, 0x74)[0]
+    nature_id = int(data[0x1C])
+    nature = nature_presentation(nature_id)
+    ev_binary = tuple(int(value) for value in data[0x1E:0x24])
+    iv_binary = tuple(int((iv32 >> (index * 5)) & 0x1F) for index in range(6))
+    stat_binary = tuple(struct.unpack_from("<H", data, 0xF2 + index * 2)[0] for index in range(6))
+    # PK7 almacena PS, Atq., Def., Vel., At. Esp. y Def. Esp.; la UI usa
+    # PS, Atq., Def., At. Esp., Def. Esp. y Vel. Es el mismo orden que ya
+    # usa el writer SM al reconstruir PartyData y no introduce offsets nuevos.
+    canonical_order = (0, 1, 2, 4, 5, 3)
 
     # PKHeX PK7: MarkingValue es un ushort en 0x16; cada símbolo ocupa 2 bits.
     # Para RoleRun cualquier color distinto de None (0) significa marca activa.
@@ -438,6 +450,16 @@ def parse_pk7_party(raw: bytes, slot: int, move_names: dict[int, str]) -> SavePo
         form=int(form),
         current_hp=struct.unpack_from("<H", data, 0xF0)[0],
         max_hp=struct.unpack_from("<H", data, 0xF2)[0],
+        status_condition=struct.unpack_from("<I", data, 0xE8)[0],
+        nature_id=nature_id,
+        stat_nature_id=nature_id,
+        nature=nature.name if nature is not None else "",
+        stat_nature=nature.name if nature is not None else "",
+        nature_increased=nature.increased if nature is not None else None,
+        nature_decreased=nature.decreased if nature is not None else None,
+        stats=stat_dict(tuple(stat_binary[index] for index in canonical_order)),
+        ivs=stat_dict(tuple(iv_binary[index] for index in canonical_order)),
+        evs=stat_dict(tuple(ev_binary[index] for index in canonical_order)),
     )
 
 
@@ -517,6 +539,11 @@ def parse_pk7_boxed(
         for move_id in move_ids
     ]
     iv32 = struct.unpack_from("<I", data, 0x74)[0]
+    nature_id = int(data[0x1C])
+    nature = nature_presentation(nature_id)
+    ev_binary = tuple(int(value) for value in data[0x1E:0x24])
+    iv_binary = tuple(int((iv32 >> (index * 5)) & 0x1F) for index in range(6))
+    canonical_order = (0, 1, 2, 4, 5, 3)
     marking_value = struct.unpack_from("<H", data, 0x16)[0]
     markings = [bool((marking_value >> (index * 2)) & 0b11) for index in range(6)]
     role, role_symbol = role_from_markings(markings, layout=2)
@@ -528,6 +555,14 @@ def parse_pk7_boxed(
         is_egg=bool(iv32 & 0x40000000), markings=markings,
         role=role, role_symbol=role_symbol, box=int(box), box_slot=int(box_slot),
         pid=int(pid), tid=int(tid), sid=int(sid), form=int(form),
+        nature_id=nature_id,
+        stat_nature_id=nature_id,
+        nature=nature.name if nature is not None else "",
+        stat_nature=nature.name if nature is not None else "",
+        nature_increased=nature.increased if nature is not None else None,
+        nature_decreased=nature.decreased if nature is not None else None,
+        ivs=stat_dict(tuple(iv_binary[index] for index in canonical_order)),
+        evs=stat_dict(tuple(ev_binary[index] for index in canonical_order)),
     )
 
 
@@ -573,6 +608,44 @@ def _parse_pc_matrix(
             raise SMLiveError(
                 f"La matriz candidata del PC no contiene PK7 válidos en Caja {box}, hueco {box_slot}: {exc}"
             ) from exc
+    return result
+
+
+def load_gen7_move_metadata(path: Path) -> dict[int, dict[str, object]]:
+    """Carga datos de combate localizados y versionados para Gen 7.
+
+    La tabla se genera desde los CSV de PokeAPI para el version-group de
+    Sol/Luna. Se valida de forma independiente de la tabla de PP histórica:
+    una entrada parcial no debe convertir ceros o texto ausente en datos
+    aparentemente válidos dentro del selector de MT.
+    """
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    if int(raw.get("generation", 0) or 0) != 7:
+        return {}
+    result: dict[int, dict[str, object]] = {}
+    for move_raw, entry in dict(raw.get("moves", {})).items():
+        try:
+            move_id = int(move_raw)
+        except (TypeError, ValueError):
+            continue
+        if move_id <= 0 or not isinstance(entry, dict):
+            continue
+        values: dict[str, object] = {}
+        for field in ("power", "accuracy", "pp"):
+            value = entry.get(field)
+            if value is None:
+                values[field] = None
+                continue
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError):
+                parsed = 0
+            values[field] = parsed if parsed > 0 else None
+        values["description_es"] = str(entry.get("description_es", "") or "").strip()
+        result[move_id] = values
     return result
 
 
@@ -705,7 +778,8 @@ class SMLiveReader:
     La base no se considera válida hasta que una party PK7 completa y estable
     queda vinculada al último estado conocido mediante identidades fuertes.
     Alpha.27 permite además transiciones demostrables (reorden, alta/baja o una
-    sustitución 1-a-1) para no exigir que el ``main`` se guarde tras cada cambio.
+    sustituciones respaldadas por identidades persistidas de la Run) para no
+    exigir que el ``main`` se guarde tras cada cambio.
     """
 
     def __init__(
@@ -721,6 +795,28 @@ class SMLiveReader:
         self.move_names = self._load_move_names(move_catalog_path)
         self._party_bases_by_process: dict[tuple[int, int, str], int] = {}
         self._last_resolution: dict[str, object] = {}
+        self._resume_identity_witnesses: set[tuple[int, int, int, int]] = set()
+
+    def set_resume_identity_witnesses(self, identities: Sequence[str]) -> None:
+        """Carga identidades persistidas por la run para calibrar tras reiniciar.
+
+        No convierten una candidata estructural en válida por sí solas. Solo
+        permiten demostrar el caso observado en alpha.137: el ``main`` conserva
+        cinco de seis miembros, mientras el sexto fue incorporado previamente
+        por RoleRun y los miembros comunes fueron reordenados antes de guardar.
+        """
+        parsed: set[tuple[int, int, int, int]] = set()
+        for value in identities:
+            parts = str(value or "").split(":")
+            if len(parts) < 4:
+                continue
+            try:
+                identity = tuple(int(part) for part in parts[:4])
+            except (TypeError, ValueError):
+                continue
+            if all(number >= 0 for number in identity) and identity[0] > 0:
+                parsed.add(identity)  # type: ignore[arg-type]
+        self._resume_identity_witnesses = parsed
 
     @staticmethod
     def _load_move_names(path: Path) -> dict[int, str]:
@@ -809,18 +905,18 @@ class SMLiveReader:
                 party.append(pokemon)
         return party
 
-    @staticmethod
     def _party_continuity_proof(
-        live: Sequence[SavePokemon], current: SaveGameData,
+        self, live: Sequence[SavePokemon], current: SaveGameData,
     ) -> str | None:
         """Demuestra una candidata de party sin exigir que el ``main`` esté al día.
 
         La calibración inicial sigue prefiriendo la coincidencia completa por slot.
         Alpha.27 añade únicamente transiciones que pueden demostrarse a partir de
         identidades fuertes ya conocidas por RoleRun: mismos miembros reordenados,
-        crecimiento/encogimiento por inclusión completa o una sustitución 1-a-1
-        conservando todos los demás miembros. Nunca se acepta una party nueva que
-        no conserve evidencia suficiente del estado conocido.
+        crecimiento/encogimiento por inclusión completa o sustituciones cuyos
+        entrantes ya estén identificados de forma fuerte por la Run, conservando
+        al menos dos miembros conocidos. Nunca se acepta una party nueva que no
+        conserve evidencia suficiente del estado conocido.
         """
         expected_by_slot = _slot_identity_map(current.party)
         observed_by_slot = _slot_identity_map(live)
@@ -868,11 +964,29 @@ class SMLiveReader:
                 observed_common = tuple(value for value in observed if value in common)
                 if expected_common == observed_common:
                     return "single-replacement-known-members"
+                incoming = observed_set - expected_set
+                if incoming and incoming <= self._resume_identity_witnesses:
+                    return "single-managed-replacement-and-reorder"
+            # Un combate puede producir varias bajas antes de que el usuario
+            # guarde de nuevo. El caso físico de alpha.145 dejó dos sustitutos
+            # ya gestionados por la Run y cuatro miembros comunes: limitar la
+            # continuidad a un único reemplazo rechazaba la party real y dejaba
+            # la barrera inicial esperando para siempre. Varias sustituciones
+            # solo son demostrables, en el caso observado, si son exactamente
+            # dos, TODOS poseen identidad persistida y sobreviven los otros
+            # cuatro testigos fuertes exactos. No generalizamos a más bajas.
+            incoming = observed_set - expected_set
+            if (
+                len(expected_set) == len(observed_set)
+                and len(incoming) == 2
+                and len(common) == len(expected_set) - 2
+                and incoming <= self._resume_identity_witnesses
+            ):
+                return "multiple-managed-replacements"
         return None
 
-    @classmethod
-    def _party_matches_witness(cls, live: Sequence[SavePokemon], current: SaveGameData) -> bool:
-        return cls._party_continuity_proof(live, current) is not None
+    def _party_matches_witness(self, live: Sequence[SavePokemon], current: SaveGameData) -> bool:
+        return self._party_continuity_proof(live, current) is not None
 
     @staticmethod
     def _party_is_compact_prefix(live: Sequence[SavePokemon]) -> bool:
@@ -924,6 +1038,7 @@ class SMLiveReader:
 
         expected_ids = set(expected.values())
         matches: list[tuple[int, list[SavePokemon], str, int]] = []
+        structural_candidates: list[dict[str, object]] = []
         for delta in range(0, 2 * SM_PARTY_SCAN_RADIUS + 1):
             base_offset = delta
             party: list[SavePokemon] = []
@@ -946,6 +1061,21 @@ class SMLiveReader:
                     party.append(pokemon)
             if failed or not party or not self._party_is_compact_prefix(party):
                 continue
+            if len(structural_candidates) < 12:
+                structural_candidates.append({
+                    "address": int(scan_start + delta),
+                    "party": [
+                        {
+                            "slot": int(pokemon.slot),
+                            "species_id": int(pokemon.species_id),
+                            "pid": int(pokemon.pid or 0),
+                            "tid": int(pokemon.tid or 0),
+                            "sid": int(pokemon.sid or 0),
+                        }
+                        for pokemon in party
+                    ],
+                    "witness_overlap": len(expected_ids & {_identity(pokemon) for pokemon in party}),
+                })
             proof = self._party_continuity_proof(party, current)
             if proof is None:
                 continue
@@ -953,6 +1083,12 @@ class SMLiveReader:
             matches.append((scan_start + delta, party, proof, overlap))
 
         if not matches:
+            self._last_resolution = {
+                "source": "ventana sin continuidad",
+                "address": None,
+                "witness_count": len(current.party),
+                "structural_candidates": structural_candidates,
+            }
             return None
         # La ventana puede contener la misma party vista un stride más tarde. No
         # elegimos por cercanía: elegimos únicamente la candidata respaldada por
@@ -1009,6 +1145,25 @@ class SMLiveReader:
             }
             return base
 
+        reference_candidate: list[dict[str, int]] = []
+        try:
+            reference_party = self._parse_slots(
+                self._read_party_at(client, SM_PARTY_REFERENCE_ADDRESS)
+            )
+            if self._party_is_compact_prefix(reference_party):
+                reference_candidate = [
+                    {
+                        "slot": int(pokemon.slot),
+                        "species_id": int(pokemon.species_id),
+                        "pid": int(pokemon.pid or 0),
+                        "tid": int(pokemon.tid or 0),
+                        "sid": int(pokemon.sid or 0),
+                    }
+                    for pokemon in reference_party
+                ]
+        except (SMLiveError, AzaharRPCError, OSError, ValueError, struct.error):
+            reference_candidate = []
+
         scanned = self._scan_reference_window(client, current)
         if scanned is not None:
             base, party = scanned
@@ -1026,16 +1181,19 @@ class SMLiveReader:
             }
             return int(base)
 
+        previous_resolution = dict(self._last_resolution)
         self._last_resolution = {
+            **previous_resolution,
             "source": "sin resolver",
             "address": None,
             "witness_count": len(current.party),
+            "reference_candidate": reference_candidate,
         }
         raise SMLiveError(
             "No se pudo demostrar la dirección viva del equipo de Sol/Luna. "
             "Se probó la referencia pública y una ventana local de solo lectura, pero ninguna party PK7 pudo "
             "vincularse por identidades fuertes con el último estado conocido (coincidencia, reorden, alta/baja o "
-            "sustitución 1-a-1 demostrable). No se escribió ningún byte. Pulsa F5; si persiste, necesitaremos "
+            "sustituciones gestionadas demostrables). No se escribió ningún byte. Pulsa F5; si persiste, necesitaremos "
             "un diagnóstico de RAM, no un guardado forzado."
         )
 
@@ -1441,6 +1599,123 @@ class SMLiveWriter:
     def _refresh_checksum(data: bytearray) -> None:
         struct.pack_into("<H", data, 0x06, _checksum67(data))
 
+    @staticmethod
+    def _set_evs(
+        data: bytearray, *, expected: tuple[int, int, int, int, int, int],
+        desired: tuple[int, int, int, int, int, int],
+    ) -> None:
+        expected = tuple(int(value) for value in expected)
+        desired = tuple(int(value) for value in desired)
+        if any(not 0 <= value <= 252 for value in (*expected, *desired)):
+            raise SMLiveError("Los EV de Sol/Luna deben estar entre 0 y 252.")
+        if sum(desired) > 510:
+            raise SMLiveError("La distribución EV de Sol/Luna supera el límite de 510.")
+        # PK7: HP, Atk, Def, Spe, SpA, SpD. UI: HP, Atk, Def, SpA, SpD, Spe.
+        canonical_order = (0, 1, 2, 4, 5, 3)
+        actual_binary = tuple(int(value) for value in data[0x1E:0x24])
+        actual = tuple(actual_binary[index] for index in canonical_order)
+        if actual != expected:
+            raise SMLiveError(
+                f"Los EV del Pokémon cambiaron dentro del juego ({actual} != {expected}); "
+                "no se escribió ningún byte."
+            )
+        data[0x1E:0x24] = bytes(
+            (desired[0], desired[1], desired[2], desired[5], desired[3], desired[4])
+        )
+
+    @staticmethod
+    def _calculate_party_stats(
+        base: tuple[int, int, int, int, int, int],
+        ivs: tuple[int, int, int, int, int, int],
+        evs: tuple[int, int, int, int, int, int], level: int, nature: int,
+    ) -> tuple[int, int, int, int, int, int]:
+        if not 1 <= int(level) <= 100:
+            raise SMLiveError(f"El nivel {level} queda fuera de 1..100.")
+        if any(not 1 <= int(value) <= 255 for value in base):
+            raise SMLiveError("El Personal efectivo contiene stats base inválidos.")
+        if any(not 0 <= int(value) <= 31 for value in ivs):
+            raise SMLiveError("El PK7 contiene IV fuera de 0..31.")
+        if any(not 0 <= int(value) <= 252 for value in evs) or sum(evs) > 510:
+            raise SMLiveError("La distribución EV queda fuera de los límites del juego.")
+        if not 0 <= int(nature) <= 24:
+            raise SMLiveError(f"La naturaleza #{nature} no es válida.")
+        hp = 1 if int(base[0]) == 1 else (
+            ((2 * int(base[0]) + int(ivs[0]) + int(evs[0]) // 4) * int(level)) // 100
+            + int(level) + 10
+        )
+        result = [hp]
+        raised, lowered = divmod(int(nature), 5)
+        for index in range(1, 6):
+            value = (
+                ((2 * int(base[index]) + int(ivs[index]) + int(evs[index]) // 4) * int(level)) // 100
+                + 5
+            )
+            nature_index = index - 1
+            if raised != lowered:
+                if nature_index == raised:
+                    value = value * 110 // 100
+                elif nature_index == lowered:
+                    value = value * 90 // 100
+            result.append(value)
+        return tuple(result)  # type: ignore[return-value]
+
+    def _set_party_evs_and_stats(
+        self, data: bytearray, *, pokemon: SavePokemon,
+        expected: tuple[int, int, int, int, int, int],
+        desired: tuple[int, int, int, int, int, int],
+    ) -> None:
+        """Actualiza atómicamente EV stored y PartyData calculada de SM."""
+        if self.personal_for is None:
+            raise SMLiveError(
+                "No está disponible el Personal efectivo de la ROM Sol/Luna; "
+                "no se recalcularon las estadísticas."
+            )
+        species = int(struct.unpack_from("<H", data, 8)[0])
+        form = int(data[0x1D] >> 3)
+        personal = self.personal_for(species, form)
+        if personal is None:
+            raise SMLiveError(
+                f"La ROM efectiva no aportó Personal para especie #{species}, forma {form}; "
+                "no se escribió ningún byte."
+            )
+        base = tuple(int(value) for value in personal.base_stats)
+        iv32 = int(struct.unpack_from("<I", data, 0x74)[0])
+        stored_ivs = tuple((iv32 >> (5 * index)) & 0x1F for index in range(6))
+        hyper_flags = int(data[0xDE])
+        hyper_bits_binary = (0, 1, 2, 5, 3, 4)
+        effective_ivs = tuple(
+            31 if hyper_flags & (1 << hyper_bits_binary[index]) else int(stored_ivs[index])
+            for index in range(6)
+        )
+        expected_binary = (expected[0], expected[1], expected[2], expected[5], expected[3], expected[4])
+        desired_binary = (desired[0], desired[1], desired[2], desired[5], desired[3], desired[4])
+        current_stats = tuple(
+            int(struct.unpack_from("<H", data, 0xF2 + index * 2)[0]) for index in range(6)
+        )
+        calculated_current = self._calculate_party_stats(
+            base, effective_ivs, expected_binary, int(data[0xEC]), int(data[0x1C]),
+        )
+        if current_stats != calculated_current and tuple(expected) != tuple(desired):
+            raise SMLiveError(
+                f"Las estadísticas vivas de {pokemon.nickname or pokemon.species} no coinciden con "
+                "Personal/IV/EV/nivel/naturaleza/hiperentrenamiento; no se escribió RAM."
+            )
+        new_stats = self._calculate_party_stats(
+            base, effective_ivs, desired_binary, int(data[0xEC]), int(data[0x1C]),
+        )
+        self._set_evs(data, expected=expected, desired=desired)
+        old_current = int(struct.unpack_from("<H", data, 0xF0)[0])
+        missing_hp = max(0, int(current_stats[0]) - old_current)
+        new_max = int(new_stats[0])
+        new_current = 0 if old_current == 0 else max(1, new_max - missing_hp)
+        struct.pack_into("<H", data, 0xF0, min(new_current, new_max))
+        for index, value in enumerate(new_stats):
+            struct.pack_into("<H", data, 0xF2 + index * 2, int(value))
+        # Los EV pertenecen al bloque stored cubierto por el checksum PK7.
+        # Mantener el bloque validable también cuando este helper se usa fuera
+        # del bucle de apply evita publicar una representación intermedia inválida.
+        self._refresh_checksum(data)
+
     def _replace_move(self, data: bytearray, change: PendingChange | PendingTMTeach) -> None:
         index = int(change.move_slot) - 1
         if not 0 <= index < 4:
@@ -1606,7 +1881,12 @@ class SMLiveWriter:
         return "SIN ROL"
 
     def _party_payload_from_box(
-        self, raw_box: bytes, *, role: str, remove_move_slots: Sequence[int],
+        self,
+        raw_box: bytes,
+        *,
+        role: str,
+        remove_move_slots: Sequence[int],
+        desired_evs: tuple[int, int, int, int, int, int] | None = None,
     ) -> tuple[bytes, SavePokemon]:
         """Convierte un PK7 stored demostrado en EncryptedPartyData 0x104.
 
@@ -1621,6 +1901,13 @@ class SMLiveWriter:
         plain_stored, was_encrypted = _plain_pk7_stored_with_state(bytes(raw_box))
         data = bytearray(plain_stored)
         self._set_role(data, role)
+        if desired_evs is not None:
+            binary_evs = tuple(int(value) for value in data[0x1E:0x24])
+            current_evs = (
+                binary_evs[0], binary_evs[1], binary_evs[2],
+                binary_evs[4], binary_evs[5], binary_evs[3],
+            )
+            self._set_evs(data, expected=current_evs, desired=desired_evs)
         self._remove_move_slots(data, remove_move_slots)
         self._refresh_checksum(data)
         species_id = struct.unpack_from("<H", data, 8)[0]
@@ -1638,6 +1925,30 @@ class SMLiveWriter:
         if parsed is None:
             raise SMLiveError("El EncryptedPartyData preparado no contiene un Pokémon válido.")
         return raw_party, parsed
+
+    @staticmethod
+    def _incoming_team_evs(
+        change: PendingTeamChange, *, expected_role: str,
+    ) -> tuple[int, int, int, int, int, int] | None:
+        """Valida el reparto EV preparado para una entrada PC→Equipo."""
+        snapshot = change.incoming_snapshot
+        if not snapshot or "evs" not in snapshot:
+            return None
+        declared_role = canonical_role(change.incoming_role or str(snapshot.get("role") or ""))
+        if declared_role != canonical_role(expected_role):
+            raise SMLiveError(
+                "El rol preparado para el Pokémon del PC ya no coincide con la casilla de destino; no se escribió ningún byte."
+            )
+        raw_evs = snapshot.get("evs")
+        if not isinstance(raw_evs, dict):
+            raise SMLiveError("El reparto EV preparado para el Pokémon del PC no es válido; no se escribió ningún byte.")
+        keys = ("hp", "attack", "defense", "sp_attack", "sp_defense", "speed")
+        if any(key not in raw_evs for key in keys):
+            raise SMLiveError("El reparto EV preparado está incompleto; no se escribió ningún byte.")
+        try:
+            return tuple(int(raw_evs[key]) for key in keys)  # type: ignore[return-value]
+        except (TypeError, ValueError) as exc:
+            raise SMLiveError("El reparto EV preparado contiene valores no válidos; no se escribió ningún byte.") from exc
 
     def _resolve_target(self, change: PendingRoleChange, live_party: dict[int, SavePokemon]) -> int:
         identity = str(change.pokemon_identity or "")
@@ -1977,7 +2288,7 @@ class SMLiveWriter:
     def _rollback(
         self, client, party_base: int, attempted_slots: Sequence[int], originals: dict[int, bytes],
         write_addresses: dict[int, int], write_modes: dict[int, str], *,
-        host_memory=None, host_handle=None,
+        host_memory=None, host_handle=None, partydata_slots: set[int] | None = None,
     ) -> list[str]:
         errors: list[str] = []
         for slot in reversed(tuple(attempted_slots)):
@@ -1988,6 +2299,20 @@ class SMLiveWriter:
             canonical = int(party_base) + (int(slot) - 1) * SM_PARTY_STRIDE
             expected = bytes(original[:PK7_STORED_SIZE])
             try:
+                if int(slot) in (partydata_slots or set()):
+                    old_stats = bytes(original[PK7_STORED_SIZE:PK7_STORED_SIZE + SM_PARTY_STATS_SIZE])
+                    stats_write = int(write_address) + SM_PARTY_STATS_OFFSET
+                    stats_canonical = canonical + SM_PARTY_STATS_OFFSET
+                    if write_modes.get(int(slot)) == "windows-host-fcram-content-validated":
+                        if host_memory is None or host_handle is None:
+                            raise SMLiveError("el transporte host ya no está disponible para rollback")
+                        host_memory.write(host_handle, stats_write, old_stats)
+                        stats_confirmed = bytes(host_memory.read(host_handle, stats_write, len(old_stats)))
+                    else:
+                        client.write_memory(stats_write, old_stats)
+                        stats_confirmed = bytes(client.read_memory(stats_write, len(old_stats)))
+                    if stats_confirmed != old_stats or bytes(client.read_memory(stats_canonical, len(old_stats))) != old_stats:
+                        raise SMLiveError("PartyData no confirmó rollback")
                 if write_modes.get(int(slot)) == "windows-host-fcram-content-validated":
                     if host_memory is None or host_handle is None:
                         raise SMLiveError("el transporte host ya no está disponible para rollback")
@@ -2420,6 +2745,46 @@ class SMLiveWriter:
             return None
         return second
 
+    def _resolve_live_items_from_published_reference(
+        self, *, client, host_memory, host_target: HostPartyTarget, party_base: int,
+    ) -> tuple[object, int, int, bytes]:
+        """Demuestra la candidata Items publicada para la sesión host+guest.
+
+        La traducción guest→host procede de la copia de party encontrada por
+        contenido en esta misma captura. No se acepta la dirección publicada
+        por sí sola: ambos lados deben ser estables, no vacíos e idénticos.
+        """
+        guest_base = int(SM_ITEMS_LIVEHEX_REFERENCE)
+        host_base = int(host_target.host_party_base) + (guest_base - int(party_base))
+        if host_base <= 0:
+            raise SMLiveError("La traducción host de la mochila publicada quedó fuera del proceso.")
+        guest_live = self._read_stable_guest_items(client, guest_base)
+        if guest_live is None or not any(guest_live):
+            raise SMLiveError("La referencia publicada de mochila no produjo una lectura guest estable y no vacía.")
+
+        handle = None
+        try:
+            handle = host_memory.open_process(int(host_target.pid))
+            host_first = bytes(host_memory.read(handle, host_base, SM_SAVE_ITEM_BLOCK_SIZE))
+            if self.reader.stable_delay:
+                time.sleep(self.reader.stable_delay)
+            host_second = bytes(host_memory.read(handle, host_base, SM_SAVE_ITEM_BLOCK_SIZE))
+            if host_first != host_second or host_second != guest_live:
+                raise SMLiveError(
+                    "La referencia publicada de mochila no coincide de forma estable entre host y guest."
+                )
+            # Además de la igualdad física, obliga a que el bloque tenga la
+            # codificación de bolsillo que consume realmente el flujo de MT.
+            self._parse_tm_items_block(guest_live)
+            return handle, host_base, guest_base, guest_live
+        except Exception:
+            if handle is not None:
+                try:
+                    host_memory.close_process(handle)
+                except Exception:
+                    pass
+            raise
+
     def read_kahuna_badges_for_game(
         self, current: SaveGameData, save_path: Path | str | None, *, party_base: int | None = None,
         allow_full_scan: bool = True,
@@ -2642,20 +3007,29 @@ class SMLiveWriter:
                     }
                     handle = None
                     try:
+                        published_error = None
                         exact_error = None
                         try:
-                            handle, host_base, guest_base, live = self._resolve_live_utility_block(
+                            handle, host_base, guest_base, live = self._resolve_live_items_from_published_reference(
                                 client=client, host_memory=host_memory, host_target=target,
-                                party_base=party_base, kind="items", original=original,
+                                party_base=party_base,
                             )
-                            entry["proof_mode"] = "exact-main-block"
+                            entry["proof_mode"] = "pkmn-ntr-sm-items-reference-host-guest"
                         except SMLiveError as exc:
-                            exact_error = str(exc)
-                            handle, host_base, guest_base, live = self._resolve_live_items_structurally(
-                                client=client, host_memory=host_memory, host_target=target,
-                                party_base=party_base, original=original,
-                            )
-                            entry["proof_mode"] = "distributed-structural-witnesses"
+                            published_error = str(exc)
+                            try:
+                                handle, host_base, guest_base, live = self._resolve_live_utility_block(
+                                    client=client, host_memory=host_memory, host_target=target,
+                                    party_base=party_base, kind="items", original=original,
+                                )
+                                entry["proof_mode"] = "exact-main-block"
+                            except SMLiveError as fallback_exc:
+                                exact_error = str(fallback_exc)
+                                handle, host_base, guest_base, live = self._resolve_live_items_structurally(
+                                    client=client, host_memory=host_memory, host_target=target,
+                                    party_base=party_base, original=original,
+                                )
+                                entry["proof_mode"] = "distributed-structural-witnesses"
                         inventory = self._parse_tm_items_block(live)
                         proof_key = (int(target.pid), int(host_base), int(guest_base))
                         proofs[proof_key] = (target, int(host_base), int(guest_base), bytes(live), inventory)
@@ -2667,6 +3041,8 @@ class SMLiveWriter:
                         })
                         if exact_error is not None:
                             entry["exact_proof_rejected"] = exact_error
+                        if published_error is not None:
+                            entry["published_reference_rejected"] = published_error
                     except Exception as exc:
                         entry["accepted"] = False
                         entry["rejected"] = f"{type(exc).__name__}: {exc}"
@@ -3077,7 +3453,9 @@ class SMLiveWriter:
                         "No se pudo demostrar una única party host de Azahar antes de tocar el inventario; no se escribió ningún byte."
                     )
                 host_target = party_targets[0]
-                applied: list[tuple[object, int, int, bytes, bytes, str]] = []
+                # Registrar el intento antes del primer byte: una excepción o
+                # readback fallido posterior también necesita rollback.
+                attempted: list[tuple[object, int, int, bytes, bytes, str]] = []
                 handles: list[object] = []
                 try:
                     for change in changes:
@@ -3108,6 +3486,7 @@ class SMLiveWriter:
                         new_block[patch_offset:patch_offset + len(new_patch)] = new_patch
                         host_address = host_base + patch_offset
                         guest_address = guest_base + patch_offset
+                        attempted.append((handle, host_address, guest_address, current_patch, new_patch, kind))
                         try:
                             host_memory.write(handle, host_address, new_patch)
                             host_check = bytes(host_memory.read(handle, host_address, len(new_patch)))
@@ -3116,15 +3495,9 @@ class SMLiveWriter:
                         except WindowsProcessMemoryError as exc:
                             raise SMLiveError(str(exc)) from exc
                         if host_check != new_patch or guest_check != new_patch or full_guest != bytes(new_block):
-                            # rollback inmediato del único campo tocado
-                            try:
-                                host_memory.write(handle, host_address, current_patch)
-                            except Exception:
-                                pass
                             raise SMLiveError(
-                                f"Azahar no confirmó {change.item_name} en la copia guest viva; RoleRun restauró el campo original."
+                                f"Azahar no confirmó {change.item_name} en la copia guest viva."
                             )
-                        applied.append((handle, host_address, guest_address, current_patch, new_patch, kind))
                         self._utility_block_cache[kind] = (
                             int(host_target.pid), int(host_base), int(guest_base), bytes(new_block)
                         )
@@ -3132,11 +3505,11 @@ class SMLiveWriter:
                     game = self.reader._build_game(original_capture, current, process, party_base)
                     return SMLiveWriteResult(
                         game=game, process=process, attempts=capture_attempt,
-                        applied_count=len(changes), already_applied=not bool(applied),
+                        applied_count=len(changes), already_applied=not bool(attempted),
                     )
                 except Exception as exc:
                     rollback_errors: list[str] = []
-                    for handle, host_address, guest_address, old_patch, _new_patch, kind in reversed(applied):
+                    for handle, host_address, guest_address, old_patch, _new_patch, kind in reversed(attempted):
                         try:
                             host_memory.write(handle, host_address, old_patch)
                             if bytes(host_memory.read(handle, host_address, len(old_patch))) != old_patch:
@@ -3149,6 +3522,10 @@ class SMLiveWriter:
                     if rollback_errors:
                         raise SMLiveError(
                             f"La utilidad SM falló: {exc}. Además no se pudo confirmar todo el rollback: " + "; ".join(rollback_errors)
+                        ) from exc
+                    if attempted:
+                        raise SMLiveError(
+                            f"La utilidad SM falló: {exc}. RoleRun restauró y verificó los campos originales."
                         ) from exc
                     raise
                 finally:
@@ -4468,7 +4845,10 @@ class SMLiveWriter:
                     raise SMLiveError("La lectura demostrada de PartyData no devolvió los seis slots físicos.")
 
                 incoming_raw, incoming_prepared = self._party_payload_from_box(
-                    source_original, role=result_role, remove_move_slots=change.remove_move_slots,
+                    source_original,
+                    role=result_role,
+                    remove_move_slots=change.remove_move_slots,
+                    desired_evs=self._incoming_team_evs(change, expected_role=result_role),
                 )
                 if self._pokemon_identity(incoming_prepared) != incoming_identity:
                     raise SMLiveError("El PK7 preparado para sustituir al debilitado perdió su identidad fuerte.")
@@ -4777,7 +5157,10 @@ class SMLiveWriter:
                     if result_role not in ROLE_ORDER:
                         raise SMLiveError("El Pokémon saliente no tiene un único rol válido. Pulsa F5 antes de sustituirlo.")
                     incoming_raw, incoming_prepared = self._party_payload_from_box(
-                        pc_original, role=result_role, remove_move_slots=change.remove_move_slots,
+                        pc_original,
+                        role=result_role,
+                        remove_move_slots=change.remove_move_slots,
+                        desired_evs=self._incoming_team_evs(change, expected_role=result_role),
                     )
                     if self._pokemon_identity(incoming_prepared) != incoming_identity:
                         raise SMLiveError("El PK7 preparado para entrar perdió su identidad fuerte.")
@@ -4813,7 +5196,10 @@ class SMLiveWriter:
                     if result_role not in ROLE_ORDER:
                         raise SMLiveError("No existe ningún rol libre para el Pokémon que entra; no se escribió ningún byte.")
                     incoming_raw, incoming_prepared = self._party_payload_from_box(
-                        pc_original, role=result_role, remove_move_slots=change.remove_move_slots,
+                        pc_original,
+                        role=result_role,
+                        remove_move_slots=change.remove_move_slots,
+                        desired_evs=self._incoming_team_evs(change, expected_role=result_role),
                     )
                     if self._pokemon_identity(incoming_prepared) != incoming_identity:
                         raise SMLiveError("El PK7 preparado para entrar perdió su identidad fuerte.")
@@ -4826,7 +5212,12 @@ class SMLiveWriter:
                     )
                     expected_ids[target_party_slot] = incoming_identity
                     expected_sparse_members[target_party_slot] = incoming_prepared
-                    pc_expected = b"\0" * PK7_STORED_SIZE
+                    # Un BoxPokemon vacío sigue siendo un PK7 cifrado válido.
+                    # Los 0xE8 bytes crudos a cero no son la representación de
+                    # caja vacía que consume Gen 7: el juego los materializa como
+                    # un huevo corrupto. Usamos el mismo vacío canónico que ya
+                    # emplea el flujo de bajas y exigimos su readback exacto.
+                    pc_expected = encrypt_pk6_stored(bytes(PK7_STORED_SIZE))
                     pc_expected_identity = None
 
                 else:  # party-to-box
@@ -4987,7 +5378,8 @@ class SMLiveWriter:
                         )
                         boxed = parsed_pc.get((box, box_slot))
                         if pc_expected_identity is None:
-                            if boxed is not None or any(client.read_memory(guest_pc_addr, PK7_STORED_SIZE)):
+                            pc_after = bytes(client.read_memory(guest_pc_addr, PK7_STORED_SIZE))
+                            if boxed is not None or pc_after != pc_expected:
                                 raise SMLiveError("BoxPokemon no confirmó que el hueco del PC quedara vacío.")
                         else:
                             if boxed is None or self._pokemon_identity(boxed) != pc_expected_identity:
@@ -5059,11 +5451,208 @@ class SMLiveWriter:
                 except Exception:
                     pass
 
+    def _healed_party_bytes(self, raw: bytes) -> tuple[bytes, bytes]:
+        """Proyecta la curación completa sobre el PK7 sparse demostrado de SM."""
+        if self.move_pp_for is None:
+            raise SMLiveError("No está disponible la tabla efectiva de PP.")
+        plain, encrypted = _plain_pk7_with_state(raw)
+        patched = bytearray(plain)
+        # PartyData Gen7: status, HP actual y HP máximo pertenecen a la
+        # extensión runtime separada del stored PK7 (0xE8).
+        struct.pack_into("<I", patched, 0xE8, 0)
+        max_hp = int(struct.unpack_from("<H", patched, 0xF2)[0])
+        if max_hp <= 0:
+            raise SMLiveError("El PK7 no tiene Max HP válido; no se curó.")
+        struct.pack_into("<H", patched, 0xF0, max_hp)
+        for index, move_offset in enumerate(_PK7_MOVE_OFFSETS):
+            move_id = int(struct.unpack_from("<H", patched, move_offset)[0])
+            if move_id <= 0:
+                patched[_PK7_MOVE_PP_OFFSETS[index]] = 0
+                continue
+            base_pp = int(self.move_pp_for(move_id) or 0)
+            pp_ups = int(patched[_PK7_MOVE_PP_UPS_OFFSETS[index]])
+            if base_pp <= 0 or not 0 <= pp_ups <= 3:
+                raise SMLiveError(
+                    f"No se pudieron demostrar los PP máximos del movimiento #{move_id}."
+                )
+            patched[_PK7_MOVE_PP_OFFSETS[index]] = base_pp * (5 + pp_ups) // 5
+        self._refresh_checksum(patched)
+        encoded = encrypt_pk6(bytes(patched)) if encrypted else bytes(patched)
+        return (
+            bytes(encoded[:PK7_STORED_SIZE]),
+            bytes(encoded[PK7_STORED_SIZE:PK7_STORED_SIZE + SM_PARTY_STATS_SIZE]),
+        )
+
+    def _party_target_for_self_contained_write(
+        self, *, client, process: AzaharProcess, party_base: int,
+        original_capture: Sequence[bytes], current: SaveGameData, host_memory,
+    ) -> HostPartyTarget:
+        """Resuelve la party host sin depender de acciones previas del usuario."""
+        matches = host_memory.find_party_targets(
+            slot_raws=original_capture,
+            stored_size=PK7_STORED_SIZE,
+            stats_offset=SM_PARTY_STATS_OFFSET,
+            stats_size=SM_PARTY_STATS_SIZE,
+            stride=SM_PARTY_STRIDE,
+        )
+        if len(matches) == 1:
+            return matches[0]
+        # Si la sesión ya dispone de una relación PC↔party demostrada, se
+        # revalida antes de volver a recorrer la matriz completa. Esto conserva
+        # la prueba existente de roles/MT/PC y evita sustituir evidencia válida
+        # por una calibración nueva innecesaria.
+        if self._pc_party_anchor is not None or self._pc_live_cache is not None:
+            try:
+                return self._validated_pc_party_target(
+                    client=client, process=process, party_base=party_base,
+                    original_capture=original_capture, host_memory=host_memory,
+                )
+            except SMLiveError:
+                pass
+        self._ensure_pc_live_cache_for_team_write(
+            client=client, process=process, party_base=int(party_base),
+            original_capture=original_capture, current=current,
+            host_memory=host_memory,
+        )
+        return self._validated_pc_party_target(
+            client=client, process=process, party_base=party_base,
+            original_capture=original_capture, host_memory=host_memory,
+        )
+
+    def _apply_party_heal(
+        self, current: SaveGameData, changes: Sequence[PendingPartyHeal],
+    ) -> SMLiveWriteResult:
+        """Cura HP, estado y PP de SM con preflight, readback y rollback."""
+        if self.move_pp_for is None:
+            raise SMLiveError(
+                "No está disponible la tabla efectiva de PP; no se curó ningún Pokémon."
+            )
+        host_memory = None
+        host_handle = None
+        client = None
+        attempted: list[tuple[int, int, bytes, bytes, str]] = []
+        try:
+            with self.reader.client_factory() as client:
+                process = self.reader._find_sm_process(client.process_list())
+                client.set_process(process.process_id)
+                party_base = self.reader._locate_party_base(client, process, current)
+                original_capture, capture_attempt = self._capture_stable_party(client, party_base)
+                live_party = self._read_party_members(original_capture, current)
+                targets = {id(change): self._resolve_target(change, live_party) for change in changes}
+                desired = {
+                    slot: self._healed_party_bytes(original_capture[slot - 1])
+                    for slot in sorted(set(targets.values()))
+                }
+                if all(
+                    desired[slot][0] == original_capture[slot - 1][:PK7_STORED_SIZE]
+                    and desired[slot][1] == original_capture[slot - 1][PK7_STORED_SIZE:PK7_STORED_SIZE + SM_PARTY_STATS_SIZE]
+                    for slot in desired
+                ):
+                    game = self.reader._build_game(original_capture, current, process, party_base)
+                    return SMLiveWriteResult(game, process, capture_attempt, len(changes), True)
+
+                host_memory = self.host_memory_factory()
+                # La curación puede ser la primera escritura de la sesión:
+                # si Azahar conserva buffers duplicados, la operación construye
+                # su propia prueba completa de backing en vez de exigir caché.
+                host_target = self._party_target_for_self_contained_write(
+                    client=client, process=process, party_base=party_base,
+                    original_capture=original_capture, current=current,
+                    host_memory=host_memory,
+                )
+                host_handle = host_memory.open_process(int(host_target.pid))
+
+                # Toda la party se relee antes de permitir la primera escritura.
+                for slot in desired:
+                    host_slot = int(host_target.host_party_base) + (slot - 1) * SM_PARTY_STRIDE
+                    old_stored = bytes(original_capture[slot - 1][:PK7_STORED_SIZE])
+                    old_stats = bytes(original_capture[slot - 1][PK7_STORED_SIZE:PK7_STORED_SIZE + SM_PARTY_STATS_SIZE])
+                    if bytes(host_memory.read(host_handle, host_slot, PK7_STORED_SIZE)) != old_stored:
+                        raise SMLiveError(f"La party host cambió antes de curar el slot {slot}.")
+                    if bytes(host_memory.read(host_handle, host_slot + SM_PARTY_STATS_OFFSET, SM_PARTY_STATS_SIZE)) != old_stats:
+                        raise SMLiveError(f"PartyData cambió antes de curar el slot {slot}.")
+
+                for slot, (new_stored, new_stats) in desired.items():
+                    host_slot = int(host_target.host_party_base) + (slot - 1) * SM_PARTY_STRIDE
+                    guest_slot = int(party_base) + (slot - 1) * SM_PARTY_STRIDE
+                    fields = (
+                        (host_slot, guest_slot, bytes(original_capture[slot - 1][:PK7_STORED_SIZE]), new_stored, f"slot {slot} stored"),
+                        (host_slot + SM_PARTY_STATS_OFFSET, guest_slot + SM_PARTY_STATS_OFFSET,
+                         bytes(original_capture[slot - 1][PK7_STORED_SIZE:PK7_STORED_SIZE + SM_PARTY_STATS_SIZE]),
+                         new_stats, f"slot {slot} PartyData"),
+                    )
+                    for host_addr, guest_addr, old, new, label in fields:
+                        if old == new:
+                            continue
+                        attempted.append((host_addr, guest_addr, old, new, label))
+                        host_memory.write(host_handle, host_addr, new)
+                        if bytes(host_memory.read(host_handle, host_addr, len(new))) != new:
+                            raise SMLiveError(f"{label} no confirmó readback host.")
+                        if bytes(client.read_memory(guest_addr, len(new))) != new:
+                            raise SMLiveError(f"{label} no confirmó readback guest.")
+
+                verified_capture, verified_attempt = self._capture_stable_party(client, party_base)
+                verified_party = self._read_party_members(verified_capture, current)
+                for change in changes:
+                    slot = targets[id(change)]
+                    actual = verified_party.get(slot)
+                    if actual is None or self._pokemon_identity(actual) != str(change.pokemon_identity):
+                        raise SMLiveError(f"El slot {slot} cambió de identidad durante la curación.")
+                    if int(actual.current_hp) != int(actual.max_hp) or int(actual.status_condition or 0) != 0:
+                        raise SMLiveError(f"El slot {slot} no confirmó HP/estado curados.")
+                    plain, _encrypted = _plain_pk7_with_state(verified_capture[slot - 1])
+                    for index, move_id in enumerate(actual.move_ids[:4]):
+                        if int(move_id or 0) <= 0:
+                            continue
+                        base_pp = int(self.move_pp_for(int(move_id)) or 0)
+                        pp_ups = int(plain[_PK7_MOVE_PP_UPS_OFFSETS[index]])
+                        expected_pp = base_pp * (5 + pp_ups) // 5
+                        if int(plain[_PK7_MOVE_PP_OFFSETS[index]]) != expected_pp:
+                            raise SMLiveError(f"El slot {slot} no confirmó los PP restaurados.")
+                game = self.reader._build_game(verified_capture, current, process, party_base, live_write=True)
+                return SMLiveWriteResult(
+                    game, process, max(capture_attempt, verified_attempt), len(changes), False,
+                )
+        except Exception as exc:
+            rollback_errors: list[str] = []
+            for host_addr, _guest_addr, old, _new, label in reversed(attempted):
+                try:
+                    host_memory.write(host_handle, host_addr, old)
+                    if bytes(host_memory.read(host_handle, host_addr, len(old))) != old:
+                        rollback_errors.append(f"{label}: host")
+                except Exception as rollback_exc:
+                    rollback_errors.append(f"{label}: {rollback_exc}")
+            if attempted and not rollback_errors and client is not None:
+                try:
+                    time.sleep(max(0.03, float(getattr(self.reader, "stable_delay", 0.06))))
+                    for _host_addr, guest_addr, old, _new, label in attempted:
+                        if bytes(client.read_memory(guest_addr, len(old))) != old:
+                            rollback_errors.append(f"{label}: guest")
+                except Exception as rollback_exc:
+                    rollback_errors.append(f"guest rollback: {rollback_exc}")
+            if rollback_errors:
+                raise SMLiveError(
+                    f"La curación SM falló: {exc}. Rollback incompleto: " + "; ".join(rollback_errors)
+                ) from exc
+            if attempted:
+                raise SMLiveError(
+                    f"La curación SM falló: {exc}. RoleRun restauró y verificó los bytes originales."
+                ) from exc
+            raise
+        finally:
+            if host_memory is not None and host_handle is not None:
+                try:
+                    host_memory.close_process(host_handle)
+                except Exception:
+                    pass
+
     def apply(self, current: SaveGameData, changes: Sequence[object]) -> SMLiveWriteResult:
         if not changes:
             raise SMLiveError("No hay cambios que aplicar en Sol/Luna.")
         if all(isinstance(change, PendingInventoryChange) for change in changes):
             return self._apply_inventory(current, list(changes))
+        if all(isinstance(change, PendingPartyHeal) for change in changes):
+            return self._apply_party_heal(current, list(changes))
         team_changes = [change for change in changes if isinstance(change, PendingTeamChange)]
         if team_changes:
             if len(team_changes) != 1 or len(changes) != 1:
@@ -5100,6 +5689,7 @@ class SMLiveWriter:
                 original_slots: dict[int, bytes] = {}
                 plain_slots: dict[int, bytearray] = {}
                 was_encrypted: dict[int, bool] = {}
+                partydata_slots: set[int] = set()
                 for slot in sorted(set(targets.values())):
                     original = original_capture[slot - 1]
                     plain, encrypted = _plain_pk7_with_state(original)
@@ -5120,6 +5710,17 @@ class SMLiveWriter:
                                 f"RoleRun esperaba {expected}; no se escribió ningún byte."
                             )
                         self._set_role(plain_slots[slot], change.new_role)
+                        if change.new_evs is not None:
+                            if change.old_evs is None:
+                                raise SMLiveError(
+                                    "El cambio EV de Sol/Luna no incluye los EV anteriores; "
+                                    "no se escribió ningún byte."
+                                )
+                            self._set_party_evs_and_stats(
+                                plain_slots[slot], pokemon=live_party[slot],
+                                expected=tuple(change.old_evs), desired=tuple(change.new_evs),
+                            )
+                            partydata_slots.add(slot)
                     elif isinstance(change, (PendingChange, PendingTMTeach)):
                         if isinstance(change, PendingTMTeach):
                             self._assert_live_tm_available(client, process, party_base, change)
@@ -5137,6 +5738,12 @@ class SMLiveWriter:
                     encoded_slots[slot] = encoded
                     expected_party[slot] = expected
                     if encoded[:PK7_STORED_SIZE] != original_slots[slot][:PK7_STORED_SIZE]:
+                        any_byte_change = True
+                    if (
+                        slot in partydata_slots
+                        and encoded[PK7_STORED_SIZE:PK7_STORED_SIZE + SM_PARTY_STATS_SIZE]
+                        != original_slots[slot][PK7_STORED_SIZE:PK7_STORED_SIZE + SM_PARTY_STATS_SIZE]
+                    ):
                         any_byte_change = True
 
                 if not any_byte_change:
@@ -5160,7 +5767,13 @@ class SMLiveWriter:
                     # por contenido exacto de TODA la party (stored + stats + stride).
                     host_slots: list[int] = []
                     for slot in sorted(encoded_slots):
-                        if encoded_slots[slot][:PK7_STORED_SIZE] == original_slots[slot][:PK7_STORED_SIZE]:
+                        stored_changed = encoded_slots[slot][:PK7_STORED_SIZE] != original_slots[slot][:PK7_STORED_SIZE]
+                        stats_changed = (
+                            slot in partydata_slots
+                            and encoded_slots[slot][PK7_STORED_SIZE:PK7_STORED_SIZE + SM_PARTY_STATS_SIZE]
+                            != original_slots[slot][PK7_STORED_SIZE:PK7_STORED_SIZE + SM_PARTY_STATS_SIZE]
+                        )
+                        if not stored_changed and not stats_changed:
                             continue
                         canonical = int(party_base) + (slot - 1) * SM_PARTY_STRIDE
                         resolved = self._resolve_write_address(
@@ -5203,9 +5816,10 @@ class SMLiveWriter:
                                     # desambiguarlos de extremo a extremo. La ancla
                                     # se relee completa antes de reutilizarla.
                                     try:
-                                        host_target = self._validated_pc_party_target(
+                                        host_target = self._party_target_for_self_contained_write(
                                             client=client, process=process, party_base=party_base,
-                                            original_capture=original_capture, host_memory=host_memory,
+                                            original_capture=original_capture, current=current,
+                                            host_memory=host_memory,
                                         )
                                     except SMLiveError as anchor_exc:
                                         if not matches:
@@ -5246,6 +5860,17 @@ class SMLiveWriter:
                         canonical = int(party_base) + (slot - 1) * SM_PARTY_STRIDE
                         write_address = int(write_addresses[slot])
                         expected_stored = bytes(encoded_slots[slot][:PK7_STORED_SIZE])
+                        old_stats = bytes(original_slots[slot][PK7_STORED_SIZE:PK7_STORED_SIZE + SM_PARTY_STATS_SIZE])
+                        expected_stats = bytes(encoded_slots[slot][PK7_STORED_SIZE:PK7_STORED_SIZE + SM_PARTY_STATS_SIZE])
+                        if slot in partydata_slots:
+                            if bytes(client.read_memory(canonical + SM_PARTY_STATS_OFFSET, SM_PARTY_STATS_SIZE)) != old_stats:
+                                raise SMLiveError(f"PartyData cambió antes de escribir el slot {slot}.")
+                            if write_modes[slot] == "windows-host-fcram-content-validated":
+                                transport_old_stats = bytes(host_memory.read(host_handle, write_address + SM_PARTY_STATS_OFFSET, SM_PARTY_STATS_SIZE))
+                            else:
+                                transport_old_stats = bytes(client.read_memory(write_address + SM_PARTY_STATS_OFFSET, SM_PARTY_STATS_SIZE))
+                            if transport_old_stats != old_stats:
+                                raise SMLiveError(f"El transporte PartyData cambió antes de escribir el slot {slot}.")
                         if write_modes[slot] == "windows-host-fcram-content-validated":
                             try:
                                 host_memory.write(host_handle, write_address, expected_stored)
@@ -5257,6 +5882,19 @@ class SMLiveWriter:
                             client.write_memory(write_address, expected_stored)
                             transport_readback = bytes(client.read_memory(write_address, PK7_STORED_SIZE))
                             label = "immediate-after-write-via-rpc"
+
+                        if slot in partydata_slots and expected_stats != old_stats:
+                            stats_address = write_address + SM_PARTY_STATS_OFFSET
+                            if write_modes[slot] == "windows-host-fcram-content-validated":
+                                host_memory.write(host_handle, stats_address, expected_stats)
+                                stats_readback = bytes(host_memory.read(host_handle, stats_address, SM_PARTY_STATS_SIZE))
+                            else:
+                                client.write_memory(stats_address, expected_stats)
+                                stats_readback = bytes(client.read_memory(stats_address, SM_PARTY_STATS_SIZE))
+                            if stats_readback != expected_stats or bytes(client.read_memory(canonical + SM_PARTY_STATS_OFFSET, SM_PARTY_STATS_SIZE)) != expected_stats:
+                                raise SMLiveError(
+                                    f"La PartyData calculada del slot {slot} no confirmó readback guest/transporte."
+                                )
 
                         immediate_readbacks[slot] = self._diagnostic_slot_snapshot(
                             client, address=canonical,
@@ -5286,6 +5924,14 @@ class SMLiveWriter:
                             raise SMLiveError(
                                 f"Azahar no confirmó el rol del slot {slot}; se restaurará el PK7 original."
                             )
+                        if actual.evs != expected.evs:
+                            raise SMLiveError(
+                                f"Azahar no confirmó los EV del slot {slot}; se restaurará el PK7 original."
+                            )
+                        if slot in partydata_slots and actual.stats != expected.stats:
+                            raise SMLiveError(
+                                f"Azahar no confirmó las estadísticas calculadas del slot {slot}; se restaurará el PK7 original."
+                            )
                         if [int(v or 0) for v in actual.move_ids[:4]] != [int(v or 0) for v in expected.move_ids[:4]]:
                             raise SMLiveError(
                                 f"Azahar no confirmó los movimientos del slot {slot}; se restaurará el PK7 original."
@@ -5309,6 +5955,7 @@ class SMLiveWriter:
                     rollback_errors = self._rollback(
                         client, party_base, attempted_slots, original_slots, write_addresses, write_modes,
                         host_memory=host_memory, host_handle=host_handle,
+                        partydata_slots=partydata_slots,
                     )
                     diagnostic_hint = (
                         f" Diagnóstico guardado en: {diagnostic_path}"

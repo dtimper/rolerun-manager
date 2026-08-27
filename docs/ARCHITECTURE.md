@@ -1,5 +1,9 @@
 # RoleRun Manager — Arquitectura desde v0.4
 
+> Documento histórico centrado en la migración a IDs de movimientos y el motor
+> de saves. Para la arquitectura realtime y el estado funcional actual, consultar
+> `REALTIME_CORE.md` y `CURRENT_STATE.md`.
+
 ## Identificadores estables
 
 Los movimientos se almacenan y se aplican mediante su ID numérico oficial. Los nombres visibles se obtienen de los recursos localizados de PKHeX.Core.

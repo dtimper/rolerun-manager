@@ -1,0 +1,55 @@
+{
+  "captured_at_local": "2026-08-22",
+  "environment": {
+    "game": "Pokemon Shining Pearl",
+    "title_id": "010018E011D92000",
+    "revision": "1.3.0",
+    "emulator": "Ryujinx 1.3.3",
+    "memory_manager_mode": "HostMappedUnsafe",
+    "gdb_stub_enabled": false,
+    "access": "read-only",
+    "writes": 0
+  },
+  "source_evidence": {
+    "repository": "https://github.com/TeamLumi/opendpr",
+    "commit": "5b0cb0c8e11e1a4fdf072e7bb368b8f45a348c6a",
+    "facts": [
+      "PlayerWork contains a serialized SaveData.playerParty and a separate nonserialized _playerParty runtime field.",
+      "PokeParty contains PokemonParam[6] m_member followed by uint m_memberCount.",
+      "PokemonParam inherits m_coreData, m_calcData and m_accessor; its full serialized size is 344 bytes.",
+      "CoreParam data is 328 bytes and CalcData is 16 bytes; CalcData contains level and maxHp."
+    ]
+  },
+  "bounded_physical_observation": {
+    "paired_hostmapped_regions": 1344,
+    "paired_region_bytes": 1524072448,
+    "valid_328_byte_core_arrays": 6,
+    "unique_pokemonparam_owner_per_core": true,
+    "pokemonparam_owners": 6,
+    "six_member_arrays": 1,
+    "pokeparty_objects": 1,
+    "playerwork_instance_chain": [
+      "main+0x4E7BE98",
+      "deref+0xB8",
+      "deref+0x10"
+    ],
+    "playerwork_runtime_party_field_offset": "0x808",
+    "runtime_hp_pairs_current_max": [
+      [67, 67],
+      [58, 58],
+      [66, 66],
+      [58, 58],
+      [70, 70],
+      [59, 59]
+    ],
+    "matched_previous_party_baseline_slots": 6,
+    "elapsed_seconds": 29.747
+  },
+  "demonstrated_conclusion": "The previously monitored SaveData.playerParty is a serialized copy and is not the live HP authority. For this exact SP 1.3.0 profile, PlayerWork._playerParty is the unique coherent runtime party and is reachable through the demonstrated singleton chain at field offset 0x808.",
+  "not_yet_demonstrated": [
+    "A live HP transition through this runtime source.",
+    "Party reorder lifecycle through this runtime source.",
+    "Any battle-specific HP copy or battle-state structure.",
+    "Any write operation."
+  ]
+}

@@ -9,6 +9,7 @@ from app.oras_tm_service import oras_tm_item_id
 from app.xy_live import (
     XYLiveReader, XYLiveWriter, XY_PC_SCAN_START, XY_PC_SIZE,
     XY_TM_POUCH_SIZE, XY_INVENTORY_SCAN_START, XY_TITLE_IDS,
+    load_xy_move_metadata,
 )
 
 
@@ -55,6 +56,38 @@ class _MemoryClient:
                 region[address-base:address-base+len(data)] = data
                 return
         self.regions[address] = bytearray(data)
+
+
+def test_xy_move_metadata_is_pinned_to_the_xy_version_group() -> None:
+    metadata = load_xy_move_metadata(Path("data/xy_move_metadata.json"))
+
+    assert len(metadata) == 621
+    assert metadata[33] == {
+        "power": 50,
+        "accuracy": 100,
+        "pp": 35,
+        "description_es": "Embiste con todo el cuerpo.",
+    }
+    assert metadata[611] == {
+        "power": 20,
+        "accuracy": 100,
+        "pp": 20,
+        "description_es": (
+            "Hostiga al Pokémon objetivo durante cuatro o cinco turnos e impide "
+            "que pueda huir mientras tanto."
+        ),
+    }
+
+
+def test_xy_move_metadata_rejects_a_table_from_another_game(tmp_path: Path) -> None:
+    wrong = tmp_path / "wrong.json"
+    wrong.write_text(
+        '{"generation": 7, "target_version_group": "sun-moon", '
+        '"moves": {"33": {"power": 40, "accuracy": 100, "pp": 35}}}',
+        encoding="utf-8",
+    )
+
+    assert load_xy_move_metadata(wrong) == {}
 
 
 def test_xy_alpha6_locates_and_reads_live_pc_matrix_then_reuses_cache() -> None:
@@ -115,7 +148,7 @@ def test_xy_alpha6_runtime_capabilities_are_live_for_pc_and_tm() -> None:
     assert caps["tm_inventory"] == "read-live"
 
 
-def test_xy_alpha6_writer_allows_validated_one_for_one_pc_swap_but_not_party_resize() -> None:
+def test_xy_v024_writer_allows_validated_pc_swap_and_party_resize_operations() -> None:
     from app.models import PendingTeamChange
     class R:
         client_factory = staticmethod(lambda: None)
@@ -130,7 +163,7 @@ def test_xy_alpha6_writer_allows_validated_one_for_one_pc_swap_but_not_party_res
         outgoing_pokemon="A",
     )
     assert writer._unsupported_changes([swap]) == []
-    assert writer._unsupported_changes([deposit])
+    assert writer._unsupported_changes([deposit]) == []
 
 
 def test_xy_alpha6_can_calibrate_pc_with_one_unique_pokemon() -> None:

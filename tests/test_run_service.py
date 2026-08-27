@@ -136,6 +136,34 @@ class RunProjectServiceTests(unittest.TestCase):
             self.assertIn("261:1:2:3", final.graveyard_pokemon)
             self.assertEqual(final.counters["vidas"], 2)
 
+    def test_declining_replacement_keeps_death_and_life_but_clears_reminder(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            save = root / "main"
+            save.write_bytes(b"save")
+            service = RunProjectService(root / "Runs", root / "OBS")
+            project = service.open_or_create("X", "Timper", save)
+            project.counters["vidas"] = 3
+            service.save(project)
+            event = {
+                "identity": "664:1:2:3", "pokemon": "Scatterbug",
+                "species": "Scatterbug", "slot": 2, "role": "Tanque",
+                "source_label": "X/Y en vivo",
+            }
+            self.assertTrue(service.register_detected_faint(project, event))
+            self.assertEqual(project.counters["vidas"], 2)
+
+            self.assertTrue(service.decline_detected_faint_replacement(project, event["identity"]))
+
+            reloaded = service.load(project.slug)
+            assert reloaded is not None
+            self.assertEqual(reloaded.pending_faints, [])
+            self.assertEqual(reloaded.counters["vidas"], 2)
+            self.assertIn(event["identity"], reloaded.graveyard_pokemon)
+            history = service.history(reloaded)
+            self.assertEqual(history[-1]["type"], "pokemon_faint_replacement_declined")
+            self.assertEqual(history[-1]["reason"], "sustitución descartada por el usuario")
+
 
 
 if __name__ == "__main__":

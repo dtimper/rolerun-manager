@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from app.ui import RoleRunManager
+import app.ui as ui_module
 
 
 class FakeScheduler:
@@ -59,3 +60,33 @@ def test_floating_role_drop_is_completed_after_buttonrelease_not_inside_event() 
     assert len(manager.floating_bar.callbacks) == 1
     manager.floating_bar.callbacks[0]()
     assert manager.moves == [("mon-a", "Asesino", "floating")]
+
+
+def test_libero_ev_selector_uses_visible_toplevel_while_main_root_is_withdrawn(monkeypatch) -> None:
+    calls: list[tuple[str, object]] = []
+
+    class FakeBar:
+        def winfo_exists(self): return True
+        def state(self): return "normal"
+        def winfo_screenwidth(self): return 1920
+        def winfo_screenheight(self): return 1080
+
+    class FakeWindow:
+        def __init__(self, master): calls.append(("master", master))
+        def configure(self, **_kwargs): pass
+        def resizable(self, *_args): pass
+        def attributes(self, *args): calls.append(("attributes", args))
+        def transient(self, master): calls.append(("transient", master))
+        def geometry(self, value): calls.append(("geometry", value))
+        def after(self, _delay, _callback): pass
+        def lift(self): pass
+        def focus_force(self): pass
+
+    monkeypatch.setattr(ui_module.ctk, "CTkToplevel", FakeWindow)
+    manager = SimpleNamespace(floating_bar=FakeBar())
+    manager._create_libero_ev_window = RoleRunManager._create_libero_ev_window.__get__(manager)
+    window = manager._create_libero_ev_window("floating")
+    assert isinstance(window, FakeWindow)
+    assert ("master", manager.floating_bar) in calls
+    assert ("attributes", ("-topmost", True)) in calls
+    assert ("geometry", "620x430+650+325") in calls

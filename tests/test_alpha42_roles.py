@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import unittest
+import random
 from pathlib import Path
 
+from app.draft_engine import DraftEngine
 from app.role_rules import (
     ROLE_ORDER,
     ROLE_TO_MARKING,
@@ -100,7 +102,9 @@ class Alpha42RoleReworkTests(unittest.TestCase):
         self.assertIn(347, allowed)   # Calm Mind
         self.assertIn(133, allowed)   # Amnesia
         self.assertIn(601, allowed)   # Geomancy
-        self.assertIn(182, allowed)   # Protect
+        self.assertIn(92, allowed)    # Toxic: problema de estado directo
+        self.assertIn(261, allowed)   # Will-O-Wisp: problema de estado directo
+        self.assertNotIn(182, allowed)  # Protect ya no pertenece a Prisma
         self.assertIn(392, allowed)   # Aqua Ring
         self.assertIn(275, allowed)   # Ingrain
         self.assertNotIn(339, allowed)  # Bulk Up: Defensa física
@@ -141,7 +145,7 @@ class Alpha42RoleReworkTests(unittest.TestCase):
             [entry["pool_key"] for entry in self.roles["Prisma"]],
             [
                 "prisma_subir_defensa_especial",
-                "tanque_proteccion",
+                "prisma_problemas_estado",
                 "defensa_ataque_fisico",
                 "defensa_ataque_especial",
             ],
@@ -163,6 +167,41 @@ class Alpha42RoleReworkTests(unittest.TestCase):
                 "support_hazards",
                 "support_ataque_estado",
             ],
+        )
+
+    def test_prism_status_draft_respects_the_loaded_games_move_catalog(self) -> None:
+        engine = DraftEngine(
+            DATA / "moves.json",
+            DATA / "roles.json",
+            DATA / "move_catalog.json",
+        )
+        # Tóxico existe en X/Y; Hilo Tóxico (672) pertenece a Gen 7.
+        engine.set_allowed_moves({92})
+
+        pool = engine._compatible_pool("prisma_problemas_estado")
+
+        self.assertIn(92, pool)
+        self.assertNotIn(672, pool)
+
+    def test_libero_draft_places_three_unique_auxiliaries_before_both_damage_categories(self) -> None:
+        engine = DraftEngine(
+            DATA / "moves.json",
+            DATA / "roles.json",
+            DATA / "move_catalog.json",
+            rng=random.Random(42),
+        )
+
+        results = engine.generate_role("Líbero")
+        pool_keys = [entry["pool_key"] for entry in results]
+
+        self.assertEqual(len(results), 5)
+        self.assertEqual(pool_keys[-2:], ["extra_ataque_fisico", "extra_ataque_especial"])
+        self.assertEqual(len(set(pool_keys)), 5)
+        self.assertTrue(
+            set(pool_keys[:3]).isdisjoint({
+                "extra_ataque_fisico", "extra_ataque_especial",
+                "defensa_ataque_fisico", "defensa_ataque_especial",
+            })
         )
 
 

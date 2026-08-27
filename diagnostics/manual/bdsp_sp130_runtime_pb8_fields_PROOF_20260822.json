@@ -1,0 +1,68 @@
+{
+  "captured_at_local": "2026-08-22",
+  "environment": {
+    "game": "Pokemon Shining Pearl",
+    "title_id": "010018E011D92000",
+    "revision": "1.3.0",
+    "emulator": "Ryujinx 1.3.3",
+    "memory_manager_mode": "HostMappedUnsafe",
+    "gdb_stub_enabled": false,
+    "access": "read-only",
+    "writes": 0
+  },
+  "format_evidence": {
+    "pkhex_package": "PKHeX.Core 26.7.7",
+    "pkhex_tag": "26.07.07",
+    "pkhex_commit": "fcfb50269a5a8354904b8b72104966714e726270",
+    "source_files": [
+      "PKHeX.Core/PKM/Shared/G8PKM.cs",
+      "PKHeX.Core/PKM/PB8.cs",
+      "PKHeX.Core/PKM/Strings/StringConverter8.cs"
+    ],
+    "demonstrated_fields": [
+      "species",
+      "held item",
+      "TID/SID",
+      "ability",
+      "two-bit marking value",
+      "PID",
+      "form",
+      "UTF-16LE nickname",
+      "four move IDs",
+      "current PP",
+      "PP Ups",
+      "egg flag",
+      "current HP",
+      "level",
+      "maximum HP"
+    ]
+  },
+  "physical_comparison": {
+    "runtime_members": 6,
+    "save_members": 6,
+    "matched_by_species_pid_tid_sid": 6,
+    "matched_form": 6,
+    "matched_nickname": 6,
+    "matched_held_item": 6,
+    "matched_ability": 6,
+    "matched_move_ids": 6,
+    "matched_egg_flag": 6,
+    "matched_marking_value": 6,
+    "runtime_pp_and_pp_ups_structurally_valid": 6,
+    "runtime_hp_pairs_current_max": [
+      [58, 67],
+      [58, 58],
+      [66, 66],
+      [58, 58],
+      [70, 70],
+      [59, 59]
+    ]
+  },
+  "demonstrated_conclusion": "The six runtime PB8 records use the exact G8PKM/PB8 field layout shipped by the same PKHeX.Core package version used by RoleRun.SaveEngine. All non-HP fields exposed by the save engine matched the live records for all six identities.",
+  "not_yet_demonstrated": [
+    "A live move or PP transition during battle.",
+    "A live held-item, form, nickname or marking transition.",
+    "A party reorder or member-count transition.",
+    "Any write operation."
+  ]
+}

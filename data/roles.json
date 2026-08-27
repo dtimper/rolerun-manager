@@ -51,8 +51,8 @@
       "pool_key": "prisma_subir_defensa_especial"
     },
     {
-      "title": "Protección",
-      "pool_key": "tanque_proteccion"
+      "title": "Problemas de Estado",
+      "pool_key": "prisma_problemas_estado"
     },
     {
       "title": "Ataque Físico",

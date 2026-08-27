@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import struct
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from app.azahar_rpc import AzaharProcess
-from app.oras_live import encrypt_pk6
+from app.oras_live import decrypt_pk6, encrypt_pk6
+from app.oras_tm_service import ORASPersonalStats
 from app.realtime.sm_adapter import SMRealTimeAdapter
-from app.models import PendingInventoryChange, PendingRoleChange
+from app.models import PendingInventoryChange, PendingPartyHeal, PendingRoleChange
 from app.save_engine_client import SaveGameData, SavePokemon
 from app.win_process_memory import HostPartyTarget, WindowsProcessMemory
 from app.sm_live import (
@@ -20,6 +22,7 @@ from app.sm_live import (
     SM_PARTY_STATS_OFFSET,
     SM_PARTY_STATS_SIZE,
     SM_PARTY_STRIDE,
+    SM_ITEMS_LIVEHEX_REFERENCE,
     SM_TITLE_IDS,
     SM_SAVE_ITEM_BLOCK_SIZE,
     SMLiveError,
@@ -27,9 +30,174 @@ from app.sm_live import (
     SMLiveWriter,
     parse_pk7_party,
 )
+from app.ui import RoleRunManager
 
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
+
+
+def test_sm_role_ev_writer_recalculates_party_stats_and_preserves_missing_hp() -> None:
+    personal = ORASPersonalStats((35, 55, 40, 90, 50, 50), 0)
+    writer = SMLiveWriter(object(), personal_for=lambda _species, _form: personal)
+    stored = bytearray(PK7_STORED_SIZE)
+    struct.pack_into("<I", stored, 0, 0x12345678)
+    struct.pack_into("<H", stored, 8, 25)
+    stored[0x1C] = 3
+    struct.pack_into("<I", stored, 0x74, sum(20 << (5 * index) for index in range(6)))
+    writer._refresh_checksum(stored)
+    plain = bytearray(bytes(stored) + writer._party_extension(stored, personal))
+    plain[0xEC] = 50
+    old_stats = writer._calculate_party_stats(
+        personal.base_stats, (20, 20, 20, 20, 20, 20),
+        (0, 0, 0, 0, 0, 0), 50, 3,
+    )
+    struct.pack_into("<H", plain, 0xF0, old_stats[0] - 3)
+    struct.pack_into("<6H", plain, 0xF2, *old_stats)
+    before = parse_pk7_party(bytes(plain), 1, {})
+    assert before is not None
+
+    writer._set_party_evs_and_stats(
+        plain, pokemon=before, expected=(0, 0, 0, 0, 0, 0),
+        desired=(252, 252, 0, 0, 0, 0),
+    )
+    after = parse_pk7_party(bytes(plain), 1, {})
+    assert after is not None
+    assert after.evs == {
+        "hp": 252, "attack": 252, "defense": 0,
+        "sp_attack": 0, "sp_defense": 0, "speed": 0,
+    }
+    assert after.max_hp > before.max_hp
+    assert after.stats["attack"] > before.stats["attack"]
+    assert after.current_hp == after.max_hp - 3
+
+
+def test_sm_role_assignment_projects_role_evs_through_the_ui_contract() -> None:
+    pokemon = _saved_mon(1, 25, 0xA1360001, 100, 200, role="Mago")
+    pokemon.evs = {
+        "hp": 1, "attack": 2, "defense": 3,
+        "sp_attack": 4, "sp_defense": 5, "speed": 6,
+    }
+
+    class ProjectService:
+        @staticmethod
+        def pokemon_identity_key(species_id, pid, tid, sid, name):
+            return f"{species_id}:{pid}:{tid}:{sid}:{name}"
+
+        @staticmethod
+        def pokemon_key(slot, species_id, nickname):
+            return f"{slot}:{species_id}:{nickname}"
+
+        @staticmethod
+        def save(_project):
+            return None
+
+    manager = SimpleNamespace(
+        project=SimpleNamespace(role_overrides={}),
+        project_service=ProjectService(),
+        run=SimpleNamespace(pending_changes=[]),
+        current_game=SimpleNamespace(party=[pokemon]),
+    )
+    manager._pokemon_identity = lambda mon: RoleRunManager._pokemon_identity(manager, mon)
+    manager._effective_role = lambda _mon: ("Mago", "■")
+    manager._active_azahar_realtime_key = lambda: "sm"
+    manager._bdsp_role_evs = RoleRunManager._bdsp_role_evs
+
+    result = RoleRunManager._apply_role_assignment(
+        manager, pokemon, "Asesino", refresh=False,
+    )
+
+    assert result == "Asesino"
+    assert len(manager.run.pending_changes) == 1
+    change = manager.run.pending_changes[0]
+    assert isinstance(change, PendingRoleChange)
+    assert change.old_evs == (1, 2, 3, 4, 5, 6)
+    assert change.new_evs == (0, 252, 0, 0, 0, 252)
+
+
+def test_sm_party_heal_projects_hp_status_and_pp_without_touching_identity_or_training() -> None:
+    raw = _encrypted_pk7(
+        species=25, pid=0xAABBCCDD, tid=100, sid=200,
+        moves=(33, 45, 0, 0), hp=(7, 60),
+    )
+    plain = bytearray(decrypt_pk6(raw))
+    struct.pack_into("<I", plain, 0xE8, 4)
+    plain[0x62:0x66] = bytes((1, 2, 0, 0))
+    plain[0x66:0x6A] = bytes((3, 1, 0, 0))
+    struct.pack_into("<H", plain, 0x06, _checksum(plain))
+    damaged = encrypt_pk6(bytes(plain))
+    writer = SMLiveWriter(
+        object(), move_pp_for=lambda move_id: {33: 35, 45: 40}.get(move_id, 0),
+    )
+
+    stored, stats = writer._healed_party_bytes(damaged)
+    healed = decrypt_pk6(stored + stats + (b"\0" * (PK7_PARTY_SIZE - len(stored) - len(stats))))
+
+    assert struct.unpack_from("<I", healed, 0xE8)[0] == 0
+    assert struct.unpack_from("<H", healed, 0xF0)[0] == 60
+    assert tuple(healed[0x62:0x66]) == (56, 48, 0, 0)
+    assert tuple(healed[0x66:0x6A]) == (3, 1, 0, 0)
+    assert healed[0x08:0x1C] == plain[0x08:0x1C]
+    assert healed[0x1E:0x22] == plain[0x1E:0x22]
+
+
+def test_sm_party_heal_crosses_ui_dispatch_and_floating_action_gates() -> None:
+    change = PendingPartyHeal(
+        pokemon_slot=1, pokemon="Pikachu", species="Pikachu",
+        pokemon_identity="25:1:2:3",
+    )
+    scheduled: list[bool] = []
+    manager = type("Manager", (), {})()
+    manager.run = type("Run", (), {"pending_changes": [change]})()
+    manager._oras_live_auto_apply_available = lambda: True
+    manager._active_azahar_realtime_key = lambda: "sm"
+    manager._oras_live_auto_apply_ids = set()
+    manager._schedule_oras_live_auto_apply = lambda: scheduled.append(True)
+
+    RoleRunManager._request_oras_live_auto_apply(manager, [change])
+
+    assert manager._oras_live_auto_apply_ids == {id(change)}
+    assert scheduled == [True]
+    assert RoleRunManager._floating_live_actions_available(manager) is True
+
+
+def test_sm_party_heal_builds_pc_proof_when_first_write_finds_duplicate_party_buffers() -> None:
+    """Curar no puede depender de haber usado antes PC, roles o MT."""
+    process = AzaharProcess(134, next(iter(SM_TITLE_IDS)), "niji_loc")
+    raw = _encrypted_pk7(species=25, pid=0xA1340001, tid=100, sid=200)
+    targets = [
+        HostPartyTarget(900, "azahar.exe", 0x10000000),
+        HostPartyTarget(900, "azahar.exe", 0x20000000),
+    ]
+
+    class DuplicateHost:
+        def find_party_targets(self, **_kwargs):
+            return targets
+
+    writer = SMLiveWriter(object(), move_pp_for=lambda _move_id: 35)
+    calls: list[str] = []
+    proven = HostPartyTarget(900, "azahar.exe", 0x20000000)
+
+    def establish(**kwargs):
+        assert kwargs["original_capture"] == [raw]
+        calls.append("establish-full-pc-proof")
+
+    def validate(**kwargs):
+        assert calls == ["establish-full-pc-proof"]
+        assert kwargs["original_capture"] == [raw]
+        calls.append("revalidate-party-target")
+        return proven
+
+    writer._ensure_pc_live_cache_for_team_write = establish
+    writer._validated_pc_party_target = validate
+
+    result = writer._party_target_for_self_contained_write(
+        client=object(), process=process, party_base=SM_PARTY_REFERENCE_ADDRESS,
+        original_capture=[raw], current=_game(_saved_mon(1, 25, 0xA1340001, 100, 200)),
+        host_memory=DuplicateHost(),
+    )
+
+    assert result == proven
+    assert calls == ["establish-full-pc-proof", "revalidate-party-target"]
 
 
 def _checksum(data: bytes) -> int:
@@ -213,6 +381,29 @@ def test_pk7_parser_reads_identity_moves_level_and_hp():
     assert mon.level == 31
     assert (mon.current_hp, mon.max_hp) == (44, 79)
     assert mon.role == "SIN ROL"
+
+
+def test_sm_party_parser_publishes_training_and_calculated_stats_in_ui_order():
+    raw = bytearray(_encrypted_pk7(species=25, pid=0xAABBCCDD, tid=1234, sid=5678, level=31, hp=(44, 79)))
+    # La utilidad del fixture devuelve un PK7 cifrado. Desciframos, fijamos una
+    # muestra determinista de los campos ya documentados y volvemos a cifrarla.
+    from app.oras_live import decrypt_pk6
+    plain = bytearray(decrypt_pk6(bytes(raw)))
+    plain[0x1C] = 3
+    plain[0x1E:0x24] = bytes((1, 2, 3, 4, 5, 6))
+    iv32 = sum(value << (index * 5) for index, value in enumerate((7, 8, 9, 10, 11, 12)))
+    struct.pack_into("<I", plain, 0x74, iv32)
+    struct.pack_into("<6H", plain, 0xF2, 79, 30, 31, 32, 33, 34)
+    struct.pack_into("<H", plain, 0x06, _checksum(plain))
+    raw = encrypt_pk6(bytes(plain))
+
+    mon = parse_pk7_party(raw, 1, {})
+
+    assert mon is not None
+    assert mon.nature_id == 3 and mon.nature
+    assert mon.stats == {"hp": 79, "attack": 30, "defense": 31, "sp_attack": 33, "sp_defense": 34, "speed": 32}
+    assert mon.ivs == {"hp": 7, "attack": 8, "defense": 9, "sp_attack": 11, "sp_defense": 12, "speed": 10}
+    assert mon.evs == {"hp": 1, "attack": 2, "defense": 3, "sp_attack": 5, "sp_defense": 6, "speed": 4}
 
 
 def test_reader_accepts_reference_only_after_full_main_witness_match():
@@ -730,6 +921,22 @@ def test_sm_gen7_pp_table_is_loaded_and_covers_pkhex_table() -> None:
     assert len(table) == 728
 
 
+def test_gen7_move_metadata_uses_sun_moon_values_and_spanish_descriptions() -> None:
+    from app.sm_live import load_gen7_move_metadata
+
+    table = load_gen7_move_metadata(DATA_DIR / "gen7_move_metadata.json")
+    # Placaje cambió a potencia 40 precisamente en Sol/Luna; esta aserción
+    # protege frente a mostrar por error el valor histórico de Gen 6.
+    assert table[33]["power"] == 40
+    assert table[33]["accuracy"] == 100
+    assert table[33]["pp"] == 35
+    assert table[33]["description_es"] == "Embiste con todo el cuerpo."
+    # Demolición es una de las MT observadas físicamente en la ROM SM activa.
+    assert table[280]["power"] == 75
+    assert table[280]["accuracy"] == 100
+    assert "Pantalla de Luz" in str(table[280]["description_es"])
+
+
 class IgnoringWriteRPC(AzaharAliasRPC):
     """RPC que expone el alias correcto pero confirma sin mutar RAM."""
 
@@ -888,6 +1095,67 @@ def test_alpha14_inventory_rare_candy_uses_pkhex_block_witness_and_host_fcram() 
     live_word = struct.unpack_from("<I", fake.memory, bag_guest - start + record_offset)[0]
     assert (live_word & 0x3FF) == 50
     assert ((live_word >> 10) & 0x3FF) == 999
+
+
+def test_alpha64_inventory_reports_unconfirmed_immediate_rollback() -> None:
+    """No afirmar que el campo volvió al original si el readback lo desmiente."""
+    saved = _saved_mon(1, 25, 0xABC16414, 100, 200, role="SIN ROL")
+    start, party_memory = _memory_for_party(
+        SM_PARTY_REFERENCE_ADDRESS,
+        {1: _encrypted_pk7(species=25, pid=saved.pid, tid=saved.tid, sid=saved.sid)},
+    )
+    bag = bytearray(SM_SAVE_ITEM_BLOCK_SIZE)
+    record_offset = 0xB48
+    original_word = 50 | (1 << 10)
+    desired_word = 50 | (999 << 10)
+    struct.pack_into("<I", bag, record_offset, original_word)
+    desired = bytearray(bag)
+    struct.pack_into("<I", desired, record_offset, desired_word)
+
+    bag_guest = SM_PARTY_REFERENCE_ADDRESS + 0x3000
+    end = max(start + len(party_memory), bag_guest + len(bag))
+    memory = bytearray(end - start)
+    memory[:len(party_memory)] = party_memory
+    memory[bag_guest - start:bag_guest - start + len(bag)] = bag
+
+    class WrongAliasRPC(AzaharAliasRPC):
+        def read_memory(self, address: int, size: int) -> bytes:
+            if 0x14000000 <= int(address) < 0x1C000000:
+                self.read_calls.append((int(address), int(size)))
+                return b"\xA5" * int(size)
+            return super().read_memory(address, size)
+
+    class CorruptThenIgnoreRollbackHost(FakeWindowsHostMemory):
+        def __init__(self, fake: FakeRPC) -> None:
+            super().__init__(fake)
+            self.write_count = 0
+
+        def write(self, handle, address: int, data: bytes) -> None:
+            self.write_count += 1
+            if self.write_count == 1:
+                corrupted = bytearray(data)
+                corrupted[0] ^= 0x01
+                super().write(handle, address, bytes(corrupted))
+            # El segundo write es el rollback y Azahar lo ignora.
+
+    fake = WrongAliasRPC(
+        start, memory, AzaharProcess(171, 0x0004000000164800, "niji_loc"), allow_writes=True,
+    )
+    adapter = SMRealTimeAdapter(_reader(fake))
+    host = CorruptThenIgnoreRollbackHost(fake)
+    adapter.writer.host_memory_factory = lambda: host
+    snapshot = adapter.capture_full(_game(saved), save_path=None)
+    change = PendingInventoryChange(
+        "rare-candy", "Caramelo Raro", 999,
+        save_inventory_witness=bytes(bag), desired_inventory_witness=bytes(desired),
+    )
+
+    with pytest.raises(SMLiveError, match="no se pudo confirmar.*rollback"):
+        adapter.apply_changes(snapshot.game, [change])
+
+    live_word = struct.unpack_from("<I", fake.memory, bag_guest - start + record_offset)[0]
+    assert live_word not in {original_word, desired_word}
+    assert host.write_count == 2
 
 
 def test_alpha14_inventory_aborts_if_saved_block_is_not_proven_in_live_fcram() -> None:
@@ -1157,6 +1425,35 @@ def test_alpha16_reads_tm_inventory_from_proven_live_bag(tmp_path: Path) -> None
     inventory, _process, _attempt = adapter.read_tm_inventory({}, save_path=main)
     assert inventory[328] == 1
     assert snapshot.game.party[0].move_ids[0] == 33
+
+
+def test_sm_tm_inventory_accepts_pkmn_ntr_items_reference_only_with_host_guest_proof(tmp_path: Path) -> None:
+    """Regresión: Items live no conserva el desplazamiento de BoxPokemon del save."""
+    saved = _saved_mon(1, 25, 0xABC14001, 100, 200, role="SIN ROL")
+    party_start, party_memory = _memory_for_party(
+        SM_PARTY_REFERENCE_ADDRESS,
+        {1: _encrypted_pk7(species=25, pid=saved.pid, tid=saved.tid, sid=saved.sid)},
+    )
+    bag = _alpha16_live_bag_block(tm_item_id=328, tm_count=3)
+    start = min(SM_ITEMS_LIVEHEX_REFERENCE, party_start)
+    end = max(SM_ITEMS_LIVEHEX_REFERENCE + len(bag), party_start + len(party_memory))
+    memory = bytearray(end - start)
+    memory[party_start - start:party_start - start + len(party_memory)] = party_memory
+    memory[SM_ITEMS_LIVEHEX_REFERENCE - start:SM_ITEMS_LIVEHEX_REFERENCE - start + len(bag)] = bag
+    fake = AzaharAliasRPC(start, memory, AzaharProcess(140, 0x0004000000164800, "niji_loc"), allow_writes=True)
+    adapter = SMRealTimeAdapter(_reader(fake), move_pp_for=lambda _mid: 35, move_allowed=lambda _mid: True)
+    adapter.writer.host_memory_factory = lambda: FakeWindowsHostMemory(fake)
+    adapter.capture_full(_game(saved), save_path=None)
+    main = tmp_path / "main"
+    # El main puede estar desfasado; la prueba positiva procede de RAM host+guest.
+    main.write_bytes(bytes(SM_SAVE_ITEM_BLOCK_SIZE))
+
+    inventory, _process, _attempt = adapter.read_tm_inventory({}, save_path=main)
+
+    assert inventory[328] == 3
+    cached = adapter.writer._utility_block_cache["items"]
+    assert cached[2] == SM_ITEMS_LIVEHEX_REFERENCE
+    assert cached[3] == bag
 
 
 def test_alpha17_tm_inventory_uses_end_to_end_proof_when_party_host_is_duplicated(tmp_path: Path) -> None:
@@ -1519,6 +1816,94 @@ def test_alpha27_initial_calibration_accepts_single_replacement_with_five_strong
 
     assert [mon.pid for mon in snapshot.game.party] == [mon.pid for mon in live]
     assert reader.runtime_state()["last_resolution"]["continuity_proof"] == "single-replacement-known-members"
+
+
+def test_sm_restart_accepts_reordered_single_replacement_only_when_run_managed_incoming_identity():
+    saved = [
+        _saved_mon(i, 50 + i, 0x21000000 + i, 310 + i, 410 + i)
+        for i in range(1, 7)
+    ]
+    incoming = _saved_mon(1, 731, 0x99880077, 777, 888)
+    live = [incoming, saved[3], saved[0], saved[5], saved[1], saved[2]]
+    records = {
+        index: _encrypted_pk7(
+            species=mon.species_id, pid=mon.pid, tid=mon.tid, sid=mon.sid,
+        )
+        for index, mon in enumerate(live, start=1)
+    }
+    start, memory = _memory_for_party(SM_PARTY_REFERENCE_ADDRESS, records)
+    fake = FakeRPC(start, memory, AzaharProcess(138, next(iter(SM_TITLE_IDS)), "niji_loc"))
+    reader = _reader(fake)
+
+    with pytest.raises(SMLiveError, match="vincularse por identidades fuertes"):
+        reader.read(_game(*saved))
+
+    reader.set_resume_identity_witnesses((
+        f"{incoming.species_id}:{incoming.pid}:{incoming.tid}:{incoming.sid}",
+    ))
+    snapshot = reader.read(_game(*saved))
+
+    assert [mon.pid for mon in snapshot.game.party] == [mon.pid for mon in live]
+    assert reader.runtime_state()["last_resolution"]["continuity_proof"] == (
+        "single-managed-replacement-and-reorder"
+    )
+
+
+def test_sm_restart_rejects_reordered_replacement_when_persisted_identity_is_different():
+    saved = [
+        _saved_mon(i, 60 + i, 0x22000000 + i, 320 + i, 420 + i)
+        for i in range(1, 7)
+    ]
+    incoming = _saved_mon(1, 731, 0x88770066, 778, 889)
+    live = [saved[4], incoming, saved[0], saved[5], saved[1], saved[2]]
+    records = {
+        index: _encrypted_pk7(
+            species=mon.species_id, pid=mon.pid, tid=mon.tid, sid=mon.sid,
+        )
+        for index, mon in enumerate(live, start=1)
+    }
+    start, memory = _memory_for_party(SM_PARTY_REFERENCE_ADDRESS, records)
+    fake = FakeRPC(start, memory, AzaharProcess(139, next(iter(SM_TITLE_IDS)), "niji_loc"))
+    reader = _reader(fake)
+    reader.set_resume_identity_witnesses(("731:1:2:3",))
+
+    with pytest.raises(SMLiveError, match="vincularse por identidades fuertes"):
+        reader.read(_game(*saved))
+
+
+def test_sm_restart_accepts_two_managed_replacements_after_consecutive_faints():
+    saved = [
+        _saved_mon(i, 70 + i, 0x23000000 + i, 330 + i, 430 + i)
+        for i in range(1, 7)
+    ]
+    incoming_a = _saved_mon(1, 731, 0x77880055, 779, 890)
+    incoming_b = _saved_mon(4, 165, 0x66990044, 779, 890)
+    # Dos bajas consecutivas sustituyen miembros distintos y el juego puede
+    # reordenar el equipo. Cuatro identidades exactas conocidas sobreviven.
+    live = [saved[4], incoming_a, saved[2], incoming_b, saved[5], saved[1]]
+    records = {
+        index: _encrypted_pk7(
+            species=mon.species_id, pid=mon.pid, tid=mon.tid, sid=mon.sid,
+        )
+        for index, mon in enumerate(live, start=1)
+    }
+    start, memory = _memory_for_party(SM_PARTY_REFERENCE_ADDRESS, records)
+    fake = FakeRPC(start, memory, AzaharProcess(146, next(iter(SM_TITLE_IDS)), "niji_loc"))
+    reader = _reader(fake)
+
+    with pytest.raises(SMLiveError, match="vincularse por identidades fuertes"):
+        reader.read(_game(*saved))
+
+    reader.set_resume_identity_witnesses((
+        f"{incoming_a.species_id}:{incoming_a.pid}:{incoming_a.tid}:{incoming_a.sid}",
+        f"{incoming_b.species_id}:{incoming_b.pid}:{incoming_b.tid}:{incoming_b.sid}",
+    ))
+    snapshot = reader.read(_game(*saved))
+
+    assert [mon.pid for mon in snapshot.game.party] == [mon.pid for mon in live]
+    assert reader.runtime_state()["last_resolution"]["continuity_proof"] == (
+        "multiple-managed-replacements"
+    )
 
 
 def test_alpha27_initial_calibration_rejects_unrelated_structurally_valid_party():

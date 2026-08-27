@@ -12,6 +12,7 @@ from .azahar_rpc import AzaharProcess, AzaharRPCClient, AzaharRPCError
 from .models import (
     PendingChange,
     PendingInventoryChange,
+    PendingPartyHeal,
     PendingPCRoleChange,
     PendingRoleChange,
     PendingTeamChange,
@@ -19,6 +20,7 @@ from .models import (
 )
 from .oras_tm_service import ORASPersonalStats, oras_tm_item_id
 from .boxed_metadata import ability_name, boxed_level, item_name
+from .pokemon_stats import nature_presentation, stat_dict
 from .save_engine_client import SaveGameData, SavePokemon
 from .realtime_memory import LiveBlockResolver, MemoryCandidateHint
 
@@ -692,6 +694,16 @@ def parse_pk6_party(raw: bytes, slot: int, move_names: dict[int, str]) -> SavePo
     move_ids = [struct.unpack_from("<H", data, offset)[0] for offset in (0x5A, 0x5C, 0x5E, 0x60)]
     moves = ["—" if move_id == 0 else move_names.get(move_id, f"Movimiento #{move_id}") for move_id in move_ids]
     iv32 = struct.unpack_from("<I", data, 0x74)[0]
+    nature_id = int(data[0x1C])
+    nature = nature_presentation(nature_id)
+    ev_binary = tuple(int(value) for value in data[0x1E:0x24])
+    iv_binary = tuple(int((iv32 >> (index * 5)) & 0x1F) for index in range(6))
+    # PK6 PartyData almacena tras PS actuales: PS máximos, Atq., Def., Vel.,
+    # At. Esp. y Def. Esp. RoleRun presenta Velocidad al final. Estos 0x16
+    # bytes ya se capturaban y validaban cifrados junto al PK6; hasta ahora el
+    # parser solo publicaba los dos primeros ushort y descartaba el resto.
+    stat_binary = tuple(struct.unpack_from("<H", data, 0xF2 + index * 2)[0] for index in range(6))
+    canonical_order = (0, 1, 2, 4, 5, 3)
 
     return SavePokemon(
         slot=slot,
@@ -713,6 +725,16 @@ def parse_pk6_party(raw: bytes, slot: int, move_names: dict[int, str]) -> SavePo
         form=form,
         current_hp=struct.unpack_from("<H", data, 0xF0)[0],
         max_hp=struct.unpack_from("<H", data, 0xF2)[0],
+        status_condition=struct.unpack_from("<I", data, 0xE8)[0],
+        nature_id=nature_id,
+        stat_nature_id=nature_id,
+        nature=nature.name if nature is not None else "",
+        stat_nature=nature.name if nature is not None else "",
+        nature_increased=nature.increased if nature is not None else None,
+        nature_decreased=nature.decreased if nature is not None else None,
+        stats=stat_dict(tuple(stat_binary[index] for index in canonical_order)),
+        ivs=stat_dict(tuple(iv_binary[index] for index in canonical_order)),
+        evs=stat_dict(tuple(ev_binary[index] for index in canonical_order)),
     )
 
 
@@ -772,7 +794,14 @@ def parse_pk6_boxed(
         "—" if move_id == 0 else move_names.get(move_id, f"Movimiento #{move_id}")
         for move_id in move_ids
     ]
+    nature_id = int(data[0x1C])
+    nature = nature_presentation(nature_id)
+    ev_binary = tuple(int(data[0x1E + index]) for index in range(6))
     iv32 = struct.unpack_from("<I", data, 0x74)[0]
+    iv_binary = tuple((iv32 >> (5 * index)) & 31 for index in range(6))
+    # PK6 almacena PS, Atq., Def., Vel., At. Esp. y Def. Esp.; SavePokemon y
+    # la UI mantienen Velocidad al final.
+    canonical_order = (0, 1, 2, 4, 5, 3)
 
     return SavePokemon(
         slot=box_slot,
@@ -794,7 +823,57 @@ def parse_pk6_boxed(
         tid=tid,
         sid=sid,
         form=form,
+        nature_id=nature_id,
+        stat_nature_id=nature_id,
+        nature=nature.name if nature is not None else "",
+        stat_nature=nature.name if nature is not None else "",
+        nature_increased=nature.increased if nature is not None else None,
+        nature_decreased=nature.decreased if nature is not None else None,
+        ivs=stat_dict(tuple(iv_binary[index] for index in canonical_order)),
+        evs=stat_dict(tuple(ev_binary[index] for index in canonical_order)),
     )
+
+
+def calculate_pk6_stats(
+    *,
+    level: int,
+    nature_id: int,
+    personal: ORASPersonalStats,
+    ivs: Mapping[str, int],
+    evs: Mapping[str, int],
+) -> dict[str, int]:
+    """Calcula las stats visibles de un stored PK6 con Personal demostrado.
+
+    El PK6 de caja no contiene la extensión de combate. La fórmula y el orden
+    son los mismos que usa ``ORASLiveWriter._party_extension`` al construir el
+    bloque party; la tabla Personal procede siempre de la ROM activa.
+    """
+    level = int(level)
+    nature_id = int(nature_id)
+    if not 1 <= level <= 100 or not 0 <= nature_id <= 24:
+        raise ORASLiveError("Nivel o naturaleza PK6 fuera de rango.")
+    canonical = ("hp", "attack", "defense", "sp_attack", "sp_defense", "speed")
+    if any(key not in ivs or key not in evs for key in canonical):
+        raise ORASLiveError("El PK6 no contiene IV/EV completos para calcular stats.")
+    # Orden Personal nativo: PS, Atq., Def., Vel., At. Esp., Def. Esp.
+    native_keys = ("hp", "attack", "defense", "speed", "sp_attack", "sp_defense")
+    base = tuple(int(value) for value in personal.base_stats)
+    native_ivs = tuple(int(ivs[key]) for key in native_keys)
+    native_evs = tuple(int(evs[key]) for key in native_keys)
+    values = [0] * 6
+    values[0] = ((2 * base[0] + native_ivs[0] + native_evs[0] // 4) * level) // 100 + level + 10
+    raised = nature_id // 5
+    lowered = nature_id % 5
+    for index in range(1, 6):
+        value = ((2 * base[index] + native_ivs[index] + native_evs[index] // 4) * level) // 100 + 5
+        nature_index = index - 1
+        if raised != lowered:
+            if nature_index == raised:
+                value = value * 110 // 100
+            elif nature_index == lowered:
+                value = value * 90 // 100
+        values[index] = value
+    return stat_dict(tuple(values[index] for index in (0, 1, 2, 4, 5, 3)))
 
 
 def parse_oras_item_pocket(raw: bytes, *, label: str) -> dict[int, int]:
@@ -819,6 +898,49 @@ def parse_oras_item_pocket(raw: bytes, *, label: str) -> dict[int, int]:
                 f"El bolsillo {label} contiene el objeto #{item_id} dos veces; no se escribió nada."
             )
         result[item_id] = quantity
+    return result
+
+
+def load_oras_move_metadata(path: Path) -> dict[int, dict[str, object]]:
+    """Carga metadata fijada al version-group de Omega Ruby/Alpha Sapphire.
+
+    El version-group forma parte del contrato para impedir que una tabla de
+    X/Y o de una generación posterior publique valores que solo coincidan por
+    compartir el ID interno del movimiento.
+    """
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    if (
+        int(raw.get("generation", 0) or 0) != 6
+        or str(raw.get("target_version_group", "") or "")
+        != "omega-ruby-alpha-sapphire"
+    ):
+        return {}
+    result: dict[int, dict[str, object]] = {}
+    for move_raw, entry in dict(raw.get("moves", {})).items():
+        try:
+            move_id = int(move_raw)
+        except (TypeError, ValueError):
+            continue
+        if move_id <= 0 or not isinstance(entry, dict):
+            continue
+        values: dict[str, object] = {}
+        for field in ("power", "accuracy", "pp"):
+            value = entry.get(field)
+            if value is None:
+                values[field] = None
+                continue
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError):
+                parsed = 0
+            values[field] = parsed if parsed > 0 else None
+        values["description_es"] = str(
+            entry.get("description_es", "") or ""
+        ).strip()
+        result[move_id] = values
     return result
 
 
@@ -1486,6 +1608,7 @@ class _ORASLiveWriterExtendedMixin:
         *,
         pc_base: int = ORAS_PC_ADDRESS,
         inventory_delta: int = 0,
+        misc_base: int = ORAS_MONEY_ADDRESS - ORAS_MISC_MONEY_OFFSET,
         inventory_witness_labels: Sequence[str] = (),
     ) -> tuple[tuple[str, int, int], ...]:
         requests: dict[str, tuple[int, int]] = {}
@@ -1518,7 +1641,10 @@ class _ORASLiveWriterExtendedMixin:
                     )
             elif isinstance(change, PendingInventoryChange):
                 if change.item_key == "money-max":
-                    add("money", ORAS_MONEY_ADDRESS + int(inventory_delta), 4)
+                    # El dinero vive en Misc, no en el bloque desplazable de
+                    # bolsillos. Capturamos el bloque completo para demostrar
+                    # su identidad justo antes de escribir el campo.
+                    add("misc", int(misc_base), ORAS_SAVE_MISC_SIZE)
                 else:
                     target = ORAS_INVENTORY_TARGETS.get(change.item_key)
                     if target is None:
@@ -1589,12 +1715,28 @@ class _ORASLiveWriterExtendedMixin:
                 "No se escribió ningún byte; pulsa F5 y repite las sustituciones de una en una."
             )
         inventory_changes = [change for change in supported if isinstance(change, PendingInventoryChange)]
+        money_changes = [change for change in inventory_changes if change.item_key == "money-max"]
         tm_changes = [change for change in supported if isinstance(change, PendingTMTeach)]
         # ORAS tiene MT reutilizables. Enseñar una MT solo modifica el PK6 del
         # equipo: no escribe ni necesita localizar la mochila. La disponibilidad
         # se usa para construir el selector, pero la escritura viva no debe
         # depender de que el ``main`` coincida byte a byte con la bolsa actual.
-        inventory_sources = list(inventory_changes)
+        inventory_sources = [change for change in inventory_changes if change.item_key != "money-max"]
+
+        saved_misc = b""
+        if money_changes:
+            misc_witnesses = {bytes(change.save_misc_witness) for change in money_changes}
+            if len(misc_witnesses) != 1:
+                raise ORASLiveError(
+                    "La cola de dinero ORAS no contiene una única huella Misc demostrada. "
+                    "No se escribió ningún byte."
+                )
+            saved_misc = misc_witnesses.pop()
+            if len(saved_misc) != ORAS_SAVE_MISC_SIZE:
+                raise ORASLiveError(
+                    "La huella Misc de ORAS está ausente o incompleta. "
+                    "No se escribió ningún byte."
+                )
 
         try:
             with self.reader.client_factory() as client:
@@ -1613,10 +1755,20 @@ class _ORASLiveWriterExtendedMixin:
                     self._locate_inventory_delta(client, process, inventory_witnesses)
                     if inventory_sources else 0
                 )
+                misc_base = (
+                    self._locate_misc_base(client, process, saved_misc)
+                    if money_changes else ORAS_MONEY_ADDRESS - ORAS_MISC_MONEY_OFFSET
+                )
+                if money_changes and misc_base is None:
+                    raise ORASLiveError(
+                        "No se pudo localizar y validar el bloque Misc vivo de ORAS. "
+                        "No se escribió ningún byte."
+                    )
                 requests = self._extended_requests(
                     supported,
                     pc_base=pc_base,
                     inventory_delta=inventory_delta,
+                    misc_base=int(misc_base),
                     inventory_witness_labels=tuple(inventory_witnesses),
                 )
                 original_capture, original_extra, capture_attempt = self._capture_stable_state(client, requests)
@@ -1625,6 +1777,11 @@ class _ORASLiveWriterExtendedMixin:
                     raise ORASLiveError("La captura estable de ORAS no contiene ningún Pokémon en el equipo.")
                 if inventory_witnesses:
                     self._validate_inventory_witness_capture(original_extra, inventory_witnesses)
+                if money_changes and not self._misc_candidate_matches(original_extra["misc"], saved_misc):
+                    raise ORASLiveError(
+                        "El bloque Misc de ORAS cambió durante la captura estable. "
+                        "No se escribió ningún byte."
+                    )
 
                 # --- Objetivos de party y MT ---------------------------------
                 party_targets = {
@@ -1725,6 +1882,17 @@ class _ORASLiveWriterExtendedMixin:
                     key = (int(change.box), int(change.box_slot))
                     incoming = bytearray(pc_plain[key])
                     self._set_role(incoming, change.incoming_role or "SIN ROL")
+                    ev_map = dict(change.incoming_snapshot.get("evs", {}) or {})
+                    if ev_map:
+                        stat_keys = ("hp", "attack", "defense", "sp_attack", "sp_defense", "speed")
+                        try:
+                            desired_evs = tuple(int(ev_map[key]) for key in stat_keys)
+                        except (KeyError, TypeError, ValueError) as exc:
+                            raise ORASLiveError(
+                                "El intercambio Equipo↔PC de ORAS no recibió los seis EV del Pokémon entrante. "
+                                "No se escribió ningún byte."
+                            ) from exc
+                        incoming[0x1E:0x24] = bytes(self._native_evs(desired_evs))
                     self._remove_move_slots(incoming, change.remove_move_slots)
                     self._refresh_checksum(incoming)
                     species_id = struct.unpack_from("<H", incoming, 8)[0]
@@ -1774,7 +1942,9 @@ class _ORASLiveWriterExtendedMixin:
                 for change in inventory_changes:
                     if change.item_key == "money-max":
                         if money_original is None:
-                            money_original = original_extra["money"]
+                            money_original = original_extra["misc"][
+                                ORAS_MISC_MONEY_OFFSET:ORAS_MISC_MONEY_OFFSET + 4
+                            ]
                             self._validate_money(money_original)
                         money_modified = struct.pack("<I", ORAS_MAX_MONEY)
                         continue
@@ -1853,7 +2023,7 @@ class _ORASLiveWriterExtendedMixin:
                             "inventory",
                         )
                 if money_original is not None and money_modified is not None:
-                    plan(ORAS_MONEY_ADDRESS + int(inventory_delta), money_original, money_modified, "money")
+                    plan(int(misc_base) + ORAS_MISC_MONEY_OFFSET, money_original, money_modified, "money")
 
                 if not planned:
                     # La captura doble ya demostró que estos bytes son estables.
@@ -1879,7 +2049,7 @@ class _ORASLiveWriterExtendedMixin:
                                 "",
                             ))
                     if money_modified is not None:
-                        watch_specs.append((ORAS_MONEY_ADDRESS + int(inventory_delta), money_modified, "money", ""))
+                        watch_specs.append((int(misc_base) + ORAS_MISC_MONEY_OFFSET, money_modified, "money", ""))
 
                     pc_addresses = {
                         self._box_slot_address(*key, base_address=pc_base): key
@@ -2610,28 +2780,35 @@ class ORASLiveWriter(_ORASLiveWriterExtendedMixin):
             return None
         return best[1], best[2]
 
-    @staticmethod
-    def _live_misc_references(client: AzaharRPCClient) -> tuple[int | None, int | None]:
-        """Lee Money/BP runtime como testigos; nunca falla la lectura de medallas."""
-        money: int | None = None
-        bp: int | None = None
+    @classmethod
+    def _live_misc_references(
+        cls,
+        client: AzaharRPCClient,
+        saved_misc: bytes,
+    ) -> tuple[int | None, int | None]:
+        """Lee Money/BP nominales solo si pertenecen a un bloque Misc válido.
+
+        Una lectura escalar dentro de rango no demuestra que la dirección
+        histórica siga apuntando al estado vivo. En particular, una región a
+        cero convertiría Money=0 y BP=0 en dos falsos testigos y desplazaría el
+        localizador hacia otra copia vacía. La huella completa de esta partida
+        debe validar primero el bloque que contiene ambos campos.
+        """
+        static_base = ORAS_MONEY_ADDRESS - ORAS_MISC_MONEY_OFFSET
         try:
-            raw = client.read_memory(ORAS_MONEY_ADDRESS, 4)
-            value = struct.unpack("<I", bytes(raw))[0]
-            if 0 <= value <= ORAS_MAX_MONEY:
-                money = int(value)
+            raw = bytes(client.read_memory(static_base, ORAS_SAVE_MISC_SIZE))
         except (AzaharRPCError, OSError, ValueError, struct.error):
-            pass
-        # PKHeX sitúa BP a +0x28 respecto a Money dentro de Misc, y los códigos
-        # runtime de ORAS 1.4 usan exactamente 0x08C71DE8 para este valor.
+            return None, None
+        if not cls._misc_candidate_matches(raw, saved_misc):
+            return None, None
         try:
-            raw = client.read_memory(ORAS_MONEY_ADDRESS + (ORAS_MISC_BP_OFFSET - ORAS_MISC_MONEY_OFFSET), 2)
-            value = struct.unpack("<H", bytes(raw))[0]
-            if 0 <= value <= 65535:
-                bp = int(value)
-        except (AzaharRPCError, OSError, ValueError, struct.error):
-            pass
-        return money, bp
+            money = struct.unpack_from("<I", raw, ORAS_MISC_MONEY_OFFSET)[0]
+            bp = struct.unpack_from("<H", raw, ORAS_MISC_BP_OFFSET)[0]
+        except struct.error:
+            return None, None
+        if not 0 <= money <= ORAS_MAX_MONEY:
+            return None, None
+        return int(money), int(bp)
 
     def _locate_misc_base(
         self,
@@ -2650,7 +2827,7 @@ class ORASLiveWriter(_ORASLiveWriterExtendedMixin):
                 return cached
             self._misc_bases_by_process.pop(process_key, None)
 
-        live_money, live_bp = self._live_misc_references(client)
+        live_money, live_bp = self._live_misc_references(client, saved_misc)
         candidates: dict[int, bytes] = {}
 
         # La dirección histórica sigue siendo un candidato, nunca una verdad.
@@ -3502,7 +3679,7 @@ class ORASLiveWriter(_ORASLiveWriterExtendedMixin):
         for change in changes:
             if isinstance(
                 change,
-                (PendingChange, PendingRoleChange, PendingPCRoleChange, PendingInventoryChange, PendingTMTeach),
+                (PendingChange, PendingRoleChange, PendingPCRoleChange, PendingInventoryChange, PendingPartyHeal, PendingTMTeach),
             ):
                 continue
             if isinstance(change, PendingTeamChange) and change.operation in {"swap-party-box", "replace-fainted"}:
@@ -3676,6 +3853,166 @@ class ORASLiveWriter(_ORASLiveWriterExtendedMixin):
         self._set_role(data, change.new_role)
 
     @staticmethod
+    def _canonical_evs(data: bytes | bytearray) -> tuple[int, int, int, int, int, int]:
+        """EV en el contrato UI: PS, Atq, Def, At. Esp., Def. Esp., Vel."""
+        native = tuple(int(data[0x1E + index]) for index in range(6))
+        return native[0], native[1], native[2], native[4], native[5], native[3]
+
+    @staticmethod
+    def _native_evs(values: Sequence[int]) -> tuple[int, int, int, int, int, int]:
+        canonical = tuple(int(value) for value in values)
+        if len(canonical) != 6:
+            raise ORASLiveError("La distribución de EV de ORAS no contiene las seis estadísticas.")
+        if any(not 0 <= value <= 252 for value in canonical) or sum(canonical) > 510:
+            raise ORASLiveError("La distribución de EV pedida no es válida en ORAS.")
+        return canonical[0], canonical[1], canonical[2], canonical[5], canonical[3], canonical[4]
+
+    def _set_party_evs_and_stats(self, data: bytearray, change: PendingRoleChange) -> None:
+        expected_evs = tuple(int(value) for value in tuple(change.old_evs or ()))
+        desired_evs = tuple(int(value) for value in tuple(change.new_evs or ()))
+        if len(expected_evs) != 6 or len(desired_evs) != 6:
+            raise ORASLiveError("ORAS necesita los EV anteriores y nuevos completos para cambiar el rol.")
+        self._native_evs(expected_evs)
+        desired_native = self._native_evs(desired_evs)
+        actual_evs = self._canonical_evs(data)
+        if actual_evs != expected_evs:
+            name = str(getattr(change, "pokemon", "") or "El Pokémon")
+            raise ORASLiveError(
+                f"{name} cambió sus EV dentro del juego. RoleRun esperaba {expected_evs} "
+                f"y encontró {actual_evs}; no se escribió ningún byte."
+            )
+        species = int(struct.unpack_from("<H", data, 0x08)[0])
+        form = (int(data[0x1D]) >> 3) & 0x1F
+        if self.personal_for is None:
+            raise ORASLiveError("No está disponible la tabla Personal ORAS para recalcular estadísticas.")
+        personal = self.personal_for(species, form)
+        if personal is None:
+            raise ORASLiveError(
+                f"La ROM activa no contiene datos Personal exactos para especie {species}, forma {form}."
+            )
+        calculated_before = self._party_extension(bytes(data[:PK6_STORED_SIZE]), personal)
+        live_level = int(data[0xEC])
+        if live_level != int(calculated_before[4]):
+            raise ORASLiveError("El nivel vivo ORAS no coincide con la experiencia del PK6; no se escribió nada.")
+        if expected_evs != desired_evs and bytes(data[0xF2:0xFE]) != bytes(calculated_before[10:22]):
+            raise ORASLiveError(
+                "Las estadísticas vivas de ORAS no corresponden al PK6 capturado; no se aplicaron EV."
+            )
+        old_current_hp = int(struct.unpack_from("<H", data, 0xF0)[0])
+        old_max_hp = int(struct.unpack_from("<H", data, 0xF2)[0])
+        if old_max_hp <= 0 or not 0 <= old_current_hp <= old_max_hp:
+            raise ORASLiveError("ORAS devolvió una relación de PS inválida; no se cambiaron los EV.")
+        missing_hp = old_max_hp - old_current_hp
+        data[0x1E:0x24] = bytes(desired_native)
+        calculated_after = self._party_extension(bytes(data[:PK6_STORED_SIZE]), personal)
+        new_max_hp = int(struct.unpack_from("<H", calculated_after, 10)[0])
+        new_current_hp = 0 if old_current_hp == 0 else min(new_max_hp, max(1, new_max_hp - missing_hp))
+        struct.pack_into("<H", data, 0xF0, new_current_hp)
+        data[0xF2:0xFE] = calculated_after[10:22]
+
+    def _apply_party_role_evs(
+        self, current: SaveGameData, changes: Sequence[PendingChange | PendingRoleChange],
+    ) -> ORASLiveWriteResult:
+        """Aplica rol, EV y estadísticas ORAS en una única transacción recuperable."""
+        try:
+            with self.reader.client_factory() as client:
+                process = self.reader._find_oras_process(client.process_list())
+                client.set_process(process.process_id)
+                original_capture, capture_attempt = self._capture_stable_party(client)
+                live_party = self._read_party_members(original_capture, current)
+                if not live_party:
+                    raise ORASLiveError("La captura estable de ORAS no contiene ningún Pokémon en el equipo.")
+                targets = {id(change): self._resolve_target(change, live_party) for change in changes}
+                original_slots: dict[int, bytes] = {}
+                plain_slots: dict[int, bytearray] = {}
+                encrypted_slots: dict[int, bool] = {}
+                for slot in sorted(set(targets.values())):
+                    original = original_capture[slot - 1]
+                    plain, encrypted = _plain_pk6(original)
+                    original_slots[slot] = original
+                    plain_slots[slot] = bytearray(plain)
+                    encrypted_slots[slot] = encrypted
+                for change in changes:
+                    slot = targets[id(change)]
+                    if isinstance(change, PendingRoleChange):
+                        self._replace_role(plain_slots[slot], change)
+                        if change.new_evs is not None:
+                            self._set_party_evs_and_stats(plain_slots[slot], change)
+                    else:
+                        self._replace_move(plain_slots[slot], change)
+                encoded_slots: dict[int, bytes] = {}
+                expected_party: dict[int, SavePokemon] = {}
+                for slot, plain in plain_slots.items():
+                    self._refresh_checksum(plain)
+                    encoded = encrypt_pk6(bytes(plain)) if encrypted_slots[slot] else bytes(plain)
+                    expected = parse_pk6_party(encoded, slot, self.reader.move_names)
+                    if expected is None:
+                        raise ORASLiveError(f"El slot {slot} quedó vacío durante la preparación.")
+                    encoded_slots[slot] = encoded
+                    expected_party[slot] = expected
+                original_parts: dict[int, bytes] = {}
+                planned: dict[int, bytes] = {}
+                for slot, expected in encoded_slots.items():
+                    base = self._slot_address(slot)
+                    for address, original, replacement in (
+                        (base, original_slots[slot][:PK6_STORED_SIZE], expected[:PK6_STORED_SIZE]),
+                        (base + ORAS_PARTY_STATS_OFFSET,
+                         original_slots[slot][PK6_STORED_SIZE:PK6_STORED_SIZE + ORAS_PARTY_STATS_SIZE],
+                         expected[PK6_STORED_SIZE:PK6_STORED_SIZE + ORAS_PARTY_STATS_SIZE]),
+                    ):
+                        if bytes(client.read_memory(address, len(original))) != original:
+                            raise ORASLiveError(
+                                f"El slot {slot} cambió justo antes de aplicar su rol; no se escribió ningún byte."
+                            )
+                        original_parts[address] = original
+                        if replacement != original:
+                            planned[address] = replacement
+                attempted: list[tuple[int, bytes]] = []
+                try:
+                    for address in sorted(planned):
+                        attempted.append((address, original_parts[address]))
+                        client.write_memory(address, planned[address])
+                    verified_capture, verified_attempt = self._capture_stable_party(client)
+                    verified_party = self._read_party_members(verified_capture, current)
+                    for slot, expected_raw in encoded_slots.items():
+                        actual_raw = verified_capture[slot - 1]
+                        if (actual_raw[:PK6_STORED_SIZE] != expected_raw[:PK6_STORED_SIZE]
+                                or actual_raw[PK6_STORED_SIZE:PK6_STORED_SIZE + ORAS_PARTY_STATS_SIZE]
+                                != expected_raw[PK6_STORED_SIZE:PK6_STORED_SIZE + ORAS_PARTY_STATS_SIZE]):
+                            raise ORASLiveError(f"Azahar no confirmó rol, EV y estadísticas del slot {slot}.")
+                        actual = verified_party.get(slot)
+                        expected = expected_party[slot]
+                        if actual is None or self._pokemon_identity(actual) != self._pokemon_identity(expected):
+                            raise ORASLiveError(f"La identidad del slot {slot} cambió durante el readback.")
+                        if actual.role != expected.role or actual.evs != expected.evs:
+                            raise ORASLiveError(f"ORAS no confirmó el rol y los EV del slot {slot}.")
+                    return ORASLiveWriteResult(
+                        game=self._build_game(verified_capture, current, process, live_write=True),
+                        process=process, attempts=max(capture_attempt, verified_attempt),
+                        applied_count=len(changes),
+                    )
+                except Exception as exc:
+                    rollback_errors = self._rollback(client, attempted)
+                    for address, original in attempted:
+                        try:
+                            if bytes(client.read_memory(address, len(original))) != original:
+                                rollback_errors.append(f"0x{address:08X}: readback distinto tras rollback")
+                        except Exception as readback_exc:
+                            rollback_errors.append(f"0x{address:08X}: {readback_exc}")
+                    if rollback_errors:
+                        raise ORASLiveError(
+                            f"El cambio de rol ORAS falló: {exc}. No se confirmó toda la restauración: "
+                            + "; ".join(rollback_errors)
+                        ) from exc
+                    if attempted:
+                        raise ORASLiveError(
+                            f"El cambio de rol ORAS falló: {exc}. RoleRun restauró y verificó los bytes originales."
+                        ) from exc
+                    raise
+        except AzaharRPCError as exc:
+            raise ORASLiveError(str(exc)) from exc
+
+    @staticmethod
     def _remove_move_slots(data: bytearray, slots: Sequence[int]) -> None:
         """Elimina huecos originales en orden descendente y compacta move/PP."""
         for one_based in sorted({int(value) for value in slots}, reverse=True):
@@ -3827,6 +4164,148 @@ class ORASLiveWriter(_ORASLiveWriterExtendedMixin):
     def _slot_address(slot: int) -> int:
         return ORAS_PARTY_ADDRESS + (slot - 1) * ORAS_PARTY_STRIDE
 
+    def _healed_party_bytes(self, raw: bytes) -> bytes:
+        """Construye el PK6 ORAS curado sin alterar identidad ni datos ajenos."""
+        plain, was_encrypted = _plain_pk6(raw)
+        data = bytearray(plain)
+        maximum_hp = int(struct.unpack_from("<H", data, 0xF2)[0])
+        if maximum_hp <= 0:
+            raise ORASLiveError("ORAS devolvió PS máximos inválidos; no se curó el equipo.")
+        struct.pack_into("<I", data, 0xE8, 0)
+        struct.pack_into("<H", data, 0xF0, maximum_hp)
+        for move_offset, pp_offset, pp_ups_offset in zip(
+            _MOVE_OFFSETS, _MOVE_PP_OFFSETS, _MOVE_PP_UPS_OFFSETS,
+        ):
+            move_id = int(struct.unpack_from("<H", data, move_offset)[0])
+            if move_id == 0:
+                data[pp_offset] = 0
+                continue
+            base_pp = int(self.move_pp_for(move_id) or 0)
+            pp_ups = int(data[pp_ups_offset])
+            if base_pp <= 0 or not 0 <= pp_ups <= 3:
+                raise ORASLiveError(
+                    f"No se pudo demostrar el PP completo del movimiento #{move_id}; "
+                    "no se curó el equipo."
+                )
+            maximum_pp = base_pp * (5 + pp_ups) // 5
+            if maximum_pp > 0xFF:
+                raise ORASLiveError(f"El PP calculado para el movimiento #{move_id} no cabe en PK6.")
+            data[pp_offset] = maximum_pp
+        self._refresh_checksum(data)
+        return encrypt_pk6(bytes(data)) if was_encrypted else bytes(data)
+
+    def _apply_party_heal(
+        self,
+        current: SaveGameData,
+        changes: Sequence[PendingPartyHeal],
+    ) -> ORASLiveWriteResult:
+        """Cura la party ORAS con testigos inmediatos, readback y rollback."""
+        if not changes:
+            raise ORASLiveError("No hay miembros del equipo que curar en ORAS.")
+        try:
+            with self.reader.client_factory() as client:
+                process = self.reader._find_oras_process(client.process_list())
+                client.set_process(process.process_id)
+                original_capture, capture_attempt = self._capture_stable_party(client)
+                live_party = self._read_party_members(original_capture, current)
+                if not live_party:
+                    raise ORASLiveError("La captura estable de ORAS no contiene ningún Pokémon en el equipo.")
+
+                targets = {id(change): self._resolve_target(change, live_party) for change in changes}
+                if len(set(targets.values())) != len(targets):
+                    raise ORASLiveError("La petición de curación repite un mismo Pokémon; no se escribió nada.")
+                expected_slots = {
+                    slot: self._healed_party_bytes(original_capture[slot - 1])
+                    for slot in sorted(set(targets.values()))
+                }
+                if all(
+                    expected_slots[slot][:PK6_STORED_SIZE]
+                    == original_capture[slot - 1][:PK6_STORED_SIZE]
+                    and expected_slots[slot][PK6_STORED_SIZE:PK6_STORED_SIZE + ORAS_PARTY_STATS_SIZE]
+                    == original_capture[slot - 1][PK6_STORED_SIZE:PK6_STORED_SIZE + ORAS_PARTY_STATS_SIZE]
+                    for slot in expected_slots
+                ):
+                    return ORASLiveWriteResult(
+                        game=self._build_game(original_capture, current, process, live_write=True),
+                        process=process,
+                        attempts=capture_attempt,
+                        applied_count=len(changes),
+                        already_applied=True,
+                    )
+
+                original_parts: dict[int, bytes] = {}
+                planned: dict[int, bytes] = {}
+                for slot, expected in expected_slots.items():
+                    base = self._slot_address(slot)
+                    parts = (
+                        (base, original_capture[slot - 1][:PK6_STORED_SIZE], expected[:PK6_STORED_SIZE]),
+                        (
+                            base + ORAS_PARTY_STATS_OFFSET,
+                            original_capture[slot - 1][PK6_STORED_SIZE:PK6_STORED_SIZE + ORAS_PARTY_STATS_SIZE],
+                            expected[PK6_STORED_SIZE:PK6_STORED_SIZE + ORAS_PARTY_STATS_SIZE],
+                        ),
+                    )
+                    for address, original, replacement in parts:
+                        if bytes(client.read_memory(address, len(original))) != original:
+                            raise ORASLiveError(
+                                f"El slot {slot} cambió antes de curarse; no se escribió ningún byte."
+                            )
+                        original_parts[address] = original
+                        if replacement != original:
+                            planned[address] = replacement
+
+                attempted: list[tuple[int, bytes]] = []
+                try:
+                    for address in sorted(planned):
+                        attempted.append((address, original_parts[address]))
+                        client.write_memory(address, planned[address])
+
+                    verified_capture, verified_attempt = self._capture_stable_party(client)
+                    verified_party = self._read_party_members(verified_capture, current)
+                    for slot, expected_raw in expected_slots.items():
+                        actual_raw = verified_capture[slot - 1]
+                        if (
+                            actual_raw[:PK6_STORED_SIZE] != expected_raw[:PK6_STORED_SIZE]
+                            or actual_raw[PK6_STORED_SIZE:PK6_STORED_SIZE + ORAS_PARTY_STATS_SIZE]
+                            != expected_raw[PK6_STORED_SIZE:PK6_STORED_SIZE + ORAS_PARTY_STATS_SIZE]
+                        ):
+                            raise ORASLiveError(
+                                f"Azahar no confirmó todos los bytes curados del slot {slot}."
+                            )
+                        actual = verified_party.get(slot)
+                        if actual is None or int(actual.current_hp or 0) != int(actual.max_hp or 0):
+                            raise ORASLiveError(f"ORAS no confirmó los PS restaurados del slot {slot}.")
+                        if int(actual.status_condition or 0) != 0:
+                            raise ORASLiveError(f"ORAS no confirmó la eliminación del estado del slot {slot}.")
+
+                    return ORASLiveWriteResult(
+                        game=self._build_game(verified_capture, current, process, live_write=True),
+                        process=process,
+                        attempts=max(capture_attempt, verified_attempt),
+                        applied_count=len(changes),
+                    )
+                except Exception as exc:
+                    rollback_errors = self._rollback(client, attempted)
+                    for address, original in dict(attempted).items():
+                        try:
+                            if bytes(client.read_memory(address, len(original))) != original:
+                                rollback_errors.append(f"0x{address:08X}: readback distinto tras rollback")
+                        except Exception as readback_exc:
+                            rollback_errors.append(f"0x{address:08X}: {readback_exc}")
+                    if rollback_errors:
+                        raise ORASLiveError(
+                            f"La curación ORAS falló: {exc}. No se pudo confirmar toda la restauración: "
+                            + "; ".join(rollback_errors)
+                        ) from exc
+                    if attempted:
+                        raise ORASLiveError(
+                            f"La curación ORAS falló: {exc}. RoleRun restauró y verificó los bytes "
+                            "originales en RAM."
+                        ) from exc
+                    raise
+        except AzaharRPCError as exc:
+            raise ORASLiveError(str(exc)) from exc
+
     @staticmethod
     def _prepare_inventory_value(
         pocket: bytearray,
@@ -3913,7 +4392,8 @@ class ORASLiveWriter(_ORASLiveWriterExtendedMixin):
         current: SaveGameData,
         changes: Sequence[
             PendingChange | PendingRoleChange | PendingPCRoleChange |
-            PendingInventoryChange | PendingTMTeach | PendingTeamChange | object
+            PendingInventoryChange | PendingTMTeach | PendingTeamChange |
+            PendingPartyHeal | object
         ],
     ) -> ORASLiveWriteResult:
         """Captura, modifica y verifica cambios de roles/movimientos en RAM.
@@ -3923,6 +4403,20 @@ class ORASLiveWriter(_ORASLiveWriterExtendedMixin):
         """
         if not changes:
             raise ORASLiveError("No hay cambios pendientes que aplicar en ORAS.")
+        heal_changes = [change for change in changes if isinstance(change, PendingPartyHeal)]
+        if heal_changes:
+            if len(heal_changes) != len(changes):
+                raise ORASLiveError(
+                    "La curación completa de ORAS debe ejecutarse como una operación "
+                    "independiente; no se escribió ningún byte."
+                )
+            return self._apply_party_heal(current, heal_changes)
+        if any(isinstance(change, PendingRoleChange) and change.new_evs is not None for change in changes):
+            if not all(isinstance(change, (PendingChange, PendingRoleChange)) for change in changes):
+                raise ORASLiveError(
+                    "El cambio de rol y EV de ORAS debe ejecutarse separado de PC, bolsa y curación."
+                )
+            return self._apply_party_role_evs(current, changes)
         if any(
             isinstance(change, (PendingPCRoleChange, PendingInventoryChange, PendingTMTeach, PendingTeamChange))
             for change in changes

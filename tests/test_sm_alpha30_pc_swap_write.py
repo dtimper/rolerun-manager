@@ -281,6 +281,56 @@ def test_alpha35_swap_writes_full_0x104_and_sparse_stats_and_inherits_outgoing_r
     assert not any(address == party_base and size == PK7_STORED_SIZE for address, size in ram.writes)
 
 
+def test_alpha137_sm_swap_applies_prepared_role_evs_in_the_atomic_team_write() -> None:
+    writer, ram, current, _party_base, _pc_base = _setup_writer(
+        [(724, 10, "Líbero")], {0: (165, 99, "Mago")},
+    )
+    change = PendingTeamChange(
+        operation="swap-party-box", party_slot=1, box=1, box_slot=1,
+        outgoing_identity="724:10:11:22", incoming_identity="165:99:11:22",
+        incoming_pokemon="Ledyba", outgoing_pokemon="Decidueye",
+        incoming_role="Líbero",
+        incoming_snapshot={
+            "role": "Líbero",
+            "evs": {
+                "hp": 252, "attack": 0, "defense": 0,
+                "sp_attack": 0, "sp_defense": 0, "speed": 252,
+            },
+        },
+    )
+
+    result = writer.apply(current, [change])
+
+    incoming = result.game.party[0]
+    assert incoming.species_id == 165
+    assert incoming.role == "Líbero"
+    assert incoming.evs == {
+        "hp": 252, "attack": 0, "defense": 0,
+        "sp_attack": 0, "sp_defense": 0, "speed": 252,
+    }
+
+
+def test_alpha137_sm_swap_rejects_incomplete_prepared_evs_before_any_write() -> None:
+    writer, ram, current, _party_base, _pc_base = _setup_writer(
+        [(724, 10, "Líbero")], {0: (165, 99, "Mago")},
+    )
+    before_party = bytes(ram.party)
+    before_pc = bytes(ram.pc)
+    change = PendingTeamChange(
+        operation="swap-party-box", party_slot=1, box=1, box_slot=1,
+        outgoing_identity="724:10:11:22", incoming_identity="165:99:11:22",
+        incoming_role="Líbero",
+        incoming_snapshot={"role": "Líbero", "evs": {"hp": 252}},
+    )
+
+    with pytest.raises(SMLiveError, match="incompleto"):
+        writer.apply(current, [change])
+
+    assert bytes(ram.party) == before_party
+    assert bytes(ram.pc) == before_pc
+    assert ram.writes == []
+
+
 def test_alpha35_swap_does_not_depend_on_game_copying_sparse_stats() -> None:
     writer, ram, current, party_base, _pc_base = _setup_writer(
         [(724, 10, "Líbero")], {0: (165, 99, "Mago")},
@@ -360,9 +410,44 @@ def test_alpha36_box_to_party_uses_first_free_role_and_clears_pc_slot() -> None:
     result = writer.apply(current, [change])
     assert [p.species_id for p in result.game.party] == [724, 731, 165]
     assert result.game.party[2].role == "Asesino"
-    assert ram.read(pc_base, PK7_STORED_SIZE) == b"\0" * PK7_STORED_SIZE
+    empty = encrypt_pk6_stored(bytes(PK7_STORED_SIZE))
+    assert any(empty)
+    assert ram.read(pc_base, PK7_STORED_SIZE) == empty
+    assert parse_pk7_boxed(empty, 1, 1, {}) is None
     assert (party_base + 2 * SM_PARTY_STRIDE, PK7_PARTY_SIZE) in ram.writes
     assert (party_base + 2 * SM_PARTY_STRIDE + 0x158, 0x16) in ram.writes
+
+
+def test_alpha137_sm_box_to_party_applies_the_first_free_roles_prepared_evs() -> None:
+    writer, ram, current, _party_base, pc_base = _setup_writer(
+        [(724, 10, "Líbero"), (731, 11, "Mago")],
+        {0: (165, 99, "Support")},
+    )
+    change = PendingTeamChange(
+        operation="box-to-party", party_slot=3, box=1, box_slot=1,
+        incoming_identity="165:99:11:22", incoming_pokemon="Ledyba",
+        incoming_role="Asesino",
+        incoming_snapshot={
+            "role": "Asesino",
+            "evs": {
+                "hp": 0, "attack": 252, "defense": 0,
+                "sp_attack": 0, "sp_defense": 0, "speed": 252,
+            },
+        },
+    )
+
+    result = writer.apply(current, [change])
+
+    incoming = result.game.party[2]
+    assert incoming.role == "Asesino"
+    assert incoming.evs == {
+        "hp": 0, "attack": 252, "defense": 0,
+        "sp_attack": 0, "sp_defense": 0, "speed": 252,
+    }
+    empty = encrypt_pk6_stored(bytes(PK7_STORED_SIZE))
+    assert any(empty)
+    assert ram.read(pc_base, PK7_STORED_SIZE) == empty
+    assert parse_pk7_boxed(empty, 1, 1, {}) is None
 
 
 def test_alpha36_party_to_box_compacts_full_six_member_party_and_preserves_roles() -> None:
@@ -629,11 +714,23 @@ def test_alpha40_replace_fainted_moves_dead_to_box4_and_inherits_role() -> None:
         operation="replace-fainted", party_slot=1, box=1, box_slot=1,
         outgoing_identity="724:10:11:22", incoming_identity="165:99:11:22",
         outgoing_pokemon="Decidueye", incoming_pokemon="Ledyba",
+        incoming_role="Líbero",
+        incoming_snapshot={
+            "role": "Líbero",
+            "evs": {
+                "hp": 252, "attack": 252, "defense": 0,
+                "sp_attack": 0, "sp_defense": 0, "speed": 0,
+            },
+        },
         graveyard_box=4, graveyard_box_slot=1,
     )
     result = writer.apply(current, [change])
     assert [p.species_id for p in result.game.party] == [165, 731]
     assert result.game.party[0].role == "Líbero"
+    assert result.game.party[0].evs == {
+        "hp": 252, "attack": 252, "defense": 0,
+        "sp_attack": 0, "sp_defense": 0, "speed": 0,
+    }
     assert change.incoming_role == "Líbero"
     source_empty = ram.read(pc_base, PK7_STORED_SIZE)
     assert source_empty == encrypt_pk6_stored(bytes(PK7_STORED_SIZE))

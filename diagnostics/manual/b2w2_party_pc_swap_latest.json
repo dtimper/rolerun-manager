@@ -1,0 +1,844 @@
+{
+  "format": "rolerun-b2w2-party-pc-swap-v1",
+  "captured_at": "2026-08-27T00:29:19.877813+02:00",
+  "environment": "Pokémon Negro 2 España · melonDS 1.1",
+  "before": {
+    "process_id": 15800,
+    "allocation_base": 2554950778880,
+    "party": [
+      {
+        "slot": 1,
+        "species": 498,
+        "nickname": "Tepig",
+        "pid": 2313357440,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "8008e3890000c29778d1cb51db8bb323ae42ab6757809bcb92926fdf123bfdb2aef28960ef29c6daf7807f38e0a1016ecea9d4289c132822317334a6fa844ab7a6a6e675d0242dc44bbaeed0b1d048a8381d1ad705608300d3e01b2d8338420ad482000f046b9e394fe03eb44330637d36da418a90da3609b0b6fdc17bcefd95aa651add328fc464",
+        "party_extension_hex": "41f5b96bbeb0d92d1d1c90f6783f08c93417db84af2a52729eb96f84776a628d03b8343e11400277e1ec16d5ac5f62b43834690c811e1c2dd2afbda782783a5cff63b678a0bea7a7b3e7898c028a6af0e557c94a",
+        "level": 10,
+        "status": 0,
+        "stats": [
+          34,
+          19,
+          14,
+          14,
+          16,
+          15
+        ],
+        "ivs": [
+          10,
+          16,
+          23,
+          6,
+          13,
+          11
+        ],
+        "evs": [
+          1,
+          4,
+          0,
+          3,
+          0,
+          1
+        ],
+        "hp": [
+          34,
+          34
+        ]
+      },
+      {
+        "slot": 2,
+        "species": 179,
+        "nickname": "Mareep",
+        "pid": 3361455345,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "f1bc5bc800000f57f53f7f9323c3621dc52c9b2e55eeaffbf7e6f79575b626eb86fb3d07553abefb0c9114617b51f91e27772f15658fc106aab02d2922b4552f8b45df07244dd4ed7f5af4e9995eec8a97d8ab74f7813a4db822f8e5c95bfba2589b5f8dcf94bed42a0b46bf3978308699345f4fd98ec2a91295a7e81a1b05a55b4ff4c3eeed3ac8",
+        "party_extension_hex": "07964979be1b3d7ec72750f3be605b20442b0a81b2f0c5438c53041e6bf0e7b237022b4f4f0d8818f3daec01290b0ff644118219a78aa37985b7d02773710115395773b86d0606461c19ae119691fb657c37e6e7",
+        "level": 5,
+        "status": 0,
+        "stats": [
+          20,
+          9,
+          9,
+          12,
+          11,
+          9
+        ],
+        "ivs": [
+          9,
+          11,
+          26,
+          25,
+          22,
+          25
+        ],
+        "evs": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "hp": [
+          20,
+          20
+        ]
+      },
+      {
+        "slot": 3,
+        "species": 506,
+        "nickname": "Lillipup",
+        "pid": 2161277807,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "6f7bd2800000e862e985bf8bece6686456d67b3c1f3ea7479330136771e49cd1b5f76b1731b21ae79934efb0f9f405311ee9636039cff7f5c353d9ad22dd893e585e330f75a3c5e2ec728c502462b39ba54f8f0abe348fbd47496b628b342475f3fe729a3699447d34e9a53af29fb645656138cc2d90d48a7de6e9530330dbe2272f81f35c3d16d3",
+        "party_extension_hex": "14a251981fbf9041fef8d447e8345dac82e74e4af2485139224ec5687ba7ed7cbfa69e2231184f103ed28dbc92af1f1253e4b54feb580c1c12fd8e062f99a5f29e249e47316b3fd1f01d8649af31905fb4cf3724",
+        "level": 4,
+        "status": 0,
+        "stats": [
+          17,
+          9,
+          9,
+          7,
+          9,
+          11
+        ],
+        "ivs": [
+          3,
+          30,
+          18,
+          7,
+          19,
+          19
+        ],
+        "evs": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "hp": [
+          17,
+          17
+        ]
+      },
+      {
+        "slot": 4,
+        "species": 504,
+        "nickname": "Patrat",
+        "pid": 433090044,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "fc6dd01900005615f55cc8a2fa9a68f420f109223001b26870dd7596cb38ec3ea953be79a1c37a6b7fbb54ba5c539b338058c002cdec586c8693bd9c73e238f04947e250977c53a637dc21e955c35e185c15753bb4b20d1be9c6b3c2356468117df2c0d75f94c377ccf1e93045d483deb8b8d3f0e740d82e1a4bdaf4ca11648f02b7e844a7904567",
+        "party_extension_hex": "298c9d73a557132b44d3740ca51d1c025baea39357527e9940175466f04d6274cae375e749bc9d3cf2acba6cf7ace09350bfc8627030cd569e3e156467d46e109dda514197523b1449221f8d6ce840073def6fd8",
+        "level": 5,
+        "status": 0,
+        "stats": [
+          19,
+          12,
+          9,
+          9,
+          9,
+          8
+        ],
+        "ivs": [
+          6,
+          27,
+          9,
+          16,
+          16,
+          1
+        ],
+        "evs": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "hp": [
+          19,
+          19
+        ]
+      },
+      {
+        "slot": 5,
+        "species": 298,
+        "nickname": "Azurill",
+        "pid": 189015932,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "7c27440b0000dd47d8c6b0088049a93ee2b36ae49e5947643e21e2385e5054d1f5b7f15f131c5b83949c22197d3616e8c87648c029f34d15e586de11852aeec73c3024764a09a10bf61b44fa6a2a3813ecdce9c913c530afd3e1f56f00a91df55cc1ce534958c55165ad41e881aa50cc290989fc84599ba7f82240fec199c4b8561adc6a03a5feb5",
+        "party_extension_hex": "f495ab7c299ea3f583111a249a411d941760bf12501aec77c21e6abe35a7cdd389ddf635a4401002bff00a2621eef3aba760a06922853a1b8c28594ce8b9373aae5e8a3ae139fa226a1300755937342bd73b8bbb",
+        "level": 5,
+        "status": 0,
+        "stats": [
+          21,
+          8,
+          9,
+          6,
+          10,
+          8
+        ],
+        "ivs": [
+          21,
+          31,
+          9,
+          14,
+          31,
+          23
+        ],
+        "evs": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "hp": [
+          21,
+          21
+        ]
+      },
+      {
+        "slot": 6,
+        "species": 506,
+        "nickname": "Lillipup",
+        "pid": 3995146419,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "b31821ee0000d0ca29eb535b81ef3bb753673ee39ade315e4a177fb88c3a63d8d6e2cf84f67318490fe36e31bdf655ed681c872ed5a80cafd77895821aeac4cd03a84cf5d602c88e252f44958304d19e45e4e6e4464b89a4ab309e7e0fff11b546d7e230677df1a9f7b33ad65e9806861392b06ebd71a8d133765621c82d591a5ede8be7a8fab5ed",
+        "party_extension_hex": "100733c5668d446bb8743f83758f20fe25a081563290665788121987ae9e4a51f2d5ce224530419481eee766eade15626dc8e6e2866f7d9ca82b93f3791cab2a5ddade682b1d7fc1996dac6fcff201f30ebb9db3",
+        "level": 4,
+        "status": 0,
+        "stats": [
+          18,
+          9,
+          9,
+          7,
+          9,
+          10
+        ],
+        "ivs": [
+          21,
+          3,
+          20,
+          10,
+          16,
+          28
+        ],
+        "evs": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "hp": [
+          18,
+          18
+        ]
+      }
+    ],
+    "pc": [
+      {
+        "box": 1,
+        "slot": 1,
+        "species": 298,
+        "nickname": "Azurill",
+        "pid": 4147802933,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "35733af70000c05736b9a225ad6beeeb8016a6a905c9e84adcf294f2c49e8a56b4bb06bb444f4cfbe26920be9e4804bc65f1d9675baf9f691bb40cc18fc256feb47c7a3be4d9b028dde46f3cc13ec84a993217c14d0db8ae6707c0eeb02d5b9ceb66707e13bdcd3efdfd4261ce257de2c6b66c1f2ba2d026ef711a6680166c22dad59f5b917c835e"
+      },
+      {
+        "box": 1,
+        "slot": 2,
+        "species": 506,
+        "nickname": "Lillipup",
+        "pid": 1491403272,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "0802e55800001ce8e8e8178f09528e1d435eb7bed7fc5636381540f27baa0b1479c752fd3b1a70d242e751532fc59b917594c975b09ddbb0aac80d32d04750ba34654f4ca053c8186f2181a944a29b7d3a7fd315abb96b416dc9242b04d0f5583862c81b404a9b814117c265fbcc229b74a0a4b0dcc9ba38d56bd07a17ddbbb03406e791946fb901"
+      },
+      {
+        "box": 1,
+        "slot": 3,
+        "species": 540,
+        "nickname": "Sewaddle",
+        "pid": 609969752,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "58665b240000a4c0c0df788d56a704c9cb77efdd743e57feaec340647d2db56fc6d3af0a09e5fb53f419c0d3c29cfdd5d8040fdb62c049912cce34b2faa7fff4ecff6052e19d0fd6009eb7363bc972beb7e7c1566971d3fbe19f191cc0e6f1a543e34a0c35bcee6163e44c4dedc679acb16a9025403526d3f7d2a5c28bae6cf285ffb57e218788a1"
+      }
+    ],
+    "pc_empty": 717
+  },
+  "swapped": {
+    "process_id": 15800,
+    "allocation_base": 2554950778880,
+    "party": [
+      {
+        "slot": 1,
+        "species": 506,
+        "nickname": "Lillipup",
+        "pid": 1491403272,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "0802e55800001ce8e8e8178f09528e1d435eb7bed7fc5636381540f27baa0b1479c752fd3b1a70d242e751532fc59b917594c975b09ddbb0aac80d32d04750ba34654f4ca053c8186f2181a944a29b7d3a7fd315abb96b416dc9242b04d0f5583862c81b404a9b814117c265fbcc229b74a0a4b0dcc9ba38d56bd07a17ddbbb03406e791946fb901",
+        "party_extension_hex": "503ab57bc70d02317bc4108484ef0193ca5e5549243d946671c81ffd7c538b73576119f262462becc6b524fc0775bf61695cc56311aefd2ff837b804b8952d823f0c06e0b5f123014e71ff8427b9d8abc83ff48e",
+        "level": 6,
+        "status": 0,
+        "stats": [
+          21,
+          12,
+          11,
+          8,
+          12,
+          12
+        ],
+        "ivs": [
+          8,
+          0,
+          19,
+          27,
+          28,
+          6
+        ],
+        "evs": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "hp": [
+          21,
+          21
+        ]
+      },
+      {
+        "slot": 2,
+        "species": 179,
+        "nickname": "Mareep",
+        "pid": 3361455345,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "f1bc5bc800000f57f53f7f9323c3621dc52c9b2e55eeaffbf7e6f79575b626eb86fb3d07553abefb0c9114617b51f91e27772f15658fc106aab02d2922b4552f8b45df07244dd4ed7f5af4e9995eec8a97d8ab74f7813a4db822f8e5c95bfba2589b5f8dcf94bed42a0b46bf3978308699345f4fd98ec2a91295a7e81a1b05a55b4ff4c3eeed3ac8",
+        "party_extension_hex": "07964979be1b3d7ec72750f3be605b20442b0a81b2f0c5438c53041e6bf0e7b237022b4f4f0d8818f3daec01290b0ff644118219a78aa37985b7d02773710115395773b86d0606461c19ae119691fb657c37e6e7",
+        "level": 5,
+        "status": 0,
+        "stats": [
+          20,
+          9,
+          9,
+          12,
+          11,
+          9
+        ],
+        "ivs": [
+          9,
+          11,
+          26,
+          25,
+          22,
+          25
+        ],
+        "evs": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "hp": [
+          20,
+          20
+        ]
+      },
+      {
+        "slot": 3,
+        "species": 506,
+        "nickname": "Lillipup",
+        "pid": 2161277807,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "6f7bd2800000e862e985bf8bece6686456d67b3c1f3ea7479330136771e49cd1b5f76b1731b21ae79934efb0f9f405311ee9636039cff7f5c353d9ad22dd893e585e330f75a3c5e2ec728c502462b39ba54f8f0abe348fbd47496b628b342475f3fe729a3699447d34e9a53af29fb645656138cc2d90d48a7de6e9530330dbe2272f81f35c3d16d3",
+        "party_extension_hex": "14a251981fbf9041fef8d447e8345dac82e74e4af2485139224ec5687ba7ed7cbfa69e2231184f103ed28dbc92af1f1253e4b54feb580c1c12fd8e062f99a5f29e249e47316b3fd1f01d8649af31905fb4cf3724",
+        "level": 4,
+        "status": 0,
+        "stats": [
+          17,
+          9,
+          9,
+          7,
+          9,
+          11
+        ],
+        "ivs": [
+          3,
+          30,
+          18,
+          7,
+          19,
+          19
+        ],
+        "evs": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "hp": [
+          17,
+          17
+        ]
+      },
+      {
+        "slot": 4,
+        "species": 504,
+        "nickname": "Patrat",
+        "pid": 433090044,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "fc6dd01900005615f55cc8a2fa9a68f420f109223001b26870dd7596cb38ec3ea953be79a1c37a6b7fbb54ba5c539b338058c002cdec586c8693bd9c73e238f04947e250977c53a637dc21e955c35e185c15753bb4b20d1be9c6b3c2356468117df2c0d75f94c377ccf1e93045d483deb8b8d3f0e740d82e1a4bdaf4ca11648f02b7e844a7904567",
+        "party_extension_hex": "298c9d73a557132b44d3740ca51d1c025baea39357527e9940175466f04d6274cae375e749bc9d3cf2acba6cf7ace09350bfc8627030cd569e3e156467d46e109dda514197523b1449221f8d6ce840073def6fd8",
+        "level": 5,
+        "status": 0,
+        "stats": [
+          19,
+          12,
+          9,
+          9,
+          9,
+          8
+        ],
+        "ivs": [
+          6,
+          27,
+          9,
+          16,
+          16,
+          1
+        ],
+        "evs": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "hp": [
+          19,
+          19
+        ]
+      },
+      {
+        "slot": 5,
+        "species": 298,
+        "nickname": "Azurill",
+        "pid": 189015932,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "7c27440b0000dd47d8c6b0088049a93ee2b36ae49e5947643e21e2385e5054d1f5b7f15f131c5b83949c22197d3616e8c87648c029f34d15e586de11852aeec73c3024764a09a10bf61b44fa6a2a3813ecdce9c913c530afd3e1f56f00a91df55cc1ce534958c55165ad41e881aa50cc290989fc84599ba7f82240fec199c4b8561adc6a03a5feb5",
+        "party_extension_hex": "f495ab7c299ea3f583111a249a411d941760bf12501aec77c21e6abe35a7cdd389ddf635a4401002bff00a2621eef3aba760a06922853a1b8c28594ce8b9373aae5e8a3ae139fa226a1300755937342bd73b8bbb",
+        "level": 5,
+        "status": 0,
+        "stats": [
+          21,
+          8,
+          9,
+          6,
+          10,
+          8
+        ],
+        "ivs": [
+          21,
+          31,
+          9,
+          14,
+          31,
+          23
+        ],
+        "evs": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "hp": [
+          21,
+          21
+        ]
+      },
+      {
+        "slot": 6,
+        "species": 506,
+        "nickname": "Lillipup",
+        "pid": 3995146419,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "b31821ee0000d0ca29eb535b81ef3bb753673ee39ade315e4a177fb88c3a63d8d6e2cf84f67318490fe36e31bdf655ed681c872ed5a80cafd77895821aeac4cd03a84cf5d602c88e252f44958304d19e45e4e6e4464b89a4ab309e7e0fff11b546d7e230677df1a9f7b33ad65e9806861392b06ebd71a8d133765621c82d591a5ede8be7a8fab5ed",
+        "party_extension_hex": "100733c5668d446bb8743f83758f20fe25a081563290665788121987ae9e4a51f2d5ce224530419481eee766eade15626dc8e6e2866f7d9ca82b93f3791cab2a5ddade682b1d7fc1996dac6fcff201f30ebb9db3",
+        "level": 4,
+        "status": 0,
+        "stats": [
+          18,
+          9,
+          9,
+          7,
+          9,
+          10
+        ],
+        "ivs": [
+          21,
+          3,
+          20,
+          10,
+          16,
+          28
+        ],
+        "evs": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "hp": [
+          18,
+          18
+        ]
+      }
+    ],
+    "pc": [
+      {
+        "box": 1,
+        "slot": 1,
+        "species": 298,
+        "nickname": "Azurill",
+        "pid": 4147802933,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "35733af70000c05736b9a225ad6beeeb8016a6a905c9e84adcf294f2c49e8a56b4bb06bb444f4cfbe26920be9e4804bc65f1d9675baf9f691bb40cc18fc256feb47c7a3be4d9b028dde46f3cc13ec84a993217c14d0db8ae6707c0eeb02d5b9ceb66707e13bdcd3efdfd4261ce257de2c6b66c1f2ba2d026ef711a6680166c22dad59f5b917c835e"
+      },
+      {
+        "box": 1,
+        "slot": 2,
+        "species": 498,
+        "nickname": "Tepig",
+        "pid": 2313357440,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "8008e3890000c29778d1cb51db8bb323ae42ab6757809bcb92926fdf123bfdb2aef28960ef29c6daf7807f38e0a1016ecea9d4289c132822317334a6fa844ab7a6a6e675d0242dc44bbaeed0b1d048a8381d1ad705608300d3e01b2d8338420ad482000f046b9e394fe03eb44330637d36da418a90da3609b0b6fdc17bcefd95aa651add328fc464"
+      },
+      {
+        "box": 1,
+        "slot": 3,
+        "species": 540,
+        "nickname": "Sewaddle",
+        "pid": 609969752,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "58665b240000a4c0c0df788d56a704c9cb77efdd743e57feaec340647d2db56fc6d3af0a09e5fb53f419c0d3c29cfdd5d8040fdb62c049912cce34b2faa7fff4ecff6052e19d0fd6009eb7363bc972beb7e7c1566971d3fbe19f191cc0e6f1a543e34a0c35bcee6163e44c4dedc679acb16a9025403526d3f7d2a5c28bae6cf285ffb57e218788a1"
+      }
+    ],
+    "pc_empty": 717
+  },
+  "restored": {
+    "process_id": 15800,
+    "allocation_base": 2554950778880,
+    "party": [
+      {
+        "slot": 1,
+        "species": 498,
+        "nickname": "Tepig",
+        "pid": 2313357440,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "8008e3890000c29778d1cb51db8bb323ae42ab6757809bcb92926fdf123bfdb2aef28960ef29c6daf7807f38e0a1016ecea9d4289c132822317334a6fa844ab7a6a6e675d0242dc44bbaeed0b1d048a8381d1ad705608300d3e01b2d8338420ad482000f046b9e394fe03eb44330637d36da418a90da3609b0b6fdc17bcefd95aa651add328fc464",
+        "party_extension_hex": "41f5b96bbe8fd92d1d1c90f6783f08c93417db84af2a52729eb96f84776a628d03b8343e11400277e1ec16d5cd98239d5bf8690c811e782dd2afbda782783a5cff63b678a0bec019b3e7898c221c1ba6346c9203",
+        "level": 10,
+        "status": 0,
+        "stats": [
+          34,
+          19,
+          14,
+          14,
+          16,
+          15
+        ],
+        "ivs": [
+          10,
+          16,
+          23,
+          6,
+          13,
+          11
+        ],
+        "evs": [
+          1,
+          4,
+          0,
+          3,
+          0,
+          1
+        ],
+        "hp": [
+          34,
+          34
+        ]
+      },
+      {
+        "slot": 2,
+        "species": 179,
+        "nickname": "Mareep",
+        "pid": 3361455345,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "f1bc5bc800000f57f53f7f9323c3621dc52c9b2e55eeaffbf7e6f79575b626eb86fb3d07553abefb0c9114617b51f91e27772f15658fc106aab02d2922b4552f8b45df07244dd4ed7f5af4e9995eec8a97d8ab74f7813a4db822f8e5c95bfba2589b5f8dcf94bed42a0b46bf3978308699345f4fd98ec2a91295a7e81a1b05a55b4ff4c3eeed3ac8",
+        "party_extension_hex": "07964979be1b3d7ec72750f3be605b20442b0a81b2f0c5438c53041e6bf0e7b237022b4f4f0d8818f3daec01290b0ff644118219a78aa37985b7d02773710115395773b86d0606461c19ae119691fb657c37e6e7",
+        "level": 5,
+        "status": 0,
+        "stats": [
+          20,
+          9,
+          9,
+          12,
+          11,
+          9
+        ],
+        "ivs": [
+          9,
+          11,
+          26,
+          25,
+          22,
+          25
+        ],
+        "evs": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "hp": [
+          20,
+          20
+        ]
+      },
+      {
+        "slot": 3,
+        "species": 506,
+        "nickname": "Lillipup",
+        "pid": 2161277807,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "6f7bd2800000e862e985bf8bece6686456d67b3c1f3ea7479330136771e49cd1b5f76b1731b21ae79934efb0f9f405311ee9636039cff7f5c353d9ad22dd893e585e330f75a3c5e2ec728c502462b39ba54f8f0abe348fbd47496b628b342475f3fe729a3699447d34e9a53af29fb645656138cc2d90d48a7de6e9530330dbe2272f81f35c3d16d3",
+        "party_extension_hex": "14a251981fbf9041fef8d447e8345dac82e74e4af2485139224ec5687ba7ed7cbfa69e2231184f103ed28dbc92af1f1253e4b54feb580c1c12fd8e062f99a5f29e249e47316b3fd1f01d8649af31905fb4cf3724",
+        "level": 4,
+        "status": 0,
+        "stats": [
+          17,
+          9,
+          9,
+          7,
+          9,
+          11
+        ],
+        "ivs": [
+          3,
+          30,
+          18,
+          7,
+          19,
+          19
+        ],
+        "evs": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "hp": [
+          17,
+          17
+        ]
+      },
+      {
+        "slot": 4,
+        "species": 504,
+        "nickname": "Patrat",
+        "pid": 433090044,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "fc6dd01900005615f55cc8a2fa9a68f420f109223001b26870dd7596cb38ec3ea953be79a1c37a6b7fbb54ba5c539b338058c002cdec586c8693bd9c73e238f04947e250977c53a637dc21e955c35e185c15753bb4b20d1be9c6b3c2356468117df2c0d75f94c377ccf1e93045d483deb8b8d3f0e740d82e1a4bdaf4ca11648f02b7e844a7904567",
+        "party_extension_hex": "298c9d73a557132b44d3740ca51d1c025baea39357527e9940175466f04d6274cae375e749bc9d3cf2acba6cf7ace09350bfc8627030cd569e3e156467d46e109dda514197523b1449221f8d6ce840073def6fd8",
+        "level": 5,
+        "status": 0,
+        "stats": [
+          19,
+          12,
+          9,
+          9,
+          9,
+          8
+        ],
+        "ivs": [
+          6,
+          27,
+          9,
+          16,
+          16,
+          1
+        ],
+        "evs": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "hp": [
+          19,
+          19
+        ]
+      },
+      {
+        "slot": 5,
+        "species": 298,
+        "nickname": "Azurill",
+        "pid": 189015932,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "7c27440b0000dd47d8c6b0088049a93ee2b36ae49e5947643e21e2385e5054d1f5b7f15f131c5b83949c22197d3616e8c87648c029f34d15e586de11852aeec73c3024764a09a10bf61b44fa6a2a3813ecdce9c913c530afd3e1f56f00a91df55cc1ce534958c55165ad41e881aa50cc290989fc84599ba7f82240fec199c4b8561adc6a03a5feb5",
+        "party_extension_hex": "f495ab7c299ea3f583111a249a411d941760bf12501aec77c21e6abe35a7cdd389ddf635a4401002bff00a2621eef3aba760a06922853a1b8c28594ce8b9373aae5e8a3ae139fa226a1300755937342bd73b8bbb",
+        "level": 5,
+        "status": 0,
+        "stats": [
+          21,
+          8,
+          9,
+          6,
+          10,
+          8
+        ],
+        "ivs": [
+          21,
+          31,
+          9,
+          14,
+          31,
+          23
+        ],
+        "evs": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "hp": [
+          21,
+          21
+        ]
+      },
+      {
+        "slot": 6,
+        "species": 506,
+        "nickname": "Lillipup",
+        "pid": 3995146419,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "b31821ee0000d0ca29eb535b81ef3bb753673ee39ade315e4a177fb88c3a63d8d6e2cf84f67318490fe36e31bdf655ed681c872ed5a80cafd77895821aeac4cd03a84cf5d602c88e252f44958304d19e45e4e6e4464b89a4ab309e7e0fff11b546d7e230677df1a9f7b33ad65e9806861392b06ebd71a8d133765621c82d591a5ede8be7a8fab5ed",
+        "party_extension_hex": "100733c5668d446bb8743f83758f20fe25a081563290665788121987ae9e4a51f2d5ce224530419481eee766eade15626dc8e6e2866f7d9ca82b93f3791cab2a5ddade682b1d7fc1996dac6fcff201f30ebb9db3",
+        "level": 4,
+        "status": 0,
+        "stats": [
+          18,
+          9,
+          9,
+          7,
+          9,
+          10
+        ],
+        "ivs": [
+          21,
+          3,
+          20,
+          10,
+          16,
+          28
+        ],
+        "evs": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "hp": [
+          18,
+          18
+        ]
+      }
+    ],
+    "pc": [
+      {
+        "box": 1,
+        "slot": 1,
+        "species": 298,
+        "nickname": "Azurill",
+        "pid": 4147802933,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "35733af70000c05736b9a225ad6beeeb8016a6a905c9e84adcf294f2c49e8a56b4bb06bb444f4cfbe26920be9e4804bc65f1d9675baf9f691bb40cc18fc256feb47c7a3be4d9b028dde46f3cc13ec84a993217c14d0db8ae6707c0eeb02d5b9ceb66707e13bdcd3efdfd4261ce257de2c6b66c1f2ba2d026ef711a6680166c22dad59f5b917c835e"
+      },
+      {
+        "box": 1,
+        "slot": 2,
+        "species": 506,
+        "nickname": "Lillipup",
+        "pid": 1491403272,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "0802e55800001ce8e8e8178f09528e1d435eb7bed7fc5636381540f27baa0b1479c752fd3b1a70d242e751532fc59b917594c975b09ddbb0aac80d32d04750ba34654f4ca053c8186f2181a944a29b7d3a7fd315abb96b416dc9242b04d0f5583862c81b404a9b814117c265fbcc229b74a0a4b0dcc9ba38d56bd07a17ddbbb03406e791946fb901"
+      },
+      {
+        "box": 1,
+        "slot": 3,
+        "species": 540,
+        "nickname": "Sewaddle",
+        "pid": 609969752,
+        "tid": 22483,
+        "sid": 17443,
+        "stored_hex": "58665b240000a4c0c0df788d56a704c9cb77efdd743e57feaec340647d2db56fc6d3af0a09e5fb53f419c0d3c29cfdd5d8040fdb62c049912cce34b2faa7fff4ecff6052e19d0fd6009eb7363bc972beb7e7c1566971d3fbe19f191cc0e6f1a543e34a0c35bcee6163e44c4dedc679acb16a9025403526d3f7d2a5c28bae6cf285ffb57e218788a1"
+      }
+    ],
+    "pc_empty": 717
+  },
+  "restored_matches_identity": true,
+  "note": "Diagnóstico local de solo lectura; no habilita escrituras por sí solo."
+}

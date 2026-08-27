@@ -1,0 +1,3736 @@
+{
+  "version": 1,
+  "generation": 6,
+  "target_version_group": "x-y",
+  "source": "PokeAPI/pokeapi CSV dataset (moves, move_changelog, move_flavor_text)",
+  "source_url": "https://github.com/PokeAPI/pokeapi/tree/master/data/v2/csv",
+  "derivation": "Current values rolled back for changes introduced after version-group 15; Spanish flavor text for version-group 15.",
+  "moves": {
+    "1": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 35,
+      "description_es": "Golpea con las patas o la cola."
+    },
+    "2": {
+      "power": 50,
+      "accuracy": 100,
+      "pp": 25,
+      "description_es": "Da un golpe cortante. Suele ser crítico."
+    },
+    "3": {
+      "power": 15,
+      "accuracy": 85,
+      "pp": 10,
+      "description_es": "Abofetea de dos a cinco veces seguidas."
+    },
+    "4": {
+      "power": 18,
+      "accuracy": 85,
+      "pp": 15,
+      "description_es": "Pega de dos a cinco veces seguidas."
+    },
+    "5": {
+      "power": 80,
+      "accuracy": 85,
+      "pp": 20,
+      "description_es": "Un puñetazo de gran potencia."
+    },
+    "6": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Arroja monedas al objetivo. Las recupera al final del combate."
+    },
+    "7": {
+      "power": 75,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Puñetazo ardiente. Puede quemar."
+    },
+    "8": {
+      "power": 75,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Puñetazo helado. Puede congelar."
+    },
+    "9": {
+      "power": 75,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Puñetazo eléctrico. Puede paralizar."
+    },
+    "10": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 35,
+      "description_es": "Araña con afiladas garras."
+    },
+    "11": {
+      "power": 55,
+      "accuracy": 100,
+      "pp": 30,
+      "description_es": "Atrapa y atenaza al objetivo."
+    },
+    "12": {
+      "power": null,
+      "accuracy": 30,
+      "pp": 5,
+      "description_es": "Ataque con pinzas que debilita al oponente de un golpe si acierta."
+    },
+    "13": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Primero se prepara y en el segundo turno ataca al oponente con ráfagas de viento cortante. Alta probabilidad de ser crítico."
+    },
+    "14": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Baile frenético que aumenta mucho el Ataque."
+    },
+    "15": {
+      "power": 50,
+      "accuracy": 95,
+      "pp": 30,
+      "description_es": "Corta con garras, guadañas, etc. También sirve para cortar árboles finos."
+    },
+    "16": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 35,
+      "description_es": "Crea un tornado con las alas y lo lanza contra el objetivo."
+    },
+    "17": {
+      "power": 60,
+      "accuracy": 100,
+      "pp": 35,
+      "description_es": "Golpea al objetivo con unas grandes alas."
+    },
+    "18": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Se lleva al objetivo, que es cambiado por otro Pokémon. Si es un Pokémon salvaje, acaba el combate."
+    },
+    "19": {
+      "power": 90,
+      "accuracy": 95,
+      "pp": 15,
+      "description_es": "Primer turno: vuela. Segundo turno: ataca. Fuera de combate, permite ir a sitios ya conocidos."
+    },
+    "20": {
+      "power": 15,
+      "accuracy": 85,
+      "pp": 20,
+      "description_es": "Ata y oprime de cuatro a cinco turnos."
+    },
+    "21": {
+      "power": 80,
+      "accuracy": 75,
+      "pp": 20,
+      "description_es": "Golpea con las extremidades."
+    },
+    "22": {
+      "power": 45,
+      "accuracy": 100,
+      "pp": 25,
+      "description_es": "Azota al objetivo con ramas finas."
+    },
+    "23": {
+      "power": 65,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Tremendo pisotón que puede hacer retroceder al objetivo."
+    },
+    "24": {
+      "power": 30,
+      "accuracy": 100,
+      "pp": 30,
+      "description_es": "Una patada doble. Golpea dos veces."
+    },
+    "25": {
+      "power": 120,
+      "accuracy": 75,
+      "pp": 5,
+      "description_es": "Patada de extrema fuerza."
+    },
+    "26": {
+      "power": 100,
+      "accuracy": 95,
+      "pp": 10,
+      "description_es": "Da un salto y pega una patada. Si falla, se lesiona."
+    },
+    "27": {
+      "power": 60,
+      "accuracy": 85,
+      "pp": 15,
+      "description_es": "Da una patada rápida y circular. Puede hacer retroceder al objetivo."
+    },
+    "28": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Arroja arena a la cara y baja la Precisión."
+    },
+    "29": {
+      "power": 70,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Lanza un potente cabezazo que puede hacer retroceder al objetivo."
+    },
+    "30": {
+      "power": 65,
+      "accuracy": 100,
+      "pp": 25,
+      "description_es": "Ataca al objetivo con una cornada."
+    },
+    "31": {
+      "power": 15,
+      "accuracy": 85,
+      "pp": 20,
+      "description_es": "Cornea al objetivo de dos a cinco veces."
+    },
+    "32": {
+      "power": null,
+      "accuracy": 30,
+      "pp": 5,
+      "description_es": "Ataque con taladro que fulmina en un golpe al objetivo si le toca."
+    },
+    "33": {
+      "power": 50,
+      "accuracy": 100,
+      "pp": 35,
+      "description_es": "Embiste con todo el cuerpo."
+    },
+    "34": {
+      "power": 85,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Salta sobre el objetivo con todo su peso. Puede paralizar."
+    },
+    "35": {
+      "power": 15,
+      "accuracy": 90,
+      "pp": 20,
+      "description_es": "Oprime al objetivo de cuatro a cinco turnos con ramas o con su cuerpo."
+    },
+    "36": {
+      "power": 90,
+      "accuracy": 85,
+      "pp": 20,
+      "description_es": "Carga desmedida que también hiere al agresor."
+    },
+    "37": {
+      "power": 120,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Ataca de dos a tres turnos y acaba confundiendo al agresor."
+    },
+    "38": {
+      "power": 120,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Ataque arriesgado que también hiere al agresor."
+    },
+    "39": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 30,
+      "description_es": "Agita la cola para bajar la Defensa del equipo rival."
+    },
+    "40": {
+      "power": 15,
+      "accuracy": 100,
+      "pp": 35,
+      "description_es": "Lanza un aguijón tóxico que puede envenenar al objetivo."
+    },
+    "41": {
+      "power": 25,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Pincha dos veces con dos espinas. Puede envenenar."
+    },
+    "42": {
+      "power": 25,
+      "accuracy": 95,
+      "pp": 20,
+      "description_es": "Lanza finas púas que hieren de dos a cinco veces."
+    },
+    "43": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 30,
+      "description_es": "Intimida a los rivales para bajar su Defensa."
+    },
+    "44": {
+      "power": 60,
+      "accuracy": 100,
+      "pp": 25,
+      "description_es": "Un voraz bocado que puede hacer retroceder al objetivo."
+    },
+    "45": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 40,
+      "description_es": "Dulce gruñido que reduce el Ataque del contrincante."
+    },
+    "46": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Se lleva al objetivo, que es cambiado por otro Pokémon. Si es un Pokémon salvaje, acaba el combate."
+    },
+    "47": {
+      "power": null,
+      "accuracy": 55,
+      "pp": 15,
+      "description_es": "Cancioncilla que hace dormir profundamente al objetivo."
+    },
+    "48": {
+      "power": null,
+      "accuracy": 55,
+      "pp": 20,
+      "description_es": "Raras ondas sónicas que confunden al objetivo."
+    },
+    "49": {
+      "power": null,
+      "accuracy": 90,
+      "pp": 20,
+      "description_es": "Lanza ondas de choque que restan 20 PS al objetivo."
+    },
+    "50": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Desactiva el último movimiento del objetivo durante cuatro turnos."
+    },
+    "51": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 30,
+      "description_es": "Rocía a los enemigos con un ácido corrosivo. Puede bajar la Defensa Especial."
+    },
+    "52": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 25,
+      "description_es": "Ataca con llamas pequeñas que pueden causar quemaduras."
+    },
+    "53": {
+      "power": 90,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Ataca con una gran ráfaga de fuego que puede causar quemaduras."
+    },
+    "54": {
+      "power": null,
+      "accuracy": null,
+      "pp": 30,
+      "description_es": "Rodea de fina niebla al usuario y protege las características de su equipo durante cinco turnos."
+    },
+    "55": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 25,
+      "description_es": "Ataca disparando agua con gran potencia."
+    },
+    "56": {
+      "power": 110,
+      "accuracy": 80,
+      "pp": 5,
+      "description_es": "Lanza una gran masa de agua a presión para atacar."
+    },
+    "57": {
+      "power": 90,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Inunda el campo de batalla con una ola gigante. Fuera de batalla sirve para moverse sobre el agua."
+    },
+    "58": {
+      "power": 90,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Rayo de hielo que puede llegar a congelar."
+    },
+    "59": {
+      "power": 110,
+      "accuracy": 70,
+      "pp": 5,
+      "description_es": "Tormenta de hielo que puede llegar a congelar."
+    },
+    "60": {
+      "power": 65,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Extraño rayo que puede causar confusión."
+    },
+    "61": {
+      "power": 65,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Diluvio de burbujas que puede bajar la Velocidad."
+    },
+    "62": {
+      "power": 65,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Rayo multicolor que puede reducir el Ataque."
+    },
+    "63": {
+      "power": 150,
+      "accuracy": 90,
+      "pp": 5,
+      "description_es": "Es eficaz, pero el atacante deberá descansar en el siguiente turno."
+    },
+    "64": {
+      "power": 35,
+      "accuracy": 100,
+      "pp": 35,
+      "description_es": "Ensarta al objetivo con un cuerno o pico punzante."
+    },
+    "65": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Picotazo giratorio y perforador muy potente."
+    },
+    "66": {
+      "power": 80,
+      "accuracy": 80,
+      "pp": 20,
+      "description_es": "Tira al objetivo al suelo. También hiere al agresor."
+    },
+    "67": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Patada baja. Cuanto más pesa el objetivo, más daño causa."
+    },
+    "68": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Devuelve un golpe físico por duplicado."
+    },
+    "69": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "La gravedad derriba al objetivo. Se restarán tantos PS como nivel tenga el agresor."
+    },
+    "70": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Potente puñetazo. Fuera de combate sirve para mover rocas."
+    },
+    "71": {
+      "power": 20,
+      "accuracy": 100,
+      "pp": 25,
+      "description_es": "Absorbe la mitad del daño producido en el objetivo para restaurar los PS del usuario."
+    },
+    "72": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Absorbe la mitad del daño producido en el objetivo para restaurar los PS del usuario."
+    },
+    "73": {
+      "power": null,
+      "accuracy": 90,
+      "pp": 10,
+      "description_es": "Planta semillas que absorben PS para recuperar la salud del usuario en cada turno."
+    },
+    "74": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "El cuerpo del usuario crece a marchas forzadas y aumenta el Ataque y el Ataque Especial."
+    },
+    "75": {
+      "power": 55,
+      "accuracy": 95,
+      "pp": 25,
+      "description_es": "Corta con hojas afiladas. Suele ser crítico."
+    },
+    "76": {
+      "power": 120,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Primer turno: absorbe luz. Segundo turno: lanza un potente rayo de energía."
+    },
+    "77": {
+      "power": null,
+      "accuracy": 75,
+      "pp": 35,
+      "description_es": "Polvo tóxico que envenena al objetivo."
+    },
+    "78": {
+      "power": null,
+      "accuracy": 75,
+      "pp": 30,
+      "description_es": "Esparce polvo que paraliza al objetivo."
+    },
+    "79": {
+      "power": null,
+      "accuracy": 75,
+      "pp": 15,
+      "description_es": "Esparce polvo que duerme al objetivo."
+    },
+    "80": {
+      "power": 120,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Lanza pétalos de dos a tres turnos y acaba confundiendo al atacante."
+    },
+    "81": {
+      "power": null,
+      "accuracy": 95,
+      "pp": 40,
+      "description_es": "Lanza seda a los rivales y reduce mucho su Velocidad."
+    },
+    "82": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Ráfaga de furiosas ondas de choque que quitan 40 PS."
+    },
+    "83": {
+      "power": 35,
+      "accuracy": 85,
+      "pp": 15,
+      "description_es": "Un aro de fuego que atrapa al objetivo de cuatro a cinco turnos."
+    },
+    "84": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 30,
+      "description_es": "Ataque eléctrico que puede paralizar al objetivo."
+    },
+    "85": {
+      "power": 90,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Potente ataque eléctrico que puede paralizar al objetivo."
+    },
+    "86": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Una ligera descarga que paraliza al objetivo si lo alcanza."
+    },
+    "87": {
+      "power": 110,
+      "accuracy": 70,
+      "pp": 10,
+      "description_es": "Un poderoso rayo que daña al objetivo y puede paralizarlo."
+    },
+    "88": {
+      "power": 50,
+      "accuracy": 90,
+      "pp": 15,
+      "description_es": "Tira una pequeña roca al objetivo."
+    },
+    "89": {
+      "power": 100,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Un terremoto que afecta a los Pokémon de alrededor en combate."
+    },
+    "90": {
+      "power": null,
+      "accuracy": 30,
+      "pp": 5,
+      "description_es": "Abre una grieta en el suelo y mete al objetivo en ella. Fulmina en un golpe."
+    },
+    "91": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Primer turno: cava. Segundo turno: ataca. También sirve para salir de ciertas zonas."
+    },
+    "92": {
+      "power": null,
+      "accuracy": 90,
+      "pp": 10,
+      "description_es": "Envenena gravemente al objetivo y causa un daño mayor en cada turno."
+    },
+    "93": {
+      "power": 50,
+      "accuracy": 100,
+      "pp": 25,
+      "description_es": "Débil ataque telequinético que puede causar confusión."
+    },
+    "94": {
+      "power": 90,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Fuerte ataque telequinético que puede bajar la Defensa Especial del objetivo."
+    },
+    "95": {
+      "power": null,
+      "accuracy": 60,
+      "pp": 20,
+      "description_es": "Ataque hipnótico que hace dormir profundamente al objetivo."
+    },
+    "96": {
+      "power": null,
+      "accuracy": null,
+      "pp": 40,
+      "description_es": "El usuario reposa y medita para potenciar el Ataque."
+    },
+    "97": {
+      "power": null,
+      "accuracy": null,
+      "pp": 30,
+      "description_es": "Relaja el cuerpo para ganar mucha Velocidad."
+    },
+    "98": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 30,
+      "description_es": "Ataque rápido que permite golpear en primer lugar."
+    },
+    "99": {
+      "power": 20,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Al usarse, aumenta el Ataque del usuario cada vez que es golpeado."
+    },
+    "100": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Permite huir al instante de combates contra Pokémon salvajes o viajar al último Centro Pokémon visitado."
+    },
+    "101": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Produce un espejismo ante el objetivo, que pierde tantos PS como nivel tenga el agresor."
+    },
+    "102": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Copia el último movimiento usado por el objetivo. Dicho movimiento se podrá usar mientras el Pokémon no sea cambiado."
+    },
+    "103": {
+      "power": null,
+      "accuracy": 85,
+      "pp": 40,
+      "description_es": "Alarido agudo que reduce mucho la Defensa del objetivo."
+    },
+    "104": {
+      "power": null,
+      "accuracy": null,
+      "pp": 15,
+      "description_es": "Crea copias de sí mismo para mejorar la Evasión."
+    },
+    "105": {
+      "power": null,
+      "accuracy": null,
+      "pp": 5,
+      "description_es": "Restaura hasta la mitad de los PS máximos."
+    },
+    "106": {
+      "power": null,
+      "accuracy": null,
+      "pp": 30,
+      "description_es": "Tensa la musculatura del usuario para aumentar la Defensa."
+    },
+    "107": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "El usuario mengua para aumentar mucho la Evasión."
+    },
+    "108": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Baja la Precisión del objetivo con una nube de humo o tinta."
+    },
+    "109": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Rayo siniestro que confunde al objetivo."
+    },
+    "110": {
+      "power": null,
+      "accuracy": null,
+      "pp": 40,
+      "description_es": "El usuario se protege en su coraza y sube la Defensa."
+    },
+    "111": {
+      "power": null,
+      "accuracy": null,
+      "pp": 40,
+      "description_es": "Se enrosca para ocultar su punto débil. Sube la Defensa."
+    },
+    "112": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Crea una barrera que aumenta mucho la Defensa."
+    },
+    "113": {
+      "power": null,
+      "accuracy": null,
+      "pp": 30,
+      "description_es": "Pared de luz que reduce durante cinco turnos el daño producido por los ataques especiales."
+    },
+    "114": {
+      "power": null,
+      "accuracy": null,
+      "pp": 30,
+      "description_es": "Neblina que elimina los cambios de características de todos los Pokémon en combate."
+    },
+    "115": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Pared de luz que reduce durante cinco turnos el daño producido por los ataques físicos."
+    },
+    "116": {
+      "power": null,
+      "accuracy": null,
+      "pp": 30,
+      "description_es": "Concentra energía para aumentar las posibilidades de un golpe crítico."
+    },
+    "117": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Espera dos turnos para atacar con el doble de potencia del daño recibido."
+    },
+    "118": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "El usuario mueve un dedo y estimula su cerebro para usar al azar casi cualquier movimiento."
+    },
+    "119": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Contraataca con el mismo movimiento empleado por el objetivo."
+    },
+    "120": {
+      "power": 200,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "El atacante explota y hiere a todos a su alrededor. El usuario se debilita de inmediato."
+    },
+    "121": {
+      "power": 100,
+      "accuracy": 75,
+      "pp": 10,
+      "description_es": "Arroja un huevo al objetivo con gran fuerza."
+    },
+    "122": {
+      "power": 30,
+      "accuracy": 100,
+      "pp": 30,
+      "description_es": "Una lengua ataca al objetivo. Puede causar parálisis."
+    },
+    "123": {
+      "power": 30,
+      "accuracy": 70,
+      "pp": 20,
+      "description_es": "El objetivo es atacado con gases tóxicos que pueden llegar a envenenar."
+    },
+    "124": {
+      "power": 65,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Arroja residuos al objetivo. Puede llegar a envenenar."
+    },
+    "125": {
+      "power": 65,
+      "accuracy": 85,
+      "pp": 20,
+      "description_es": "Aporrea con un hueso. Puede hacer retroceder al objetivo."
+    },
+    "126": {
+      "power": 110,
+      "accuracy": 85,
+      "pp": 5,
+      "description_es": "Llama intensa que chamusca y puede causar quemaduras."
+    },
+    "127": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Embiste con un gran impulso que puede hacer retroceder. También sirve para remontar cascadas."
+    },
+    "128": {
+      "power": 35,
+      "accuracy": 85,
+      "pp": 15,
+      "description_es": "Atrapa y atenaza con fuerza durante cuatro o cinco turnos."
+    },
+    "129": {
+      "power": 60,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Lanza rayos en forma de estrella que no fallan nunca."
+    },
+    "130": {
+      "power": 130,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Primer turno: se prepara y sube la Defensa del usuario. Segundo turno: da el cabezazo."
+    },
+    "131": {
+      "power": 20,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Lanza finas púas que hieren de dos a cinco veces."
+    },
+    "132": {
+      "power": 10,
+      "accuracy": 100,
+      "pp": 35,
+      "description_es": "Constriñe para herir y puede bajar la Velocidad."
+    },
+    "133": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "El usuario olvida sus preocupaciones y aumenta mucho la Defensa Especial."
+    },
+    "134": {
+      "power": null,
+      "accuracy": 80,
+      "pp": 15,
+      "description_es": "Dobla una cuchara para distraer al objetivo y bajar su nivel de Precisión."
+    },
+    "135": {
+      "power": null,
+      "accuracy": null,
+      "pp": 5,
+      "description_es": "Restaura la mitad de los PS máximos del usuario. Fuera de combate se usa para transferir parte de sus PS a un aliado."
+    },
+    "136": {
+      "power": 130,
+      "accuracy": 90,
+      "pp": 10,
+      "description_es": "Salta muy alto y lanza una patada. Si falla, dañará al usuario."
+    },
+    "137": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 30,
+      "description_es": "Intimida y asusta al objetivo con la mirada para dejarlo paralizado."
+    },
+    "138": {
+      "power": 100,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Restaura al usuario la mitad del daño causado a un objetivo dormido."
+    },
+    "139": {
+      "power": null,
+      "accuracy": 90,
+      "pp": 40,
+      "description_es": "Lanza una nube de gas tóxico a los rivales. Produce envenenamiento."
+    },
+    "140": {
+      "power": 15,
+      "accuracy": 85,
+      "pp": 20,
+      "description_es": "Arroja esferas al objetivo entre dos y cinco veces seguidas."
+    },
+    "141": {
+      "power": 20,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Restaura al usuario la mitad del daño causado al objetivo."
+    },
+    "142": {
+      "power": null,
+      "accuracy": 75,
+      "pp": 10,
+      "description_es": "Con una cara que asusta, da un beso al objetivo y lo adormece."
+    },
+    "143": {
+      "power": 140,
+      "accuracy": 90,
+      "pp": 5,
+      "description_es": "Ataque en dos turnos que suele ser crítico. Puede hacer retroceder al objetivo."
+    },
+    "144": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "El usuario se transforma en una copia del objetivo, con los mismos movimientos."
+    },
+    "145": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 30,
+      "description_es": "Lanza burbujas a los contrincantes y puede reducir su Velocidad."
+    },
+    "146": {
+      "power": 70,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Rítmicos puñetazos que pueden causar confusión."
+    },
+    "147": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Esparce esporas que inducen al sueño."
+    },
+    "148": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Luz cegadora que baja la Precisión del objetivo."
+    },
+    "149": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Ataque con una onda de energía de intensidad variable."
+    },
+    "150": {
+      "power": null,
+      "accuracy": null,
+      "pp": 40,
+      "description_es": "No tiene ningún efecto. Solo salpica."
+    },
+    "151": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Transforma la estructura celular para hacerse líquido y aumenta mucho la Defensa."
+    },
+    "152": {
+      "power": 100,
+      "accuracy": 90,
+      "pp": 10,
+      "description_es": "Golpea con fuerza con una pinza enorme. Suele ser crítico."
+    },
+    "153": {
+      "power": 250,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "El atacante causa una grandísima explosión y hiere a todos a su alrededor. El usuario se debilita de inmediato."
+    },
+    "154": {
+      "power": 18,
+      "accuracy": 80,
+      "pp": 15,
+      "description_es": "Araña rápidamente de dos a cinco veces."
+    },
+    "155": {
+      "power": 50,
+      "accuracy": 90,
+      "pp": 10,
+      "description_es": "Lanza un hueso a modo de bumerán que golpea dos veces."
+    },
+    "156": {
+      "power": null,
+      "accuracy": null,
+      "pp": 5,
+      "description_es": "Restaura todos los PS y cura todos los problemas de estado del usuario. Duerme los dos próximos turnos."
+    },
+    "157": {
+      "power": 75,
+      "accuracy": 90,
+      "pp": 10,
+      "description_es": "Lanza grandes pedruscos. Puede hacer retroceder a los rivales."
+    },
+    "158": {
+      "power": 80,
+      "accuracy": 90,
+      "pp": 15,
+      "description_es": "Ataque con finos colmillos. Puede hacer retroceder al objetivo."
+    },
+    "159": {
+      "power": null,
+      "accuracy": null,
+      "pp": 30,
+      "description_es": "El perfil del usuario se hace más afilado y su Ataque mejora."
+    },
+    "160": {
+      "power": null,
+      "accuracy": null,
+      "pp": 30,
+      "description_es": "Cambia el tipo del usuario por el del primero de sus movimientos."
+    },
+    "161": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Ataque triple que puede paralizar, quemar o congelar al objetivo."
+    },
+    "162": {
+      "power": null,
+      "accuracy": 90,
+      "pp": 10,
+      "description_es": "Finos colmillos que reducen a la mitad los PS del objetivo."
+    },
+    "163": {
+      "power": 70,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Ataca con cuchillas o con pinzas. Suele dar un golpe crítico."
+    },
+    "164": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Utiliza parte de los PS propios para crear un sustituto que actúa como señuelo."
+    },
+    "165": {
+      "power": 50,
+      "accuracy": null,
+      "pp": 1,
+      "description_es": "Solo se usa como último recurso al acabarse los PP. Hiere un poco al agresor."
+    },
+    "166": {
+      "power": null,
+      "accuracy": null,
+      "pp": 1,
+      "description_es": "Aprende de forma permanente el último movimiento utilizado por el objetivo. Es de un solo uso."
+    },
+    "167": {
+      "power": 10,
+      "accuracy": 90,
+      "pp": 10,
+      "description_es": "Patea hasta tres veces seguidas y cada vez más fuerte."
+    },
+    "168": {
+      "power": 60,
+      "accuracy": 100,
+      "pp": 25,
+      "description_es": "Ataca y le quita al objetivo el objeto que lleve. Si el agresor lleva un objeto, no robará el del objetivo."
+    },
+    "169": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Enreda al objetivo para evitar que abandone la batalla."
+    },
+    "170": {
+      "power": null,
+      "accuracy": null,
+      "pp": 5,
+      "description_es": "El usuario adivina los movimientos del objetivo para hacer que su siguiente ataque no falle."
+    },
+    "171": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "El objetivo dormido sufre una pesadilla que le hace perder PS en cada turno."
+    },
+    "172": {
+      "power": 60,
+      "accuracy": 100,
+      "pp": 25,
+      "description_es": "Ataca envuelto en fuego. Puede causar quemaduras."
+    },
+    "173": {
+      "power": 50,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Fuerte ronquido que solo puede usarse dormido. Puede hacer retroceder al objetivo."
+    },
+    "174": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Un movimiento que tiene efectos distintos si el usuario es de tipo Fantasma o no."
+    },
+    "175": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Ataque frenético. Cuantos menos PS tenga el usuario, más daño producirá."
+    },
+    "176": {
+      "power": null,
+      "accuracy": null,
+      "pp": 30,
+      "description_es": "El usuario cambia de tipo para hacerse resistente al último tipo de movimiento usado por el objetivo."
+    },
+    "177": {
+      "power": 100,
+      "accuracy": 95,
+      "pp": 5,
+      "description_es": "Lanza un chorro de aire que suele dar un golpe crítico."
+    },
+    "178": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 40,
+      "description_es": "Adhiere esporas a los rivales para reducir mucho su Velocidad."
+    },
+    "179": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Ataque desesperado que causa más daño cuantos menos PS tenga el usuario."
+    },
+    "180": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Da rienda suelta a su rencor para reducir cuatro PP del último movimiento usado por el objetivo."
+    },
+    "181": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 25,
+      "description_es": "Lanza nieve que puede llegar a congelar."
+    },
+    "182": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Frena todos los ataques, pero puede fallar si se usa repetidamente."
+    },
+    "183": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 30,
+      "description_es": "Puñetazo que se da rápido para golpear primero."
+    },
+    "184": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Asusta al objetivo para reducir mucho su Velocidad."
+    },
+    "185": {
+      "power": 60,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Engaña al objetivo para acercarse y dar un puñetazo que no falla."
+    },
+    "186": {
+      "power": null,
+      "accuracy": 75,
+      "pp": 10,
+      "description_es": "Da un beso con tal dulzura que causa confusión."
+    },
+    "187": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Reduce la mitad de los PS máximos para mejorar al máximo el Ataque."
+    },
+    "188": {
+      "power": 90,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Arroja residuos al objetivo. Puede llegar a envenenar."
+    },
+    "189": {
+      "power": 20,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Echa lodo en la cara para bajar la Precisión."
+    },
+    "190": {
+      "power": 65,
+      "accuracy": 85,
+      "pp": 10,
+      "description_es": "Dispara tinta a la cara. Puede bajar la Precisión."
+    },
+    "191": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Esparce púas en el equipo rival. Las púas hieren a los Pokémon rivales que entran en combate."
+    },
+    "192": {
+      "power": 120,
+      "accuracy": 50,
+      "pp": 5,
+      "description_es": "Dispara una descarga eléctrica que causa daño y parálisis."
+    },
+    "193": {
+      "power": null,
+      "accuracy": null,
+      "pp": 40,
+      "description_es": "Permite atacar con cualquier movimiento a objetivos de tipo Fantasma y golpear a Pokémon evasivos."
+    },
+    "194": {
+      "power": null,
+      "accuracy": null,
+      "pp": 5,
+      "description_es": "Si el usuario se debilita por un ataque rival antes de usar otro movimiento, el Pokémon rival se debilitará también."
+    },
+    "195": {
+      "power": null,
+      "accuracy": null,
+      "pp": 5,
+      "description_es": "Si un Pokémon escucha este canto y no es cambiado por otro en tres turnos, acaba debilitándose."
+    },
+    "196": {
+      "power": 55,
+      "accuracy": 95,
+      "pp": 15,
+      "description_es": "Ataque con aire helado que baja la Velocidad de los rivales."
+    },
+    "197": {
+      "power": null,
+      "accuracy": null,
+      "pp": 5,
+      "description_es": "Frena todos los ataques, pero puede fallar si se usa repetidamente."
+    },
+    "198": {
+      "power": 25,
+      "accuracy": 90,
+      "pp": 10,
+      "description_es": "Hueso en ristre, aporrea al objetivo de dos a cinco veces."
+    },
+    "199": {
+      "power": null,
+      "accuracy": null,
+      "pp": 5,
+      "description_es": "Fija el blanco para que el siguiente ataque no falle."
+    },
+    "200": {
+      "power": 120,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Ataca de dos a tres turnos y acaba confundiendo al agresor."
+    },
+    "201": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Tormenta de arena que dura cinco turnos y hiere a todos, excepto a los de tipo Roca, Tierra y Acero."
+    },
+    "202": {
+      "power": 75,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Un ataque que absorbe nutrientes. Quien lo usa recupera la mitad de los PS del daño que produce."
+    },
+    "203": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Resiste cualquier ataque y deja al menos 1 PS. Puede fallar si se usa repetidamente."
+    },
+    "204": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Engatusa al objetivo y reduce bastante su Ataque."
+    },
+    "205": {
+      "power": 30,
+      "accuracy": 90,
+      "pp": 20,
+      "description_es": "El atacante rueda contra el objetivo durante cinco turnos, cada vez con mayor fuerza."
+    },
+    "206": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 40,
+      "description_es": "Ataque moderado que no debilita al objetivo y le deja al menos 1 PS."
+    },
+    "207": {
+      "power": null,
+      "accuracy": 90,
+      "pp": 15,
+      "description_es": "Provoca confusión en el objetivo, pero también sube mucho su Ataque."
+    },
+    "208": {
+      "power": null,
+      "accuracy": null,
+      "pp": 5,
+      "description_es": "Restaura la mitad de los PS máximos del usuario. Fuera de combate se usa para transferir parte de sus PS a un aliado."
+    },
+    "209": {
+      "power": 65,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Ataque eléctrico que puede llegar a paralizar."
+    },
+    "210": {
+      "power": 40,
+      "accuracy": 95,
+      "pp": 20,
+      "description_es": "Ataque con garras o guadaña que crece en intensidad si se usa repetidas veces."
+    },
+    "211": {
+      "power": 70,
+      "accuracy": 90,
+      "pp": 25,
+      "description_es": "Alas macizas que golpean al objetivo y pueden subir la Defensa del usuario."
+    },
+    "212": {
+      "power": null,
+      "accuracy": null,
+      "pp": 5,
+      "description_es": "Mal de ojo que impide al objetivo huir de la batalla."
+    },
+    "213": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Si el objetivo es del sexo opuesto, se enamorará y bajará la posibilidad de que ataque."
+    },
+    "214": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Mientras duerme, usa uno de sus movimientos elegido al azar."
+    },
+    "215": {
+      "power": null,
+      "accuracy": null,
+      "pp": 5,
+      "description_es": "Tañido que cura los problemas de estado de todos los Pokémon del equipo."
+    },
+    "216": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Cuanto mayor sea la amistad con el Entrenador, más poderoso será este ataque."
+    },
+    "217": {
+      "power": null,
+      "accuracy": 90,
+      "pp": 15,
+      "description_es": "Quien lo usa ataca al objetivo dándole un regalo con bomba trampa. Sin embargo, a veces restaura sus PS."
+    },
+    "218": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Cuanto menor sea la amistad con el Entrenador, más poderoso será este ataque."
+    },
+    "219": {
+      "power": null,
+      "accuracy": null,
+      "pp": 25,
+      "description_es": "Un escudo que protege de problemas de estado, como el sueño o la parálisis, durante cinco turnos."
+    },
+    "220": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Suma los PS del usuario a los del objetivo y los reparte a partes iguales."
+    },
+    "221": {
+      "power": 100,
+      "accuracy": 95,
+      "pp": 5,
+      "description_es": "Fuego místico de gran intensidad que puede causar quemaduras."
+    },
+    "222": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 30,
+      "description_es": "Sacudida sísmica de intensidad variable que afecta a todos los Pokémon a su alrededor."
+    },
+    "223": {
+      "power": 100,
+      "accuracy": 50,
+      "pp": 5,
+      "description_es": "Puñetazo con toda la fuerza concentrada. Causa confusión si atina."
+    },
+    "224": {
+      "power": 120,
+      "accuracy": 85,
+      "pp": 10,
+      "description_es": "Violenta embestida con cuernos imponentes."
+    },
+    "225": {
+      "power": 60,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Poderosa ráfaga de aliento que golpea al objetivo y puede paralizarlo."
+    },
+    "226": {
+      "power": null,
+      "accuracy": null,
+      "pp": 40,
+      "description_es": "Cambia el puesto con un compañero y le pasa los cambios de características."
+    },
+    "227": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "El objetivo repite su último movimiento durante tres turnos."
+    },
+    "228": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Hace el doble de daño al objetivo que pide el relevo."
+    },
+    "229": {
+      "power": 20,
+      "accuracy": 100,
+      "pp": 40,
+      "description_es": "Ataque giratorio que puede eliminar movimientos como Atadura, Constricción, Drenadoras y Púas."
+    },
+    "230": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Un dulce aroma engatusa al objetivo, por lo que se reduce mucho su Evasión. En la hierba alta sirve para atraer a Pokémon salvajes."
+    },
+    "231": {
+      "power": 100,
+      "accuracy": 75,
+      "pp": 15,
+      "description_es": "Ataca con una cola férrea y puede bajar la Defensa del objetivo."
+    },
+    "232": {
+      "power": 50,
+      "accuracy": 95,
+      "pp": 35,
+      "description_es": "Ataque con garras de acero que puede aumentar el Ataque del usuario."
+    },
+    "233": {
+      "power": 70,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "El usuario ataca el último, pero no falla."
+    },
+    "234": {
+      "power": null,
+      "accuracy": null,
+      "pp": 5,
+      "description_es": "Restaura PS del usuario. La cantidad varía según el tiempo que haga."
+    },
+    "235": {
+      "power": null,
+      "accuracy": null,
+      "pp": 5,
+      "description_es": "Restaura PS del usuario. La cantidad varía según el tiempo que haga."
+    },
+    "236": {
+      "power": null,
+      "accuracy": null,
+      "pp": 5,
+      "description_es": "Restaura PS del usuario. La cantidad varía según el tiempo que haga."
+    },
+    "237": {
+      "power": 60,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Movimiento cuyo tipo varía en función del Pokémon que lo usa."
+    },
+    "238": {
+      "power": 100,
+      "accuracy": 80,
+      "pp": 5,
+      "description_es": "Corte doble que suele propinar un golpe crítico."
+    },
+    "239": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Crea un violento tornado para hacer trizas al enemigo. Puede hacerlo retroceder."
+    },
+    "240": {
+      "power": null,
+      "accuracy": null,
+      "pp": 5,
+      "description_es": "Genera una fuerte lluvia que refuerza los movimientos de tipo Agua durante cinco turnos."
+    },
+    "241": {
+      "power": null,
+      "accuracy": null,
+      "pp": 5,
+      "description_es": "Quien lo usa intensifica el efecto del sol durante cinco turnos, lo que potencia los movimientos de tipo Fuego."
+    },
+    "242": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Tritura con afilados colmillos y puede bajar la Defensa del objetivo."
+    },
+    "243": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Responde a un ataque especial ocasionando el doble del daño recibido."
+    },
+    "244": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Quien lo usa se hipnotiza y copia cualquier cambio que haya en las características de su objetivo."
+    },
+    "245": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "Ataque muy rápido que siempre se realiza el primero."
+    },
+    "246": {
+      "power": 60,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "Ataque prehistórico que puede subir todas las características."
+    },
+    "247": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Lanza una bola oscura que puede bajar la Defensa Especial del objetivo."
+    },
+    "248": {
+      "power": 120,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Concentra energía psíquica para golpear al objetivo dos turnos después."
+    },
+    "249": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Ataque con los puños. Puede bajar la Defensa del objetivo. Puede romper rocas fuera del combate."
+    },
+    "250": {
+      "power": 35,
+      "accuracy": 85,
+      "pp": 15,
+      "description_es": "Una tromba de agua atrapa al objetivo durante cuatro o cinco turnos."
+    },
+    "251": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Ataque de todo el equipo Pokémon. Cuantos más haya, más veces se atacará."
+    },
+    "252": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Ataca primero y, además, hace retroceder al objetivo. Solo sirve en el primer turno."
+    },
+    "253": {
+      "power": 90,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Ataca de forma alborotada durante tres turnos. Mantiene despiertos a todos."
+    },
+    "254": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Acumula energía y sube la Defensa y la Defensa Especial. Puede utilizarse hasta tres veces."
+    },
+    "255": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Libera de una vez la energía acumulada con Reserva."
+    },
+    "256": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Absorbe la energía acumulada con Reserva y restaura PS."
+    },
+    "257": {
+      "power": 95,
+      "accuracy": 90,
+      "pp": 10,
+      "description_es": "Provoca un viento abrasador que puede quemar al objetivo."
+    },
+    "258": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Tormenta de granizo que dura cinco turnos. Hiere a todos, excepto a los de tipo Hielo."
+    },
+    "259": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Atormenta y enfurece al objetivo, que no puede usar dos veces seguidas el mismo movimiento."
+    },
+    "260": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Halaga al objetivo y lo confunde, pero también sube su Ataque Especial."
+    },
+    "261": {
+      "power": null,
+      "accuracy": 85,
+      "pp": 15,
+      "description_es": "Siniestra llama morada que produce quemaduras."
+    },
+    "262": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "El usuario se debilita, pero baja mucho tanto el Ataque como el Ataque Especial del objetivo."
+    },
+    "263": {
+      "power": 70,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Ataca con el doble de potencia si el usuario está quemado, paralizado o envenenado."
+    },
+    "264": {
+      "power": 150,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Se concentra para dar un puñetazo. Falla si se sufre un golpe antes de su uso."
+    },
+    "265": {
+      "power": 70,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Hace el doble de daño a objetivos paralizados, pero también cura la parálisis."
+    },
+    "266": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Llama la atención para concentrar todos los ataques de todos los del equipo rival hacia sí mismo."
+    },
+    "267": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Usa el poder de la naturaleza para atacar. Su efecto varía según el entorno de combate."
+    },
+    "268": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Recarga energía para potenciar el siguiente movimiento de tipo Eléctrico. También sube la Defensa Especial."
+    },
+    "269": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Enfurece al objetivo para que solo use movimientos de ataque durante tres turnos."
+    },
+    "270": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "El usuario ayuda a un aliado reforzando la potencia de su ataque."
+    },
+    "271": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Engaña al objetivo desprevenido e intercambia objetos."
+    },
+    "272": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Imita al objetivo por completo y copia su habilidad."
+    },
+    "273": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Restaura la mitad de los PS máximos en el siguiente turno."
+    },
+    "274": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Usa un movimiento de un miembro del equipo elegido al azar."
+    },
+    "275": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Echa raíces para recuperar PS en cada turno, pero impide el relevo."
+    },
+    "276": {
+      "power": 120,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "Ataque de gran potencia, pero que reduce el Ataque y la Defensa del agresor."
+    },
+    "277": {
+      "power": null,
+      "accuracy": null,
+      "pp": 15,
+      "description_es": "Barrera capaz de devolver al agresor movimientos como Drenadoras y otros que alteran el estado o las características."
+    },
+    "278": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Recicla y así recupera un objeto equipado de un solo uso que ya haya sido empleado durante el combate."
+    },
+    "279": {
+      "power": 60,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Ataque que produce el doble de daño si el usuario es herido en el mismo turno."
+    },
+    "280": {
+      "power": 75,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Potente ataque que también es capaz de destruir barreras como Pantalla de Luz y Reflejo."
+    },
+    "281": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Gran bostezo que induce al sueño al objetivo en el siguiente turno."
+    },
+    "282": {
+      "power": 65,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Impide al objetivo usar el objeto que lleva durante el combate. La potencia del movimiento se multiplica si el objetivo lleva un objeto."
+    },
+    "283": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "Reduce los PS del objetivo para que igualen a los del atacante."
+    },
+    "284": {
+      "power": 150,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "Furia explosiva. Cuanto menor sea el número de PS del usuario, menos daño hará el ataque."
+    },
+    "285": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Usa el poder psíquico para intercambiar habilidades con el objetivo."
+    },
+    "286": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Impide a los contrincantes usar ataques conocidos por el usuario durante el combate."
+    },
+    "287": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Descansa para curar parálisis, envenenamiento o quemaduras."
+    },
+    "288": {
+      "power": null,
+      "accuracy": null,
+      "pp": 5,
+      "description_es": "Si el usuario se debilita al recibir un ataque, todos los PP de este último ataque serán eliminados."
+    },
+    "289": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Roba el efecto de los movimientos de curación o de cambio de características que se usen."
+    },
+    "290": {
+      "power": 70,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Ataque con poder secreto cuyos efectos secundarios varían según el entorno de combate."
+    },
+    "291": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "El usuario se sumerge en el primer turno y ataca en el segundo."
+    },
+    "292": {
+      "power": 15,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Empujones directos que golpean de dos a cinco veces seguidas."
+    },
+    "293": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Modifica el tipo del Pokémon según el terreno de combate donde esté."
+    },
+    "294": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Se concentra en una ráfaga de luz que sube muchísimo el Ataque Especial."
+    },
+    "295": {
+      "power": 95,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "Fogonazo de luz que puede bajar la Defensa Especial del objetivo."
+    },
+    "296": {
+      "power": 70,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "Banco de niebla que puede bajar el Ataque Especial del objetivo."
+    },
+    "297": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Envuelve al objetivo con un manto de plumas para reducir mucho su Ataque."
+    },
+    "298": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Danza histérica que confunde a los Pokémon que están alrededor del usuario."
+    },
+    "299": {
+      "power": 85,
+      "accuracy": 90,
+      "pp": 10,
+      "description_es": "Patada que suele ser un golpe crítico y puede causar quemaduras."
+    },
+    "300": {
+      "power": null,
+      "accuracy": null,
+      "pp": 15,
+      "description_es": "El usuario esparce lodo a su alrededor, lo que debilita los movimientos de tipo Eléctrico durante cinco turnos."
+    },
+    "301": {
+      "power": 30,
+      "accuracy": 90,
+      "pp": 20,
+      "description_es": "El atacante rueda contra el objetivo durante cinco turnos, cada vez con mayor fuerza."
+    },
+    "302": {
+      "power": 60,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Pega con brazos de pinchos y puede hacer retroceder al objetivo."
+    },
+    "303": {
+      "power": null,
+      "accuracy": null,
+      "pp": 5,
+      "description_es": "El usuario se relaja y restaura la mitad de sus PS máximos."
+    },
+    "304": {
+      "power": 90,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Grito desgarrador que inflige daño al objetivo."
+    },
+    "305": {
+      "power": 50,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Colmillos tóxicos que pueden envenenar gravemente al objetivo."
+    },
+    "306": {
+      "power": 75,
+      "accuracy": 95,
+      "pp": 10,
+      "description_es": "Hace trizas al objetivo con garras afiladas y puede bajar su Defensa."
+    },
+    "307": {
+      "power": 150,
+      "accuracy": 90,
+      "pp": 5,
+      "description_es": "Explosión de fuego. El atacante debe descansar el siguiente turno."
+    },
+    "308": {
+      "power": 150,
+      "accuracy": 90,
+      "pp": 5,
+      "description_es": "Disparo de agua. El atacante debe descansar el siguiente turno."
+    },
+    "309": {
+      "power": 90,
+      "accuracy": 90,
+      "pp": 10,
+      "description_es": "Puñetazo que impacta como un meteorito y puede subir el Ataque del agresor."
+    },
+    "310": {
+      "power": 30,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Impresiona tanto que puede hacer retroceder al objetivo."
+    },
+    "311": {
+      "power": 50,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "El tipo y fuerza del ataque varían según el tiempo que haga."
+    },
+    "312": {
+      "power": null,
+      "accuracy": null,
+      "pp": 5,
+      "description_es": "Cura todos los problemas de estado del equipo con un suave aroma."
+    },
+    "313": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Lágrimas de cocodrilo que bajan mucho la Defensa Especial del objetivo."
+    },
+    "314": {
+      "power": 60,
+      "accuracy": 95,
+      "pp": 25,
+      "description_es": "Viento cortante que azota. Suele ser un golpe crítico."
+    },
+    "315": {
+      "power": 130,
+      "accuracy": 90,
+      "pp": 5,
+      "description_es": "Ataque en toda regla que baja mucho el Ataque Especial de quien lo usa."
+    },
+    "316": {
+      "power": null,
+      "accuracy": null,
+      "pp": 40,
+      "description_es": "Permite atacar con cualquier movimiento a objetivos de tipo Fantasma y golpear a Pokémon evasivos."
+    },
+    "317": {
+      "power": 60,
+      "accuracy": 95,
+      "pp": 15,
+      "description_es": "Tira rocas que detienen al objetivo y bajan su Velocidad."
+    },
+    "318": {
+      "power": 60,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "Fuerte viento con polvo de escamas. Puede subir todas las características de quien lo usa."
+    },
+    "319": {
+      "power": null,
+      "accuracy": 85,
+      "pp": 40,
+      "description_es": "Horrible chirrido metálico que baja mucho la Defensa Especial del objetivo."
+    },
+    "320": {
+      "power": null,
+      "accuracy": 55,
+      "pp": 15,
+      "description_es": "Agradable melodía que adormece al objetivo."
+    },
+    "321": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Hace reír al objetivo para bajar su Ataque y Defensa."
+    },
+    "322": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Sube la Defensa y la Defensa Especial propias con energía mística."
+    },
+    "323": {
+      "power": 150,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "Chorro de agua. Cuantos menos PS tenga el usuario, menos dañino será."
+    },
+    "324": {
+      "power": 75,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Ataca con un rayo de luz siniestro. Puede confundir al objetivo."
+    },
+    "325": {
+      "power": 60,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Puñetazo ineludible procedente de las sombras."
+    },
+    "326": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Energía muy extraña que puede hacer retroceder al objetivo."
+    },
+    "327": {
+      "power": 85,
+      "accuracy": 90,
+      "pp": 15,
+      "description_es": "Gancho ascendente de gran ímpetu."
+    },
+    "328": {
+      "power": 35,
+      "accuracy": 85,
+      "pp": 15,
+      "description_es": "Enreda al objetivo en un remolino de arena de cuatro a cinco turnos."
+    },
+    "329": {
+      "power": null,
+      "accuracy": 30,
+      "pp": 5,
+      "description_es": "Ataque de frío polar que debilita al objetivo si le alcanza."
+    },
+    "330": {
+      "power": 90,
+      "accuracy": 85,
+      "pp": 10,
+      "description_es": "Ataque con agua lodosa que puede bajar la Precisión del equipo rival."
+    },
+    "331": {
+      "power": 25,
+      "accuracy": 100,
+      "pp": 30,
+      "description_es": "Dispara rápido de dos a cinco ráfagas de semillas de manera consecutiva."
+    },
+    "332": {
+      "power": 60,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "El usuario lanza un ataque muy rápido e ineludible."
+    },
+    "333": {
+      "power": 25,
+      "accuracy": 100,
+      "pp": 30,
+      "description_es": "Ataca lanzando de dos a cinco ráfagas consecutivas de carámbanos."
+    },
+    "334": {
+      "power": null,
+      "accuracy": null,
+      "pp": 15,
+      "description_es": "Fortalece el cuerpo como si fuera de hierro y sube mucho la Defensa."
+    },
+    "335": {
+      "power": null,
+      "accuracy": null,
+      "pp": 5,
+      "description_es": "Le corta el paso al objetivo para que no pueda escapar."
+    },
+    "336": {
+      "power": null,
+      "accuracy": null,
+      "pp": 40,
+      "description_es": "Aullido que sube el ánimo y aumenta el Ataque."
+    },
+    "337": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Araña al objetivo con garras afiladas."
+    },
+    "338": {
+      "power": 150,
+      "accuracy": 90,
+      "pp": 5,
+      "description_es": "Golpea con una enorme planta. Quien lo usa no puede moverse en el siguiente turno."
+    },
+    "339": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Robustece el cuerpo para subir el Ataque y la Defensa."
+    },
+    "340": {
+      "power": 85,
+      "accuracy": 85,
+      "pp": 5,
+      "description_es": "Primer turno: bota. Segundo turno: golpea. Puede paralizar."
+    },
+    "341": {
+      "power": 55,
+      "accuracy": 95,
+      "pp": 15,
+      "description_es": "El usuario lanza lodo al objetivo y reduce su Velocidad."
+    },
+    "342": {
+      "power": 50,
+      "accuracy": 100,
+      "pp": 25,
+      "description_es": "Puede envenenar y dar un golpe crítico."
+    },
+    "343": {
+      "power": 60,
+      "accuracy": 100,
+      "pp": 25,
+      "description_es": "Se acerca con ternura al objetivo, pero le ataca y le roba el objeto que lleve."
+    },
+    "344": {
+      "power": 120,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Quien lo usa electrifica su cuerpo para luego atacar. Se hiere mucho a sí mismo, pero puede paralizar al objetivo."
+    },
+    "345": {
+      "power": 60,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Esparce extrañas hojas que persiguen al objetivo. No se puede esquivar."
+    },
+    "346": {
+      "power": null,
+      "accuracy": null,
+      "pp": 15,
+      "description_es": "El usuario se empapa en agua, lo que debilita los movimientos de tipo Fuego durante cinco turnos."
+    },
+    "347": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Aumenta la concentración y calma el espíritu para subir el Ataque Especial y la Defensa Especial."
+    },
+    "348": {
+      "power": 90,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Acuchilla con una hoja fina. Suele dar un golpe crítico."
+    },
+    "349": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Danza mística que sube el Ataque y la Velocidad."
+    },
+    "350": {
+      "power": 25,
+      "accuracy": 90,
+      "pp": 10,
+      "description_es": "Lanza pedruscos al objetivo de dos a cinco veces consecutivas."
+    },
+    "351": {
+      "power": 60,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Ataque eléctrico muy rápido e ineludible."
+    },
+    "352": {
+      "power": 60,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Ataca con un potente chorro de agua. Puede confundir al objetivo."
+    },
+    "353": {
+      "power": 140,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "Concentra un haz de luz y ataca dos turnos después."
+    },
+    "354": {
+      "power": 140,
+      "accuracy": 90,
+      "pp": 5,
+      "description_es": "Ataque en toda regla que baja mucho el Ataque Especial de quien lo usa."
+    },
+    "355": {
+      "power": null,
+      "accuracy": null,
+      "pp": 5,
+      "description_es": "Aterriza sobre la superficie para descansar. Recupera hasta la mitad del total de sus PS."
+    },
+    "356": {
+      "power": null,
+      "accuracy": null,
+      "pp": 5,
+      "description_es": "La gravedad aumenta durante cinco turnos, lo que impide acciones que impliquen volar o levitar."
+    },
+    "357": {
+      "power": null,
+      "accuracy": null,
+      "pp": 40,
+      "description_es": "Permite atacar con cualquier movimiento a objetivos de tipo Siniestro y golpear a Pokémon evasivos."
+    },
+    "358": {
+      "power": 70,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Inflige gran daño a objetivos dormidos. Sin embargo, los bofetones también los despiertan."
+    },
+    "359": {
+      "power": 100,
+      "accuracy": 90,
+      "pp": 10,
+      "description_es": "Gira con fuerza el puño y da un gran golpe. No obstante, baja la Velocidad."
+    },
+    "360": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "Embiste al objetivo con un potente ataque giratorio. Cuanto más lento es el usuario, más daño causa."
+    },
+    "361": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "El Pokémon cae debilitado, pero su sustituto recupera su estado y los PS."
+    },
+    "362": {
+      "power": 65,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Si al objetivo le queda la mitad o menos de sus PS, el ataque será el doble de fuerte."
+    },
+    "363": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "La baya que lleva presta su fuerza para atacar. El tipo de ataque y su fuerza dependen de la baya."
+    },
+    "364": {
+      "power": 30,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Permite golpear a objetivos que usan Protección o Detección y anula dichos movimientos."
+    },
+    "365": {
+      "power": 60,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Picotea al objetivo. Si este sostiene una baya, la picotea también y obtiene sus efectos."
+    },
+    "366": {
+      "power": null,
+      "accuracy": null,
+      "pp": 15,
+      "description_es": "Crea un fuerte remolino que aumenta la Velocidad de los Pokémon de tu equipo durante cuatro turnos."
+    },
+    "367": {
+      "power": null,
+      "accuracy": null,
+      "pp": 30,
+      "description_es": "Aplica presión en puntos clave de su cuerpo o de los aliados para potenciar un parámetro de sus características."
+    },
+    "368": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Devuelve al objetivo el último ataque recibido, pero con mucha más fuerza."
+    },
+    "369": {
+      "power": 70,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Tras atacar, vuelve a toda prisa para dar paso a otro Pokémon del equipo."
+    },
+    "370": {
+      "power": 120,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "Lucha abiertamente contra el objetivo sin protegerse. También reduce la Defensa y la Defensa Especial del usuario."
+    },
+    "371": {
+      "power": 50,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "El usuario contraataca con el doble de fuerza si el objetivo usa un movimiento antes."
+    },
+    "372": {
+      "power": 60,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Si el objetivo ya ha sufrido daño en ese turno, la fuerza del ataque se duplica."
+    },
+    "373": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Impide al objetivo usar el objeto que lleva. Su Entrenador tampoco puede usar objetos con él."
+    },
+    "374": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Lanza contra el objetivo el objeto que lleva. La fuerza del ataque y su efecto varían según el objeto."
+    },
+    "375": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Usa su poder mental para transferir al objetivo sus problemas de estado."
+    },
+    "376": {
+      "power": null,
+      "accuracy": null,
+      "pp": 5,
+      "description_es": "Cuantos menos PP tenga el movimiento, mayor será la fuerza para atacar."
+    },
+    "377": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Impide al objetivo usar movimientos, habilidades y objetos equipados que recuperan PS durante cinco turnos."
+    },
+    "378": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "Estruja con fuerza al objetivo. Cuantos más PS tenga el objetivo, más fuerza tendrá el ataque."
+    },
+    "379": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Usa sus poderes mentales para intercambiar su característica de Ataque por Defensa."
+    },
+    "380": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "El usuario arroja sus jugos biliares al objetivo, lo que anula el efecto de la habilidad en uso."
+    },
+    "381": {
+      "power": null,
+      "accuracy": null,
+      "pp": 30,
+      "description_es": "Lanza al cielo un conjuro que impide al objetivo asestar golpes críticos."
+    },
+    "382": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Se adelanta al movimiento que pretende usar el objetivo y lo lanza antes con más fuerza. Si el usuario es más lento, falla."
+    },
+    "383": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Imita el movimiento usado justo antes. El movimiento falla si no se ha usado aún ninguno."
+    },
+    "384": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "El usuario emplea su poder mental para intercambiar los cambios en Ataque y Ataque Especial con el objetivo."
+    },
+    "385": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "El usuario emplea su poder mental para intercambiar los cambios en Defensa y Defensa Especial con el objetivo."
+    },
+    "386": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "La fuerza del ataque aumenta cuanto más se ha fortalecido el objetivo con cambios de características."
+    },
+    "387": {
+      "power": 140,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "Este movimiento solo puede utilizarse tras haber usado al menos una vez todos los demás conocidos por el Pokémon."
+    },
+    "388": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Se planta una semilla en el objetivo que le causa pesar. Evita el sueño gracias a la habilidad Insomnio."
+    },
+    "389": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "Permite atacar primero. Falla si el objetivo no está preparando ningún ataque."
+    },
+    "390": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Lanza una trampa de púas tóxicas a los pies del objetivo. El veneno afecta a los Pokémon que entran en combate."
+    },
+    "391": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Usa la fuerza mental para intercambiar con el objetivo los cambios en las características."
+    },
+    "392": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Un manto de agua cubre al Pokémon que lo usa. Recupera algunos PS en cada turno."
+    },
+    "393": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Levita gracias a un campo magnético generado por electricidad durante cinco turnos."
+    },
+    "394": {
+      "power": 120,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "El Pokémon se cubre de llamas y carga contra el objetivo, aunque él también recibe daños. Puede quemar."
+    },
+    "395": {
+      "power": 60,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Ataca al objetivo con una onda de choque y puede llegar a paralizarlo."
+    },
+    "396": {
+      "power": 80,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Libera una descarga de la fuerza del aura desde su interior. Es infalible."
+    },
+    "397": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Reduce la resistencia puliendo su cuerpo. Aumenta la Velocidad considerablemente."
+    },
+    "398": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Pincha al objetivo con un tentáculo o brazo envenenado. Puede llegar a envenenar al objetivo."
+    },
+    "399": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Libera una horrible aura llena de malos pensamientos y puede hacer retroceder al objetivo."
+    },
+    "400": {
+      "power": 70,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Ataca al objetivo a la primera oportunidad. Suele ser crítico."
+    },
+    "401": {
+      "power": 90,
+      "accuracy": 90,
+      "pp": 10,
+      "description_es": "Ataca agitando la cola como si fuera una ola rabiosa en una tormenta devastadora."
+    },
+    "402": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Lanza al objetivo una descarga de semillas explosivas desde arriba."
+    },
+    "403": {
+      "power": 75,
+      "accuracy": 95,
+      "pp": 15,
+      "description_es": "Ataca con una hoja de aire que incluso corta el cielo. También puede hacer retroceder al objetivo."
+    },
+    "404": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Cruza las guadañas o las garras para atacar al objetivo como si fueran unas tijeras."
+    },
+    "405": {
+      "power": 90,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "El movimiento de las alas crea una onda sónica dañina. También puede disminuir la Defensa Especial del objetivo."
+    },
+    "406": {
+      "power": 85,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Abre mucho la boca y libera una onda de choque que ataca al objetivo."
+    },
+    "407": {
+      "power": 100,
+      "accuracy": 75,
+      "pp": 10,
+      "description_es": "Ataca de forma brutal mientras intimida al objetivo. También puede hacerlo retroceder."
+    },
+    "408": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Ataca con un rayo de luz que centellea como si lo formaran miles de joyas."
+    },
+    "409": {
+      "power": 75,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Un golpe que drena energía. El Pokémon recupera la mitad de los PS arrebatados al objetivo."
+    },
+    "410": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 30,
+      "description_es": "Gira los puños y libera una onda de vacío contra el objetivo. Este movimiento siempre va primero."
+    },
+    "411": {
+      "power": 120,
+      "accuracy": 70,
+      "pp": 5,
+      "description_es": "Agudiza la concentración mental y libera su poder. Puede disminuir la Defensa Especial del objetivo."
+    },
+    "412": {
+      "power": 90,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Aúna fuerzas de la naturaleza y libera su ataque. Puede disminuir la Defensa Especial del objetivo."
+    },
+    "413": {
+      "power": 120,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Pliega sus alas y ataca con un vuelo rasante. El Pokémon que lo usa también resulta seriamente dañado."
+    },
+    "414": {
+      "power": 90,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "La tierra a los pies del objetivo erupciona violentamente. Puede disminuir la Defensa Especial del objetivo."
+    },
+    "415": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Intercambia con el objetivo los objetos que llevan tan rápido que es imposible verlo a simple vista."
+    },
+    "416": {
+      "power": 150,
+      "accuracy": 90,
+      "pp": 5,
+      "description_es": "Carga contra el objetivo usando toda la fuerza que tiene. El Pokémon descansa el turno siguiente."
+    },
+    "417": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Estimula su cerebro pensando en cosas malas. Aumenta considerablemente el Ataque Especial."
+    },
+    "418": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 30,
+      "description_es": "Ataca con fuertes puñetazos tan rápidos como proyectiles. Este movimiento siempre va primero."
+    },
+    "419": {
+      "power": 60,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Este ataque inflige el doble de daño a un objetivo que haya golpeado al usuario en ese mismo turno."
+    },
+    "420": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 30,
+      "description_es": "Crea bolas de hielo y las lanza a gran velocidad. Este movimiento siempre va primero."
+    },
+    "421": {
+      "power": 70,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Ataca con una garra afilada hecha de sombras. Suele ser crítico."
+    },
+    "422": {
+      "power": 65,
+      "accuracy": 95,
+      "pp": 15,
+      "description_es": "Usa colmillos electrificados para morder. Puede hacer que el objetivo retroceda o se paralice."
+    },
+    "423": {
+      "power": 65,
+      "accuracy": 95,
+      "pp": 15,
+      "description_es": "Usa colmillos helados para morder. Puede hacer que el objetivo retroceda o se congele."
+    },
+    "424": {
+      "power": 65,
+      "accuracy": 95,
+      "pp": 15,
+      "description_es": "Usa colmillos en llamas para morder. Puede hacer que el objetivo retroceda o reciba quemaduras."
+    },
+    "425": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 30,
+      "description_es": "Extiende su sombra y ataca al objetivo por la espalda. Este movimiento siempre va primero."
+    },
+    "426": {
+      "power": 65,
+      "accuracy": 85,
+      "pp": 10,
+      "description_es": "Ataca lanzando una compacta bola de fango. Puede bajar la Precisión del objetivo."
+    },
+    "427": {
+      "power": 70,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Ataca al objetivo con cuchillas formadas por energía psíquica. Suele ser crítico."
+    },
+    "428": {
+      "power": 80,
+      "accuracy": 90,
+      "pp": 15,
+      "description_es": "Concentra su energía psíquica en la cabeza para golpear. Puede hacer que el objetivo retroceda."
+    },
+    "429": {
+      "power": 65,
+      "accuracy": 85,
+      "pp": 10,
+      "description_es": "El usuario libera un haz de energía desde su pulido cuerpo. Puede bajar la Precisión."
+    },
+    "430": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "El usuario concentra toda la luz del cuerpo y la libera. Puede bajar la Defensa Especial del objetivo."
+    },
+    "431": {
+      "power": 90,
+      "accuracy": 85,
+      "pp": 20,
+      "description_es": "Ataca con una gran embestida. Puede confundir al objetivo."
+    },
+    "432": {
+      "power": null,
+      "accuracy": null,
+      "pp": 15,
+      "description_es": "Potente viento que barre el Reflejo o Pantalla de Luz del objetivo y puede reducir su Evasión."
+    },
+    "433": {
+      "power": null,
+      "accuracy": null,
+      "pp": 5,
+      "description_es": "Se crea un espacio extraño en el que los Pokémon lentos se mueven primero durante cinco turnos."
+    },
+    "434": {
+      "power": 130,
+      "accuracy": 90,
+      "pp": 5,
+      "description_es": "Hace que grandes cometas caigan del cielo sobre el objetivo. Baja mucho el Ataque Especial del que lo usa."
+    },
+    "435": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Una deslumbradora onda eléctrica afecta a los Pokémon que hay combatiendo alrededor. Puede paralizar."
+    },
+    "436": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Un infierno de llamas daña a los Pokémon adyacentes en combate. Puede quemar."
+    },
+    "437": {
+      "power": 130,
+      "accuracy": 90,
+      "pp": 5,
+      "description_es": "Cae una lluvia de hojas afiladas. Baja mucho el Ataque Especial de quien lo usa."
+    },
+    "438": {
+      "power": 120,
+      "accuracy": 85,
+      "pp": 10,
+      "description_es": "El usuario agita violentamente sus lianas o tentáculos para golpear al objetivo."
+    },
+    "439": {
+      "power": 150,
+      "accuracy": 90,
+      "pp": 5,
+      "description_es": "Lanza una piedra enorme contra el objetivo, pero tiene que descansar el siguiente turno."
+    },
+    "440": {
+      "power": 70,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Tajo que puede envenenar al objetivo. Suele ser crítico."
+    },
+    "441": {
+      "power": 120,
+      "accuracy": 80,
+      "pp": 5,
+      "description_es": "Lanza contra el objetivo basura asquerosa. Puede envenenar al objetivo."
+    },
+    "442": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Ataca con su dura cabeza de hierro. Puede hacer que el objetivo retroceda."
+    },
+    "443": {
+      "power": 60,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Lanza unas bombas de hierro que se pegan al adversario. No se puede esquivar."
+    },
+    "444": {
+      "power": 100,
+      "accuracy": 80,
+      "pp": 5,
+      "description_es": "Clava piedras muy afiladas al objetivo. Suele ser crítico."
+    },
+    "445": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Si el objetivo es del sexo opuesto, queda embelesado y baja mucho su Ataque Especial."
+    },
+    "446": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Una trampa de rocas que flota en el aire y daña a los objetivos que entran en combate."
+    },
+    "447": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Enreda al objetivo con hierba y lo derriba. Cuanto más pesado es el objetivo, más daño inflige."
+    },
+    "448": {
+      "power": 65,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Ataca con una onda sónica compuesta por palabras que ha aprendido y confunde al objetivo."
+    },
+    "449": {
+      "power": 100,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Emite incontables haces de luz. Varía según el tipo de tabla que lleve el usuario."
+    },
+    "450": {
+      "power": 60,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Pica al objetivo. Si el objetivo lleva una baya, el usuario se la come y se beneficia de su efecto."
+    },
+    "451": {
+      "power": 50,
+      "accuracy": 90,
+      "pp": 10,
+      "description_es": "Lanza un rayo eléctrico contra el objetivo. Puede subir el Ataque Especial de quien lo usa."
+    },
+    "452": {
+      "power": 120,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Arremete contra el objetivo con su robusto cuerpo. El agresor también sufre bastante daño."
+    },
+    "453": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Ataque rápido que permite golpear en primer lugar."
+    },
+    "454": {
+      "power": 90,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "El usuario llama a sus súbditos para que ataquen al objetivo. Suele ser crítico."
+    },
+    "455": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "El usuario llama a sus súbditos para que formen un escudo viviente. Sube la Defensa y la Defensa Especial."
+    },
+    "456": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "El usuario llama a sus súbditos para que lo curen. Recupera hasta la mitad de los PS máximos."
+    },
+    "457": {
+      "power": 150,
+      "accuracy": 80,
+      "pp": 5,
+      "description_es": "El usuario arriesga su vida y lanza un cabezazo con toda su fuerza. El agresor resulta seriamente dañado."
+    },
+    "458": {
+      "power": 35,
+      "accuracy": 90,
+      "pp": 10,
+      "description_es": "Golpea al objetivo dos veces seguidas con la cola u otras partes de su cuerpo."
+    },
+    "459": {
+      "power": 150,
+      "accuracy": 90,
+      "pp": 5,
+      "description_es": "Ataca al objetivo usando tal energía que el tiempo se distorsiona. El usuario descansa el siguiente turno."
+    },
+    "460": {
+      "power": 100,
+      "accuracy": 95,
+      "pp": 5,
+      "description_es": "Desgarra al objetivo y el espacio a su alrededor. Suele ser crítico."
+    },
+    "461": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "El usuario se debilita, pero el Pokémon que lo sustituye recupera su estado, los PS y los PP."
+    },
+    "462": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "Estruja al objetivo con gran fuerza. Cuantos más PS le queden al objetivo, más fuerte será el ataque."
+    },
+    "463": {
+      "power": 100,
+      "accuracy": 75,
+      "pp": 5,
+      "description_es": "El objetivo queda atrapado en una tormenta de fuego que dura de cuatro a cinco turnos."
+    },
+    "464": {
+      "power": null,
+      "accuracy": 80,
+      "pp": 10,
+      "description_es": "El objetivo es enviado a un mundo de tinieblas que lo hace dormir."
+    },
+    "465": {
+      "power": 120,
+      "accuracy": 85,
+      "pp": 5,
+      "description_es": "Una onda de choque se libera del cuerpo. Puede bajar mucho la Defensa Especial del objetivo."
+    },
+    "466": {
+      "power": 60,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "Produce un viento horripilante. Puede subir de golpe todas las características del usuario."
+    },
+    "467": {
+      "power": 120,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "En el primer turno, desaparece. En el segundo, golpea al objetivo aunque se esté protegiendo."
+    },
+    "468": {
+      "power": null,
+      "accuracy": null,
+      "pp": 15,
+      "description_es": "El usuario se afila las garras para aumentar su Ataque y Precisión."
+    },
+    "469": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Bloquea los ataques de objetivo múltiple lanzados contra tu equipo durante un turno."
+    },
+    "470": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "El usuario emplea sus poderes para hacer la media de su Defensa y Defensa Especial con las de su objetivo y compartirlas."
+    },
+    "471": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "El usuario emplea sus poderes para hacer la media de su Ataque y Ataque Especial con los de su objetivo y compartirlos."
+    },
+    "472": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Crea una zona misteriosa donde se intercambian la Defensa y la Defensa Especial de todos los Pokémon durante cinco turnos."
+    },
+    "473": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Crea una onda psíquica que causa daño físico al objetivo."
+    },
+    "474": {
+      "power": 65,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Ataca cubriendo al objetivo con un líquido venenoso. El daño será doble si este ya está envenenado."
+    },
+    "475": {
+      "power": null,
+      "accuracy": null,
+      "pp": 15,
+      "description_es": "El usuario se sacude para hacerse más ligero y aumentar mucho su Velocidad."
+    },
+    "476": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Usa un polvo que irrita y centra en el usuario la atención y los ataques de los rivales."
+    },
+    "477": {
+      "power": null,
+      "accuracy": null,
+      "pp": 15,
+      "description_es": "El usuario emplea su poder mental para hacer flotar al objetivo, y lo convierte en un blanco fácil durante tres turnos."
+    },
+    "478": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Crea un espacio misterioso que inutiliza todos los objetos de los Pokémon durante cinco turnos."
+    },
+    "479": {
+      "power": 50,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "El usuario ataca lanzando una piedra o un proyectil. Puede estrellar contra el suelo al objetivo si vuela."
+    },
+    "480": {
+      "power": 60,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Lanza un golpe fulminante. Siempre resulta en un golpe crítico."
+    },
+    "481": {
+      "power": 70,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Golpea al objetivo con una llamarada que afecta también a los Pokémon adyacentes."
+    },
+    "482": {
+      "power": 95,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Una onda tóxica que daña a los Pokémon de alrededor. Puede envenenar."
+    },
+    "483": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Danza mística que sube el Ataque Especial, la Defensa Especial y la Velocidad."
+    },
+    "484": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "El usuario golpea con todo su cuerpo. Cuanto mayor sea su peso comparado con el del objetivo, más daño causará."
+    },
+    "485": {
+      "power": 120,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Una extraña onda que daña a todos los Pokémon adyacentes del mismo tipo que el que la ejecuta."
+    },
+    "486": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Lanza una bola eléctrica. Cuanto mayor sea la Velocidad del usuario en comparación con la del objetivo, mayor será el daño causado."
+    },
+    "487": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Potente lluvia que transforma al objetivo en un Pokémon de tipo Agua."
+    },
+    "488": {
+      "power": 50,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Llamas que golpean al objetivo y aumentan la Velocidad del atacante."
+    },
+    "489": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "El usuario se concentra, lo que le permite aumentar su Ataque, Defensa y Precisión."
+    },
+    "490": {
+      "power": 65,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Ataque rápido dirigido a los pies del objetivo que le hace perder Velocidad."
+    },
+    "491": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Ataca con un líquido corrosivo, reduciendo mucho la Defensa Especial del objetivo."
+    },
+    "492": {
+      "power": 95,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "El usuario emplea la fuerza del objetivo para atacarlo. Cuanto mayor es el Ataque del objetivo, más daño provoca."
+    },
+    "493": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Lanza una onda psíquica que hace que la habilidad del objetivo pase a ser Simple."
+    },
+    "494": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Una extraña danza que hace que el usuario y el objetivo tengan la misma habilidad."
+    },
+    "495": {
+      "power": null,
+      "accuracy": null,
+      "pp": 15,
+      "description_es": "Si el usuario es el más rápido, permite al objetivo usar un movimiento justo tras él, adelantándose a Pokémon más rápidos."
+    },
+    "496": {
+      "power": 60,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Un canto que ataca al objetivo. Cuantos más Pokémon lo usan, más aumenta de potencia."
+    },
+    "497": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Un susurro que aumenta de potencia conforme el usuario y otros Pokémon lo van utilizando."
+    },
+    "498": {
+      "power": 70,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Un ataque que busca los puntos débiles del objetivo y puede causarle daño aunque cambien sus características."
+    },
+    "499": {
+      "power": 50,
+      "accuracy": null,
+      "pp": 15,
+      "description_es": "Ataca al objetivo con una extraña niebla que elimina sus cambios de características."
+    },
+    "500": {
+      "power": 20,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Acumula poder para golpear. Cuanto más suban las características del usuario, mayor será el daño."
+    },
+    "501": {
+      "power": null,
+      "accuracy": null,
+      "pp": 15,
+      "description_es": "Protege a todo el equipo de los movimientos que se adelantan y atacan primero."
+    },
+    "502": {
+      "power": null,
+      "accuracy": null,
+      "pp": 15,
+      "description_es": "Extraño poder que intercambia la posición del usuario con la de un aliado sobre el terreno de combate."
+    },
+    "503": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Ataca arrojando agua hirviendo al objetivo. Puede causar quemaduras."
+    },
+    "504": {
+      "power": null,
+      "accuracy": null,
+      "pp": 15,
+      "description_es": "El usuario rompe su coraza y baja su Defensa y Defensa Especial, pero aumenta mucho su Ataque, Ataque Especial y Velocidad."
+    },
+    "505": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Una onda curativa restaura los PS del objetivo a la mitad de su máximo."
+    },
+    "506": {
+      "power": 65,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Ataque que causa un gran daño a los objetivos que sufren problemas de estado."
+    },
+    "507": {
+      "power": 60,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Primer turno: lanza al objetivo al aire. Segundo turno: lo hace caer. Mientras está en el aire, no lo deja moverse."
+    },
+    "508": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Al hacer girar los engranajes, el usuario mejora su Ataque y aumenta su Velocidad espectacularmente."
+    },
+    "509": {
+      "power": 60,
+      "accuracy": 90,
+      "pp": 10,
+      "description_es": "Lanza por los aires al objetivo y hace que salga otro Pokémon. Si es uno salvaje, acaba el combate."
+    },
+    "510": {
+      "power": 60,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Llamas que golpean a los objetivos adyacentes. Si estos llevan bayas u otros objetos, estos se quemarán y ya no se podrán usar."
+    },
+    "511": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Consigue que el objetivo sea el último en moverse."
+    },
+    "512": {
+      "power": 55,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Golpea ágilmente. Si el usuario no porta ningún objeto, el objetivo resulta seriamente dañado."
+    },
+    "513": {
+      "power": null,
+      "accuracy": null,
+      "pp": 15,
+      "description_es": "Cambia el tipo del Pokémon al mismo tipo que el del objetivo."
+    },
+    "514": {
+      "power": 70,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "Venga a los amigos derrotados. Si en el turno anterior han derrotado a uno, la potencia del ataque aumentará."
+    },
+    "515": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "El usuario se sacrifica causándole un daño al objetivo equivalente a sus propios PS perdidos."
+    },
+    "516": {
+      "power": null,
+      "accuracy": null,
+      "pp": 15,
+      "description_es": "Entrega el objeto que lleva al objetivo en caso de que este no tenga ninguno."
+    },
+    "517": {
+      "power": 100,
+      "accuracy": 50,
+      "pp": 5,
+      "description_es": "Ataca con una gran ráfaga de fuego que causa quemaduras."
+    },
+    "518": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Ataca con columnas de agua. Combinado con Voto Fuego, crea un arcoíris y aumenta su potencia."
+    },
+    "519": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Ataca con columnas de fuego. Combinado con Voto Planta, crea un mar de llamas y aumenta su potencia."
+    },
+    "520": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Ataca con columnas de hojas. Combinado con Voto Agua, crea un pantano y aumenta su potencia."
+    },
+    "521": {
+      "power": 70,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Tras atacar, vuelve a toda prisa para dar paso a otro Pokémon del equipo."
+    },
+    "522": {
+      "power": 50,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "El usuario opone resistencia y ataca a los oponentes. También reduce su Ataque Especial."
+    },
+    "523": {
+      "power": 60,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Sacudida sísmica que afecta a los demás Pokémon adyacentes y también reduce su Velocidad."
+    },
+    "524": {
+      "power": 60,
+      "accuracy": 90,
+      "pp": 10,
+      "description_es": "Quien lo usa ataca lanzando un aliento gélido. Siempre resulta en un golpe crítico."
+    },
+    "525": {
+      "power": 60,
+      "accuracy": 90,
+      "pp": 10,
+      "description_es": "Ataca al objetivo y lo obliga a cambiarse por otro Pokémon. Si es uno salvaje, acaba el combate."
+    },
+    "526": {
+      "power": null,
+      "accuracy": null,
+      "pp": 30,
+      "description_es": "Quien lo usa se concentra y potencia su Ataque y su Ataque Especial."
+    },
+    "527": {
+      "power": 55,
+      "accuracy": 95,
+      "pp": 15,
+      "description_es": "Atrapa y ataca a los objetivos con una telaraña eléctrica. También reduce su Velocidad."
+    },
+    "528": {
+      "power": 90,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Carga eléctrica muy potente que también hiere ligeramente a quien la usa."
+    },
+    "529": {
+      "power": 80,
+      "accuracy": 95,
+      "pp": 10,
+      "description_es": "El usuario golpea usando su cuerpo como un taladro. Suele ser crítico."
+    },
+    "530": {
+      "power": 40,
+      "accuracy": 90,
+      "pp": 15,
+      "description_es": "Golpea dos veces seguidas con la cola u otras partes de su cuerpo."
+    },
+    "531": {
+      "power": 60,
+      "accuracy": 100,
+      "pp": 25,
+      "description_es": "Grácil gesto que asesta un golpe tremendo al objetivo y puede hacerlo retroceder."
+    },
+    "532": {
+      "power": 75,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Un golpe que drena energía. El Pokémon recupera la mitad de los PS arrebatados al objetivo."
+    },
+    "533": {
+      "power": 90,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "El usuario ataca con una espada, ignorando cualquier cambio en las características del objetivo."
+    },
+    "534": {
+      "power": 75,
+      "accuracy": 95,
+      "pp": 10,
+      "description_es": "Una afilada vieira ataca al objetivo. También puede hacer disminuir su Defensa."
+    },
+    "535": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "El usuario ataca con su cuerpo ardiente. Cuanto mayor sea su peso comparado con el del objetivo, más daño causará."
+    },
+    "536": {
+      "power": 65,
+      "accuracy": 90,
+      "pp": 10,
+      "description_es": "Tritura con afiladas hojas y puede bajar la Precisión del objetivo."
+    },
+    "537": {
+      "power": 65,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "El usuario se hace una bola y arrolla al objetivo con su cuerpo. Puede hacerlo retroceder."
+    },
+    "538": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Cubre al Pokémon con una madeja protectora. Aumenta muchísimo la Defensa."
+    },
+    "539": {
+      "power": 85,
+      "accuracy": 95,
+      "pp": 10,
+      "description_es": "Ataca al objetivo con una onda siniestra. Puede bajar su Precisión."
+    },
+    "540": {
+      "power": 100,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Crea una onda psíquica que causa daño físico al objetivo."
+    },
+    "541": {
+      "power": 25,
+      "accuracy": 85,
+      "pp": 10,
+      "description_es": "Golpea con la cola u otras partes de su cuerpo de dos a cinco veces seguidas."
+    },
+    "542": {
+      "power": 110,
+      "accuracy": 70,
+      "pp": 10,
+      "description_es": "Golpea al objetivo con un fuerte torbellino que envuelve al rival y puede confundirlo."
+    },
+    "543": {
+      "power": 120,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Propina un tremendo cabezazo. También daña al usuario un poco."
+    },
+    "544": {
+      "power": 50,
+      "accuracy": 85,
+      "pp": 15,
+      "description_es": "Rota dos engranajes de hierro sobre el objetivo. Golpea dos veces."
+    },
+    "545": {
+      "power": 100,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "Un infierno de llamas daña a los Pokémon adyacentes en combate. Puede quemar."
+    },
+    "546": {
+      "power": 120,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "Ataca al objetivo con un gran láser. El tipo del ataque lo determina el cartucho que porta el usuario."
+    },
+    "547": {
+      "power": 75,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Ataca conmoviendo a los rivales de alrededor con un antiguo canto. Puede dormirlos."
+    },
+    "548": {
+      "power": 85,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Ensarta al objetivo con un sable, hiriéndolo con su místico poder. Produce daño físico."
+    },
+    "549": {
+      "power": 65,
+      "accuracy": 95,
+      "pp": 10,
+      "description_es": "Ataque con aire helado que baja la Velocidad del objetivo."
+    },
+    "550": {
+      "power": 130,
+      "accuracy": 85,
+      "pp": 5,
+      "description_es": "Ataca envolviéndose de una gran carga eléctrica y embistiendo al objetivo con ella. Puede paralizar."
+    },
+    "551": {
+      "power": 130,
+      "accuracy": 85,
+      "pp": 5,
+      "description_es": "Ataca con una bella pero potente llama azul que rodea al objetivo. Puede quemarlo."
+    },
+    "552": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Envuelve en llamas y daña al objetivo. Puede aumentar el Ataque Especial de quien lo usa."
+    },
+    "553": {
+      "power": 140,
+      "accuracy": 90,
+      "pp": 5,
+      "description_es": "El usuario carga un bloque de hielo con electricidad en el primer turno y ataca con él en el segundo. Puede paralizar."
+    },
+    "554": {
+      "power": 140,
+      "accuracy": 90,
+      "pp": 5,
+      "description_es": "Ataca al objetivo en el segundo turno rodeándolo de un aire gélido. Puede causar quemaduras."
+    },
+    "555": {
+      "power": 55,
+      "accuracy": 95,
+      "pp": 15,
+      "description_es": "Ataca con un chillido desagradable que baja el Ataque Especial del rival."
+    },
+    "556": {
+      "power": 85,
+      "accuracy": 90,
+      "pp": 10,
+      "description_es": "Lanza grandes carámbanos. Puede hacer retroceder al objetivo."
+    },
+    "557": {
+      "power": 180,
+      "accuracy": 95,
+      "pp": 5,
+      "description_es": "Golpea con una V de llamas al objetivo. Baja la Defensa, la Defensa Especial y la Velocidad de quien lo usa."
+    },
+    "558": {
+      "power": 100,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "Ataca con una llamarada gigantesca. Aumenta su potencia si es influenciada por una gran energía eléctrica."
+    },
+    "559": {
+      "power": 100,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": "Ataca con una enorme descarga eléctrica. Aumenta su potencia si es influenciada por una gigantesca llamarada."
+    },
+    "560": {
+      "power": 80,
+      "accuracy": 95,
+      "pp": 10,
+      "description_es": "El Pokémon que lo usa se lanza sobre su oponente. Este movimiento es de tipo Lucha y tipo Volador al mismo tiempo."
+    },
+    "561": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "El usuario usa un tatami para escudarse de los movimientos enemigos. Protege también a los aliados. No funciona contra ataques de estado."
+    },
+    "562": {
+      "power": 120,
+      "accuracy": 90,
+      "pp": 10,
+      "description_es": "El Pokémon causa daño a su oponente lanzándole un eructo. Para poder utilizar este movimiento tiene que llevar una baya y comérsela."
+    },
+    "563": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Labra la tierra haciendo que sea más fácil cultivarla y consigue que aumente el Ataque y el Ataque Especial de los Pokémon de tipo Planta."
+    },
+    "564": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Coloca una red pegajosa alrededor del equipo rival, haciendo que baje la Velocidad de cualquier Pokémon adversario que entre al combate."
+    },
+    "565": {
+      "power": 30,
+      "accuracy": 100,
+      "pp": 25,
+      "description_es": "Al derrotar al objetivo utilizando este movimiento, aumenta mucho el Ataque del usuario."
+    },
+    "566": {
+      "power": 90,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "El usuario desaparece en el primer turno y ataca a su objetivo en el segundo. Permite acertar aunque el objetivo esté protegiéndose."
+    },
+    "567": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Invita al objetivo a celebrar Halloween, haciendo que pase a ser también de tipo Fantasma además de conservar sus propios tipos."
+    },
+    "568": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 30,
+      "description_es": "Intimida a su oponente con un rugido de guerra, haciendo que disminuyan tanto su Ataque como su Ataque Especial."
+    },
+    "569": {
+      "power": null,
+      "accuracy": null,
+      "pp": 25,
+      "description_es": "El Pokémon disemina partículas con carga eléctrica que convierten los movimientos de tipo Normal en tipo Eléctrico."
+    },
+    "570": {
+      "power": 50,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Inflige daño a todos los Pokémon a su alrededor. El usuario absorbe la mitad del daño producido para restaurar sus propios PS."
+    },
+    "571": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "El objetivo es presa de la maldición del bosque, por lo que pasa a ser un Pokémon de tipo Planta, además de conservar sus tipos habituales."
+    },
+    "572": {
+      "power": 90,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "El usuario desata un intenso vendaval de pétalos que daña a los Pokémon a su alrededor."
+    },
+    "573": {
+      "power": 70,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Enfría súbitamente al objetivo e incluso puede congelarlo. Es supereficaz contra Pokémon de tipo Agua."
+    },
+    "574": {
+      "power": 40,
+      "accuracy": null,
+      "pp": 15,
+      "description_es": "Obnubila a los oponentes con su fascinante voz y les provoca daños emocionales. Siempre acierta al objetivo."
+    },
+    "575": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "El usuario se cambia por otro Pokémon de su equipo, pero antes amedrenta a su oponente y hace que disminuyan su Ataque y Ataque Especial."
+    },
+    "576": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Invierte por completo los cambios en las características del Pokémon objetivo."
+    },
+    "577": {
+      "power": 50,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Absorbe PS del objetivo con un beso y restaura su propia energía en una cantidad igual o superior a la mitad del daño infligido."
+    },
+    "578": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Usa unos misteriosos poderes para protegerse a sí mismo y a sus aliados de ataques de estado, pero no de otro tipo de ataques."
+    },
+    "579": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Aumenta la Defensa de todos los Pokémon de tipo Planta que hay en el combate usando unos misteriosos poderes."
+    },
+    "580": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Convierte el terreno de combate en un campo de hierba durante cinco turnos. Los Pokémon que estén en el suelo recuperan PS en cada turno."
+    },
+    "581": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Cubre de niebla el terreno de combate durante cinco turnos. Los Pokémon que estén en el suelo no se ven afectados por cambios de estado."
+    },
+    "582": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Si el Pokémon objetivo queda electrificado antes de usar un movimiento, este será de tipo Eléctrico."
+    },
+    "583": {
+      "power": 90,
+      "accuracy": 90,
+      "pp": 10,
+      "description_es": "El Pokémon que lo usa le hace cucamonas al objetivo y lo ataca. Puede disminuir el Ataque del objetivo."
+    },
+    "584": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 30,
+      "description_es": "El Pokémon que lo usa desata un vendaval feérico que arremete contra el objetivo."
+    },
+    "585": {
+      "power": 95,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Invoca el poder de la luna para atacar al objetivo. Puede disminuir el Ataque Especial del objetivo."
+    },
+    "586": {
+      "power": 140,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Ataca a todos los Pokémon a su alrededor con una potentísima onda sonora."
+    },
+    "587": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Consigue que ningún Pokémon pueda huir en el siguiente turno echando un cerrojo."
+    },
+    "588": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Asume una estrategia defensiva a la par que se protege de cualquier daño. Disminuye mucho el Ataque de cualquier Pokémon que lo toque."
+    },
+    "589": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Se hace amigo de su oponente y consigue que a este se le quiten las ganas de combatir. Además, reduce su Ataque."
+    },
+    "590": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Hace que el objetivo pierda la concentración contándole un secreto. Disminuye el Ataque Especial del oponente."
+    },
+    "591": {
+      "power": 100,
+      "accuracy": 95,
+      "pp": 5,
+      "description_es": "Desata un devastador vendaval de diamantes para dañar a los oponentes. Puede aumentar la Defensa del usuario."
+    },
+    "592": {
+      "power": 110,
+      "accuracy": 95,
+      "pp": 5,
+      "description_es": "Envuelve al Pokémon oponente con vapor extremadamente caliente que puede llegar a quemarlo."
+    },
+    "593": {
+      "power": 80,
+      "accuracy": null,
+      "pp": 5,
+      "description_es": "El usuario aparece junto a su objetivo usando un agujero interdimensional y le asesta un golpe que no puede esquivarse con Protección ni Detección."
+    },
+    "594": {
+      "power": 15,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Golpea al oponente de 2 a 5 veces con estrellas arrojadizas hechas de mucosidad. El que lo usa siempre ataca primero."
+    },
+    "595": {
+      "power": 65,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Lanza por su boca una singular llama a gran temperatura con la que ataca a su oponente y baja su Ataque Especial."
+    },
+    "596": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Evita el ataque de su oponente y, al mismo tiempo, le inflige daño si ha entrado en contacto con él."
+    },
+    "597": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Consigue aumentar la Defensa Especial de un Pokémon de su equipo con una fragancia misteriosa."
+    },
+    "598": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 15,
+      "description_es": "Su cuerpo irradia unas raras ondas que, al alcanzar a un oponente, hacen que disminuya mucho su Ataque Especial."
+    },
+    "599": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Impregna a su objetivo con un líquido venenoso que disminuye el Ataque, el At. Esp. y la Velocidad. Solo afecta a Pokémon ya envenenados."
+    },
+    "600": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Esparce un polvo sobre el Pokémon objetivo. Si este usa un movimiento de tipo Fuego en el mismo turno, el polvo explota y le inflige daño."
+    },
+    "601": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Concentra energía durante el primer turno, de forma que su Velocidad, Ataque Especial y Defensa Especial aumenten mucho en el segundo."
+    },
+    "602": {
+      "power": null,
+      "accuracy": null,
+      "pp": 20,
+      "description_es": "Manipula el campo magnético y logra aumentar la Defensa y la Def. Esp. de los Pokémon aliados que cuenten con las habilidades Más y Menos."
+    },
+    "603": {
+      "power": null,
+      "accuracy": null,
+      "pp": 30,
+      "description_es": "Al usar este movimiento se consigue duplicar la recompensa recibida tras el combate."
+    },
+    "604": {
+      "power": null,
+      "accuracy": null,
+      "pp": 10,
+      "description_es": "Durante cinco turnos, crea un campo eléctrico en el terreno de combate que impide dormirse a los Pokémon que estén en contacto con el suelo."
+    },
+    "605": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Inflige daño a los oponentes con una potente luz."
+    },
+    "606": {
+      "power": null,
+      "accuracy": null,
+      "pp": 40,
+      "description_es": "El Pokémon te felicita en un día muy especial para ti."
+    },
+    "607": {
+      "power": null,
+      "accuracy": null,
+      "pp": 40,
+      "description_es": "El Pokémon le da la mano a un aliado y ambos se sienten muy felices."
+    },
+    "608": {
+      "power": null,
+      "accuracy": 100,
+      "pp": 30,
+      "description_es": "Lanza una mirada al Pokémon objetivo con ojos acaramelados, con lo que logra que su Ataque se reduzca. El que lo usa siempre ataca primero."
+    },
+    "609": {
+      "power": 20,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Quien lo usa frota sus mofletes cargados de electricidad contra el Pokémon objetivo y consigue paralizarlo."
+    },
+    "610": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 40,
+      "description_es": "El usuario se contiene a la hora de atacar y deja al Pokémon objetivo con al menos 1 PS."
+    },
+    "611": {
+      "power": 20,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Hostiga al Pokémon objetivo durante cuatro o cinco turnos e impide que pueda huir mientras tanto."
+    },
+    "612": {
+      "power": 40,
+      "accuracy": 100,
+      "pp": 20,
+      "description_es": "Cada vez que golpea a un oponente se endurecen sus puños. Si acierta al objetivo, el Ataque del usuario aumenta."
+    },
+    "613": {
+      "power": 80,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "El usuario absorbe energía del Pokémon objetivo y aumenta sus PS en una cantidad igual o superior a la mitad del daño infligido."
+    },
+    "614": {
+      "power": 90,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Acierta incluso a Pokémon que estén en el aire y los hace caer al suelo."
+    },
+    "615": {
+      "power": 90,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "El usuario genera ondas sísmicas que se propagan por el suelo y sacuden a los oponentes. Los Pokémon alcanzados no podrán huir del combate."
+    },
+    "616": {
+      "power": 90,
+      "accuracy": 100,
+      "pp": 10,
+      "description_es": "Acumula energía de la corteza terrestre y la concentra contra los oponentes, dañándolos."
+    },
+    "617": {
+      "power": 140,
+      "accuracy": 90,
+      "pp": 5,
+      "description_es": "El usuario emplea el poder de la Flor Eterna para lanzar un potente rayo de luz, pero sufre bastante daño al hacerlo."
+    },
+    "618": {
+      "power": 110,
+      "accuracy": 85,
+      "pp": 10,
+      "description_es": ""
+    },
+    "619": {
+      "power": 120,
+      "accuracy": 85,
+      "pp": 10,
+      "description_es": ""
+    },
+    "620": {
+      "power": 120,
+      "accuracy": 100,
+      "pp": 5,
+      "description_es": ""
+    },
+    "621": {
+      "power": 100,
+      "accuracy": null,
+      "pp": 5,
+      "description_es": ""
+    }
+  }
+}

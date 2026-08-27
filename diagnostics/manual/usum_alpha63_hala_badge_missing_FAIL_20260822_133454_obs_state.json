@@ -1,0 +1,87 @@
+{
+  "updated_at": 1787398522.0504746,
+  "active_run": "US-Timper",
+  "game": "US",
+  "trainer": "Timper",
+  "counters": {
+    "vidas": 6,
+    "curaciones": 0,
+    "medallas": 0,
+    "drafteos": 4
+  },
+  "roles": {
+    "libero": {
+      "slot": 1,
+      "species_id": 115,
+      "species": "Kangaskhan",
+      "nickname": "Kangaskhan",
+      "level": 50,
+      "role": "Líbero",
+      "role_symbol": "●",
+      "pokemon_id": "115:kangaskhan",
+      "visible": true,
+      "sprite": "sprites/115.png"
+    },
+    "asesino": {
+      "slot": 6,
+      "species_id": 455,
+      "species": "Carnivine",
+      "nickname": "Carnivine",
+      "level": 3,
+      "role": "Asesino",
+      "role_symbol": "▲",
+      "pokemon_id": "455:carnivine",
+      "visible": true,
+      "sprite": "sprites/455.png"
+    },
+    "mago": {
+      "slot": 3,
+      "species_id": 133,
+      "species": "Eevee",
+      "nickname": "Eevee",
+      "level": 4,
+      "role": "Mago",
+      "role_symbol": "■",
+      "pokemon_id": "133:eevee",
+      "visible": true,
+      "sprite": "sprites/133.png"
+    },
+    "tanque": {
+      "slot": 5,
+      "species_id": 763,
+      "species": "Tsareena",
+      "nickname": "Tsareena",
+      "level": 50,
+      "role": "Tanque",
+      "role_symbol": "♥",
+      "pokemon_id": "763:tsareena",
+      "visible": true,
+      "sprite": "sprites/763.png"
+    },
+    "prisma": {
+      "slot": 2,
+      "species_id": 137,
+      "species": "Porygon",
+      "nickname": "Porygon",
+      "level": 4,
+      "role": "Prisma",
+      "role_symbol": "★",
+      "pokemon_id": "137:porygon",
+      "visible": true,
+      "sprite": "sprites/137.png"
+    },
+    "support": {
+      "slot": 4,
+      "species_id": 379,
+      "species": "Registeel",
+      "nickname": "Registeel",
+      "level": 3,
+      "role": "Support",
+      "role_symbol": "◆",
+      "pokemon_id": "379:registeel",
+      "visible": true,
+      "sprite": "sprites/379.png"
+    }
+  },
+  "conflicts": []
+}

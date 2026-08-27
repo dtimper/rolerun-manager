@@ -1,0 +1,39 @@
+{
+  "captured_at_local": "2026-08-22T21:11:00+02:00",
+  "environment": {
+    "game": "Pokemon Shining Pearl",
+    "title_id": "010018E011D92000",
+    "revision": "1.3.0",
+    "emulator": "Ryujinx",
+    "memory_manager_mode": "HostMappedUnsafe",
+    "gdb_stub_enabled": false,
+    "process_id": 14456,
+    "access": "read-only",
+    "writes": 0
+  },
+  "observation": {
+    "guest_main": "0x08504000",
+    "battleproc_typeinfo_slot": "0x0D375D00",
+    "first_read_hex": "0000000000000000",
+    "second_read_hex": "0000000000000000",
+    "stable": true,
+    "typeinfo_value": "0x0",
+    "physical_state": "outside battle; party and team UI available"
+  },
+  "control": {
+    "battle_ui_typeinfo_slot": "0x0D374E40",
+    "first_read_hex": "605e90c015000000",
+    "second_read_hex": "605e90c015000000",
+    "stable": true,
+    "typeinfo_value": "0x15C0905E60"
+  },
+  "source_trace": {
+    "path": "diagnostics/manual/bdsp_alpha75_pc_seventh_and_tm_battleproc_FAIL_20260822_210614.jsonl",
+    "sha256": "51BB6576F4421B4B0A37926E702C77CE0CEE9F658A7FE3C23F38F9E4CA831DC9",
+    "snapshot_count": 439,
+    "party_counts": [6],
+    "battle_warning_count": 439
+  },
+  "demonstrated_conclusion": "A stable null BattleProc TypeInfo is an unloaded/absent battle lane in this exact SP 1.3.0 HostMapped session, not a non-null invalid pointer. Non-null invalid values remain rejected.",
+  "writes_performed": 0
+}

@@ -4,7 +4,7 @@ import struct
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.models import PendingTeamChange
+from app.models import PendingRoleChange, PendingTeamChange
 from app.oras_live import encrypt_pk6, encrypt_pk6_stored
 from app.oras_tm_service import ORASPersonalStats
 from app.save_engine_client import SaveGameData
@@ -193,6 +193,46 @@ def test_alpha44_party_to_box_6_to_5_updates_valid_empty_and_party_count() -> No
     assert boxed is not None and boxed.species_id == 115
 
 
+def test_usum_party_drag_writes_the_exact_validated_pc_destination() -> None:
+    defs = [(115, 10, "Líbero"), (761, 11, "Asesino")]
+    writer, ram, current, _party_base, pc_base, _save_base = _setup(defs, {})
+    change = PendingTeamChange(
+        operation="party-to-box", party_slot=2, box=3, box_slot=4,
+        outgoing_identity="761:11:11:22", outgoing_pokemon="Tsareena",
+    )
+
+    result = writer.apply(current, [change])
+
+    assert [p.species_id for p in result.game.party] == [115]
+    assert parse_pk7_boxed(ram.read(pc_base, PK7_STORED_SIZE), 1, 1, {}) is None
+    target_offset = (((3 - 1) * 30) + (4 - 1)) * PK7_STORED_SIZE
+    boxed = parse_pk7_boxed(
+        ram.read(pc_base + target_offset, PK7_STORED_SIZE), 3, 4, {},
+    )
+    assert boxed is not None and boxed.species_id == 761
+
+
+def test_usum_party_drag_rejects_an_occupied_exact_destination_without_writing() -> None:
+    defs = [(115, 10, "Líbero"), (761, 11, "Asesino")]
+    writer, ram, current, _party_base, _pc_base, _save_base = _setup(
+        defs, {63: (133, 99, "SIN ROL")},
+    )
+    before_party = bytes(ram.party)
+    before_pc = bytes(ram.pc)
+    change = PendingTeamChange(
+        operation="party-to-box", party_slot=2, box=3, box_slot=4,
+        outgoing_identity="761:11:11:22", outgoing_pokemon="Tsareena",
+    )
+
+    import pytest
+    from app.usum_live import USUMLiveError
+    with pytest.raises(USUMLiveError, match="casilla PC elegida ya está ocupada"):
+        writer.apply(current, [change])
+
+    assert bytes(ram.party) == before_party
+    assert bytes(ram.pc) == before_pc
+
+
 def test_alpha44_box_to_party_increments_count_and_leaves_encrypted_empty_box() -> None:
     writer, ram, current, _party_base, pc_base, _save_base = _setup(
         [(115, 10, "Líbero"), (761, 11, "Mago")],
@@ -209,12 +249,152 @@ def test_alpha44_box_to_party_increments_count_and_leaves_encrypted_empty_box() 
     assert any(raw_empty)
     assert parse_pk7_boxed(raw_empty, 1, 1, {}) is None
 
+
+def test_usum_box_to_party_applies_prepared_role_evs_to_stored_and_partydata() -> None:
+    writer, _ram, current, _party_base, _pc_base, _save_base = _setup(
+        [(115, 10, "Líbero"), (761, 11, "Mago")],
+        {0: (133, 99, "SIN ROL")},
+    )
+    change = PendingTeamChange(
+        operation="box-to-party", party_slot=3, box=1, box_slot=1,
+        incoming_identity="133:99:11:22", incoming_pokemon="Eevee",
+        incoming_role="Asesino",
+        incoming_snapshot={
+            "role": "Asesino",
+            "evs": {
+                "hp": 0, "attack": 252, "defense": 0,
+                "sp_attack": 0, "sp_defense": 0, "speed": 252,
+            },
+        },
+    )
+
+    result = writer.apply(current, [change])
+
+    incoming = result.game.party[2]
+    assert incoming.role == "Asesino"
+    assert incoming.evs == {
+        "hp": 0, "attack": 252, "defense": 0,
+        "sp_attack": 0, "sp_defense": 0, "speed": 252,
+    }
+    assert incoming.stats["attack"] > 5
+    assert incoming.stats["speed"] > 5
+
+
+def test_usum_swap_party_box_applies_evs_for_the_inherited_role() -> None:
+    defs = [
+        (115, 10, "Líbero"), (761, 11, "Asesino"), (455, 12, "Mago"),
+        (133, 13, "Tanque"), (379, 14, "Prisma"), (137, 15, "Support"),
+    ]
+    writer, _ram, current, _party_base, _pc_base, _save_base = _setup(
+        defs, {0: (133, 99, "SIN ROL")},
+    )
+    change = PendingTeamChange(
+        operation="swap-party-box", party_slot=2, box=1, box_slot=1,
+        outgoing_identity="761:11:11:22", outgoing_pokemon="Tsareena",
+        incoming_identity="133:99:11:22", incoming_pokemon="Eevee",
+        incoming_role="Asesino",
+        incoming_snapshot={
+            "role": "Asesino",
+            "evs": {
+                "hp": 0, "attack": 252, "defense": 0,
+                "sp_attack": 0, "sp_defense": 0, "speed": 252,
+            },
+        },
+    )
+
+    result = writer.apply(current, [change])
+
+    incoming = result.game.party[1]
+    assert incoming.species_id == 133
+    assert incoming.role == "Asesino"
+    assert incoming.evs["attack"] == 252
+    assert incoming.evs["speed"] == 252
+    assert sum(incoming.evs.values()) == 504
+
+
+def test_usum_role_evs_write_stored_and_sparse_partydata_together() -> None:
+    writer, ram, current, party_base, _pc_base, _count = _setup(
+        [(115, 10, "Líbero")], {},
+    )
+    writer._resolve_write_address = lambda *_args: None
+    before = current.party[0]
+    change = PendingRoleChange(
+        pokemon_slot=1,
+        pokemon=before.nickname or before.species,
+        species=before.species,
+        old_role="Líbero",
+        new_role="Líbero",
+        pokemon_identity="115:10:11:22",
+        old_evs=(0, 0, 0, 0, 0, 0),
+        new_evs=(252, 252, 0, 0, 0, 0),
+    )
+
+    result = writer.apply(current, [change])
+
+    actual = result.game.party[0]
+    assert actual.evs["hp"] == actual.evs["attack"] == 252
+    assert actual.max_hp > before.max_hp
+    assert actual.stats["attack"] > before.stats["attack"]
+    written_addresses = {address for address, _raw in ram.writes}
+    assert party_base in written_addresses
+    assert party_base + USUM_PARTY_STATS_OFFSET in written_addresses
+
 class _FailCountHost(_Host):
     def write(self, _handle, address: int, data: bytes) -> None:
         guest = int(address) - self.delta
         if guest == self.ram.count_addr:
             raise RuntimeError("forced PartyCount write failure")
         super().write(_handle, address, data)
+
+
+class _FailPartyStatsOnceHost(_Host):
+    def __init__(self, ram: _RAM, delta: int, pid: int):
+        super().__init__(ram, delta, pid)
+        self.failed = False
+
+    def write(self, _handle, address: int, data: bytes) -> None:
+        guest = int(address) - self.delta
+        stats_address = self.ram.party_base + USUM_PARTY_STATS_OFFSET
+        if guest == stats_address and not self.failed:
+            self.failed = True
+            raise RuntimeError("forced sparse PartyData write failure")
+        super().write(_handle, address, data)
+
+
+def test_usum_role_ev_sparse_stats_failure_rolls_back_stored_and_partydata() -> None:
+    writer, ram, current, party_base, _pc_base, _count = _setup(
+        [(115, 10, "Líbero")], {},
+    )
+    before_stored = ram.read(party_base, PK7_STORED_SIZE)
+    before_stats = ram.read(
+        party_base + USUM_PARTY_STATS_OFFSET, USUM_PARTY_STATS_SIZE,
+    )
+    writer._resolve_write_address = lambda *_args: None
+    writer.host_memory_factory = lambda: _FailPartyStatsOnceHost(
+        ram, 0x20000000000, 9002,
+    )
+    writer.diagnostic_delays = ()
+    before = current.party[0]
+    change = PendingRoleChange(
+        pokemon_slot=1,
+        pokemon=before.nickname or before.species,
+        species=before.species,
+        old_role="Líbero",
+        new_role="Líbero",
+        pokemon_identity="115:10:11:22",
+        old_evs=(0, 0, 0, 0, 0, 0),
+        new_evs=(252, 252, 0, 0, 0, 0),
+    )
+
+    import pytest
+    from app.usum_live import USUMLiveError
+    with pytest.raises(USUMLiveError, match="restauró los PK7 originales"):
+        writer.apply(current, [change])
+
+    assert ram.read(party_base, PK7_STORED_SIZE) == before_stored
+    assert ram.read(
+        party_base + USUM_PARTY_STATS_OFFSET, USUM_PARTY_STATS_SIZE,
+    ) == before_stats
 
 
 def test_alpha44_party_count_failure_rolls_back_pc_sparse_party_and_save_mirror() -> None:
@@ -265,3 +445,84 @@ def test_alpha55_usum_faint_replacement_leaves_encrypted_empty_source_box() -> N
     grave_addr = pc_base + grave_index * PK7_STORED_SIZE
     grave = parse_pk7_boxed(ram.read(grave_addr, PK7_STORED_SIZE), 4, 1, {})
     assert grave is not None and grave.species_id == 115 and grave.role == "Líbero"
+
+
+def test_usum_faint_replacement_applies_inherited_role_evs_and_runtime_stats() -> None:
+    writer, ram, current, _party_base, pc_base, _count_addr = _setup(
+        [(115, 10, "Líbero"), (761, 11, "Asesino")],
+        {0: (133, 99, "Mago")},
+    )
+    grave_index = (4 - 1) * 30
+    change = PendingTeamChange(
+        operation="replace-fainted", party_slot=2, box=1, box_slot=1,
+        outgoing_identity="761:11:11:22", incoming_identity="133:99:11:22",
+        outgoing_pokemon="Tsareena", incoming_pokemon="Eevee",
+        incoming_role="Asesino",
+        incoming_snapshot={
+            "role": "Asesino",
+            "evs": {
+                "hp": 0, "attack": 252, "defense": 0,
+                "sp_attack": 0, "sp_defense": 0, "speed": 252,
+            },
+        },
+        graveyard_box=4, graveyard_box_slot=1,
+    )
+
+    result = writer.apply(current, [change])
+
+    replacement = result.game.party[1]
+    assert replacement.species_id == 133
+    assert replacement.role == "Asesino"
+    assert replacement.evs == {
+        "hp": 0, "attack": 252, "defense": 0,
+        "sp_attack": 0, "sp_defense": 0, "speed": 252,
+    }
+    assert replacement.stats["attack"] > 5
+    assert replacement.stats["speed"] > 5
+    assert parse_pk7_boxed(ram.read(pc_base, PK7_STORED_SIZE), 1, 1, {}) is None
+    grave_addr = pc_base + grave_index * PK7_STORED_SIZE
+    grave = parse_pk7_boxed(ram.read(grave_addr, PK7_STORED_SIZE), 4, 1, {})
+    assert grave is not None and grave.species_id == 761
+
+
+def test_usum_pc_to_pc_moves_exact_pk7_to_requested_box_and_slot() -> None:
+    writer, ram, current, _party_base, pc_base, _count_addr = _setup(
+        [(115, 10, "Líbero")],
+        {(4 - 1) * 30: (133, 99, "Tanque")},
+    )
+    source_index = (4 - 1) * 30
+    destination_index = (3 - 1) * 30 + 4
+    source_addr = pc_base + source_index * PK7_STORED_SIZE
+    destination_addr = pc_base + destination_index * PK7_STORED_SIZE
+    exact_source = ram.read(source_addr, PK7_STORED_SIZE)
+
+    result = writer.apply(current, [PendingTeamChange(
+        operation="move-box-slot", party_slot=0,
+        box=4, box_slot=1, destination_box=3, destination_box_slot=5,
+        incoming_identity="133:99:11:22", incoming_pokemon="Eevee",
+    )])
+
+    assert result.applied_count == 1
+    assert ram.read(source_addr, PK7_STORED_SIZE) == encrypt_pk6_stored(bytes(PK7_STORED_SIZE))
+    assert ram.read(destination_addr, PK7_STORED_SIZE) == exact_source
+    moved = parse_pk7_boxed(ram.read(destination_addr, PK7_STORED_SIZE), 3, 5, {})
+    assert moved is not None and moved.species_id == 133 and moved.role == "Tanque"
+    assert [pokemon.species_id for pokemon in result.game.party] == [115]
+
+
+def test_usum_pc_to_pc_rejects_occupied_destination_without_writing() -> None:
+    writer, ram, current, _party_base, _pc_base, _count_addr = _setup(
+        [(115, 10, "Líbero")],
+        {0: (133, 99, "Tanque"), 1: (761, 100, "Asesino")},
+    )
+    before = bytes(ram.pc)
+    import pytest
+    from app.usum_live import USUMLiveError
+
+    with pytest.raises(USUMLiveError, match="destino.*ocupada"):
+        writer.apply(current, [PendingTeamChange(
+            operation="move-box-slot", party_slot=0,
+            box=1, box_slot=1, destination_box=1, destination_box_slot=2,
+            incoming_identity="133:99:11:22",
+        )])
+    assert bytes(ram.pc) == before

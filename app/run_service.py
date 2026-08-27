@@ -28,7 +28,10 @@ class RunProject:
     # Las Runs existentes sin este campo se consideran layout 1 y se migran en
     # vivo de forma segura al conectar ORAS. Las Runs nuevas nacen en layout 2.
     role_marker_layout: int = 1
-    role_rules_active: bool = False
+    # Conservado únicamente para leer configuraciones históricas. Desde la
+    # evolución visual posterior a alpha.86 las reglas RoleRun están siempre
+    # activas y cualquier valor ``false`` se normaliza al cargar la Run.
+    role_rules_active: bool = True
     # Fuente de tablas reales de MT de ORAS. La ruta de ROM se descubre desde
     # Azahar siempre que puede y solo se recuerda para la Run como respaldo.
     # Nunca se almacena dentro de ``main`` ni se modifica el juego.
@@ -64,6 +67,17 @@ class RunProject:
         "toggle_tanque": "alt+4",
         "toggle_prisma": "alt+5",
         "toggle_support": "alt+6",
+        "heal_party": "",
+        "floating_menu": "",
+    })
+    controller_hotkeys: dict[str, str] = field(default_factory=lambda: {
+        "floating_menu": "guide",
+    })
+    menu_keys: dict[str, str] = field(default_factory=lambda: {
+        "accept": "z", "back": "x",
+    })
+    controller_menu_buttons: dict[str, str] = field(default_factory=lambda: {
+        "accept": "a", "back": "b",
     })
 
 
@@ -181,6 +195,20 @@ class RunProjectService:
         clean = re.sub(r"-+", "-", clean).strip("-")
         return clean or "rolerun"
 
+    @staticmethod
+    def _normalize_role_rules_state(raw: dict[str, Any]) -> bool:
+        """Migra el antiguo Modo Libre sin tocar ningún otro dato de la Run.
+
+        La configuración de la Run es independiente del guardado del juego. La
+        migración cambia exclusivamente el indicador obsoleto y devuelve si el
+        JSON necesita persistirse; roles, contadores, bajas y rutas permanecen
+        byte-semánticamente iguales.
+        """
+        if raw.get("role_rules_active") is True:
+            return False
+        raw["role_rules_active"] = True
+        return True
+
     def open_or_create(
         self, game: str, trainer: str, save_path: Path, *, force_new: bool = False,
     ) -> RunProject:
@@ -206,11 +234,9 @@ class RunProjectService:
         now = datetime.now().isoformat(timespec="seconds")
         if config_path.exists():
             raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
-            # Migración v1.11.6: las Runs antiguas no guardaban el estado de activación.
-            # Si ya tienen medallas, las reglas necesariamente estaban en vigor; con 0
-            # medallas no se puede inferir si el jugador sigue en preparación.
-            if "role_rules_active" not in raw:
-                raw["role_rules_active"] = int(raw.get("counters", {}).get("medallas", 0)) > 0
+            # El antiguo Modo Libre queda obsoleto. Esta normalización solo
+            # modifica config.json; nunca alcanza al save ni al backend live.
+            self._normalize_role_rules_state(raw)
             # alpha.27: las bajas creadas por alpha.25/26 no persistían si el
             # selector ya se había mostrado. Para no reabrir al actualizar una
             # decisión que el usuario ya vio, se consideran notificadas una vez.
@@ -218,6 +244,9 @@ class RunProjectService:
                 if "prompt_contract" not in pending:
                     pending["prompt_shown"] = True
                     pending["prompt_contract"] = 27
+            raw.setdefault("controller_hotkeys", {"floating_menu": "guide"})
+            raw.setdefault("menu_keys", {"accept": "z", "back": "x"})
+            raw.setdefault("controller_menu_buttons", {"accept": "a", "back": "b"})
             project = RunProject(**raw)
             project.save_path = str(save_path.resolve())
             project.updated_at = now
@@ -238,6 +267,7 @@ class RunProjectService:
                 "toggle_libero": "alt+1", "toggle_asesino": "alt+2",
                 "toggle_mago": "alt+3", "toggle_tanque": "alt+4",
                 "toggle_prisma": "alt+5", "toggle_support": "alt+6",
+                "heal_party": "", "floating_menu": "",
             }
             if had_default_role_hotkeys:
                 project.hotkeys.update({
@@ -277,13 +307,17 @@ class RunProjectService:
         for config_path in self.root.glob("*/config.json"):
             try:
                 raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
-                if "role_rules_active" not in raw:
-                    raw["role_rules_active"] = int(raw.get("counters", {}).get("medallas", 0)) > 0
+                self._normalize_role_rules_state(raw)
                 for pending in raw.get("pending_faints", []):
                     if "prompt_contract" not in pending:
                         pending["prompt_shown"] = True
                         pending["prompt_contract"] = 27
                 raw.setdefault("hotkeys", {}).setdefault("sync_live_game", "f5")
+                raw["hotkeys"].setdefault("heal_party", "")
+                raw["hotkeys"].setdefault("floating_menu", "")
+                raw.setdefault("controller_hotkeys", {"floating_menu": "guide"})
+                raw.setdefault("menu_keys", {"accept": "z", "back": "x"})
+                raw.setdefault("controller_menu_buttons", {"accept": "a", "back": "b"})
                 projects.append(RunProject(**raw))
             except (OSError, json.JSONDecodeError, TypeError):
                 continue
@@ -295,8 +329,7 @@ class RunProjectService:
             return None
         try:
             raw = json.loads(path.read_text(encoding="utf-8-sig"))
-            if "role_rules_active" not in raw:
-                raw["role_rules_active"] = int(raw.get("counters", {}).get("medallas", 0)) > 0
+            migrated_role_rules = self._normalize_role_rules_state(raw)
             migrated_prompt = False
             for pending in raw.get("pending_faints", []):
                 if "prompt_contract" not in pending:
@@ -304,8 +337,13 @@ class RunProjectService:
                     pending["prompt_contract"] = 27
                     migrated_prompt = True
             raw.setdefault("hotkeys", {}).setdefault("sync_live_game", "f5")
+            raw["hotkeys"].setdefault("heal_party", "")
+            raw["hotkeys"].setdefault("floating_menu", "")
+            raw.setdefault("controller_hotkeys", {"floating_menu": "guide"})
+            raw.setdefault("menu_keys", {"accept": "z", "back": "x"})
+            raw.setdefault("controller_menu_buttons", {"accept": "a", "back": "b"})
             project = RunProject(**raw)
-            if migrated_prompt:
+            if migrated_prompt or migrated_role_rules:
                 self.save(project)
             return project
         except (OSError, json.JSONDecodeError, TypeError):
@@ -635,6 +673,43 @@ class RunProjectService:
         self.save(project)
         return True
 
+    def decline_detected_faint_replacement(self, project: RunProject, identity: str) -> bool:
+        """Archiva la obligación de sustituir sin alterar la baja registrada.
+
+        La muerte y el decremento de vidas ya se comprometieron al crear
+        ``pending_faints``. Esta decisión elimina únicamente el recordatorio de
+        sustitución, conserva al debilitado en el historial del Cementerio y no
+        escribe en el juego ni devuelve contadores.
+        """
+        identity = str(identity or "")
+        pending = next((
+            item for item in project.pending_faints
+            if str(item.get("identity", "")) == identity
+        ), None)
+        if pending is None:
+            return False
+        project.pending_faints = [
+            item for item in project.pending_faints
+            if str(item.get("identity", "")) != identity
+        ]
+        if identity and identity not in project.graveyard_pokemon:
+            project.graveyard_pokemon.append(identity)
+        events = self.history(project)
+        events.append({
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "type": "pokemon_faint_replacement_declined",
+            "pokemon": str(pending.get("pokemon", "Pokémon")),
+            "species": str(pending.get("species", "")),
+            "identity": identity,
+            "role": str(pending.get("role", "SIN ROL") or "SIN ROL"),
+            "source": str(pending.get("source_label", "Azahar en vivo") or "Azahar en vivo"),
+            "reason": "sustitución descartada por el usuario",
+        })
+        path = self.folder(project) / "history.json"
+        path.write_text(json.dumps(events, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        self.save(project)
+        return True
+
     def resolve_detected_faint(
         self, project: RunProject, identity: str, *, box: int, box_slot: int, substitute: str,
     ) -> bool:
@@ -667,6 +742,17 @@ class RunProjectService:
 
     def set_hotkeys(self, project: RunProject, hotkeys: dict[str, str]) -> None:
         project.hotkeys = dict(hotkeys)
+        self.save(project)
+
+    def set_controller_hotkeys(self, project: RunProject, hotkeys: dict[str, str]) -> None:
+        project.controller_hotkeys = dict(hotkeys)
+        self.save(project)
+
+    def set_menu_controls(
+        self, project: RunProject, keyboard: dict[str, str], controller: dict[str, str],
+    ) -> None:
+        project.menu_keys = dict(keyboard)
+        project.controller_menu_buttons = dict(controller)
         self.save(project)
 
     def _write_obs_placeholders(self, project: RunProject) -> None:

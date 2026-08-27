@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-
 from app.ui import RoleRunManager
 
 
@@ -58,6 +57,54 @@ def test_faint_never_blocks_auto_floating_in_alpha27() -> None:
     assert RoleRunManager._faint_picker_blocks_floating(manager) is False
 
 
+def test_closing_first_ready_faint_picker_schedules_the_second_without_remapping() -> None:
+    """Regresión física alpha.62: dos KO quedaron listos a la vez.
+
+    Antes, cerrar el primer selector no avanzaba la cola. El segundo solo aparecía
+    cuando minimizar/restaurar provocaba ``_on_main_map``.
+    """
+    scheduled: list[int] = []
+
+    first = {
+        "identity": "dead-1", "pokemon": "Porygon", "role": "Support",
+        "prompt_shown": False, "battle_ended": True,
+    }
+    second = {
+        "identity": "dead-2", "pokemon": "Registeel", "role": "Prisma",
+        "prompt_shown": False, "battle_ended": True,
+    }
+    manager = SimpleNamespace(
+        project=SimpleNamespace(pending_faints=[first, second]),
+        project_service=SimpleNamespace(
+            mark_detected_faint_prompt_shown=lambda _project, identity: identity == "dead-1",
+        ),
+        _oras_faint_replacement_window=None,
+        _oras_faint_picker_event_identity=None,
+        _faint_replacement_mode=None,
+        _cancel_pending_faint_picker_request=lambda: None,
+        _pokemon_identity=lambda _pokemon: "dead-1",
+        _effective_role=lambda _pokemon: ("Support", "S"),
+        _role_symbol=lambda _role: "S",
+        _pc_cache=None,
+        _pc_page_box=1,
+        active_page="team",
+        _set_operation_status=lambda *_args, **_kwargs: None,
+        _smooth_render_page=lambda **_kwargs: None,
+        _set_auto_floating_guard_temporarily=lambda _delay: None,
+        _schedule_pending_faint_picker=lambda delay: scheduled.append(int(delay)),
+    )
+    dead = SimpleNamespace(nickname="Porygon", species="Porygon")
+    pc_data = SimpleNamespace(box_count=32, current_box=1)
+
+    RoleRunManager._open_faint_replacement_picker(manager, first, dead, pc_data=pc_data)
+    RoleRunManager._dismiss_integrated_faint_picker(manager)
+
+    assert first["prompt_shown"] is True
+    assert second["prompt_shown"] is False
+    assert manager._faint_replacement_mode is None
+    assert scheduled, "cerrar el primer selector debe avanzar la cola sin esperar a <Map>"
+
+
 def test_ready_faint_returns_from_floating_bar_before_opening_picker() -> None:
     calls: list[str] = []
     manager = SimpleNamespace(
@@ -82,6 +129,27 @@ def test_ready_faint_returns_from_floating_bar_before_opening_picker() -> None:
     RoleRunManager._maybe_open_pending_faint_picker(manager)
     assert manager._oras_faint_picker_after_id is None
     assert calls == ["return-from-floating"]
+
+
+def test_second_ready_picker_retries_while_first_replacement_is_being_applied() -> None:
+    scheduled: list[int] = []
+    manager = SimpleNamespace(
+        _oras_faint_picker_after_id="after-1",
+        project=SimpleNamespace(pending_faints=[{
+            "identity": "dead-2", "prompt_shown": False, "battle_ended": True,
+        }]),
+        current_game=object(),
+        run=SimpleNamespace(pending_changes=[object()]),
+        _next_ready_pending_faint=lambda: {
+            "identity": "dead-2", "prompt_shown": False, "battle_ended": True,
+        },
+        _schedule_pending_faint_picker=lambda delay: scheduled.append(int(delay)),
+    )
+
+    RoleRunManager._maybe_open_pending_faint_picker(manager)
+
+    assert manager._oras_faint_picker_after_id is None
+    assert scheduled == [450]
 
 
 def test_faint_is_not_scheduled_before_battle_end() -> None:
@@ -146,4 +214,18 @@ def test_floating_bar_opening_guard_prevents_second_toplevel_creation() -> None:
             AssertionError("a concurrent open must stop before touching any window")
         ),
     )
+    RoleRunManager.open_floating_bar(manager)
+
+
+def test_floating_bar_off_preference_blocks_automatic_opening() -> None:
+    manager = SimpleNamespace(
+        _floating_enabled=False,
+        project=object(),
+        current_game=object(),
+        _floating_bar_opening=False,
+        _suspend_modal_for_floating_bar=lambda: (_ for _ in ()).throw(
+            AssertionError("OFF debe detenerse antes de tocar ninguna ventana")
+        ),
+    )
+
     RoleRunManager.open_floating_bar(manager)

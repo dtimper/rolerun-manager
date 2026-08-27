@@ -7,6 +7,7 @@ from typing import Callable
 
 from ..azahar_rpc import AzaharRPCClient
 from ..citra_broker import CitraBrokerClient
+from ..ryujinx_gdb import RyujinxGDBClient
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,3 +55,27 @@ class CitraBridge(EmulatorBridge):
         # permanece vivo para que el Core lo reutilice en el snapshot siguiente.
         with self.open():
             pass
+
+
+class RyujinxBridge(EmulatorBridge):
+    """Transporte Switch HostMapped; el perfil concreto lo inyecta el adapter."""
+
+    info = EmulatorBridgeInfo("ryujinx", "Ryujinx", "HostMapped read-only")
+
+    def __init__(self, client_factory: Callable[[], AbstractContextManager]) -> None:
+        self.client_factory = client_factory
+
+    def open(self) -> AbstractContextManager:
+        return self.client_factory()
+
+
+class RyujinxGDBDiagnosticBridge(EmulatorBridge):
+    """Frontera GDB conservada únicamente para diagnósticos controlados."""
+
+    info = EmulatorBridgeInfo("ryujinx-gdb-diagnostic", "Ryujinx", "GDB RSP diagnostic")
+
+    def __init__(self, client_factory: Callable[[], RyujinxGDBClient] = RyujinxGDBClient) -> None:
+        self.client_factory = client_factory
+
+    def open(self) -> AbstractContextManager:
+        return self.client_factory()

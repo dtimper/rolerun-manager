@@ -1,0 +1,37 @@
+{
+  "format": "rolerun-usum-kahuna-manual-proof-v1",
+  "captured_at": "2026-08-22T13:45:00+02:00",
+  "physical_observation": "Kaudan/Hala derrotado y cristal Z recibido; RoleRun mantuvo medallas=0",
+  "running_version": "0.2.2-alpha.63",
+  "process": {
+    "pid": 11,
+    "title_id": "00040000001B5000",
+    "name": "momiji"
+  },
+  "guest_items": {
+    "address": "0x33011934",
+    "two_reads_equal": true,
+    "structurally_valid": true,
+    "records": [
+      {"slot": 1, "offset": "0xD70", "word": "0x40000727", "item_id": 807, "name": "Normastal Z", "count": 1},
+      {"slot": 2, "offset": "0xD74", "word": "0x4000072D", "item_id": 813, "name": "Lizastal Z", "count": 1}
+    ],
+    "count_usum_kahuna_badges": 1
+  },
+  "saved_items": {
+    "crystal_item_ids": [807],
+    "count_usum_kahuna_badges": 0
+  },
+  "first_divergence": {
+    "function": "USUMLiveWriter.read_kahuna_badges_for_game",
+    "demonstrated_anchor": "_tm_guest_inventory_anchor",
+    "incorrect_lookup": "_utility_block_cache[items]",
+    "effect": "the proven live value 1 was discarded and the stale saved value 0 was returned"
+  },
+  "fixed_reader_readonly_probe": {
+    "first_value": 1,
+    "second_value": 1,
+    "source": "Z-Crystals vivos · referencia ItemsOffset revalidada",
+    "party_base": "0x33F7FA44"
+  }
+}

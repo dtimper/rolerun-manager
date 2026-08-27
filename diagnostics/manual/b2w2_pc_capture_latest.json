@@ -1,0 +1,80 @@
+{
+  "format": "rolerun-b2w2-pc-candidates-v1",
+  "captured_at": "2026-08-26T23:07:42.813622+02:00",
+  "environment": "Pokémon Negro 2 España · melonDS 1.1",
+  "party_count_before": 6,
+  "candidate_count": 14,
+  "candidates": [
+    {
+      "guest_address": "0x02205AB4",
+      "species_id": 540,
+      "nickname": "Sewaddle"
+    },
+    {
+      "guest_address": "0x0221E3AC",
+      "species_id": 498,
+      "nickname": "Tepig"
+    },
+    {
+      "guest_address": "0x0221E564",
+      "species_id": 506,
+      "nickname": "Lillipup"
+    },
+    {
+      "guest_address": "0x0221E640",
+      "species_id": 504,
+      "nickname": "Patrat"
+    },
+    {
+      "guest_address": "0x0221E71C",
+      "species_id": 298,
+      "nickname": "Azurill"
+    },
+    {
+      "guest_address": "0x0221E7F8",
+      "species_id": 506,
+      "nickname": "Lillipup"
+    },
+    {
+      "guest_address": "0x0224791C",
+      "species_id": 540,
+      "nickname": "Sewaddle"
+    },
+    {
+      "guest_address": "0x02247A2C",
+      "species_id": 498,
+      "nickname": "Tepig"
+    },
+    {
+      "guest_address": "0x02247B08",
+      "species_id": 179,
+      "nickname": "Mareep"
+    },
+    {
+      "guest_address": "0x02247BE4",
+      "species_id": 506,
+      "nickname": "Lillipup"
+    },
+    {
+      "guest_address": "0x02247CC0",
+      "species_id": 504,
+      "nickname": "Patrat"
+    },
+    {
+      "guest_address": "0x02247D9C",
+      "species_id": 298,
+      "nickname": "Azurill"
+    },
+    {
+      "guest_address": "0x02247E78",
+      "species_id": 506,
+      "nickname": "Lillipup"
+    },
+    {
+      "guest_address": "0x02247F8C",
+      "species_id": 540,
+      "nickname": "Sewaddle"
+    }
+  ],
+  "note": "Diagnóstico de solo lectura; no activa writers."
+}

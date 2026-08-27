@@ -1,0 +1,10 @@
+{
+  "process_id": 11,
+  "title_id": "0004000000055D00",
+  "process_name": "kujira-1",
+  "region_start": "0x08C00000",
+  "region_size": 1048576,
+  "region_sha256": "609fce6db8052c35b2f6be542416509471a59dcdd2f15771cbfc84fb777f3a2f",
+  "party_sha256": "2a8a19e8d54fd32921e584678f968f21f407f9b4b022f03f9b526e29637ee14b",
+  "party_count": 5
+}

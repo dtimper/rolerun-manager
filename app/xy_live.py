@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import struct
 import time
 from dataclasses import dataclass, replace
@@ -12,6 +13,7 @@ from .models import (
     PendingRoleChange,
     PendingPCRoleChange,
     PendingInventoryChange,
+    PendingPartyHeal,
     PendingTMTeach,
     PendingTeamChange,
 )
@@ -31,14 +33,61 @@ from .oras_live import (
     parse_pk6_boxed as _parse_pk6_boxed_gen6,
     parse_oras_item_pocket,
     ORAS_ITEM_RECORD_SIZE,
+    _MOVE_OFFSETS,
+    _MOVE_PP_OFFSETS,
+    _MOVE_PP_UPS_OFFSETS,
+    _plain_pk6,
+    _plain_stored_pk6,
+    encrypt_pk6,
 )
 from .oras_tm_service import oras_tm_item_id
 from .realtime_memory import LiveBlockResolver, MemoryCandidateHint
 from .save_engine_client import SaveGameData, SavePokemon
+from .win_process_memory import WindowsProcessMemory
 
 
 # Primer perfil vivo de X/Y sobre Azahar. X/Y utiliza el mismo formato PK6 de
 # party de sexta generación que ORAS, pero su matriz runtime parte de otra base.
+
+
+def load_xy_move_metadata(path: Path) -> dict[int, dict[str, object]]:
+    """Carga datos de movimientos fijados al version-group de X/Y.
+
+    El encabezado de la tabla forma parte del contrato: una tabla de otra
+    generación o version-group se rechaza en vez de publicar valores que solo
+    coincidan por compartir el mismo ID de movimiento.
+    """
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    if (
+        int(raw.get("generation", 0) or 0) != 6
+        or str(raw.get("target_version_group", "") or "") != "x-y"
+    ):
+        return {}
+    result: dict[int, dict[str, object]] = {}
+    for move_raw, entry in dict(raw.get("moves", {})).items():
+        try:
+            move_id = int(move_raw)
+        except (TypeError, ValueError):
+            continue
+        if move_id <= 0 or not isinstance(entry, dict):
+            continue
+        values: dict[str, object] = {}
+        for field in ("power", "accuracy", "pp"):
+            value = entry.get(field)
+            if value is None:
+                values[field] = None
+                continue
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError):
+                parsed = 0
+            values[field] = parsed if parsed > 0 else None
+        values["description_es"] = str(entry.get("description_es", "") or "").strip()
+        result[move_id] = values
+    return result
 
 
 def parse_pk6_boxed(
@@ -50,10 +99,20 @@ def parse_pk6_boxed(
     )
 
 XY_PARTY_ADDRESS = 0x08CE1CE8
+# X/Y v1.5 sobre Azahar: la prueba física controlada del 25-08-2026
+# demostró que este u32 little-endian pasa 6→5 al depositar un miembro,
+# mientras la party se compacta a la izquierda. Las seis palabras anteriores
+# son punteros/campos ajenos y quedan expresamente fuera de toda escritura.
+XY_PARTY_COUNT_ADDRESS = 0x08CE1C74
+XY_PARTY_COUNT_SIZE = 4
 XY_PARTY_STRIDE = ORAS_PARTY_STRIDE
 XY_PARTY_STATS_OFFSET = ORAS_PARTY_STATS_OFFSET
 XY_PARTY_STATS_SIZE = ORAS_PARTY_STATS_SIZE
 XY_PARTY_SPAN = (5 * XY_PARTY_STRIDE) + XY_PARTY_STATS_OFFSET + XY_PARTY_STATS_SIZE
+# El writer necesita preservar también las regiones runtime que el lector no
+# publica. La captura física X/Y/Azahar del 25-08-2026 demostró seis strides
+# estables de 0x1E4, con bytes no nulos y específicos fuera del PK6+stats.
+XY_PARTY_RUNTIME_SPAN = 6 * XY_PARTY_STRIDE
 
 # Identidad del proceso. Se prioriza Title ID; los nombres sirven únicamente de
 # fallback para forks de Citra/Azahar que no expongan el TID esperado.
@@ -117,13 +176,13 @@ XY_SUBEVENT_SCAN_RANGES = (
 XY_SUBEVENT_SCAN_BLOCK_SIZE = 0x00010000
 
 # X/Y conserva el mismo formato PK6 almacenado (0xE8) y 31 cajas de 30
-# huecos que ORAS. El CTRPluginFramework Gen 6 documenta 0x08C861C8 como base
-# de Caja 1 / Slot 1, pero alpha.12 demostró en Citra Nightly 2104 que una región
-# completamente a cero en esa dirección NO basta para afirmar que el PC real está
-# vacío. Desde alpha.13 esta dirección es solo una candidata: cuando existe un
-# Pokémon testigo que acaba de salir de la party, la base se calibra buscando su
-# identidad PK6 exacta en un vecindario acotado y nunca se acepta un falso vacío.
-XY_PC_KNOWN_ADDRESS = 0x08C861C8
+# huecos que ORAS. La captura física del 25-08-2026 en Pokémon X + Azahar
+# 263745c demostró la base invitada 0x08C861B8: al depositar Budew desde el
+# propio juego, la identidad apareció exactamente en Caja 1 / Slot 11 desde
+# esa base y la party invitada se compactó a la vez. 0x08C861C8 era una copia
+# desplazada 0x10 bytes que podía aceptar readback sin gobernar el juego.
+# La dirección sigue siendo candidata y se valida con testigos antes de escribir.
+XY_PC_KNOWN_ADDRESS = 0x08C861B8
 # El rango total es menor que un stride PK6 (0xE8). Por ello una misma casilla
 # física no puede encajar como dos índices diferentes dentro de las candidatas.
 # El barrido es conservador: si ninguna candidata contiene al testigo exacto,
@@ -636,6 +695,58 @@ class XYLiveReader:
                 ))
         return tuple(hints)
 
+    def _discover_pc_base_near_known_from_structure(
+        self, client,
+    ) -> tuple[MemoryCandidateHint, ...]:
+        """Localiza una matriz X/Y poblada sin depender del ``main`` guardado.
+
+        Esta ruta solo produce evidencia cuando una alineación contiene al menos
+        dos PK6 completos que superan descifrado, checksum y especie. Una única
+        coincidencia no basta para calibrar una dirección sin identidad testigo.
+        El vecindario es el mismo rango acotado y documentado que usa la
+        calibración party->PC; nunca se amplía a un escaneo de FCRAM.
+        """
+        radius = int(XY_PC_KNOWN_SEARCH_RADIUS)
+        scan_start = int(XY_PC_KNOWN_ADDRESS - radius)
+        scan_size = int(XY_PC_SIZE + radius * 2)
+        try:
+            region = bytes(client.read_memory(scan_start, scan_size))
+        except Exception:
+            return ()
+        if len(region) != scan_size:
+            return ()
+
+        hints: list[MemoryCandidateHint] = []
+        for delta in range(-radius, radius + 1, 4):
+            base = int(XY_PC_KNOWN_ADDRESS + delta)
+            offset0 = base - scan_start
+            valid_occupied = 0
+            for index in range(XY_PC_BOX_COUNT * XY_PC_BOX_SLOT_COUNT):
+                start = offset0 + index * PK6_STORED_SIZE
+                raw = region[start:start + PK6_STORED_SIZE]
+                if len(raw) != PK6_STORED_SIZE or not any(raw):
+                    continue
+                # Sanity debe ser cero en un PK6 almacenado válido. Este filtro
+                # evita descifrar alineaciones obviamente imposibles.
+                if raw[4] or raw[5]:
+                    continue
+                box, slot_index = divmod(index, XY_PC_BOX_SLOT_COUNT)
+                try:
+                    pokemon = parse_pk6_boxed(
+                        raw, box + 1, slot_index + 1, self.move_names,
+                    )
+                except Exception:
+                    continue
+                if pokemon is not None and self._stable_pc_identity(pokemon) is not None:
+                    valid_occupied += 1
+            if valid_occupied >= 2:
+                hints.append(MemoryCandidateHint(
+                    base,
+                    f"estructura PC X/Y ({valid_occupied} PK6 válidos)",
+                    valid_occupied,
+                ))
+        return tuple(hints)
+
     def _discover_pc_bases(self, client, anchors: Sequence[SavePokemon]) -> tuple[MemoryCandidateHint, ...]:
         usable = [
             p for p in anchors
@@ -684,11 +795,20 @@ class XYLiveReader:
         # PC no vuelva a barrer memoria. Siempre que tengamos una evidencia actual
         # (posición conocida o testigo party->PC), la caché debe volver a validarse.
         cached = self._pc_bases_by_process.get(process_key)
+        structural_hints: tuple[MemoryCandidateHint, ...] | None = None
         if cached is not None:
             if positioned:
                 if self._pc_anchor_score(client, cached, positioned) is not None:
                     return int(cached)
             elif not witnesses:
+                # Sin anchors, una caché nominal no demuestra que siga apuntando
+                # al inicio real. Si la matriz viva está poblada, recalibramos
+                # únicamente con evidencia estructural múltiple y unívoca.
+                structural_hints = self._discover_pc_base_near_known_from_structure(client)
+                if len(structural_hints) == 1:
+                    resolved = int(structural_hints[0].address)
+                    self._pc_bases_by_process[process_key] = resolved
+                    return resolved
                 return int(cached)
 
         # 1) Con posiciones conocidas, la dirección documentada sigue siendo una
@@ -726,7 +846,19 @@ class XYLiveReader:
                 self._pc_bases_by_process[process_key] = int(best[0])
                 return int(best[0])
 
-        # 4) Solo cuando literalmente no existe ninguna evidencia de que haya un
+        # 4) Si el main no aporta anchors pero la matriz viva contiene varios PK6
+        # válidos, su estructura completa permite calibrar el pequeño desplazamiento
+        # observado entre revisiones de Citra/Azahar. Se exige una única candidata
+        # estructural en todo el rango; una aparición aislada nunca se acepta.
+        if not positioned and not witnesses:
+            if structural_hints is None:
+                structural_hints = self._discover_pc_base_near_known_from_structure(client)
+            if len(structural_hints) == 1:
+                resolved = int(structural_hints[0].address)
+                self._pc_bases_by_process[process_key] = resolved
+                return resolved
+
+        # 5) Solo cuando literalmente no existe ninguna evidencia de que haya un
         # Pokémon en PC podemos usar la base documentada para representar un PC
         # posiblemente vacío. En cuanto haya un testigo, jamás confundimos ceros
         # de otra región con "0 Pokémon".
@@ -960,6 +1092,8 @@ class XYLiveWriter(ORASLiveWriter):
 
     def __init__(
         self, reader: XYLiveReader, move_pp_for: Callable[[int], int], personal_for=None,
+        party_commit_settle_delay: float = 0.35,
+        host_memory_factory: Callable[[], object] | None = None,
     ) -> None:
         super().__init__(reader, move_pp_for=move_pp_for, personal_for=personal_for)
         # Resolver independiente para el bloque Misc de X/Y.
@@ -970,6 +1104,11 @@ class XYLiveWriter(ORASLiveWriter):
         self._bag_bases_by_process: dict[tuple[int, str, str], int] = {}
         self._subevent_bases_by_process: dict[tuple[int, str], int] = {}
         self._subevent_failed_scan_at: dict[tuple[int, str], float] = {}
+        # X/Y puede aceptar momentáneamente una escritura de party y reconstruir
+        # después la estructura desde sus bytes runtime. El segundo readback se
+        # retrasa para no confundir eco inmediato del RPC con consumo del juego.
+        self.party_commit_settle_delay = max(0.0, float(party_commit_settle_delay))
+        self.host_memory_factory = host_memory_factory or WindowsProcessMemory
 
     @staticmethod
     def _slot_address(slot: int) -> int:
@@ -989,15 +1128,20 @@ class XYLiveWriter(ORASLiveWriter):
     def _unsupported_changes(changes: Sequence[object]) -> list[str]:
         labels: list[str] = []
         for change in changes:
-            if isinstance(change, (PendingChange, PendingRoleChange, PendingPCRoleChange, PendingTMTeach)):
+            if isinstance(change, (
+                PendingChange, PendingRoleChange, PendingPCRoleChange,
+                PendingPartyHeal, PendingTMTeach,
+            )):
                 continue
-            # El intercambio 1↔1 ya usa el mismo PK6 Gen 6 transaccional que
-            # ORAS y la base de cajas X/Y validada. Las operaciones que cambian
-            # el tamaño de la party siguen fuera hasta calibrar ese flujo aparte.
-            if isinstance(change, PendingTeamChange) and change.operation in {"swap-party-box", "replace-fainted"}:
+            # X/Y permite además cambiar el tamaño de la party: contador,
+            # compactación y slot vacío se demostraron físicamente en v1.5.
+            if isinstance(change, PendingTeamChange) and change.operation in {
+                "swap-party-box", "replace-fainted", "move-box-slot",
+                "party-to-box", "box-to-party",
+            }:
                 continue
             if isinstance(change, PendingTeamChange):
-                label = "Equipo ↔ PC que cambia el tamaño de la party (pendiente en X/Y)"
+                label = "operación Equipo ↔ PC no soportada por X/Y"
             elif isinstance(change, PendingInventoryChange):
                 # alpha.17: Caramelo Raro, Repelente Máximo y dinero tienen una
                 # ruta X/Y propia, localizada por testigos y verificada.
@@ -1007,6 +1151,372 @@ class XYLiveWriter(ORASLiveWriter):
             if label not in labels:
                 labels.append(label)
         return labels
+
+    def _healed_party_bytes(self, raw: bytes) -> bytes:
+        """Construye un PK6 curado conservando identidad y datos ajenos.
+
+        X/Y almacena el PK6 y su extensión runtime en dos regiones separadas.
+        Este método opera sobre la captura sintética que ya valida el reader;
+        la ruta de escritura separa después ambos fragmentos y nunca escribe
+        los seis bytes de relleno que no existen en la RAM del juego.
+        """
+        plain, was_encrypted = _plain_pk6(raw)
+        data = bytearray(plain)
+        maximum_hp = int(struct.unpack_from("<H", data, 0xF2)[0])
+        if maximum_hp <= 0:
+            raise XYLiveError("X/Y devolvió PS máximos inválidos; no se curó el equipo.")
+        struct.pack_into("<I", data, 0xE8, 0)
+        struct.pack_into("<H", data, 0xF0, maximum_hp)
+        for move_offset, pp_offset, pp_ups_offset in zip(
+            _MOVE_OFFSETS, _MOVE_PP_OFFSETS, _MOVE_PP_UPS_OFFSETS,
+        ):
+            move_id = int(struct.unpack_from("<H", data, move_offset)[0])
+            if move_id == 0:
+                data[pp_offset] = 0
+                continue
+            base_pp = int(self.move_pp_for(move_id) or 0)
+            pp_ups = int(data[pp_ups_offset])
+            if base_pp <= 0 or not 0 <= pp_ups <= 3:
+                raise XYLiveError(
+                    f"No se pudo demostrar el PP completo del movimiento #{move_id}; "
+                    "no se curó el equipo."
+                )
+            maximum_pp = base_pp * (5 + pp_ups) // 5
+            if maximum_pp > 0xFF:
+                raise XYLiveError(f"El PP calculado para el movimiento #{move_id} no cabe en PK6.")
+            data[pp_offset] = maximum_pp
+        self._refresh_checksum(data)
+        return encrypt_pk6(bytes(data)) if was_encrypted else bytes(data)
+
+    def _apply_party_heal(
+        self,
+        current: SaveGameData,
+        changes: Sequence[PendingPartyHeal],
+    ) -> ORASLiveWriteResult:
+        """Cura la party X/Y con precondición, readback y rollback verificados."""
+        if not changes:
+            raise XYLiveError("No hay miembros del equipo que curar en X/Y.")
+        try:
+            with self.reader.client_factory() as client:
+                process = self.reader._find_oras_process(client.process_list())
+                client.set_process(process.process_id)
+                original_capture, capture_attempt = self._capture_stable_party(client)
+                live_party = self._read_party_members(original_capture, current)
+                if not live_party:
+                    raise XYLiveError("La captura estable de X/Y no contiene ningún Pokémon en el equipo.")
+
+                targets = {id(change): self._resolve_target(change, live_party) for change in changes}
+                if len(set(targets.values())) != len(targets):
+                    raise XYLiveError("La petición de curación repite un mismo Pokémon; no se escribió nada.")
+                expected_slots = {
+                    slot: self._healed_party_bytes(original_capture[slot - 1])
+                    for slot in sorted(set(targets.values()))
+                }
+                if all(
+                    expected_slots[slot][:PK6_STORED_SIZE]
+                    == original_capture[slot - 1][:PK6_STORED_SIZE]
+                    and expected_slots[slot][PK6_STORED_SIZE:PK6_STORED_SIZE + XY_PARTY_STATS_SIZE]
+                    == original_capture[slot - 1][PK6_STORED_SIZE:PK6_STORED_SIZE + XY_PARTY_STATS_SIZE]
+                    for slot in expected_slots
+                ):
+                    return ORASLiveWriteResult(
+                        game=self._build_game(original_capture, current, process, live_write=True),
+                        process=process,
+                        attempts=capture_attempt,
+                        applied_count=len(changes),
+                        already_applied=True,
+                    )
+
+                original_parts: dict[int, bytes] = {}
+                planned: dict[int, bytes] = {}
+                for slot, expected in expected_slots.items():
+                    base = self._slot_address(slot)
+                    parts = (
+                        (base, original_capture[slot - 1][:PK6_STORED_SIZE], expected[:PK6_STORED_SIZE]),
+                        (
+                            base + XY_PARTY_STATS_OFFSET,
+                            original_capture[slot - 1][PK6_STORED_SIZE:PK6_STORED_SIZE + XY_PARTY_STATS_SIZE],
+                            expected[PK6_STORED_SIZE:PK6_STORED_SIZE + XY_PARTY_STATS_SIZE],
+                        ),
+                    )
+                    for address, original, replacement in parts:
+                        # Testigo inmediato: no se escribe si el juego cambió
+                        # desde la doble captura estable.
+                        if bytes(client.read_memory(address, len(original))) != original:
+                            raise XYLiveError(
+                                f"El slot {slot} cambió antes de curarse; no se escribió ningún byte."
+                            )
+                        original_parts[address] = original
+                        if replacement != original:
+                            planned[address] = replacement
+
+                attempted: list[tuple[int, bytes]] = []
+                try:
+                    for address in sorted(planned):
+                        attempted.append((address, original_parts[address]))
+                        client.write_memory(address, planned[address])
+
+                    verified_capture, verified_attempt = self._capture_stable_party(client)
+                    verified_party = self._read_party_members(verified_capture, current)
+                    for slot, expected_raw in expected_slots.items():
+                        actual_raw = verified_capture[slot - 1]
+                        if (
+                            actual_raw[:PK6_STORED_SIZE] != expected_raw[:PK6_STORED_SIZE]
+                            or actual_raw[PK6_STORED_SIZE:PK6_STORED_SIZE + XY_PARTY_STATS_SIZE]
+                            != expected_raw[PK6_STORED_SIZE:PK6_STORED_SIZE + XY_PARTY_STATS_SIZE]
+                        ):
+                            raise XYLiveError(
+                                f"Azahar no confirmó todos los bytes curados del slot {slot}."
+                            )
+                        actual = verified_party.get(slot)
+                        if actual is None or int(actual.current_hp or 0) != int(actual.max_hp or 0):
+                            raise XYLiveError(f"X/Y no confirmó los PS restaurados del slot {slot}.")
+                        if int(actual.status_condition or 0) != 0:
+                            raise XYLiveError(f"X/Y no confirmó la eliminación del estado del slot {slot}.")
+
+                    return ORASLiveWriteResult(
+                        game=self._build_game(verified_capture, current, process, live_write=True),
+                        process=process,
+                        attempts=max(capture_attempt, verified_attempt),
+                        applied_count=len(changes),
+                    )
+                except Exception as exc:
+                    rollback_errors = self._rollback(client, attempted)
+                    for address, original in dict(attempted).items():
+                        try:
+                            if bytes(client.read_memory(address, len(original))) != original:
+                                rollback_errors.append(f"0x{address:08X}: readback distinto tras rollback")
+                        except Exception as readback_exc:
+                            rollback_errors.append(f"0x{address:08X}: {readback_exc}")
+                    if rollback_errors:
+                        raise XYLiveError(
+                            f"La curación X/Y falló: {exc}. No se pudo confirmar toda la restauración: "
+                            + "; ".join(rollback_errors)
+                        ) from exc
+                    if attempted:
+                        raise XYLiveError(
+                            f"La curación X/Y falló: {exc}. RoleRun restauró y verificó los bytes "
+                            "originales en RAM."
+                        ) from exc
+                    raise
+        except AzaharRPCError as exc:
+            raise XYLiveError(str(exc)) from exc
+
+    @staticmethod
+    def _canonical_evs(data: bytes | bytearray) -> tuple[int, int, int, int, int, int]:
+        """Devuelve EV en el contrato UI: PS, Atq, Def, At. Esp., Def. Esp., Vel."""
+        native = tuple(int(data[0x1E + index]) for index in range(6))
+        return native[0], native[1], native[2], native[4], native[5], native[3]
+
+    @staticmethod
+    def _native_evs(values: Sequence[int]) -> tuple[int, int, int, int, int, int]:
+        canonical = tuple(int(value) for value in values)
+        if len(canonical) != 6:
+            raise XYLiveError("La distribución de EV de X/Y no contiene las seis estadísticas.")
+        if any(not 0 <= value <= 252 for value in canonical) or sum(canonical) > 510:
+            raise XYLiveError("La distribución de EV pedida no es válida en X/Y.")
+        return canonical[0], canonical[1], canonical[2], canonical[5], canonical[3], canonical[4]
+
+    def _set_party_evs_and_stats(
+        self,
+        data: bytearray,
+        change: PendingRoleChange,
+    ) -> None:
+        """Normaliza EV y recalcula la extensión viva completa de un PK6 X/Y.
+
+        La extensión separada conserva estado y daño relativo. Antes de
+        prepararla se demuestra que las estadísticas actuales corresponden al
+        PK6 y a los EV que la UI leyó; una muestra stale nunca llega a RAM.
+        """
+        expected_evs = tuple(int(value) for value in tuple(change.old_evs or ()))
+        desired_evs = tuple(int(value) for value in tuple(change.new_evs or ()))
+        if len(expected_evs) != 6 or len(desired_evs) != 6:
+            raise XYLiveError("X/Y necesita los EV anteriores y nuevos completos para cambiar el rol.")
+        self._native_evs(expected_evs)
+        desired_native = self._native_evs(desired_evs)
+        actual_evs = self._canonical_evs(data)
+        if actual_evs != expected_evs:
+            name = str(getattr(change, "pokemon", "") or "El Pokémon")
+            raise XYLiveError(
+                f"{name} cambió sus EV dentro del juego. RoleRun esperaba {expected_evs} "
+                f"y encontró {actual_evs}; no se escribió ningún byte."
+            )
+
+        species = int(struct.unpack_from("<H", data, 0x08)[0])
+        form = (int(data[0x1D]) >> 3) & 0x1F
+        if self.personal_for is None:
+            raise XYLiveError("No está disponible la tabla Personal X/Y necesaria para recalcular estadísticas.")
+        personal = self.personal_for(species, form)
+        if personal is None:
+            raise XYLiveError(
+                f"La ROM activa no contiene datos Personal exactos para especie {species}, forma {form}."
+            )
+
+        stored_before = bytes(data[:PK6_STORED_SIZE])
+        calculated_before = self._party_extension(stored_before, personal)
+        live_level = int(data[0xEC])
+        calculated_level = int(calculated_before[4])
+        if live_level != calculated_level:
+            raise XYLiveError(
+                f"El nivel vivo X/Y ({live_level}) no coincide con la experiencia del PK6 "
+                f"({calculated_level}); no se escribió nada."
+            )
+        live_stats = bytes(data[0xF2:0xFE])
+        calculated_stats = bytes(calculated_before[10:22])
+        if expected_evs != desired_evs and live_stats != calculated_stats:
+            raise XYLiveError(
+                "Las estadísticas vivas de X/Y no corresponden al PK6 capturado; "
+                "no se aplicaron EV sobre una muestra incompatible."
+            )
+
+        old_current_hp = int(struct.unpack_from("<H", data, 0xF0)[0])
+        old_max_hp = int(struct.unpack_from("<H", data, 0xF2)[0])
+        if old_max_hp <= 0 or not 0 <= old_current_hp <= old_max_hp:
+            raise XYLiveError("X/Y devolvió una relación de PS inválida; no se cambiaron los EV.")
+        missing_hp = old_max_hp - old_current_hp
+
+        data[0x1E:0x24] = bytes(desired_native)
+        calculated_after = self._party_extension(bytes(data[:PK6_STORED_SIZE]), personal)
+        new_max_hp = int(struct.unpack_from("<H", calculated_after, 10)[0])
+        if old_current_hp == 0:
+            new_current_hp = 0
+        else:
+            new_current_hp = min(new_max_hp, max(1, new_max_hp - missing_hp))
+        struct.pack_into("<H", data, 0xF0, new_current_hp)
+        data[0xF2:0xFE] = calculated_after[10:22]
+
+    def _apply_party_role_evs(
+        self,
+        current: SaveGameData,
+        changes: Sequence[PendingChange | PendingRoleChange],
+    ) -> ORASLiveWriteResult:
+        """Aplica rol+EV+stats X/Y como una sola transacción recuperable."""
+        if not changes:
+            raise XYLiveError("No hay cambios de rol o movimientos que aplicar en X/Y.")
+        try:
+            with self.reader.client_factory() as client:
+                process = self.reader._find_oras_process(client.process_list())
+                client.set_process(process.process_id)
+                original_capture, capture_attempt = self._capture_stable_party(client)
+                live_party = self._read_party_members(original_capture, current)
+                if not live_party:
+                    raise XYLiveError("La captura estable de X/Y no contiene ningún Pokémon en el equipo.")
+                targets = {id(change): self._resolve_target(change, live_party) for change in changes}
+
+                original_slots: dict[int, bytes] = {}
+                plain_slots: dict[int, bytearray] = {}
+                encrypted_slots: dict[int, bool] = {}
+                for slot in sorted(set(targets.values())):
+                    original = original_capture[slot - 1]
+                    plain, encrypted = _plain_pk6(original)
+                    original_slots[slot] = original
+                    plain_slots[slot] = bytearray(plain)
+                    encrypted_slots[slot] = encrypted
+
+                for change in changes:
+                    slot = targets[id(change)]
+                    if isinstance(change, PendingRoleChange):
+                        self._replace_role(plain_slots[slot], change)
+                        if change.new_evs is not None:
+                            self._set_party_evs_and_stats(plain_slots[slot], change)
+                    else:
+                        self._replace_move(plain_slots[slot], change)
+
+                encoded_slots: dict[int, bytes] = {}
+                expected_party: dict[int, SavePokemon] = {}
+                for slot, plain in plain_slots.items():
+                    self._refresh_checksum(plain)
+                    encoded = encrypt_pk6(bytes(plain)) if encrypted_slots[slot] else bytes(plain)
+                    expected = parse_pk6_party(encoded, slot, self.reader.move_names)
+                    if expected is None:
+                        raise XYLiveError(f"El slot {slot} quedó vacío durante la preparación.")
+                    encoded_slots[slot] = encoded
+                    expected_party[slot] = expected
+
+                original_parts: dict[int, bytes] = {}
+                planned: dict[int, bytes] = {}
+                for slot, expected in encoded_slots.items():
+                    base = self._slot_address(slot)
+                    for address, original, replacement in (
+                        (base, original_slots[slot][:PK6_STORED_SIZE], expected[:PK6_STORED_SIZE]),
+                        (
+                            base + XY_PARTY_STATS_OFFSET,
+                            original_slots[slot][PK6_STORED_SIZE:PK6_STORED_SIZE + XY_PARTY_STATS_SIZE],
+                            expected[PK6_STORED_SIZE:PK6_STORED_SIZE + XY_PARTY_STATS_SIZE],
+                        ),
+                    ):
+                        if bytes(client.read_memory(address, len(original))) != original:
+                            raise XYLiveError(
+                                f"El slot {slot} cambió justo antes de aplicar su rol; no se escribió ningún byte."
+                            )
+                        original_parts[address] = original
+                        if replacement != original:
+                            planned[address] = replacement
+
+                if not planned:
+                    return ORASLiveWriteResult(
+                        game=self._build_game(original_capture, current, process, live_write=True),
+                        process=process,
+                        attempts=capture_attempt,
+                        applied_count=len(changes),
+                        already_applied=True,
+                    )
+
+                attempted: list[tuple[int, bytes]] = []
+                try:
+                    for address in sorted(planned):
+                        attempted.append((address, original_parts[address]))
+                        client.write_memory(address, planned[address])
+
+                    verified_capture, verified_attempt = self._capture_stable_party(client)
+                    verified_party = self._read_party_members(verified_capture, current)
+                    for slot, expected_raw in encoded_slots.items():
+                        actual_raw = verified_capture[slot - 1]
+                        if (
+                            actual_raw[:PK6_STORED_SIZE] != expected_raw[:PK6_STORED_SIZE]
+                            or actual_raw[PK6_STORED_SIZE:PK6_STORED_SIZE + XY_PARTY_STATS_SIZE]
+                            != expected_raw[PK6_STORED_SIZE:PK6_STORED_SIZE + XY_PARTY_STATS_SIZE]
+                        ):
+                            raise XYLiveError(f"Azahar no confirmó el rol, EV y estadísticas del slot {slot}.")
+                        actual = verified_party.get(slot)
+                        expected = expected_party[slot]
+                        if actual is None or self._pokemon_identity(actual) != self._pokemon_identity(expected):
+                            raise XYLiveError(f"La identidad del slot {slot} cambió durante el readback.")
+                        if tuple(int(actual.evs.get(key, 0)) for key in (
+                            "hp", "attack", "defense", "sp_attack", "sp_defense", "speed",
+                        )) != tuple(int(expected.evs.get(key, 0)) for key in (
+                            "hp", "attack", "defense", "sp_attack", "sp_defense", "speed",
+                        )):
+                            raise XYLiveError(f"X/Y no confirmó los EV del slot {slot}.")
+                        if actual.role != expected.role:
+                            raise XYLiveError(f"X/Y no confirmó el rol del slot {slot}.")
+
+                    return ORASLiveWriteResult(
+                        game=self._build_game(verified_capture, current, process, live_write=True),
+                        process=process,
+                        attempts=max(capture_attempt, verified_attempt),
+                        applied_count=len(changes),
+                    )
+                except Exception as exc:
+                    rollback_errors = self._rollback(client, attempted)
+                    for address, original in dict(attempted).items():
+                        try:
+                            if bytes(client.read_memory(address, len(original))) != original:
+                                rollback_errors.append(f"0x{address:08X}: readback distinto tras rollback")
+                        except Exception as readback_exc:
+                            rollback_errors.append(f"0x{address:08X}: {readback_exc}")
+                    if rollback_errors:
+                        raise XYLiveError(
+                            f"El cambio de rol X/Y falló: {exc}. No se pudo confirmar toda la restauración: "
+                            + "; ".join(rollback_errors)
+                        ) from exc
+                    if attempted:
+                        raise XYLiveError(
+                            f"El cambio de rol X/Y falló: {exc}. RoleRun restauró y verificó los bytes originales."
+                        ) from exc
+                    raise
+        except AzaharRPCError as exc:
+            raise XYLiveError(str(exc)) from exc
 
     @staticmethod
     def _box_slot_address(box: int, box_slot: int, *, base_address: int = 0) -> int:
@@ -1078,6 +1588,666 @@ class XYLiveWriter(ORASLiveWriter):
             "No se pudo localizar y validar la caja viva de X/Y con sus testigos. "
             "No se escribió ningún byte. Pulsa F5 y vuelve a intentarlo fuera de una transición del PC."
         )
+
+    def _capture_stable_party_and_count(
+        self, client,
+    ) -> tuple[tuple[bytes, ...], int, int]:
+        """Captura party y contador como una sola precondición estable.
+
+        El contrato físico de X/Y exige un prefijo compacto: los ``count``
+        primeros slots están ocupados y todos los posteriores están vacíos.
+        Una muestra que no cumpla esto se rechaza antes de escribir.
+        """
+        for attempt in range(1, self.reader.snapshot_attempts + 1):
+            first_party = self.reader._read_party(client)
+            first_count = bytes(client.read_memory(XY_PARTY_COUNT_ADDRESS, XY_PARTY_COUNT_SIZE))
+            if self.reader.stable_delay:
+                time.sleep(self.reader.stable_delay)
+            second_party = self.reader._read_party(client)
+            second_count = bytes(client.read_memory(XY_PARTY_COUNT_ADDRESS, XY_PARTY_COUNT_SIZE))
+            if first_party != second_party or first_count != second_count:
+                continue
+            count = int(struct.unpack("<I", second_count)[0])
+            if not 1 <= count <= 6:
+                raise XYLiveError(f"X/Y declaró un contador de equipo inválido ({count}).")
+            parsed = [
+                parse_pk6_party(raw, index, self.reader.move_names)
+                for index, raw in enumerate(second_party, start=1)
+            ]
+            if any(pokemon is None for pokemon in parsed[:count]):
+                raise XYLiveError(
+                    "El contador X/Y incluye un slot vacío; no se escribió ningún byte."
+                )
+            if any(pokemon is not None for pokemon in parsed[count:]):
+                raise XYLiveError(
+                    "La party X/Y no es un prefijo compacto coherente con su contador; "
+                    "no se escribió ningún byte."
+                )
+            return second_party, count, attempt
+        raise XYLiveError(
+            "El equipo o su contador cambiaron durante todas las lecturas; "
+            "sal del menú del juego y vuelve a intentarlo."
+        )
+
+    def _capture_stable_runtime_party_and_count(
+        self, client,
+    ) -> tuple[tuple[bytes, ...], tuple[bytes, ...], int, int]:
+        """Captura los seis slots runtime completos y su vista PK6 publicada.
+
+        El stride vivo de X/Y mide ``0x1E4``. Leer solo PK6 almacenado y stats
+        dejaba fuera dos regiones no nulas y específicas de cada miembro; una
+        escritura parcial podía superar su propio readback y ser deshecha por
+        el juego. Esta captura convierte el stride completo en precondición y
+        autoridad de verificación.
+        """
+        for attempt in range(1, self.reader.snapshot_attempts + 1):
+            first_region = bytes(client.read_memory(XY_PARTY_ADDRESS, XY_PARTY_RUNTIME_SPAN))
+            first_count = bytes(client.read_memory(XY_PARTY_COUNT_ADDRESS, XY_PARTY_COUNT_SIZE))
+            if self.reader.stable_delay:
+                time.sleep(self.reader.stable_delay)
+            second_region = bytes(client.read_memory(XY_PARTY_ADDRESS, XY_PARTY_RUNTIME_SPAN))
+            second_count = bytes(client.read_memory(XY_PARTY_COUNT_ADDRESS, XY_PARTY_COUNT_SIZE))
+            if first_region != second_region or first_count != second_count:
+                continue
+            if len(second_region) != XY_PARTY_RUNTIME_SPAN:
+                raise XYLiveError("Azahar devolvió una party runtime X/Y incompleta.")
+            count = int(struct.unpack("<I", second_count)[0])
+            if not 1 <= count <= 6:
+                raise XYLiveError(f"X/Y declaró un contador de equipo inválido ({count}).")
+            runtime_slots = tuple(
+                second_region[index * XY_PARTY_STRIDE:(index + 1) * XY_PARTY_STRIDE]
+                for index in range(6)
+            )
+            tail_padding = PK6_PARTY_SIZE - PK6_STORED_SIZE - XY_PARTY_STATS_SIZE
+            party_slots = tuple(
+                slot[:PK6_STORED_SIZE]
+                + slot[XY_PARTY_STATS_OFFSET:XY_PARTY_STATS_OFFSET + XY_PARTY_STATS_SIZE]
+                + (b"\0" * tail_padding)
+                for slot in runtime_slots
+            )
+            parsed = [
+                parse_pk6_party(raw, index, self.reader.move_names)
+                for index, raw in enumerate(party_slots, start=1)
+            ]
+            if any(pokemon is None for pokemon in parsed[:count]):
+                raise XYLiveError("El contador X/Y incluye un slot vacío; no se escribió ningún byte.")
+            if any(pokemon is not None for pokemon in parsed[count:]):
+                raise XYLiveError(
+                    "La party X/Y no es un prefijo compacto coherente con su contador; "
+                    "no se escribió ningún byte."
+                )
+            return runtime_slots, party_slots, count, attempt
+        raise XYLiveError(
+            "La party runtime X/Y o su contador cambiaron durante todas las lecturas; "
+            "sal del menú del juego y vuelve a intentarlo."
+        )
+
+    def _locate_empty_pc_destination(
+        self, client, process: AzaharProcess, change: PendingTeamChange,
+    ) -> int:
+        """Resuelve una matriz PC cuyo destino debe estar vacío.
+
+        Un hueco cero no identifica una matriz. Por ello se aceptan solamente
+        bases ya conocidas/caché y al menos un Pokémon acompañante de la misma
+        caja en su offset exacto. Nunca se escanea RAM tomando el vacío como
+        ancla.
+        """
+        if change.box is None or change.box_slot is None:
+            raise XYLiveError("El depósito X/Y no declara una casilla PC exacta.")
+        companions = tuple(change.box_witnesses or ())
+        if not companions:
+            raise XYLiveError(
+                "No hay un testigo ocupado de la caja destino X/Y. Pulsa F5 y "
+                "vuelve a intentarlo; no se escribió ningún byte."
+            )
+        process_key = (int(process.title_id), str(process.name), self.reader.transport_label)
+        candidates: list[int] = []
+        for candidate in (
+            self._pc_bases_by_process.get(process_key),
+            self.reader._pc_bases_by_process.get(process_key),
+            XY_PC_KNOWN_ADDRESS,
+        ):
+            if candidate is not None and int(candidate) not in candidates:
+                candidates.append(int(candidate))
+        for base_address in candidates:
+            if not 0x08000000 <= base_address < 0x0A000000:
+                continue
+            target_address = self._box_slot_address(
+                int(change.box), int(change.box_slot), base_address=base_address,
+            )
+            try:
+                target_raw = bytes(client.read_memory(target_address, PK6_STORED_SIZE))
+                if parse_pk6_boxed(
+                    target_raw, int(change.box), int(change.box_slot), self.reader.move_names,
+                ) is not None:
+                    continue
+                valid = True
+                for witness_slot, expected_identity in companions:
+                    witness_slot = int(witness_slot)
+                    if witness_slot == int(change.box_slot):
+                        valid = False
+                        break
+                    raw = bytes(client.read_memory(
+                        self._box_slot_address(
+                            int(change.box), witness_slot, base_address=base_address,
+                        ),
+                        PK6_STORED_SIZE,
+                    ))
+                    pokemon = parse_pk6_boxed(
+                        raw, int(change.box), witness_slot, self.reader.move_names,
+                    )
+                    if pokemon is None or self._pokemon_identity(pokemon) != str(expected_identity):
+                        valid = False
+                        break
+                if not valid:
+                    continue
+            except (ORASLiveError, ValueError, TypeError):
+                continue
+            self._pc_bases_by_process[process_key] = base_address
+            self.reader._pc_bases_by_process[process_key] = base_address
+            return base_address
+        raise XYLiveError(
+            "No se demostró la matriz PC X/Y con el destino vacío y sus testigos. "
+            "No se escribió ningún byte."
+        )
+
+    def _validated_empty_pc_slot(
+        self, client, *, base_address: int, excluded_addresses: Sequence[int] = (),
+    ) -> bytes:
+        """Obtiene el vacío real repetido de la matriz PC del mismo instante.
+
+        X/Y materializa un BoxPokemon vacío como un PK6 cifrado no nulo. Los
+        0xE8 ceros también parecen vacíos al parser conservador, pero el juego
+        los muestra como un Huevo corrupto. Nunca inventamos la plantilla: se
+        exige una matriz completa estable y al menos dos slots no nulos,
+        semánticamente vacíos e idénticos.
+        """
+        first = bytes(client.read_memory(int(base_address), XY_PC_SIZE))
+        if self.reader.stable_delay:
+            time.sleep(self.reader.stable_delay)
+        second = bytes(client.read_memory(int(base_address), XY_PC_SIZE))
+        if first != second:
+            raise XYLiveError(
+                "La matriz PC X/Y cambió al demostrar su slot vacío; no se escribió ningún byte."
+            )
+        excluded = {int(address) for address in excluded_addresses}
+        counts: dict[bytes, int] = {}
+        for index in range(XY_PC_BOX_COUNT * XY_PC_BOX_SLOT_COUNT):
+            address = int(base_address) + index * PK6_STORED_SIZE
+            if address in excluded:
+                continue
+            raw = second[index * PK6_STORED_SIZE:(index + 1) * PK6_STORED_SIZE]
+            if not any(raw):
+                continue
+            box, slot_index = divmod(index, XY_PC_BOX_SLOT_COUNT)
+            try:
+                pokemon = parse_pk6_boxed(raw, box + 1, slot_index + 1, self.reader.move_names)
+            except ORASLiveError:
+                continue
+            if pokemon is None:
+                counts[raw] = counts.get(raw, 0) + 1
+        if not counts:
+            raise XYLiveError(
+                "No se encontró una representación vacía válida y no nula en el PC X/Y; "
+                "no se escribió ningún byte."
+            )
+        ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        template, occurrences = ranked[0]
+        if occurrences < 2 or (len(ranked) > 1 and ranked[1][1] == occurrences):
+            raise XYLiveError(
+                "La representación vacía del PC X/Y no quedó demostrada de forma única; "
+                "no se escribió ningún byte."
+            )
+        return bytes(template)
+
+    @staticmethod
+    def _party_split_writes(slot_address: int, raw: bytes) -> tuple[tuple[int, bytes], ...]:
+        if len(raw) != PK6_PARTY_SIZE:
+            raise XYLiveError("El PK6 de equipo X/Y tiene un tamaño inesperado.")
+        return (
+            (int(slot_address), bytes(raw[:PK6_STORED_SIZE])),
+            (
+                int(slot_address) + XY_PARTY_STATS_OFFSET,
+                bytes(raw[PK6_STORED_SIZE:PK6_STORED_SIZE + XY_PARTY_STATS_SIZE]),
+            ),
+        )
+
+    @staticmethod
+    def _rollback_resize(client, attempted: Sequence[tuple[int, bytes]]) -> list[str]:
+        """Restaura bloques y deja siempre el contador para el final."""
+        originals: dict[int, bytes] = {}
+        order: list[int] = []
+        for address, original in attempted:
+            address = int(address)
+            if address not in originals:
+                originals[address] = bytes(original)
+                order.append(address)
+        errors: list[str] = []
+        restore_order = [
+            address for address in reversed(order)
+            if address != XY_PARTY_COUNT_ADDRESS
+        ]
+        if XY_PARTY_COUNT_ADDRESS in originals:
+            restore_order.append(XY_PARTY_COUNT_ADDRESS)
+        for address in restore_order:
+            original = originals[address]
+            try:
+                client.write_memory(address, original)
+                if bytes(client.read_memory(address, len(original))) != original:
+                    errors.append(f"0x{address:08X}: readback distinto tras rollback")
+            except Exception as exc:
+                errors.append(f"0x{address:08X}: {exc}")
+        return errors
+
+    def _apply_party_resize(
+        self, current: SaveGameData, change: PendingTeamChange,
+    ) -> ORASLiveWriteResult:
+        """Aplica Equipo↔PC X/Y con contador final y rollback verificado."""
+        operation = str(change.operation)
+        if operation not in {"party-to-box", "box-to-party"}:
+            raise XYLiveError("La operación no cambia el tamaño de la party X/Y.")
+        try:
+            with self.reader.client_factory() as client:
+                process = self.reader._find_oras_process(client.process_list())
+                client.set_process(process.process_id)
+                original_runtime, original_party, count, party_attempt = (
+                    self._capture_stable_runtime_party_and_count(client)
+                )
+                members = self._read_party_members(original_party, current)
+                original_identities = [self._pokemon_identity(members[index]) for index in range(1, count + 1)]
+
+                if operation == "party-to-box":
+                    if count <= 1:
+                        raise XYLiveError("X/Y no permite depositar el último miembro del equipo.")
+                    if count >= 6:
+                        raise XYLiveError(
+                            "X/Y no dispone de un slot runtime vacío observado con el que cerrar "
+                            "una party de seis miembros; no se escribió ningún byte."
+                        )
+                    identity = str(change.outgoing_identity or "")
+                    matches = [
+                        slot for slot, pokemon in members.items()
+                        if slot <= count and self._pokemon_identity(pokemon) == identity
+                    ]
+                    if identity and len(matches) != 1:
+                        raise XYLiveError(
+                            "La identidad del Pokémon que iba a salir ya no es única en la party X/Y."
+                        )
+                    source_slot = matches[0] if matches else int(change.party_slot)
+                    if not 1 <= source_slot <= count or source_slot not in members:
+                        raise XYLiveError("El slot saliente X/Y ya no contiene el Pokémon previsto.")
+                    pc_base = self._locate_empty_pc_destination(client, process, change)
+                else:
+                    if count >= 6:
+                        raise XYLiveError("El equipo X/Y ya contiene seis Pokémon.")
+                    if change.box is None or change.box_slot is None:
+                        raise XYLiveError("La incorporación X/Y no declara un origen PC exacto.")
+                    source_slot = count + 1
+                    pc_base = self._locate_pc_base(client, process, [change])
+
+                pc_address = self._box_slot_address(
+                    int(change.box), int(change.box_slot), base_address=pc_base,
+                )
+                empty_pc_stored = self._validated_empty_pc_slot(
+                    client, base_address=pc_base, excluded_addresses=(pc_address,),
+                )
+                pc_original = bytes(client.read_memory(pc_address, PK6_STORED_SIZE))
+                if self.reader.stable_delay:
+                    time.sleep(self.reader.stable_delay)
+                if bytes(client.read_memory(pc_address, PK6_STORED_SIZE)) != pc_original:
+                    raise XYLiveError("La casilla PC X/Y cambió durante la precondición.")
+
+                # La operación nativa de depósito demostró que la superficie
+                # invitada leída por RPC es la autoridad que consume Pokémon X.
+                # Una copia anfitriona encontrada por contenido puede aceptar
+                # el mismo write/readback y, aun así, no gobernar el juego.
+                # Por eso la transacción y su rollback se realizan sobre el
+                # cliente invitado ya validado, nunca sobre una coincidencia host.
+                authority = client
+
+                attempted: list[tuple[int, bytes]] = []
+                try:
+                    # Relectura inmediata de todos los testigos antes del primer byte.
+                    fresh_runtime, fresh_party, fresh_count, _ = (
+                        self._capture_stable_runtime_party_and_count(client)
+                    )
+                    if (
+                        fresh_runtime != original_runtime
+                        or fresh_party != original_party
+                        or fresh_count != count
+                    ):
+                        raise XYLiveError("La party X/Y cambió antes de escribir; no se escribió ningún byte.")
+                    if bytes(client.read_memory(pc_address, PK6_STORED_SIZE)) != pc_original:
+                        raise XYLiveError("La casilla PC X/Y cambió antes de escribir.")
+
+                    def write(address: int, payload: bytes) -> None:
+                        original = bytes(authority.read_memory(address, len(payload)))
+                        attempted.append((int(address), original))
+                        authority.write_memory(int(address), bytes(payload))
+                        if bytes(authority.read_memory(address, len(payload))) != bytes(payload):
+                            raise XYLiveError(
+                                f"Azahar no confirmó la escritura invitada X/Y en 0x{address:08X}."
+                            )
+
+                    if operation == "party-to-box":
+                        if parse_pk6_boxed(
+                            pc_original, int(change.box), int(change.box_slot), self.reader.move_names,
+                        ) is not None:
+                            raise XYLiveError("La casilla destino X/Y dejó de estar vacía.")
+                        outgoing_full = original_party[source_slot - 1]
+                        outgoing = members[source_slot]
+                        if change.outgoing_identity and self._pokemon_identity(outgoing) != change.outgoing_identity:
+                            raise XYLiveError("El miembro saliente X/Y cambió antes de escribir.")
+                        write(pc_address, outgoing_full[:PK6_STORED_SIZE])
+                        # X/Y mantiene 0x1E4 bytes por miembro. Las regiones
+                        # omitidas por el PK6 publicado son no nulas y cambian
+                        # con el slot; por ello la compactación mueve la unidad
+                        # runtime completa, no solo stored+stats.
+                        for slot in range(source_slot, count):
+                            write(self._slot_address(slot), original_runtime[slot])
+                        # El slot inmediatamente posterior al prefijo ocupado
+                        # es una plantilla vacía observada en esta misma captura.
+                        write(self._slot_address(count), original_runtime[count])
+                        expected_count = count - 1
+                    else:
+                        incoming = parse_pk6_boxed(
+                            pc_original, int(change.box), int(change.box_slot), self.reader.move_names,
+                        )
+                        if incoming is None or (
+                            change.incoming_identity
+                            and self._pokemon_identity(incoming) != change.incoming_identity
+                        ):
+                            raise XYLiveError("El Pokémon origen del PC X/Y ya no coincide.")
+                        stored, was_encrypted = _plain_stored_pk6(pc_original)
+                        data = bytearray(stored)
+                        role = str(change.incoming_role or incoming.role or "SIN ROL")
+                        self._set_role(data, role)
+                        ev_map = dict(change.incoming_snapshot.get("evs", {}) or {})
+                        stat_keys = ("hp", "attack", "defense", "sp_attack", "sp_defense", "speed")
+                        if ev_map:
+                            desired = tuple(int(ev_map[key]) for key in stat_keys)
+                            data[0x1E:0x24] = bytes(self._native_evs(desired))
+                        self._remove_move_slots(data, change.remove_move_slots)
+                        self._refresh_checksum(data)
+                        species = int(struct.unpack_from("<H", data, 0x08)[0])
+                        form = (int(data[0x1D]) >> 3) & 0x1F
+                        personal = self.personal_for(species, form) if self.personal_for else None
+                        if personal is None:
+                            raise XYLiveError(
+                                "Falta la tabla Personal X/Y exacta para construir el miembro de party."
+                            )
+                        plain_full = bytes(data) + self._party_extension(data, personal)
+                        incoming_full = encrypt_pk6(plain_full) if was_encrypted else plain_full
+                        destination_runtime = bytearray(original_runtime[count])
+                        destination_runtime[:PK6_STORED_SIZE] = incoming_full[:PK6_STORED_SIZE]
+                        destination_runtime[
+                            XY_PARTY_STATS_OFFSET:XY_PARTY_STATS_OFFSET + XY_PARTY_STATS_SIZE
+                        ] = incoming_full[
+                            PK6_STORED_SIZE:PK6_STORED_SIZE + XY_PARTY_STATS_SIZE
+                        ]
+                        write(self._slot_address(source_slot), bytes(destination_runtime))
+                        write(pc_address, empty_pc_stored)
+                        expected_count = count + 1
+
+                    # El contador es el commit point y siempre se escribe al final.
+                    write(XY_PARTY_COUNT_ADDRESS, struct.pack("<I", expected_count))
+
+                    verified_runtime, verified_party, verified_count, verified_attempt = (
+                        self._capture_stable_runtime_party_and_count(client)
+                    )
+                    verified_members = self._read_party_members(verified_party, current)
+                    verified_identities = [
+                        self._pokemon_identity(verified_members[index])
+                        for index in range(1, verified_count + 1)
+                    ]
+                    verified_pc = bytes(client.read_memory(pc_address, PK6_STORED_SIZE))
+                    if operation == "party-to-box":
+                        expected_ids = original_identities[:source_slot - 1] + original_identities[source_slot:]
+                        moved = parse_pk6_boxed(
+                            verified_pc, int(change.box), int(change.box_slot), self.reader.move_names,
+                        )
+                        if verified_count != count - 1 or verified_identities != expected_ids:
+                            raise XYLiveError("X/Y no confirmó la compactación exacta de la party.")
+                        if moved is None or self._pokemon_identity(moved) != original_identities[source_slot - 1]:
+                            raise XYLiveError("X/Y no confirmó el Pokémon exacto en el destino PC.")
+                        expected_runtime_list = list(original_runtime)
+                        for slot in range(source_slot, count):
+                            expected_runtime_list[slot - 1] = original_runtime[slot]
+                        expected_runtime_list[count - 1] = original_runtime[count]
+                        expected_runtime = tuple(expected_runtime_list)
+                        if verified_runtime != expected_runtime:
+                            raise XYLiveError("X/Y no confirmó la estructura runtime completa de la party.")
+                    else:
+                        added = verified_members.get(count + 1)
+                        if (
+                            verified_count != count + 1
+                            or verified_identities[:count] != original_identities
+                            or added is None
+                            or self._pokemon_identity(added) != str(change.incoming_identity)
+                            or added.role != str(change.incoming_role)
+                        ):
+                            raise XYLiveError("X/Y no confirmó la incorporación exacta al final de la party.")
+                        if parse_pk6_boxed(
+                            verified_pc, int(change.box), int(change.box_slot), self.reader.move_names,
+                        ) is not None:
+                            raise XYLiveError("X/Y no confirmó vacío el origen PC.")
+
+                    # El readback inmediato de alpha.10 solo demostraba que
+                    # Azahar aceptaba momentáneamente los bytes. Esperamos y
+                    # volvemos a leer la autoridad completa para detectar si
+                    # el juego restaura su propia estructura.
+                    if self.party_commit_settle_delay:
+                        time.sleep(self.party_commit_settle_delay)
+                    settled_runtime, settled_party, settled_count, settled_attempt = (
+                        self._capture_stable_runtime_party_and_count(client)
+                    )
+                    settled_pc = bytes(client.read_memory(pc_address, PK6_STORED_SIZE))
+                    if (
+                        settled_runtime != verified_runtime
+                        or settled_party != verified_party
+                        or settled_count != verified_count
+                        or settled_pc != verified_pc
+                    ):
+                        raise XYLiveError(
+                            "El juego restauró la party o el PC después del readback inmediato; "
+                            "la operación no quedó comprometida."
+                        )
+                    return ORASLiveWriteResult(
+                        game=self._build_game(settled_party, current, process, live_write=True),
+                        process=process,
+                        attempts=max(party_attempt, verified_attempt, settled_attempt),
+                        applied_count=1,
+                    )
+                except Exception as exc:
+                    rollback_errors = self._rollback_resize(authority, attempted)
+                    if attempted:
+                        try:
+                            rolled_runtime, _rolled_party, rolled_count, _ = (
+                                self._capture_stable_runtime_party_and_count(client)
+                            )
+                            rolled_pc = bytes(client.read_memory(pc_address, PK6_STORED_SIZE))
+                            if rolled_runtime != original_runtime:
+                                rollback_errors.append("RPC: party distinta tras rollback invitado")
+                            if rolled_count != count:
+                                rollback_errors.append("RPC: contador distinto tras rollback invitado")
+                            if rolled_pc != pc_original:
+                                rollback_errors.append("RPC: casilla PC distinta tras rollback invitado")
+                        except Exception as rollback_exc:
+                            rollback_errors.append(f"RPC: readback de rollback falló: {rollback_exc}")
+                    if rollback_errors:
+                        raise XYLiveError(
+                            f"El cambio de tamaño X/Y falló: {exc}. No se pudo confirmar toda "
+                            "la restauración: " + "; ".join(rollback_errors)
+                        ) from exc
+                    if attempted:
+                        raise XYLiveError(
+                            f"El cambio de tamaño X/Y falló: {exc}. RoleRun restauró y "
+                            "verificó party, PC y contador."
+                        ) from exc
+                    raise
+        except AzaharRPCError as exc:
+            raise XYLiveError(str(exc)) from exc
+
+    def _apply_pc_move(
+        self,
+        current: SaveGameData,
+        change: PendingTeamChange,
+    ) -> ORASLiveWriteResult:
+        """Mueve un PK6 entre dos casillas exactas sin alterar la party.
+
+        La matriz X/Y y su stride de 0xE8 bytes ya son la misma superficie que
+        usa el lector de cajas. El origen actúa como testigo de identidad; el
+        destino debe ser una casilla vacía demostrada. Se copia primero el PK6
+        exacto al destino y solo entonces se vacía el origen. Cualquier fallo
+        restaura y verifica ambos bloques originales.
+        """
+        source_box = int(change.box or 0)
+        source_slot = int(change.box_slot or 0)
+        destination_box = int(change.destination_box or 0)
+        destination_slot = int(change.destination_box_slot or 0)
+        if min(source_box, source_slot, destination_box, destination_slot) <= 0:
+            raise XYLiveError("El movimiento PC→PC de X/Y no contiene un origen y destino completos.")
+        if (source_box, source_slot) == (destination_box, destination_slot):
+            raise XYLiveError("El origen y el destino del movimiento PC→PC de X/Y son la misma casilla.")
+        expected_identity = str(change.incoming_identity or "")
+        if not expected_identity:
+            raise XYLiveError("El movimiento PC→PC de X/Y no contiene una identidad estable.")
+
+        try:
+            with self.reader.client_factory() as client:
+                process = self.reader._find_oras_process(client.process_list())
+                client.set_process(process.process_id)
+                party_capture, party_attempt = self._capture_stable_party(client)
+                pc_base = self._locate_pc_base(client, process, [change])
+                source_address = self._box_slot_address(
+                    source_box, source_slot, base_address=pc_base,
+                )
+                destination_address = self._box_slot_address(
+                    destination_box, destination_slot, base_address=pc_base,
+                )
+
+                def stable_pair() -> tuple[bytes, bytes, int]:
+                    for attempt in range(1, self.reader.snapshot_attempts + 1):
+                        first = (
+                            bytes(client.read_memory(source_address, PK6_STORED_SIZE)),
+                            bytes(client.read_memory(destination_address, PK6_STORED_SIZE)),
+                        )
+                        if self.reader.stable_delay:
+                            time.sleep(self.reader.stable_delay)
+                        second = (
+                            bytes(client.read_memory(source_address, PK6_STORED_SIZE)),
+                            bytes(client.read_memory(destination_address, PK6_STORED_SIZE)),
+                        )
+                        if first == second:
+                            return second[0], second[1], attempt
+                    raise XYLiveError(
+                        "Las casillas del PC de X/Y cambiaron durante todas las lecturas; "
+                        "no se escribió ningún byte."
+                    )
+
+                source_original, destination_original, pc_attempt = stable_pair()
+                source_pokemon = parse_pk6_boxed(
+                    source_original, source_box, source_slot, self.reader.move_names,
+                )
+                if source_pokemon is None or self._pokemon_identity(source_pokemon) != expected_identity:
+                    raise XYLiveError(
+                        "El Pokémon de origen ya no coincide con la identidad seleccionada; "
+                        "no se escribió ningún byte."
+                    )
+                destination_pokemon = parse_pk6_boxed(
+                    destination_original, destination_box, destination_slot, self.reader.move_names,
+                )
+                if destination_pokemon is not None:
+                    raise XYLiveError(
+                        "La casilla de destino de X/Y está ocupada; no se escribió ningún byte."
+                    )
+
+                # Precondición inmediata: no confiar en la captura anterior si
+                # el usuario o el juego movieron algo mientras se preparaba.
+                if bytes(client.read_memory(source_address, PK6_STORED_SIZE)) != source_original:
+                    raise XYLiveError("La casilla de origen cambió antes de escribir; no se escribió ningún byte.")
+                if bytes(client.read_memory(destination_address, PK6_STORED_SIZE)) != destination_original:
+                    raise XYLiveError("La casilla de destino cambió antes de escribir; no se escribió ningún byte.")
+
+                empty_stored = self._validated_empty_pc_slot(
+                    client,
+                    base_address=pc_base,
+                    excluded_addresses=(source_address, destination_address),
+                )
+                attempted: list[tuple[int, bytes]] = []
+                try:
+                    attempted.append((destination_address, destination_original))
+                    client.write_memory(destination_address, source_original)
+                    if bytes(client.read_memory(destination_address, PK6_STORED_SIZE)) != source_original:
+                        raise XYLiveError("Azahar no confirmó el PK6 exacto en la casilla de destino.")
+
+                    attempted.append((source_address, source_original))
+                    client.write_memory(source_address, empty_stored)
+                    if bytes(client.read_memory(source_address, PK6_STORED_SIZE)) != empty_stored:
+                        raise XYLiveError("Azahar no confirmó la casilla de origen vacía.")
+
+                    verified_source, verified_destination, verified_attempt = stable_pair()
+                    if verified_source != empty_stored or parse_pk6_boxed(
+                        verified_source, source_box, source_slot, self.reader.move_names,
+                    ) is not None:
+                        raise XYLiveError("X/Y no confirmó semánticamente el origen vacío.")
+                    moved = parse_pk6_boxed(
+                        verified_destination, destination_box, destination_slot, self.reader.move_names,
+                    )
+                    if (
+                        verified_destination != source_original
+                        or moved is None
+                        or self._pokemon_identity(moved) != expected_identity
+                    ):
+                        raise XYLiveError("X/Y no confirmó el Pokémon exacto en el destino solicitado.")
+
+                    # El RPC puede devolver durante unos milisegundos los bytes
+                    # recién escritos aunque Pokémon X todavía no los haya
+                    # adoptado. La captura física que descubrió la base real del
+                    # PC demostró precisamente ese falso positivo. Exigimos una
+                    # segunda pareja estable después del mismo tiempo de
+                    # asentamiento que usa Equipo↔PC.
+                    if self.party_commit_settle_delay:
+                        time.sleep(self.party_commit_settle_delay)
+                    settled_source, settled_destination, settled_attempt = stable_pair()
+                    if (
+                        settled_source != verified_source
+                        or settled_destination != verified_destination
+                    ):
+                        raise XYLiveError(
+                            "El juego restauró las casillas del PC después del readback "
+                            "inmediato; el movimiento no quedó comprometido."
+                        )
+
+                    return ORASLiveWriteResult(
+                        game=self._build_game(party_capture, current, process, live_write=True),
+                        process=process,
+                        attempts=max(
+                            party_attempt, pc_attempt, verified_attempt, settled_attempt,
+                        ),
+                        applied_count=1,
+                    )
+                except Exception as exc:
+                    rollback_errors = self._rollback(client, attempted)
+                    for address, original in dict(attempted).items():
+                        try:
+                            if bytes(client.read_memory(address, len(original))) != original:
+                                rollback_errors.append(f"0x{address:08X}: readback distinto tras rollback")
+                        except Exception as readback_exc:
+                            rollback_errors.append(f"0x{address:08X}: {readback_exc}")
+                    if rollback_errors:
+                        raise XYLiveError(
+                            f"El movimiento PC→PC de X/Y falló: {exc}. No se pudo confirmar toda "
+                            "la restauración: " + "; ".join(rollback_errors)
+                        ) from exc
+                    if attempted:
+                        raise XYLiveError(
+                            f"El movimiento PC→PC de X/Y falló: {exc}. RoleRun restauró y "
+                            "verificó ambas casillas originales."
+                        ) from exc
+                    raise
+        except AzaharRPCError as exc:
+            raise XYLiveError(str(exc)) from exc
 
     @staticmethod
     def _xy_inventory_witness_map(
@@ -1771,6 +2941,48 @@ class XYLiveWriter(ORASLiveWriter):
                     "No se escribió ningún byte; pulsa F5 y repite la utilidad."
                 )
             return self._apply_xy_inventory(current, inventory_changes)
+        heal_changes = [change for change in changes if isinstance(change, PendingPartyHeal)]
+        if heal_changes:
+            if len(heal_changes) != len(changes):
+                raise XYLiveError(
+                    "La curación X/Y se confirma como una transacción independiente. "
+                    "No se mezcló con otros cambios ni se escribió ningún byte."
+                )
+            return self._apply_party_heal(current, heal_changes)
+        pc_move_changes = [
+            change for change in changes
+            if isinstance(change, PendingTeamChange) and change.operation == "move-box-slot"
+        ]
+        if pc_move_changes:
+            if len(pc_move_changes) != 1 or len(changes) != 1:
+                raise XYLiveError(
+                    "Cada movimiento PC→PC de X/Y se confirma como una transacción independiente. "
+                    "No se escribió ningún byte."
+                )
+            return self._apply_pc_move(current, pc_move_changes[0])
+        party_resize_changes = [
+            change for change in changes
+            if isinstance(change, PendingTeamChange)
+            and change.operation in {"party-to-box", "box-to-party"}
+        ]
+        if party_resize_changes:
+            if len(party_resize_changes) != 1 or len(changes) != 1:
+                raise XYLiveError(
+                    "Cada cambio de tamaño Equipo↔PC de X/Y se confirma como una "
+                    "transacción independiente. No se escribió ningún byte."
+                )
+            return self._apply_party_resize(current, party_resize_changes[0])
+        role_ev_changes = [
+            change for change in changes
+            if isinstance(change, PendingRoleChange) and change.new_evs is not None
+        ]
+        if role_ev_changes:
+            if not all(isinstance(change, (PendingChange, PendingRoleChange)) for change in changes):
+                raise XYLiveError(
+                    "El cambio de rol con EV X/Y no se mezcla con operaciones de PC o inventario. "
+                    "No se escribió ningún byte."
+                )
+            return self._apply_party_role_evs(current, changes)
         return super().apply(current, changes)
 
     @property

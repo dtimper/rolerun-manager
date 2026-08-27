@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Mapping, Sequence
 
 from ..oras_live import (
     ORASLiveReader, ORASLiveWriter, ORAS_TM_POUCH_SIZE,
     ORAS_SAVE_MISC_SIZE, ORAS_SAVE_EVENTWORK_SIZE, ORAS_SAVE_SUBEVENT_SIZE,
+    calculate_pk6_stats,
 )
+from ..pokemon_stats import stat_dict
 from ..save_engine_client import SaveGameData
 from .adapter import RealTimeGameAdapter
 from .bridge import AzaharBridge
@@ -107,6 +110,42 @@ class ORASRealTimeAdapter(RealTimeGameAdapter):
             ))
         return battle, badges, badge_source, diagnostics
 
+    def _enrich_pokemon(self, pokemon):
+        """Añade Personal y stats derivadas sin inventar datos fuera de ROM."""
+        personal_for = getattr(self.writer, "personal_for", None)
+        if not callable(personal_for):
+            return pokemon
+        personal = personal_for(int(pokemon.species_id), int(pokemon.form))
+        if personal is None:
+            return pokemon
+        base_stats = stat_dict(tuple(personal.base_stats[index] for index in (0, 1, 2, 4, 5, 3)))
+        updates = {"base_stats": base_stats}
+        if (
+            not pokemon.stats
+            and pokemon.nature_id is not None
+            and len(pokemon.ivs) == 6
+            and len(pokemon.evs) == 6
+        ):
+            updates["stats"] = calculate_pk6_stats(
+                level=int(pokemon.level),
+                nature_id=int(pokemon.nature_id),
+                personal=personal,
+                ivs=pokemon.ivs,
+                evs=pokemon.evs,
+            )
+        changed = {
+            name: value
+            for name, value in updates.items()
+            if getattr(pokemon, name) != value
+        }
+        return replace(pokemon, **changed) if changed else pokemon
+
+    def _enrich_game(self, game: SaveGameData) -> SaveGameData:
+        party = [self._enrich_pokemon(pokemon) for pokemon in game.party]
+        if all(enriched is original for enriched, original in zip(party, game.party)):
+            return game
+        return replace(game, party=party)
+
     def _convert(
         self,
         raw,
@@ -116,6 +155,7 @@ class ORASRealTimeAdapter(RealTimeGameAdapter):
         include_optional_lanes: bool,
         lane_current: SaveGameData | None = None,
     ) -> RealTimeSnapshot:
+        game = self._enrich_game(raw.game)
         diagnostics: list[LiveDiagnostic] = [LiveDiagnostic(
             "party", DiagnosticLevel.OK,
             f"Equipo estable leído en {int(raw.attempts)} intento(s).",
@@ -123,14 +163,14 @@ class ORASRealTimeAdapter(RealTimeGameAdapter):
         )]
         if include_optional_lanes:
             battle, badges, badge_source, optional = self._capture_optional_lanes(
-                lane_current or raw.game, save_path,
+                lane_current or game, save_path,
             )
             diagnostics.extend(optional)
         else:
             battle, badges, badge_source = BattleState("unknown"), None, None
         self._last_process_key = (int(raw.process.title_id), str(raw.process.name))
         return RealTimeSnapshot(
-            game=raw.game,
+            game=game,
             process=self._process(raw.process),
             attempts=int(raw.attempts),
             adapter_key=self.key,
@@ -179,7 +219,12 @@ class ORASRealTimeAdapter(RealTimeGameAdapter):
         return self.writer.read_tm_inventory(saved_items)
 
     def read_pc(self, anchors, *, box_count: int | None = None, box_slot_count: int | None = None):
-        return self.reader.read_pc(anchors)
+        process, base_address, slots = self.reader.read_pc(anchors)
+        enriched = {
+            key: None if pokemon is None else self._enrich_pokemon(pokemon)
+            for key, pokemon in slots.items()
+        }
+        return process, base_address, enriched
 
     def apply_changes(self, current: SaveGameData, changes):
         return self.writer.apply(current, changes)

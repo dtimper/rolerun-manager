@@ -17,6 +17,7 @@ except ModuleNotFoundError:
 from app.azahar_rpc import AzaharProcess
 from app.oras_live import PK6_PARTY_SIZE, PK6_STORED_SIZE, _checksum, encrypt_pk6
 from app.save_engine_client import SaveBox, SaveGameData, SavePCData, SavePokemon
+from app.models import PendingTeamChange
 from app.ui import RoleRunManager
 from app.xy_live import XYLiveReader, XY_PC_KNOWN_ADDRESS, XY_PC_SIZE, XY_TITLE_IDS
 
@@ -141,18 +142,66 @@ def test_xy_alpha12_external_deposit_populates_pc_when_last_main_was_empty(tmp_p
     assert manager._oras_live_pc_overrides[(1, 1)].pid == 200
 
 
-def test_xy_alpha12_send_to_pc_does_not_create_false_live_projection() -> None:
+def test_xy_alpha8_send_to_pc_queues_exact_live_destination_without_local_projection() -> None:
     pokemon = _mon(1, 25, pid=100, role="Asesino")
+    companion = _mon(2, 6, pid=200)
+    requested: list[set[int]] = []
     manager = SimpleNamespace(
-        current_game=_game(pokemon, _mon(2, 6, pid=200)),
+        current_game=_game(pokemon, companion),
+        run=SimpleNamespace(pending_changes=[]),
+        _pc_cache=object(),
+        active_page="team",
         _active_azahar_realtime_key=lambda: "xy",
         _active_azahar_realtime_label=lambda: "X/Y",
         _oras_live_auto_apply_available=lambda: True,
-        _projected_party=lambda: (_ for _ in ()).throw(AssertionError("no debe proyectar el equipo")),
+        _projected_party=lambda: [pokemon, companion],
+        _pokemon_snapshot=lambda mon: {"species_id": mon.species_id, "pid": mon.pid},
+        _effective_role=lambda _mon: ("Asesino", "▲"),
+        _pokemon_identity=lambda mon: f"{mon.species_id}:{mon.pid}:{mon.tid}:{mon.sid}",
+        _pc_box_witnesses=lambda box, slot: ((2, "133:300:1:2"),),
+        _request_oras_live_auto_apply_since=lambda before: requested.append(set(before)),
+        _update_top_status=lambda: None,
+        _sync_live_layout=lambda: None,
+        _smooth_render_page=lambda **_kwargs: None,
     )
 
-    with patch("app.ui.messagebox.showinfo") as info:
-        RoleRunManager.send_pokemon_to_pc(manager, pokemon, ask=False)
+    RoleRunManager.send_pokemon_to_pc(manager, pokemon, ask=False, destination=(1, 5))
 
-    info.assert_called_once()
-    assert "No se ha cambiado ni RoleRun ni el juego" in info.call_args.args[1]
+    assert len(manager.run.pending_changes) == 1
+    change = manager.run.pending_changes[0]
+    assert change.operation == "party-to-box"
+    assert change.party_slot == 1
+    assert (change.box, change.box_slot) == (1, 5)
+    assert change.outgoing_identity == "25:100:1:2"
+    assert change.box_witnesses == ((2, "133:300:1:2"),)
+    assert requested == [set()]
+    assert manager._pc_cache is None
+
+
+def test_xy_all_team_pc_operations_cross_the_live_ui_gate() -> None:
+    manager = SimpleNamespace(_active_azahar_realtime_key=lambda: "xy")
+    operations = (
+        "move-box-slot", "party-to-box", "box-to-party",
+        "swap-party-box", "replace-fainted",
+    )
+
+    for operation in operations:
+        change = PendingTeamChange(operation=operation, party_slot=1)
+        assert RoleRunManager._oras_live_unsupported_changes(manager, [change]) == []
+
+
+def test_xy_pc_witnesses_use_the_live_matrix_shown_by_the_ui() -> None:
+    saved = _empty_pc()
+    live = _mon(1, 133, pid=200, box=1, box_slot=1)
+    manager = SimpleNamespace(
+        _pc_cache=saved,
+        _oras_live_pc_empty_overrides=set(),
+        _oras_live_pc_overrides={(1, 1): live},
+        _pending_team_changes=lambda: [],
+        _pokemon_identity=lambda pokemon: f"{pokemon.species_id}:{pokemon.pid}",
+    )
+    manager._project_pc_box_pokemon = lambda data, box: (
+        RoleRunManager._project_pc_box_pokemon(manager, data, box)
+    )
+
+    assert RoleRunManager._pc_box_witnesses(manager, 1, 5) == ((1, "133:200"),)

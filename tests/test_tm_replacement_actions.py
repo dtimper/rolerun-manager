@@ -99,6 +99,13 @@ class QueueManager:
         pass
 
 
+class InventoryProjectionManager:
+    _pending_adjusted_tm_inventory = RoleRunManager._pending_adjusted_tm_inventory
+
+    def __init__(self, pending_changes):
+        self.run = SimpleNamespace(pending_changes=list(pending_changes))
+
+
 def test_tm_candidates_ignore_species_compatibility_but_keep_role_inventory_game_and_duplicates():
     manager = CandidateManager()
     pokemon = SimpleNamespace(species_id=25, form=0)
@@ -119,6 +126,7 @@ def test_tm_teach_can_replace_an_occupied_incompatible_slot():
         "item_id": 201,
         "number": 29,
         "quantity": 1,
+        "consumes_item": True,
     }
 
     manager._queue_tm_teach(pokemon, 1, candidate)
@@ -131,6 +139,7 @@ def test_tm_teach_can_replace_an_occupied_incompatible_slot():
     assert change.old_move_id == 123
     assert change.new_move == "Psíquico"
     assert change.new_move_id == 94
+    assert change.consumes_item is True
     assert manager.toasts == 1
 
 
@@ -154,3 +163,26 @@ def test_oras_tm_queue_does_not_require_inventory_witnesses():
     change = manager.run.pending_changes[0]
     assert isinstance(change, PendingTMTeach)
     assert change.inventory_witnesses == ()
+    assert change.consumes_item is False
+
+
+def test_pending_tm_inventory_only_reserves_consumable_bdsp_items():
+    reusable = PendingTMTeach(
+        role="Líbero", pokemon_slot=1, pokemon="Uno", species="Mawile",
+        move_slot=1, old_move="Viejo", old_move_id=1,
+        new_move="Nuevo", new_move_id=2, pokemon_identity="one",
+        item_id=101, tm_number=1, item_name="MT01", quantity_before=1,
+        consumes_item=False,
+    )
+    consumable = PendingTMTeach(
+        role="Mago", pokemon_slot=2, pokemon="Dos", species="Abra",
+        move_slot=1, old_move="Viejo", old_move_id=1,
+        new_move="Nuevo", new_move_id=2, pokemon_identity="two",
+        item_id=202, tm_number=2, item_name="MT02", quantity_before=2,
+        consumes_item=True,
+    )
+    manager = InventoryProjectionManager([reusable, consumable])
+
+    projected = manager._pending_adjusted_tm_inventory({101: 1, 202: 2})
+
+    assert projected == {101: 1, 202: 1}

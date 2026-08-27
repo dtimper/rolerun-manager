@@ -5,6 +5,7 @@ import struct
 from app.boxed_metadata import ability_name, boxed_level, exp_growth_for
 from app.oras_live import PK6_PARTY_SIZE, PK6_STORED_SIZE, _checksum, encrypt_pk6, parse_pk6_boxed
 from app.sm_live import PK7_PARTY_SIZE, PK7_STORED_SIZE, parse_pk7_boxed
+from app.usum_live import parse_pk7_boxed as parse_usum_pk7_boxed
 
 
 def _stored_pk7(*, species: int, pid: int, experience: int, ability_id: int) -> bytes:
@@ -29,7 +30,10 @@ def _stored_pk7(*, species: int, pid: int, experience: int, ability_id: int) -> 
     return encrypt_pk6(bytes(data))[:PK7_STORED_SIZE]
 
 
-def _stored_pk6(*, species: int, pid: int, experience: int, ability_id: int) -> bytes:
+def _stored_pk6(
+    *, species: int, pid: int, experience: int, ability_id: int,
+    nature_id: int = 3, evs: tuple[int, ...] = (1, 2, 3, 4, 5, 6),
+) -> bytes:
     data = bytearray(PK6_PARTY_SIZE)
     struct.pack_into("<I", data, 0x00, 0x12345678)
     struct.pack_into("<H", data, 0x04, 0)
@@ -39,6 +43,8 @@ def _stored_pk6(*, species: int, pid: int, experience: int, ability_id: int) -> 
     struct.pack_into("<I", data, 0x10, int(experience))
     data[0x14] = int(ability_id)
     struct.pack_into("<I", data, 0x18, int(pid))
+    data[0x1C] = int(nature_id)
+    data[0x1E:0x24] = bytes(evs)
     name = b"P\x00o\x00o\x00c\x00h\x00y\x00\0\0"
     data[0x40:0x40 + len(name)] = name
     struct.pack_into("<H", data, 0x5A, 33)
@@ -71,6 +77,15 @@ def test_alpha26_oras_boxed_parser_derives_level_and_localizes_ability() -> None
     assert pokemon.species_id == 261
     assert pokemon.level == 18
     assert pokemon.ability == "Fuga"
+    assert pokemon.nature_id == 3
+    assert pokemon.ivs == {
+        "hp": 31, "attack": 31, "defense": 31,
+        "sp_attack": 31, "sp_defense": 31, "speed": 31,
+    }
+    assert pokemon.evs == {
+        "hp": 1, "attack": 2, "defense": 3,
+        "sp_attack": 5, "sp_defense": 6, "speed": 4,
+    }
 
 
 def test_alpha26_xy_boxed_parser_uses_xy_personal_table() -> None:
@@ -80,3 +95,16 @@ def test_alpha26_xy_boxed_parser_uses_xy_personal_table() -> None:
     assert pokemon is not None
     assert pokemon.level == 10
     assert pokemon.ability == ability_name(9)
+
+
+def test_alpha64_usum_boxed_parser_uses_personal_uu_for_exclusive_species() -> None:
+    # PKHeX personal_uu define a Blacephalon (#806) con crecimiento Slow.
+    # personal_sm[806] es en realidad un registro de forma de SM y declara
+    # Medium Fast, lo que produce un nivel incorrecto para la misma EXP.
+    raw = _stored_pk7(species=806, pid=0x80608060, experience=10_000, ability_id=224)
+
+    pokemon = parse_usum_pk7_boxed(raw, 1, 1, {33: "Placaje"})
+
+    assert exp_growth_for("usum", 806) == 5
+    assert pokemon is not None and pokemon.species_id == 806
+    assert pokemon.level == 20

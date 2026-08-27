@@ -1,0 +1,86 @@
+{
+  "slug": "US-Timper",
+  "name": "US · Timper",
+  "game": "US",
+  "trainer": "Timper",
+  "save_path": "C:\\Users\\PC\\AppData\\Roaming\\AzaharPlus\\sdmc\\Nintendo 3DS\\00000000000000000000000000000000\\00000000000000000000000000000000\\title\\00040000\\001b5000\\data\\00000001\\main",
+  "created_at": "2026-08-06T13:01:26",
+  "updated_at": "2026-08-22T03:53:21",
+  "role_overrides": {},
+  "managed_pokemon_roles": {
+    "115:2352989802:835:6011": "Líbero",
+    "761:135100899:835:6011": "Líbero",
+    "455:2374135587:835:6011": "Mago",
+    "133:3682008399:835:6011": "Tanque",
+    "379:2372228655:835:6011": "Prisma",
+    "137:3154914085:835:6011": "Support",
+    "133:4098690017:835:6011": "Prisma",
+    "763:135100899:835:6011": "Asesino"
+  },
+  "hidden_roles": {},
+  "role_marker_layout": 1,
+  "role_rules_active": false,
+  "oras_tm_rom_path": "",
+  "oras_fvx_tm_log": "",
+  "counters": {
+    "vidas": 4,
+    "pociones": 0,
+    "medallas": 0,
+    "drafteos": 4
+  },
+  "pending_faints": [
+    {
+      "identity": "137:3154914085:835:6011",
+      "pokemon": "Porygon",
+      "species": "Porygon",
+      "slot": 4,
+      "role": "Support",
+      "detected_source": "battle-visible",
+      "source_label": "UltraSol/UltraLuna en vivo",
+      "detected_at": "2026-08-22T03:53:08",
+      "prompt_shown": false,
+      "prompt_contract": 29,
+      "left_party": false,
+      "battle_seen": true,
+      "battle_ended": false,
+      "battle_exit_samples": 0
+    },
+    {
+      "identity": "133:3682008399:835:6011",
+      "pokemon": "Eevee",
+      "species": "Eevee",
+      "slot": 2,
+      "role": "Tanque",
+      "detected_source": "battle-visible",
+      "source_label": "UltraSol/UltraLuna en vivo",
+      "detected_at": "2026-08-22T03:53:21",
+      "prompt_shown": false,
+      "prompt_contract": 29,
+      "left_party": false,
+      "battle_seen": true,
+      "battle_ended": false,
+      "battle_exit_samples": 0
+    }
+  ],
+  "graveyard_pokemon": [
+    "455:2374135587:835:6011",
+    "379:2372228655:835:6011"
+  ],
+  "hotkeys": {
+    "vidas_mas": "num 7",
+    "vidas_menos": "num 1",
+    "pociones_mas": "num 8",
+    "pociones_menos": "num 2",
+    "medallas_mas": "num 9",
+    "medallas_menos": "num 3",
+    "drafteos_mas": "num 6",
+    "drafteos_menos": "num 4",
+    "toggle_libero": "alt+1",
+    "toggle_tanque": "alt+4",
+    "toggle_asesino": "alt+2",
+    "toggle_mago": "alt+3",
+    "toggle_support": "alt+6",
+    "toggle_prisma": "alt+5",
+    "sync_live_game": "f5"
+  }
+}

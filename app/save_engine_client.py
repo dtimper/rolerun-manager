@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +40,23 @@ class SavePokemon:
     # dejar ambos valores a cero sin afectar a las rutas existentes.
     current_hp: int = 0
     max_hp: int = 0
+    # Estado persistente del Pokémon. En PB8 coincide con
+    # PKHeX.Core.StatusCondition (0, sueño 1..7, veneno 8, quemadura 16,
+    # congelación 32, parálisis 64 y veneno grave 128).
+    status_condition: int = 0
+    # Datos opcionales de entrenamiento y combate. BDSP live los publica desde
+    # el PB8 ya validado; los backends que aún no los demuestran dejan estos
+    # campos vacíos y la UI los identifica como no disponibles.
+    nature_id: int | None = None
+    stat_nature_id: int | None = None
+    nature: str = ""
+    stat_nature: str = ""
+    nature_increased: str | None = None
+    nature_decreased: str | None = None
+    stats: dict[str, int] = field(default_factory=dict)
+    base_stats: dict[str, int] = field(default_factory=dict)
+    ivs: dict[str, int] = field(default_factory=dict)
+    evs: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

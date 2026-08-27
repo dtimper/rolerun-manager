@@ -22,3 +22,10 @@ desktop.ini
 
 # Logs
 *.log
+
+# Evidencia pesada de diagnostics (los JSON/JSONL/BIN de evidencia si se versionan)
+diagnostics/**/*.png
+diagnostics/**/*.mp4
+
+# Cache de pytest
+.pytest_cache/

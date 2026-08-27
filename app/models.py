@@ -56,6 +56,10 @@ class PendingTMTeach:
     # Huella histórica para compatibilidad con Runs antiguas/otros flujos.
     # Desde alpha.36 ORAS no la necesita para enseñar una MT reutilizable.
     inventory_witnesses: tuple[tuple[str, int, int, int], ...] = ()
+    # Solo BDSP consume la máquina. En Gen 6/7 las MT son reutilizables y
+    # deben permanecer disponibles tanto en la mochila real como en cualquier
+    # proyección de UI mientras el cambio está pendiente o tras su readback.
+    consumes_item: bool = False
 
 
 @dataclass(slots=True)
@@ -69,6 +73,24 @@ class PendingRoleChange:
     # convivir con una reorganización Equipo ↔ PC y ya no dependen de que el
     # Pokémon siga ocupando el mismo slot al guardar.
     pokemon_identity: str = ""
+    # BDSP puede aplicar rol+EV como una única transacción PB8. Vacío mantiene
+    # compatibilidad con Runs y backends anteriores.
+    old_evs: tuple[int, int, int, int, int, int] | None = None
+    new_evs: tuple[int, int, int, int, int, int] | None = None
+
+
+@dataclass(slots=True)
+class PendingPartyHeal:
+    """Curación completa de un miembro de la party viva.
+
+    La identidad estable permite que el writer rechace cualquier reordenación
+    ocurrida entre el clic y la doble lectura de precondición.
+    """
+
+    pokemon_slot: int
+    pokemon: str
+    species: str
+    pokemon_identity: str
 
 
 @dataclass(slots=True)
@@ -111,7 +133,7 @@ class PendingPCRoleChange:
 
 @dataclass(slots=True)
 class PendingTeamChange:
-    operation: str  # party-to-box | box-to-party | swap-party-box | replace-fainted
+    operation: str  # party-to-box | box-to-party | swap-party-box | replace-fainted | move-box-slot
     party_slot: int
     box: int | None = None
     box_slot: int | None = None
@@ -134,6 +156,14 @@ class PendingTeamChange:
     # Pokémon debilitado se deposita en esta posición de la caja de Cementerio.
     graveyard_box: int | None = None
     graveyard_box_slot: int | None = None
+    # PC→PC conserva ``box/box_slot`` como origen y declara el destino exacto
+    # por separado. Nunca se interpreta como un traslado de party.
+    destination_box: int | None = None
+    destination_box_slot: int | None = None
+    # B2/W2 compacta físicamente la party al depositar, pero RoleRun ordena la
+    # interfaz por roles. El mapa se captura antes del write y conserva cada rol
+    # por identidad después del cambio de índice físico.
+    party_role_snapshot: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -148,7 +178,7 @@ class RunSession:
     pokemon_slot: int | None = None
     move_slot: int | None = None
     history: list[dict[str, str]] = field(default_factory=list)
-    pending_changes: list[PendingChange | PendingTMTeach | PendingRoleChange | PendingInventoryChange | PendingPCRoleChange | PendingTeamChange] = field(default_factory=list)
+    pending_changes: list[PendingChange | PendingTMTeach | PendingRoleChange | PendingPartyHeal | PendingInventoryChange | PendingPCRoleChange | PendingTeamChange] = field(default_factory=list)
     role_rules_activation_pending: bool = False
 
     def reset_after_save_change(self) -> None:

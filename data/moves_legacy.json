@@ -20,6 +20,19 @@
     "Spore",
     "Yawn"
   ],
+  "prisma_problemas_estado": [
+    "Poison Gas",
+    "Poison Powder",
+    "Toxic",
+    "Toxic Thread",
+    "Stun Spore",
+    "Thunder Wave",
+    "Will-O-Wisp",
+    "Lovely Kiss",
+    "Sleep Powder",
+    "Spore",
+    "Yawn"
+  ],
   "support_recuperaciones": [
     "Heal order",
     "Lunar Blessing",

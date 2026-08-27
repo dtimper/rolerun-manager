@@ -1,0 +1,43 @@
+{
+  "updated_at": 1787362157.2748787,
+  "active_run": "US-Timper",
+  "game": "US",
+  "trainer": "Timper",
+  "counters": {
+    "vidas": 6,
+    "curaciones": 0,
+    "medallas": 0,
+    "drafteos": 4
+  },
+  "roles": {
+    "libero": {
+      "slot": 3,
+      "species_id": 115,
+      "species": "Kangaskhan",
+      "nickname": "Kangaskhan",
+      "level": 43,
+      "role": "Líbero",
+      "role_symbol": "●",
+      "pokemon_id": "115:kangaskhan",
+      "visible": true,
+      "sprite": "sprites/115.png"
+    },
+    "asesino": {
+      "slot": 5,
+      "species_id": 763,
+      "species": "Tsareena",
+      "nickname": "Tsareena",
+      "level": 35,
+      "role": "Asesino",
+      "role_symbol": "▲",
+      "pokemon_id": "763:tsareena",
+      "visible": true,
+      "sprite": "sprites/763.png"
+    },
+    "mago": null,
+    "tanque": null,
+    "prisma": null,
+    "support": null
+  },
+  "conflicts": []
+}

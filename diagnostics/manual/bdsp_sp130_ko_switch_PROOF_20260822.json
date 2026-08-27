@@ -1,0 +1,73 @@
+{
+  "format": "rolerun-bdsp-sp130-ko-switch-proof-v1",
+  "created_at": "2026-08-22",
+  "environment": {
+    "game": "Pokemon Shining Pearl",
+    "title_id": "010018E011D92000",
+    "revision": "1.3.0",
+    "emulator": "Ryujinx 1.3.3",
+    "memory_mode": "HostMappedUnsafe",
+    "gdb_stub": false,
+    "access": "read-only",
+    "writes": 0
+  },
+  "source_trace": {
+    "path": "diagnostics/manual/bdsp_sp130_ko_switch_AUTO_20260822_164907.jsonl",
+    "sha256": "565B0335AEED1B1174E5FF6011040BB69FE2F1774A1A554A7483474A1435C617",
+    "lines": 644,
+    "tick_samples": 642,
+    "battle_samples": 510,
+    "battle_errors": 0,
+    "party_errors": 0
+  },
+  "observations": [
+    {
+      "sequence": 800,
+      "elapsed_ms": 81832,
+      "fact": "PlayerWork cambio el primer miembro de Absol #359 a Skitty #300 antes del combate; los otros cinco miembros conservaron su identidad."
+    },
+    {
+      "sequence": 1013,
+      "elapsed_ms": 103183,
+      "fact": "BTL_PARTY aparecio con seis filas y PokeID/party_index [0,1,2,3,4,5]. Skitty estaba en fila 1, party_index 0, 21/21."
+    },
+    {
+      "sequence": 1150,
+      "elapsed_ms": 116923,
+      "fact": "BTL_PARTY publico Skitty 7/21 mientras PlayerWork seguia en 21/21."
+    },
+    {
+      "sequence": 1286,
+      "elapsed_ms": 130562,
+      "fact": "BTL_PARTY publico la transicion demostrada 7->0 para Skitty en fila 1, party_index 0; PlayerWork seguia en 21/21."
+    },
+    {
+      "sequence": 1444,
+      "elapsed_ms": 146437,
+      "fact": "Tras elegir al segundo Pokemon, BTL_PARTY se reordeno: Shuppet paso a fila 1/party_index 1 y Skitty debilitado a fila 2/party_index 0. Especie, nivel y Max HP siguieron coincidiendo con sus indices PlayerWork."
+    },
+    {
+      "sequence": 1516,
+      "elapsed_ms": 153658,
+      "fact": "PlayerWork convergio finalmente a Skitty 0/21 y reflejo ademas el PP consumido 30->29."
+    },
+    {
+      "sequence": 1523,
+      "elapsed_ms": 154359,
+      "fact": "BattleProc quedo inactivo 701 ms despues de la convergencia PlayerWork y 23797 ms despues del KO inmediato de BTL_PARTY."
+    }
+  ],
+  "demonstrated_conclusions": [
+    "BattleProc.client.BTL_PARTY es la autoridad inmediata de HP durante este combate simple.",
+    "PlayerWork._playerParty conserva HP stale durante el combate y no sirve como fuente inmediata de KO.",
+    "El numero de fila BTL_PARTY no es un slot estable: cambia al sustituir al Pokemon activo.",
+    "PokeID 0..5 conserva el indice real de la party a traves de la reordenacion observada.",
+    "La combinacion party_index + especie + nivel + Max HP permite rechazar un mapeo incompatible antes de publicar health_game."
+  ],
+  "not_demonstrated": [
+    "combates dobles, con companero, multijugador o encuentros especiales",
+    "Diamante Brillante o revisiones distintas de 1.3.0",
+    "cualquier escritura RAM, PC, MT, inventario o progreso realtime",
+    "la estructura active_candidate como dependencia de produccion"
+  ]
+}

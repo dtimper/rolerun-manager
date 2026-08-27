@@ -156,9 +156,19 @@ def test_navigate_to_pc_schedules_one_live_refresh() -> None:
     manager = SimpleNamespace(
         active_page="team",
         _cancel_help_animations=lambda: None,
+        _navigation_transition_token=0,
+        _navigation_transition_after_ids=set(),
+        _create_navigation_transition=lambda: None,
         _smooth_render_page=lambda **kwargs: calls.append(("render", kwargs)),
+        _cancel_bdsp_pc_poll=lambda: calls.append(("cancel-poll", None)),
         _schedule_gen6_live_pc_refresh=lambda: calls.append(("refresh", None)),
         after=lambda delay, callback: calls.append(("after", delay)) or callback(),
+    )
+    manager._commit_page_navigation = lambda page, previous, overlay, token: (
+        RoleRunManager._commit_page_navigation(manager, page, previous, overlay, token)
+    )
+    manager._begin_page_navigation = lambda page, previous: (
+        RoleRunManager._begin_page_navigation(manager, page, previous)
     )
     RoleRunManager.navigate(manager, "pc")
     assert manager.active_page == "pc"
