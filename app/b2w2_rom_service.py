@@ -67,6 +67,10 @@ _MOVE_PP = 0x05
 
 _CATEGORIES = {0: "status", 1: "physical", 2: "special"}
 
+# Ningún bloque legítimo de los que se leen se acerca a esto. Un valor mayor
+# significa que la ROM está corrupta, no que haya que reservar 3 GiB.
+_MAX_BLOCK = 64 * 1024 * 1024
+
 _NARC_MAGIC = b"NARC"
 _FATB_MAGICS = {b"BTAF", b"FATB"}
 _GMIF_MAGICS = {b"GMIF", b"FIMG"}
@@ -129,23 +133,17 @@ class B2W2RomProfile:
 # Sistema de archivos de una ROM de Nintendo DS
 # --------------------------------------------------------------------------
 
-def _read_paths(rom: bytes) -> dict[str, tuple[int, int]]:
-    """Resuelve nombre → (inicio, fin) recorriendo la FNT y la FAT."""
-    if len(rom) < _NDS_HEADER_SIZE:
-        raise B2W2RomError("El archivo es demasiado pequeño para ser una ROM de DS.")
-    fnt_offset, _fnt_size, fat_offset, fat_size = struct.unpack_from(
-        "<4I", rom, _FNT_OFFSET,
-    )
-    if fat_size % 8 or not fat_size:
-        raise B2W2RomError("La tabla de archivos de la ROM no es válida.")
-    total = fat_size // 8
-    if fat_offset + fat_size > len(rom) or fnt_offset >= len(rom):
-        raise B2W2RomError("La ROM declara tablas fuera de su propio tamaño.")
+def _read_paths(fnt: bytes, fat_raw: bytes) -> dict[str, tuple[int, int]]:
+    """Resuelve nombre → (inicio, fin) recorriendo la FNT y la FAT.
 
-    fat = [
-        struct.unpack_from("<II", rom, fat_offset + index * 8)
-        for index in range(total)
-    ]
+    Recibe los dos bloques ya leídos, no la ROM entera: una ROM de B2/W2 son
+    512 MiB, y leerlos todos para consultar unos kilobytes congelaría la
+    interfaz la primera vez —justo lo contrario del objetivo de instantaneidad.
+    """
+    if not fat_raw or len(fat_raw) % 8:
+        raise B2W2RomError("La tabla de archivos de la ROM no es válida.")
+    total = len(fat_raw) // 8
+    fat = [struct.unpack_from("<II", fat_raw, index * 8) for index in range(total)]
 
     rutas: dict[str, tuple[int, int]] = {}
     visitados: set[int] = set()
@@ -154,24 +152,24 @@ def _read_paths(rom: bytes) -> dict[str, tuple[int, int]]:
         if directorio in visitados:
             raise B2W2RomError("El árbol de directorios de la ROM se repite.")
         visitados.add(directorio)
-        entrada = fnt_offset + directorio * 8
-        if entrada + 8 > len(rom):
-            raise B2W2RomError("La FNT de la ROM apunta fuera del archivo.")
-        sub_offset, primer_id, _padre = struct.unpack_from("<IHH", rom, entrada)
-        puntero = fnt_offset + sub_offset
+        entrada = directorio * 8
+        if entrada + 8 > len(fnt):
+            raise B2W2RomError("La FNT de la ROM apunta fuera de la tabla.")
+        sub_offset, primer_id, _padre = struct.unpack_from("<IHH", fnt, entrada)
+        puntero = sub_offset
         file_id = primer_id
         while True:
-            if puntero >= len(rom):
+            if puntero >= len(fnt):
                 raise B2W2RomError("La FNT de la ROM quedó truncada.")
-            tipo = rom[puntero]
+            tipo = fnt[puntero]
             puntero += 1
             if tipo == 0:
                 return
             longitud = tipo & 0x7F
-            nombre = rom[puntero:puntero + longitud].decode("ascii", "replace")
+            nombre = fnt[puntero:puntero + longitud].decode("ascii", "replace")
             puntero += longitud
             if tipo & 0x80:
-                sub_id = struct.unpack_from("<H", rom, puntero)[0] & 0x0FFF
+                sub_id = struct.unpack_from("<H", fnt, puntero)[0] & 0x0FFF
                 puntero += 2
                 recorrer(sub_id, f"{prefijo}{nombre}/")
                 continue
@@ -277,33 +275,50 @@ def _parse_moves(archivos: list[bytes]) -> tuple[B2W2Move, ...]:
 
 
 def load_b2w2_rom_profile(path) -> B2W2RomProfile:
-    """Lee la ROM y publica sus datos de juego, o falla sin publicar nada."""
+    """Lee la ROM y publica sus datos de juego, o falla sin publicar nada.
+
+    Solo toca lo que necesita: cabecera, FNT, FAT y los dos contenedores. De los
+    512 MiB de una ROM de B2/W2 se leen unos cientos de kilobytes, así que la
+    primera consulta no se nota aunque el archivo esté en un disco lento.
+    """
     ruta = Path(path)
     try:
-        rom = ruta.read_bytes()
+        with ruta.open("rb") as archivo:
+            def leer(desplazamiento: int, tamano: int) -> bytes:
+                if tamano <= 0 or tamano > _MAX_BLOCK:
+                    raise B2W2RomError("La ROM declara un bloque de tamaño imposible.")
+                archivo.seek(int(desplazamiento))
+                crudo = archivo.read(int(tamano))
+                if len(crudo) != tamano:
+                    raise B2W2RomError(f"{ruta.name} quedó truncada.")
+                return crudo
+
+            cabecera = leer(0, _NDS_HEADER_SIZE)
+            titulo = cabecera[_TITLE_OFFSET:_TITLE_OFFSET + 12]
+            if titulo not in _B2W2_TITLES:
+                legible = titulo.decode("ascii", "replace").rstrip("\x00")
+                raise B2W2RomError(
+                    f"{ruta.name} no es una ROM de Negro 2/Blanco 2 (dice «{legible}»)."
+                )
+
+            fnt_offset, fnt_size, fat_offset, fat_size = struct.unpack_from(
+                "<4I", cabecera, _FNT_OFFSET,
+            )
+            rutas = _read_paths(leer(fnt_offset, fnt_size), leer(fat_offset, fat_size))
+            for nombre in (PERSONAL_PATH, MOVE_PATH):
+                if nombre not in rutas:
+                    raise B2W2RomError(f"La ROM no contiene {nombre}.")
+
+            inicio, fin = rutas[PERSONAL_PATH]
+            personal = _parse_personal(_read_narc(leer(inicio, fin - inicio)))
+            inicio, fin = rutas[MOVE_PATH]
+            movimientos = _parse_moves(_read_narc(leer(inicio, fin - inicio)))
     except OSError as exc:
         raise B2W2RomError(f"No se pudo leer {ruta.name}.") from exc
 
-    titulo = rom[_TITLE_OFFSET:_TITLE_OFFSET + 12]
-    if titulo not in _B2W2_TITLES:
-        legible = titulo.decode("ascii", "replace").rstrip("\x00")
-        raise B2W2RomError(
-            f"{ruta.name} no es una ROM de Negro 2/Blanco 2 (dice «{legible}»)."
-        )
-
-    rutas = _read_paths(rom)
-    for nombre in (PERSONAL_PATH, MOVE_PATH):
-        if nombre not in rutas:
-            raise B2W2RomError(f"La ROM no contiene {nombre}.")
-
-    inicio, fin = rutas[PERSONAL_PATH]
-    personal = _parse_personal(_read_narc(rom[inicio:fin]))
-    inicio, fin = rutas[MOVE_PATH]
-    movimientos = _parse_moves(_read_narc(rom[inicio:fin]))
-
     return B2W2RomProfile(
         source=ruta,
-        game_code=rom[_GAME_CODE_OFFSET:_GAME_CODE_OFFSET + 4].decode("ascii", "replace"),
+        game_code=cabecera[_GAME_CODE_OFFSET:_GAME_CODE_OFFSET + 4].decode("ascii", "replace"),
         title=titulo.decode("ascii", "replace").rstrip("\x00"),
         personal=personal,
         moves=movimientos,

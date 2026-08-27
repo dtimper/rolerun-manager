@@ -1,6 +1,12 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.45 — la ROM se lee sin congelar la interfaz
+
+Alpha.44 leía la ROM entera para consultar unos kilobytes: 512 MiB en el hilo
+de Tk la primera vez. Ahora se leen solo cabecera, FNT, FAT y los dos
+contenedores —**2 ms**—, con una prueba que impide la regresión.
+
 # v0.2.6-alpha.44 — B2/W2 lee los datos de juego de su ROM
 
 Cierra el hueco frente a randomizers como los juegos terminados: ORAS y X/Y

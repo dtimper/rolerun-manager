@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.44`
+- Versión de aplicación: `v0.2.6-alpha.45`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,18 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.45 — la ROM se lee sin congelar la interfaz
+
+Alpha.44 leia la ROM entera para consultar unos kilobytes. Con 512 MiB y un
+disco frio, eso es una pausa perceptible en el hilo de Tk la primera vez, justo
+lo contrario del objetivo de instantaneidad.
+
+- Ahora solo se leen cabecera, FNT, FAT y los dos contenedores: **2 ms** frente
+  a los 512 MiB del archivo.
+- Hay una prueba que lo fija: carga una ROM sintética con relleno y comprueba
+  que se lee menos de una cuarta parte.
+- Suite completa: 1289.
 
 ### v0.2.6 Alpha.44 — B2/W2 lee los datos de juego de su ROM
 

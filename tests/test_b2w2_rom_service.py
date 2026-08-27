@@ -468,3 +468,51 @@ def test_sin_rom_la_categoria_cae_al_catalogo_de_siempre() -> None:
     )
 
     assert RoleRunManager._damage_class_for_move(manager, 53) == "special"
+
+
+def test_no_se_lee_la_rom_entera(tmp_path, monkeypatch) -> None:
+    """Una ROM de B2/W2 son 512 MiB y la instantaneidad es objetivo del proyecto.
+
+    Leerla entera para consultar unos kilobytes congelaría la interfaz la
+    primera vez, sobre todo en un disco lento. Se leen la cabecera, la FNT, la
+    FAT y los dos contenedores, y nada más.
+    """
+    import pathlib
+
+    ruta = tmp_path / "grande.nds"
+    crudo = bytearray(_rom())
+    crudo += b"\x00" * (8 * 1024 * 1024)     # relleno, como el resto del cartucho
+    ruta.write_bytes(bytes(crudo))
+
+    leidos = 0
+    abrir_original = pathlib.Path.open
+
+    class _Contador:
+        def __init__(self, archivo):
+            self._archivo = archivo
+
+        def read(self, *args):
+            nonlocal leidos
+            datos = self._archivo.read(*args)
+            leidos += len(datos)
+            return datos
+
+        def __getattr__(self, nombre):
+            return getattr(self._archivo, nombre)
+
+        def __enter__(self):
+            self._archivo.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self._archivo.__exit__(*args)
+
+    def abrir(self, *args, **kwargs):
+        return _Contador(abrir_original(self, *args, **kwargs))
+
+    monkeypatch.setattr(pathlib.Path, "open", abrir)
+
+    perfil = load_b2w2_rom_profile(ruta)
+
+    assert len(perfil.moves) == MOVE_COUNT
+    assert leidos < len(crudo) // 4, f"se leyeron {leidos} de {len(crudo)} bytes"
