@@ -21,22 +21,24 @@ Podría probar a ciegas, pero es tu partida. Prefiero medirlo.
 
 QUÉ NECESITO QUE HAGAS
 
-He preparado una herramienta que SOLO LEE. No escribe nada en tu partida y no
-activa ninguna función.
+No tienes que escribir ningún comando. He dejado un archivo para hacer doble
+clic, en la misma carpeta que abrir_rolerun.bat:
+
+    capturar_baja_b2w2.bat
+
+La herramienta SOLO LEE. No escribe nada en tu partida ni activa ninguna función.
 
 1. Abre melonDS con tu partida de Negro 2 y déjalo en el mapa.
-2. CIERRA RoleRun (para que no interfiera).
-3. Abre una ventana de comandos en la carpeta de RoleRun y ejecuta:
-
-       py -3 tools_b2w2_battle_faint_capture.py
-
-4. Te dirá cuántos Pokémon ve en tu equipo. Pulsa INTRO.
-5. Entra en un combate.
-6. Deja que uno de tus Pokémon se debilite.
-7. Termina el combate y vuelve al mapa.
-8. La herramienta se para sola a los 3 minutos y te dirá dónde guardó el
-   archivo.
-9. Avísame cuando esté.
+2. CIERRA RoleRun Manager, para que no interfiera.
+3. Doble clic en  capturar_baja_b2w2.bat
+4. Se abre una ventana negra que te recuerda los dos puntos de arriba: pulsa
+   una tecla.
+5. Te dirá cuántos Pokémon ve en tu equipo. Pulsa INTRO.
+6. Entra en un combate.
+7. Deja que uno de tus Pokémon se debilite.
+8. Termina el combate y vuelve al mapa.
+9. A los 3 minutos se para sola y te dice dónde ha guardado el archivo.
+10. Avísame cuando esté.
 
 El archivo se guarda en:
 
@@ -45,4 +47,5 @@ El archivo se guarda en:
 Con eso sabré exactamente cuál de las dos explicaciones es, y podré arreglarlo
 sin tocar nada a ciegas.
 
-Si te da algún error al ejecutarla, mándame el mensaje y lo corrijo.
+Si la ventana negra se cierra sola o sale un error, hazle una foto o copia el
+texto y mándamelo.
