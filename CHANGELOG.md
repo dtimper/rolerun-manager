@@ -1,6 +1,38 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.70 — HeartGold: el ancla, y la regla del espejo también en cuarta
+
+El equipo de HeartGold vive en `0x0227C304`. No se supuso: se buscaron en la RAM
+de melonDS los **PID concretos** del equipo que declara la partida guardada y se
+conservaron los sitios donde varios caen separados 236 bytes, que es lo que mide
+un PK4 de combate. Cada candidato se confirmó leyéndolo con el parser de
+producción.
+
+**La regla del espejo se cumple en cuarta.** Restando el desplazamiento del
+equipo cae el principio del bloque, y de ahí en adelante el **98,65 %** de
+128 KiB coincide byte a byte con el archivo de la partida; lo que no coincide es
+justo lo que el jugador había avanzado desde el último guardado. Con esa sola
+dirección salen contador, dinero, medallas y PC, y se comprobaron en vivo: el
+dinero que llevaba encima, su equipo de seis y el Bellsprout de la caja 1.
+
+**Había cinco copias y elegir mal habría salido caro.** Dos coinciden con el
+archivo al 100 % —y por eso no valen: son los búferes del cartucho, congelados
+en el último guardado—. Otra tenía el equipo al día pero no llega al 18 % de
+espejo: es una estructura de trabajo aparte. Solo `0x0227C304` cumple las dos
+cosas.
+
+Los desplazamientos del guardado se sondearon en PKHeX cambiando cada campo y
+mirando qué bytes se movían: dinero en `0x78` y de **tres bytes**, medallas en
+`0x7E`, contador en `0x94`, equipo en `0x98`, PC en `0xF700`.
+
+- `app/gen4_memory.py`, `tools_hgss_anchor_capture.py`, `tools_hgss_read_check.py`.
+- `buscar_ancla_heartgold.bat` y `comprobar_heartgold.bat`, los dos de solo lectura.
+- `tests/test_gen4_memory.py`: 14 pruebas. Suite completa: **1596**.
+
+Pendiente de validación física: que lo que enseña `comprobar_heartgold.bat`
+coincida con la pantalla.
+
 # v0.2.6-alpha.69 — cuarta generación: la ROM y el formato PK4, demostrados
 
 Primer ladrillo de HeartGold/SoulSilver. Nada de esto adivina: cada dato se

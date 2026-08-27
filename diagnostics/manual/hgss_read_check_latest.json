@@ -1,0 +1,217 @@
+{
+  "format": "rolerun-hgss-read-check-v1",
+  "captured_at": "2026-08-27T22:10:48.693669+02:00",
+  "environment": "Oro HeartGold/Plata SoulSilver - melonDS",
+  "ancla": "0x0227C304",
+  "derivadas": {
+    "inicio_bloque": "0x0227C26C",
+    "contador": "0x0227C300",
+    "dinero": "0x0227C2E4",
+    "medallas": "0x0227C2EA",
+    "pc": "0x0228B96C"
+  },
+  "dinero": 2104,
+  "medallas": 0,
+  "medallas_byte": 0,
+  "equipo": [
+    {
+      "slot": 0,
+      "especie": 158,
+      "mote": "TOTODILE",
+      "nivel": 10,
+      "ps": "31/31",
+      "movimientos": [
+        10,
+        43,
+        55,
+        99
+      ],
+      "iv": [
+        14,
+        0,
+        20,
+        5,
+        30,
+        19
+      ],
+      "ev": [
+        0,
+        6,
+        0,
+        1,
+        1,
+        2
+      ],
+      "naturaleza": 23,
+      "habilidad": 67
+    },
+    {
+      "slot": 1,
+      "especie": 163,
+      "mote": "HOOTHOOT",
+      "nivel": 5,
+      "ps": "22/22",
+      "movimientos": [
+        33,
+        45,
+        193,
+        95
+      ],
+      "iv": [
+        27,
+        17,
+        21,
+        21,
+        16,
+        24
+      ],
+      "ev": [
+        0,
+        3,
+        0,
+        0,
+        0,
+        0
+      ],
+      "naturaleza": 19,
+      "habilidad": 15
+    },
+    {
+      "slot": 2,
+      "especie": 19,
+      "mote": "RATTATA",
+      "nivel": 3,
+      "ps": "14/14",
+      "movimientos": [
+        33,
+        39,
+        0,
+        0
+      ],
+      "iv": [
+        4,
+        19,
+        25,
+        6,
+        10,
+        29
+      ],
+      "ev": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "naturaleza": 14,
+      "habilidad": 62
+    },
+    {
+      "slot": 3,
+      "especie": 194,
+      "mote": "WOOPER",
+      "nivel": 6,
+      "ps": "23/23",
+      "movimientos": [
+        55,
+        39,
+        300,
+        0
+      ],
+      "iv": [
+        14,
+        7,
+        27,
+        9,
+        17,
+        15
+      ],
+      "ev": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "naturaleza": 9,
+      "habilidad": 6
+    },
+    {
+      "slot": 4,
+      "especie": 92,
+      "mote": "GASTLY",
+      "nivel": 5,
+      "ps": "18/18",
+      "movimientos": [
+        95,
+        122,
+        180,
+        0
+      ],
+      "iv": [
+        6,
+        20,
+        15,
+        2,
+        30,
+        13
+      ],
+      "ev": [
+        0,
+        2,
+        0,
+        0,
+        0,
+        0
+      ],
+      "naturaleza": 24,
+      "habilidad": 26
+    },
+    {
+      "slot": 5,
+      "especie": 167,
+      "mote": "SPINARAK",
+      "nivel": 5,
+      "ps": "19/19",
+      "movimientos": [
+        40,
+        81,
+        184,
+        0
+      ],
+      "iv": [
+        14,
+        20,
+        7,
+        3,
+        29,
+        18
+      ],
+      "ev": [
+        0,
+        4,
+        0,
+        0,
+        0,
+        0
+      ],
+      "naturaleza": 2,
+      "habilidad": 68
+    }
+  ],
+  "cajas": [
+    {
+      "caja": 1,
+      "pokemon": [
+        {
+          "hueco": 1,
+          "especie": 69,
+          "mote": "BELLSPROUT"
+        }
+      ]
+    }
+  ],
+  "note": "Diagnostico de solo lectura."
+}
