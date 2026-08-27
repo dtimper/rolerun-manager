@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.27`
+- Versión de aplicación: `v0.2.6-alpha.28`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,26 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.28 — bajas y sustitución en B2/W2
+
+Con la lane de combate, el writer de roles y la escritura del PC ya validados
+físicamente, B2/W2 puede cerrar el ciclo que da sentido a una RoleRun.
+
+La rama B2/W2 del monitor pasa a llamar al camino común de salud completo, que
+detecta las transiciones a cero PS, descuenta la vida, registra el evento y abre
+el selector de sustituto. En combate confirmado la fuente es `battle-visible`: la
+copia de presentación ya converge con la animación, de modo que el KO se registra
+cuando la barra visible llega a cero.
+
+`replace_fainted_party_pc()` mueve tres posiciones: sustituto desde su casilla a
+la party, debilitado al Cementerio y casilla de origen vacía con el PK5 semilla-0
+que deja el juego. El orden de escritura —Cementerio, party, vaciar origen—
+garantiza que ningún Pokémon se quede sin copia en ningún punto intermedio.
+Verifica ambas identidades fuertes, exige el Cementerio libre y hace rollback de
+las tres posiciones ante cualquier divergencia.
+
+Baseline completa: **1082 passed**. Validación física pendiente.
 
 ### v0.2.6 Alpha.27 — el monitor deja de esperar a lo inaplicable
 

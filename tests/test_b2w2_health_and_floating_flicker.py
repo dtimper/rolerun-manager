@@ -112,7 +112,9 @@ def test_la_rama_b2w2_del_monitor_publica_la_salud() -> None:
     fuente = inspect.getsource(RoleRunManager._finish_oras_live_reconciliation)
     rama = fuente[fuente.index('== "b2w2"'):]
     rama = rama[:rama.index("_schedule_oras_live_reconciliation")]
-    assert "_publish_live_health" in rama
+    # Desde alpha.28 entra en el camino común completo, que además de publicar
+    # la salud detecta las bajas.
+    assert "_process_oras_health_snapshot" in rama
     # Y ya no fuerza la reconstrucción de la barra cuando nada cambió.
     assert "_sync_live_layout(refresh_floating=False)" in rama
     assert "_sync_live_layout(refresh_floating=True)" not in rama
@@ -271,7 +273,6 @@ def _monitor(probe) -> SimpleNamespace:
         _oras_live_reconciliation_is_active=lambda: True,
         _cancel_oras_initial_auto_sync=lambda: None,
         _discard_b2w2_ghost_team_changes=lambda: 0,
-        _publish_live_health=lambda game: publicados.append(game) or True,
         _live_metadata_is_missing=lambda current, live: False,
         _publish_oras_live_snapshot=lambda snapshot, **kwargs: None,
         _update_top_status=lambda: None,
@@ -280,6 +281,12 @@ def _monitor(probe) -> SimpleNamespace:
         _schedule_team_integrity_check=lambda: None,
         _probe=probe,
     )
+
+    def procesar(game, *, source="overworld"):
+        publicados.append((game, source))
+        manager._oras_live_health_snapshot = game
+
+    manager._process_oras_health_snapshot = procesar
     return manager
 
 
@@ -302,7 +309,7 @@ def test_una_lane_de_batalla_no_validada_ya_no_congela_al_equipo() -> None:
 
     _run_monitor(manager, SimpleNamespace(game=vivo))
 
-    assert manager.publicados == [vivo], "debía publicarse el bloque de party"
+    assert manager.publicados == [(vivo, "overworld")], "debía publicarse el bloque de party"
     assert manager._oras_live_health_snapshot is vivo
     # Seguimos sin saber si esto es un combate: no se afirma lo contrario.
     assert manager._oras_battle_probe_last_state == "none"
@@ -316,7 +323,9 @@ def test_un_combate_confirmado_sigue_usando_la_copia_de_presentacion() -> None:
 
     _run_monitor(manager, SimpleNamespace(game=vivo))
 
-    assert manager.publicados == [presentacion]
+    # "battle-visible": la copia de presentación ya converge con la animación,
+    # así que el KO se registra sin el retraso extra que ORAS necesita.
+    assert manager.publicados == [(presentacion, "battle-visible")]
     assert manager._oras_live_health_snapshot is presentacion
     assert manager._oras_battle_probe_last_state == "battle"
 
@@ -327,5 +336,5 @@ def test_fuera_de_combate_manda_el_bloque_de_party() -> None:
 
     _run_monitor(manager, SimpleNamespace(game=vivo))
 
-    assert manager.publicados == [vivo]
+    assert manager.publicados == [(vivo, "overworld")]
     assert manager._oras_battle_probe_last_state == "none"

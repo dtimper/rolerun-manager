@@ -255,6 +255,7 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
         change = changes[0]
         if change.operation not in {
             "move-box-slot", "swap-party-box", "party-to-box", "box-to-party",
+            "replace-fainted",
         }:
             raise B2W2LiveError("La operación B2/W2 todavía no tiene writer validado.")
         if change.operation in {"party-to-box", "box-to-party"}:
@@ -284,6 +285,62 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
                 expected_identity=identity, incoming_party=built,
             )
             live = self._capture(current, 0)
+            self._restore_semantic_roles(live.game, change.party_role_snapshot)
+            live.game.raw["writes_enabled"] = True
+            live.game.raw["live_write"] = True
+            return B2W2RealTimeWriteResult(live.game, live.process, 2, 1)
+        if change.operation == "replace-fainted":
+            party_read = self.reader.read_party()
+            party_slot = int(change.party_slot)
+            if not 0 <= party_slot < party_read.count:
+                raise B2W2LiveError("El slot de party B2/W2 está fuera de rango.")
+            before_pc = self.reader.read_pc(party_read)
+            box, box_slot = int(change.box or 0), int(change.box_slot or 0)
+            grave_box = int(change.graveyard_box or 0)
+            grave_slot = int(change.graveyard_box_slot or 0)
+            if not (grave_box and grave_slot):
+                raise B2W2LiveError("La sustitución B2/W2 no declara casilla de Cementerio.")
+            incoming = next((
+                p for p in before_pc.pokemon if (p.box, p.slot) == (box, box_slot)
+            ), None)
+            if incoming is None or incoming.held_item_id != 0:
+                raise B2W2LiveError(
+                    "La sustitución B2/W2 exige por ahora un sustituto sin objeto."
+                )
+            incoming_snapshot = dict(change.incoming_snapshot or {})
+            outgoing_snapshot = dict(change.outgoing_snapshot or {})
+            incoming_identity = tuple(
+                int(incoming_snapshot.get(k, 0) or 0) for k in ("pid", "tid", "sid")
+            )
+            outgoing_identity = tuple(
+                int(outgoing_snapshot.get(k, 0) or 0) for k in ("pid", "tid", "sid")
+            )
+            if incoming_identity != (incoming.pid, incoming.tid, incoming.sid):
+                raise B2W2LiveError("El testigo del sustituto B2/W2 no coincide.")
+            if not all(outgoing_identity):
+                raise B2W2LiveError("Falta la identidad fuerte del debilitado B2/W2.")
+            offset = (box - 1) * 0x1000 + (box_slot - 1) * PK5_STORED_SIZE
+            stored = before_pc.raw[offset:offset + PK5_STORED_SIZE]
+            built = self._party_block(stored, incoming)
+            self.reader.replace_fainted_party_pc(
+                party_read, party_slot, box, box_slot, grave_box, grave_slot, built,
+                incoming_identity=incoming_identity,
+                outgoing_identity=outgoing_identity,
+            )
+            live = self._capture(current, 0)
+            # El sustituto hereda el rol de la casilla que deja libre el
+            # debilitado: es la regla nuclear de RoleRun.
+            member = next((
+                p for p in live.game.party
+                if (p.pid, p.tid, p.sid) == incoming_identity
+            ), None)
+            if member is not None:
+                heredado = str(
+                    incoming_snapshot.get("role", "") or change.incoming_role or ""
+                )
+                if heredado in ROLE_TO_KEY:
+                    member.role = heredado
+                    member.role_symbol = ROLE_SYMBOLS.get(heredado, "")
             self._restore_semantic_roles(live.game, change.party_role_snapshot)
             live.game.raw["writes_enabled"] = True
             live.game.raw["live_write"] = True

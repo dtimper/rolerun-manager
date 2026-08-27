@@ -1,6 +1,36 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.28 — bajas y sustitución en B2/W2
+
+El corazón de una RoleRun. Sus tres dependencias quedaron validadas por el
+usuario el 27-08-2026: la lane de combate, el writer de roles y la escritura del
+PC.
+
+- **Bajas.** B2/W2 entra en el camino común de salud, que además de publicar los
+  PS detecta las transiciones a cero, descuenta la vida, registra el evento y
+  abre el selector de sustituto. Hasta ahora su rama del monitor ni siquiera
+  llegaba a esa detección.
+- En combate confirmado se usa `battle-visible`: la copia de presentación de
+  B2/W2 ya converge con la animación, así que el KO se registra en cuanto la
+  barra visible llega a cero, sin el retraso extra que ORAS necesita.
+- **Sustitución.** Nuevo `replace_fainted_party_pc()`. Intervienen **tres**
+  posiciones y no dos: el sustituto sale de su casilla, el debilitado se deposita
+  en el Cementerio y la casilla de origen queda vacía. Por eso no se puede
+  reutilizar `swap_party_pc`.
+- El orden de escritura no es casual: primero se copia al debilitado al
+  Cementerio, después entra el sustituto en la party y solo al final se vacía la
+  casilla de origen. En ningún punto intermedio hay un Pokémon con cero copias;
+  como mucho un duplicado transitorio, que sí es recuperable. Hay una regresión
+  que lo comprueba escritura a escritura.
+- La casilla liberada queda como la deja el juego: un PK5 semilla-0, nunca ceros.
+- El sustituto hereda el rol de la casilla que deja libre el debilitado, que es
+  la regla nuclear de RoleRun.
+- Se exige que el Cementerio esté vacío, que origen y Cementerio sean casillas
+  distintas, y las dos identidades fuertes; cualquier fallo hace rollback de las
+  tres posiciones.
+- Baseline completa: **1082 passed**. Validación física pendiente.
+
 # v0.2.6-alpha.27 — un cambio sin writer ya no puede congelar el seguimiento
 
 Este fallo ha aparecido dos veces con síntomas muy distintos y siempre por la

@@ -836,6 +836,111 @@ class B2W2MelonDSReader:
             restore()
             raise
 
+    def replace_fainted_party_pc(
+        self, party_read: B2W2PartyRead, party_slot: int,
+        box: int, box_slot: int, graveyard_box: int, graveyard_box_slot: int,
+        incoming_party: bytes, *,
+        incoming_identity: tuple[int, int, int],
+        outgoing_identity: tuple[int, int, int],
+    ) -> tuple[B2W2PartyRead, B2W2PCRead]:
+        """Sustituye a un debilitado por un Pokémon del PC y lo lleva al Cementerio.
+
+        A diferencia de ``swap_party_pc``, aquí intervienen **tres** posiciones:
+        el sustituto sale de ``box/box_slot``, el debilitado se deposita en
+        ``graveyard_box/graveyard_box_slot`` y la casilla de origen queda vacía.
+
+        El orden de escritura no es casual. Se copia primero al debilitado al
+        Cementerio, después entra el sustituto en la party y solo al final se
+        vacía su casilla de origen. En ningún punto intermedio existe un Pokémon
+        con una única copia en juego: como mucho hay un duplicado transitorio,
+        que es recuperable; una pérdida no lo sería.
+        """
+        if len(incoming_party) != PK5_PARTY_SIZE:
+            raise B2W2LiveError("El PK5 entrante de party no mide 220 bytes.")
+        if (int(box), int(box_slot)) == (int(graveyard_box), int(graveyard_box_slot)):
+            raise B2W2LiveError(
+                "El origen del sustituto y el Cementerio no pueden ser la misma casilla."
+            )
+        before_party = self.read_party()
+        if (
+            before_party.process_id != party_read.process_id
+            or before_party.allocation_base != party_read.allocation_base
+            or not 0 <= party_slot < before_party.count
+        ):
+            raise B2W2LiveError("La party B2/W2 cambió antes de la sustitución.")
+        outgoing = before_party.pokemon[party_slot]
+        if (outgoing.pid, outgoing.tid, outgoing.sid) != tuple(outgoing_identity):
+            raise B2W2LiveError("La identidad del Pokémon debilitado B2/W2 cambió.")
+
+        before_pc = self.read_pc(before_party)
+        origen = (int(box) - 1) * PC_BOX_STRIDE + (int(box_slot) - 1) * PK5_STORED_SIZE
+        cementerio = (
+            (int(graveyard_box) - 1) * PC_BOX_STRIDE
+            + (int(graveyard_box_slot) - 1) * PK5_STORED_SIZE
+        )
+        for offset in (origen, cementerio):
+            if not 0 <= offset <= len(before_pc.raw) - PK5_STORED_SIZE:
+                raise B2W2LiveError("Una casilla PC B2/W2 de la sustitución está fuera de rango.")
+
+        incoming_stored = before_pc.raw[origen:origen + PK5_STORED_SIZE]
+        incoming = parse_pk5_boxed(incoming_stored, int(box), int(box_slot))
+        if incoming is None or (incoming.pid, incoming.tid, incoming.sid) != tuple(incoming_identity):
+            raise B2W2LiveError("La identidad del sustituto en el PC B2/W2 cambió.")
+        if parse_pk5_boxed(
+            before_pc.raw[cementerio:cementerio + PK5_STORED_SIZE],
+            int(graveyard_box), int(graveyard_box_slot),
+        ) is not None:
+            raise B2W2LiveError("La casilla del Cementerio B2/W2 ya está ocupada.")
+        parsed_incoming = parse_pk5_party(incoming_party, party_slot)
+        if (parsed_incoming.pid, parsed_incoming.tid, parsed_incoming.sid) != tuple(incoming_identity):
+            raise B2W2LiveError("El PK5 de party construido no coincide con el sustituto.")
+
+        party_offset = party_slot * PK5_PARTY_SIZE
+        outgoing_party = before_party.raw[party_offset:party_offset + PK5_PARTY_SIZE]
+        outgoing_stored = outgoing_party[:PK5_STORED_SIZE]
+        cementerio_antes = before_pc.raw[cementerio:cementerio + PK5_STORED_SIZE]
+
+        base_party = before_party.allocation_base + (PARTY_BASE - DS_RAM_BASE)
+        base_pc = before_party.allocation_base + (PC_BASE - DS_RAM_BASE)
+        party_host = base_party + party_offset
+        origen_host = base_pc + origen
+        cementerio_host = base_pc + cementerio
+
+        def restore() -> None:
+            self._write_process_bytes(before_party.process_id, party_host, outgoing_party)
+            self._write_process_bytes(before_party.process_id, origen_host, incoming_stored)
+            self._write_process_bytes(before_party.process_id, cementerio_host, cementerio_antes)
+            restored_party = self.read_party()
+            restored_pc = self.read_pc(restored_party)
+            if restored_party.raw != before_party.raw or restored_pc.raw != before_pc.raw:
+                raise B2W2LiveError(
+                    "Rollback de la sustitución B2/W2 no confirmado; no guardes la partida."
+                )
+
+        try:
+            self._write_process_bytes(before_party.process_id, cementerio_host, outgoing_stored)
+            self._write_process_bytes(before_party.process_id, party_host, incoming_party)
+            self._write_process_bytes(before_party.process_id, origen_host, empty_pk5_stored())
+            after_party = self.read_party()
+            after_pc = self.read_pc(after_party)
+            vivo = after_party.pokemon[party_slot]
+            if (vivo.pid, vivo.tid, vivo.sid) != tuple(incoming_identity):
+                raise B2W2LiveError("El sustituto B2/W2 no ocupó su casilla de party.")
+            if after_party.count != before_party.count:
+                raise B2W2LiveError("La sustitución B2/W2 alteró el tamaño del equipo.")
+            if not any(
+                (p.pid, p.tid, p.sid) == tuple(outgoing_identity)
+                and (p.box, p.slot) == (int(graveyard_box), int(graveyard_box_slot))
+                for p in after_pc.pokemon
+            ):
+                raise B2W2LiveError("El debilitado B2/W2 no llegó al Cementerio.")
+            if any((p.box, p.slot) == (int(box), int(box_slot)) for p in after_pc.pokemon):
+                raise B2W2LiveError("La casilla de origen B2/W2 no quedó vacía.")
+            return after_party, after_pc
+        except Exception:
+            restore()
+            raise
+
     def write_party_roles(
         self, party_read: B2W2PartyRead, writes,
     ) -> B2W2PartyRead:

@@ -7762,6 +7762,7 @@ class RoleRunManager(ctk.CTk):
                     isinstance(change, PendingTeamChange)
                     and change.operation in {
                         "move-box-slot", "swap-party-box", "party-to-box", "box-to-party",
+                        "replace-fainted",
                     }
                 ):
                     supported_ids.add(id(change))
@@ -9604,12 +9605,15 @@ class RoleRunManager(ctk.CTk):
                 # Combate confirmado: manda la copia de presentación, que es la
                 # que no adelanta el daño a la animación. Validada en alpha.5.
                 self._oras_battle_probe_last_state = "battle"
-                self._oras_live_health_snapshot = probe_health
                 published_health = probe_health
+                # La copia de presentación ya converge con la animación, así que
+                # el KO se registra en cuanto la barra visible llega a cero, sin
+                # el retraso extra que ORAS necesita.
+                health_source = "battle-visible"
             elif probe_state == "none":
                 self._oras_battle_probe_last_state = "none"
-                self._oras_live_health_snapshot = snapshot.game
                 published_health = snapshot.game
+                health_source = "overworld"
             else:
                 # La lane de presentación no se pudo validar: cambio de Pokémon
                 # con las dos copias describiendo miembros distintos, animación a
@@ -9624,14 +9628,17 @@ class RoleRunManager(ctk.CTk):
                 #
                 # No se toca ``_oras_battle_probe_last_state``: seguimos sin
                 # saber si esto es un combate.
-                self._oras_live_health_snapshot = snapshot.game
                 published_health = snapshot.game
+                health_source = "overworld"
             # ``diff_live_party`` ignora los PS a propósito: su trabajo es la
             # composición del equipo. B2/W2 era el único backend que no llamaba
             # después a la publicación de salud, así que un cambio de PS no
             # llegaba nunca ni a ``current_game`` ni a la vista principal.
             if published_health is not None:
-                self._publish_live_health(published_health)
+                # alpha.28: B2/W2 entra en el camino común de salud, que además
+                # de publicar detecta las bajas. Su writer de sustitución ya
+                # existe, así que abrirlo ya no deja al usuario a medio flujo.
+                self._process_oras_health_snapshot(published_health, source=health_source)
             difference = diff_live_party(before_game, snapshot.game)
             # Publicar solo ante cambios de composición dejaba la ficha sin
             # estadísticas, IV, EV ni naturaleza en cuanto algo reponía la vista
@@ -10555,6 +10562,7 @@ class RoleRunManager(ctk.CTk):
                     isinstance(change, PendingTeamChange)
                     and change.operation in {
                         "move-box-slot", "swap-party-box", "party-to-box", "box-to-party",
+                        "replace-fainted",
                     }
                 ):
                     continue
