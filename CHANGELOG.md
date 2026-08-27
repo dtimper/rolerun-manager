@@ -1,6 +1,29 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.23 — la vida se actualiza también DURANTE el combate
+
+La captura del usuario lo dejó claro: con Mareep debilitado (0/22) y Azurill a
+4/20, RoleRun pintaba a los seis miembros al máximo durante todo el combate y
+solo se corregía al salir.
+
+- **Causa raíz.** `BattleState` vale `"unknown"` por defecto y la lane de
+  presentación de B2/W2 lo deja así ante **cualquier** excepción: dos copias
+  describiendo miembros distintos durante un cambio, animación a medias, o un
+  estado runtime todavía no demostrado. Con ese valor no se publicaba ninguna
+  salud, de modo que un fallo que afecta al Pokémon **activo** congelaba a los
+  seis.
+- Esa lane gobierna solo los PS del activo: los otros cinco ya salen del bloque
+  de party incluso en un combate confirmado, y ahí no hay nada que destripar.
+  Ahora, con la lane sin validar, se publica el bloque de party.
+- Dejar un debilitado pintado a vida llena durante todo el combate es peor que
+  adelantar unos segundos el daño de un único Pokémon.
+- **No se relaja la regla validada en alpha.5**: con el combate confirmado sigue
+  mandando la copia de presentación, que no adelanta el daño a la animación.
+  Tampoco se afirma que haya combate cuando no se sabe: no se toca
+  `_oras_battle_probe_last_state`.
+- Baseline completa: **999 passed**.
+
 # v0.2.6-alpha.22 — el parpadeo de la barra flotante y los PS de B2/W2
 
 Dos fallos reportados por el usuario, **con una única causa raíz**: la rama

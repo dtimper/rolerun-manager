@@ -247,3 +247,84 @@ def test_una_firma_identica_no_hace_ningun_trabajo() -> None:
         manager, ((0, 0, 0, 0), (_rol(hp=120),)),
     ) is True
     assert barra.color is None, "no debía tocarse ninguna barra"
+
+
+# --------------------------------------------------------------------------
+# Un fallo de la lane de presentación no puede congelar a todo el equipo
+# --------------------------------------------------------------------------
+
+def _monitor(probe) -> SimpleNamespace:
+    """Lo mínimo para recorrer la rama B2/W2 del monitor."""
+    publicados = []
+    manager = SimpleNamespace(
+        _oras_live_monitor_in_progress=True,
+        _oras_live_monitor_token=5,
+        _session_generation=1,
+        project=SimpleNamespace(slug="run"),
+        current_game=_game(_mon(hp=120)),
+        _oras_live_monitor_failures=0,
+        _oras_battle_probe_last_state="none",
+        _oras_live_health_snapshot=None,
+        _live_sync_in_progress=False,
+        publicados=publicados,
+        _active_azahar_realtime_key=lambda: "b2w2",
+        _oras_live_reconciliation_is_active=lambda: True,
+        _cancel_oras_initial_auto_sync=lambda: None,
+        _discard_b2w2_ghost_team_changes=lambda: 0,
+        _publish_live_health=lambda game: publicados.append(game) or True,
+        _publish_oras_live_snapshot=lambda snapshot, **kwargs: None,
+        _update_top_status=lambda: None,
+        _schedule_oras_live_reconciliation=lambda delay: None,
+        _sync_live_layout=lambda refresh_floating=True: None,
+        _schedule_team_integrity_check=lambda: None,
+        _probe=probe,
+    )
+    return manager
+
+
+def _run_monitor(manager, snapshot) -> None:
+    RoleRunManager._finish_oras_live_reconciliation(
+        manager, 1, "run", 5, None, snapshot, None, battle_probe=manager._probe,
+    )
+
+
+def test_una_lane_de_batalla_no_validada_ya_no_congela_al_equipo() -> None:
+    """El caso real de la captura del 27-08-2026.
+
+    Con Mareep debilitado (0/22) y Azurill a 4/20, la barra flotante pintaba a
+    los seis al máximo durante todo el combate. La lane de presentación gobierna
+    solo los PS del Pokémon **activo**; los otros cinco salen del bloque de party
+    incluso en un combate confirmado, así que no hay nada que destripar en ellos.
+    """
+    manager = _monitor(SimpleNamespace(state="unknown", health_game=None))
+    vivo = _game(_mon(hp=0))
+
+    _run_monitor(manager, SimpleNamespace(game=vivo))
+
+    assert manager.publicados == [vivo], "debía publicarse el bloque de party"
+    assert manager._oras_live_health_snapshot is vivo
+    # Seguimos sin saber si esto es un combate: no se afirma lo contrario.
+    assert manager._oras_battle_probe_last_state == "none"
+
+
+def test_un_combate_confirmado_sigue_usando_la_copia_de_presentacion() -> None:
+    """La regla validada en alpha.5 no se relaja: nada de adelantar el daño."""
+    presentacion = _game(_mon(hp=90))
+    manager = _monitor(SimpleNamespace(state="battle", health_game=presentacion))
+    vivo = _game(_mon(hp=10))
+
+    _run_monitor(manager, SimpleNamespace(game=vivo))
+
+    assert manager.publicados == [presentacion]
+    assert manager._oras_live_health_snapshot is presentacion
+    assert manager._oras_battle_probe_last_state == "battle"
+
+
+def test_fuera_de_combate_manda_el_bloque_de_party() -> None:
+    manager = _monitor(SimpleNamespace(state="none", health_game=None))
+    vivo = _game(_mon(hp=45))
+
+    _run_monitor(manager, SimpleNamespace(game=vivo))
+
+    assert manager.publicados == [vivo]
+    assert manager._oras_battle_probe_last_state == "none"

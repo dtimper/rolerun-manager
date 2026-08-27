@@ -9534,17 +9534,30 @@ class RoleRunManager(ctk.CTk):
             before_game = self.current_game
             probe_state = getattr(battle_probe, "state", "unknown")
             probe_health = getattr(battle_probe, "health_game", None)
-            # Solo estas dos situaciones tienen salud demostrada. Con la lane de
-            # batalla en un estado no confirmado no se publica nada: la copia de
-            # presentación existe precisamente para no adelantar el daño antes
-            # de que el juego lo muestre.
-            published_health = None
             if probe_state == "battle" and probe_health is not None:
+                # Combate confirmado: manda la copia de presentación, que es la
+                # que no adelanta el daño a la animación. Validada en alpha.5.
                 self._oras_battle_probe_last_state = "battle"
                 self._oras_live_health_snapshot = probe_health
                 published_health = probe_health
             elif probe_state == "none":
                 self._oras_battle_probe_last_state = "none"
+                self._oras_live_health_snapshot = snapshot.game
+                published_health = snapshot.game
+            else:
+                # La lane de presentación no se pudo validar: cambio de Pokémon
+                # con las dos copias describiendo miembros distintos, animación a
+                # medias, o un estado runtime todavía no demostrado.
+                #
+                # Esa lane gobierna **solo** los PS del Pokémon activo; los otros
+                # cinco ya se publican desde el bloque de party incluso en un
+                # combate confirmado, y ahí no hay nada que destripar. Congelar a
+                # los seis por un fallo que afecta a uno dejaba un debilitado
+                # pintado al máximo de vida durante todo el combate, que es peor
+                # que adelantar unos segundos el daño de uno.
+                #
+                # No se toca ``_oras_battle_probe_last_state``: seguimos sin
+                # saber si esto es un combate.
                 self._oras_live_health_snapshot = snapshot.game
                 published_health = snapshot.game
             # ``diff_live_party`` ignora los PS a propósito: su trabajo es la

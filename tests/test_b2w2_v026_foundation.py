@@ -488,6 +488,7 @@ def _ui_double(*, current_game: SaveGameData):
     published = []
     scheduled = []
     toasts = []
+    salud = []
     ui = SimpleNamespace(
         _live_sync_in_progress=True,
         _session_generation=4,
@@ -499,6 +500,9 @@ def _ui_double(*, current_game: SaveGameData):
         _cancel_oras_initial_auto_sync=lambda: None,
         _active_azahar_realtime_key=lambda: "b2w2",
         _discard_b2w2_ghost_team_changes=lambda: 0,
+        # Desde alpha.23 B2/W2 publica la salud viva por el camino comun, tambien
+        # cuando la lane de presentacion no se pudo validar.
+        _publish_live_health=lambda game: salud.append(game) or True,
         _publish_oras_live_snapshot=lambda snapshot, **kwargs: published.append((snapshot, kwargs)),
         _update_top_status=lambda: None,
         _schedule_oras_live_reconciliation=lambda delay: scheduled.append(delay),

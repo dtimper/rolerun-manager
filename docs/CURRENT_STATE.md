@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.22`
+- Versión de aplicación: `v0.2.6-alpha.23`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,25 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.23 — salud viva durante el combate en B2/W2
+
+La captura física del 27-08-2026 demostró que alpha.22 no bastaba: con Mareep
+debilitado y Azurill a 4/20, RoleRun seguía pintando a los seis al máximo durante
+el combate y solo se corregía al salir.
+
+`BattleState` vale `"unknown"` por defecto y la lane de presentación de B2/W2 lo
+deja así ante cualquier excepción —dos copias describiendo miembros distintos en
+un cambio, animación a medias, estado runtime no demostrado—. Con ese valor no se
+publicaba salud alguna, así que un fallo que solo concierne al Pokémon activo
+congelaba al equipo entero.
+
+La lane gobierna únicamente los PS del activo; los otros cinco ya proceden del
+bloque de party incluso en combate confirmado. Con la lane sin validar se publica
+ahora ese bloque. La regla de alpha.5 se mantiene intacta para el combate
+confirmado, y no se afirma que haya combate cuando no se sabe.
+
+Baseline completa: **999 passed**.
 
 ### v0.2.6 Alpha.22 — la rama B2/W2 del monitor, corregida
 
