@@ -1,6 +1,28 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.34 — la mochila se busca con dos estados, no con un número
+
+La primera traza lo dejó claro: buscar solo el par (identificador, cantidad)
+devolvió **40 posiciones** para «Poké Ball ×3», y al decodificarlas resultaron ser
+un patrón repetitivo de valores pequeños que coincidía por azar. Un número
+suelto, por específico que parezca, aparece muchas veces en 4 MiB.
+
+También quedó claro que la heurística de «varios objetos juntos» no sirve aquí:
+en quinta generación **cada bolsillo va por separado**, así que Poké Ball y
+Poción no tienen por qué estar cerca.
+
+- La herramienta pasa al método que pide el propio documento de paridad: **dos
+  estados**. Se guardan las posiciones que contienen la cantidad vieja, el
+  jugador usa o compra algo, y se conservan solo las que **en esa misma posición**
+  pasan a contener la cantidad nueva. Un patrón casual no sobrevive a ese filtro.
+- Lo mismo para el dinero, comparando antes y después de una compra o venta.
+- De cada dirección confirmada se vuelca además el bolsillo decodificado
+  alrededor, con nombres de objeto, para poder verificar que es una mochila de
+  verdad y no otra coincidencia.
+- Corregidos los dos lanzadores `.bat`, que se estaban escribiendo con los saltos
+  de línea duplicados.
+
 # v0.2.6-alpha.33 — búsqueda de la mochila y el dinero
 
 El ciclo de combate y bajas de B2/W2 queda **validado físicamente al completo**:

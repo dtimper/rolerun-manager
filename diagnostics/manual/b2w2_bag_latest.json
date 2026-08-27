@@ -1,0 +1,171 @@
+{
+  "format": "rolerun-b2w2-bag-candidates-v1",
+  "captured_at": "2026-08-27T15:03:38.582203+02:00",
+  "environment": "Pokemon Negro 2 Espana - melonDS 1.1",
+  "metodo": "Par (item_id, cantidad) de 16 bits alineado, confirmado en dos lecturas separadas para descartar buffers transitorios.",
+  "objetos": [
+    {
+      "item_id": 4,
+      "nombre": "Poké Ball",
+      "cantidad": 3,
+      "coincidencias_primera": 40,
+      "coincidencias_estables": 40,
+      "direcciones": [
+        "0x02092D9C",
+        "0x02092DCC",
+        "0x02092DFC",
+        "0x02092E2C",
+        "0x02092E5C",
+        "0x02092E8C",
+        "0x02092EB4",
+        "0x02092EBC",
+        "0x021CD3BA",
+        "0x021CD3C2",
+        "0x021CD3E2",
+        "0x021CD3EA",
+        "0x021CD430",
+        "0x021CD4D2",
+        "0x021CD4DA",
+        "0x021CD59C",
+        "0x021CD5A4",
+        "0x021CD85E",
+        "0x021CD8F6",
+        "0x021CD8FE",
+        "0x021CD9A8",
+        "0x021CDA5E",
+        "0x021CDA66",
+        "0x021CDD42",
+        "0x021CDD4A",
+        "0x021CDE34",
+        "0x021CDE3C",
+        "0x021CDE5A",
+        "0x021CDE62",
+        "0x021CDF48",
+        "0x021CE182",
+        "0x021CE226",
+        "0x021CE2DE",
+        "0x021CE306",
+        "0x021CE40A",
+        "0x021CE460",
+        "0x021CE468",
+        "0x0221D9A4",
+        "0x02253698",
+        "0x0228928C"
+      ]
+    },
+    {
+      "item_id": 17,
+      "nombre": "Poción",
+      "cantidad": 2,
+      "coincidencias_primera": 5,
+      "coincidencias_estables": 5,
+      "direcciones": [
+        "0x02092AE8",
+        "0x0216DC84",
+        "0x0221E17C",
+        "0x0224B688",
+        "0x0224C844"
+      ]
+    }
+  ],
+  "zonas_con_varios_objetos": [
+    {
+      "objetos_encontrados": [
+        "Poké Ball",
+        "Poción"
+      ],
+      "direcciones": {
+        "Poké Ball": "0x02092D9C",
+        "Poción": "0x02092AE8"
+      },
+      "ventana_hex": "03000200030000000100030002000000040003000300000002000300020000000200030002000000010003000200000003000300030000000300030003000000"
+    },
+    {
+      "objetos_encontrados": [
+        "Poké Ball",
+        "Poción"
+      ],
+      "direcciones": {
+        "Poké Ball": "0x02092DCC",
+        "Poción": "0x02092AE8"
+      },
+      "ventana_hex": "03000300030000000300030003000000040003000300000002000300020000000200030002000000010003000200000003000300030000000300030003000000"
+    },
+    {
+      "objetos_encontrados": [
+        "Poké Ball",
+        "Poción"
+      ],
+      "direcciones": {
+        "Poké Ball": "0x02092DFC",
+        "Poción": "0x02092AE8"
+      },
+      "ventana_hex": "03000300030000000300030003000000040003000300000002000300020000000200030002000000010003000200000003000300030000000300030003000000"
+    },
+    {
+      "objetos_encontrados": [
+        "Poké Ball",
+        "Poción"
+      ],
+      "direcciones": {
+        "Poké Ball": "0x02092E2C",
+        "Poción": "0x02092AE8"
+      },
+      "ventana_hex": "03000300030000000300030003000000040003000300000002000300020000000200030002000000010003000200000003000300030000000300030003000000"
+    },
+    {
+      "objetos_encontrados": [
+        "Poké Ball",
+        "Poción"
+      ],
+      "direcciones": {
+        "Poké Ball": "0x02092E5C",
+        "Poción": "0x02092AE8"
+      },
+      "ventana_hex": "03000300030000000300030003000000040003000300000002000300020000000200030002000000010003000200000003000300030000000300030003000000"
+    },
+    {
+      "objetos_encontrados": [
+        "Poké Ball",
+        "Poción"
+      ],
+      "direcciones": {
+        "Poké Ball": "0x02092E8C",
+        "Poción": "0x02092AE8"
+      },
+      "ventana_hex": "03000300030000000300030003000000040003000300000002000300020000000100030002000000010003000200000003000300030000000400030003000000"
+    },
+    {
+      "objetos_encontrados": [
+        "Poké Ball",
+        "Poción"
+      ],
+      "direcciones": {
+        "Poké Ball": "0x02092EB4",
+        "Poción": "0x02092AE8"
+      },
+      "ventana_hex": "01000300020000000300030003000000040003000300000004000300030000000200030002000000020003000200000001000400020000000300030003000000"
+    },
+    {
+      "objetos_encontrados": [
+        "Poké Ball",
+        "Poción"
+      ],
+      "direcciones": {
+        "Poké Ball": "0x02092EBC",
+        "Poción": "0x02092AE8"
+      },
+      "ventana_hex": "03000300030000000400030003000000040003000300000002000300020000000200030002000000010004000200000003000300030000000300030003000000"
+    }
+  ],
+  "dinero": {
+    "valor": 4524,
+    "coincidencias_estables": 3,
+    "direcciones": [
+      "0x020B00CC",
+      "0x022266A4",
+      "0x0225732C"
+    ]
+  },
+  "note": "Candidatos diagnosticos de solo lectura. Ninguna direccion de aqui es de produccion mientras no se confirme con un segundo estado."
+}
