@@ -24,7 +24,7 @@ revisión, región y melonDS concretos.
 | Sustitución | Baja→Cementerio, sustituto, rol heredado, retirada de ataques | **PENDIENTE; WRITER CERRADO** | Depende de combate, roles y PC |
 | Mochila | Bolsillos, MT/cantidades y utilidades | **PENDIENTE** | Estructura estable en dos estados |
 | MT/drafteo | Compatibilidad, posesión, enseñar/borrar y consumo Gen 5 | Lectura de ataques lista; resto **PENDIENTE** | Reader mochila antes de cualquier writer |
-| Curación | PS, estado y PP de todo el equipo | **PENDIENTE; WRITER CERRADO** | Unidad PK5 completa con rollback |
+| Curación | PS, estado y PP de todo el equipo | **IMPLEMENTADO · TEST** desde alpha.26: writer transaccional con PP base Gen 5 extraídos de PKHeX.Core; validación física pendiente | Curar con el equipo herido, envenenado y con PP gastados |
 | Utilidades | Caramelo Raro, Repelente Máximo y dinero | **PENDIENTE; WRITER CERRADO** | Campo exacto por utilidad |
 | Progreso | Medallas/gimnasios sin retroceso ni duplicado | **PENDIENTE** | Flags antes/después de medalla |
 | UI | Barra, ficha, PC, avisos live/stale/inválido y compuertas | Equipo y miembros SIN ROL en barra **VALIDADOS FÍSICAMENTE**; resto por lane | Validación visible por incorporación |

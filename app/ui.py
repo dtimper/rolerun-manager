@@ -3465,14 +3465,15 @@ class RoleRunManager(ctk.CTk):
     def _live_party_heal_available(self) -> bool:
         """Centraliza los backends con curación completa ya demostrada.
 
-        B2/W2 quedó fuera en alpha.16: el botón se renderizaba, encolaba seis
-        ``PendingPartyHeal`` y la compuerta de auto-aplicación B2/W2 solo acepta
-        ``PendingTeamChange``, así que nadie los escribía ni los retiraba. Como
-        el monitor exige la cola vacía para leer, la curación dejaba la sesión
-        viva sin lecturas hasta que el usuario descartaba a mano. Volverá a esta
-        lista cuando exista su writer y esté validado físicamente.
+        B2/W2 quedó fuera en alpha.16 porque el botón se renderizaba sin tener
+        writer: encolaba seis ``PendingPartyHeal`` que nadie escribía ni retiraba
+        y, como el monitor exige la cola vacía para leer, dejaba la sesión viva
+        sin lecturas. Vuelve en alpha.26 con su writer transaccional: PS al
+        máximo, estado a cero y PP al tope con los Más PP aplicados.
         """
-        return self._active_azahar_realtime_key() in {"bdsp", "sm", "usum", "xy", "oras"}
+        return self._active_azahar_realtime_key() in {
+            "bdsp", "sm", "usum", "xy", "oras", "b2w2",
+        }
 
     # ---------- WELCOME / GAME SELECTION ----------
 
@@ -7752,7 +7753,7 @@ class RoleRunManager(ctk.CTk):
                     supported_ids.add(id(change))
                 continue
             if live_key == "b2w2":
-                if isinstance(change, PendingRoleChange):
+                if isinstance(change, (PendingRoleChange, PendingPartyHeal)):
                     # alpha.24: el writer de roles B2/W2 escribe marcas y EV en el
                     # PK5 vivo, recalcula las estadísticas con la tabla personal y
                     # verifica el resultado con el parser de producción.
@@ -10528,7 +10529,7 @@ class RoleRunManager(ctk.CTk):
             }
             result: list[str] = []
             for change in changes:
-                if isinstance(change, PendingRoleChange):
+                if isinstance(change, (PendingRoleChange, PendingPartyHeal)):
                     continue
                 if (
                     isinstance(change, PendingTeamChange)

@@ -1,6 +1,33 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.26 — curación de B2/W2
+
+El botón CURAR vuelve a B2/W2, esta vez con writer propio. Se cerró en alpha.16
+precisamente porque no lo tenía: encolaba seis curaciones que nadie escribía y
+bloqueaba el monitor en vivo.
+
+- Curar es lo que hace un Centro Pokémon: **PS al máximo, estado alterado a cero
+  y PP de los cuatro movimientos al tope**, contando los Más PP aplicados.
+- El PP base **no** se toma de la tabla de sexta generación que ya existía en el
+  proyecto. Varios movimientos cambiaron de PP entre generaciones y darlos por
+  equivalentes sería una analogía no demostrada, justo lo que el proyecto
+  prohíbe. Se extrae de la misma PKHeX.Core que usa el motor de guardados con
+  `MoveInfo.GetPPTable(EntityContext.Gen5)`.
+- Nuevo `data/b2w2_move_pp.json` (559 movimientos, exactamente los de quinta) y
+  la herramienta reproducible `tools_extract_gen5_move_pp/` que lo genera.
+- Si un PP no se puede demostrar, **no se cura**: antes que inventar un valor
+  sobre la partida del usuario, la operación se detiene.
+- `write_party_heal()` sigue el contrato transaccional habitual: relectura
+  fresca, identidad fuerte por slot, readback con el parser de producción,
+  verificación semántica de PS, estado y PP, y rollback completo.
+- Curar a quien ya está curado **no escribe ni un byte**.
+- Los cuatro tests que fijaban la curación como cerrada se corrigen de forma
+  explícita; la regla que protegían —una capacidad solo pasa la compuerta cuando
+  tiene writer— sigue vigente y ahora la ejercen los movimientos, que siguen sin
+  writer en B2/W2.
+- Baseline completa: **1061 passed**. Validación física pendiente.
+
 # v0.2.6-alpha.25 — la ficha de B2/W2 deja de estar vacía y los EV se reparten
 
 Dos fallos del mismo reporte, ambos de la misma familia que el anterior: algo que

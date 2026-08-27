@@ -10,7 +10,7 @@ from ..b2w2_live import (
     STAT_ORDER_PERSONAL, B2W2LiveError, B2W2MelonDSReader, B2W2RoleWrite,
     PK5_PARTY_SIZE, PK5_STORED_SIZE, _crypt,
 )
-from ..models import PendingRoleChange, PendingTeamChange
+from ..models import PendingPartyHeal, PendingRoleChange, PendingTeamChange
 from ..boxed_metadata import (
     ability_name, base_stats_for, boxed_level, item_name, species_name,
 )
@@ -66,6 +66,21 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
             }
         except Exception:
             self.move_names = {}
+        # PP base de quinta generación, extraídos del mismo PKHeX.Core que usa el
+        # motor de guardados. No se reutiliza la tabla de sexta: varios
+        # movimientos cambiaron de PP entre generaciones.
+        pp_path = Path(__file__).resolve().parents[2] / "data" / "b2w2_move_pp.json"
+        try:
+            raw_pp = json.loads(pp_path.read_text(encoding="utf-8-sig"))
+            self.move_base_pp = {
+                int(key): int(value) for key, value in dict(raw_pp.get("pp", {})).items()
+            }
+        except Exception:
+            self.move_base_pp = {}
+
+    def base_pp_for(self, move_id: int) -> int:
+        """PP base Gen 5 del movimiento. Cero significa «no demostrado»."""
+        return int(self.move_base_pp.get(int(move_id), 0))
 
     @staticmethod
     def _calculated_stats(base, ivs, evs, level: int, nature_id: int) -> tuple[int, ...]:
@@ -201,8 +216,32 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
         """
         return f"{int(member.species_id)}:{int(member.pid)}:{int(member.tid)}:{int(member.sid)}"
 
+    def _heal_target_for(self, party_read, change: PendingPartyHeal):
+        """Localiza por identidad fuerte al miembro que hay que curar."""
+        identity = str(getattr(change, "pokemon_identity", "") or "")
+        candidatos = [
+            (index, member) for index, member in enumerate(party_read.pokemon)
+            if self._strong_identity(member) == identity
+        ]
+        if len(candidatos) != 1:
+            raise B2W2LiveError(
+                "El Pokémon de la curación B2/W2 no está de forma única en la party."
+            )
+        slot, member = candidatos[0]
+        return slot, (int(member.pid), int(member.tid), int(member.sid))
+
     def apply_changes(self, current: SaveGameData, changes):
         changes = list(changes)
+        if changes and all(isinstance(item, PendingPartyHeal) for item in changes):
+            party_read = self.reader.read_party()
+            objetivos = [self._heal_target_for(party_read, item) for item in changes]
+            self.reader.write_party_heal(
+                party_read, objetivos, base_pp_for=self.base_pp_for,
+            )
+            live = self._capture(current, 0)
+            live.game.raw["writes_enabled"] = True
+            live.game.raw["live_write"] = True
+            return B2W2RealTimeWriteResult(live.game, live.process, 2, len(objetivos))
         if changes and all(isinstance(item, PendingRoleChange) for item in changes):
             party_read = self.reader.read_party()
             escrituras = [self._role_write_for(party_read, item) for item in changes]

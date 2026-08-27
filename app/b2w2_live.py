@@ -191,6 +191,10 @@ PK5_MARKINGS_OFFSET = 0x16
 STAT_ORDER_PERSONAL = ("hp", "attack", "defense", "speed", "sp_attack", "sp_defense")
 # Orden con el que RoleRun presenta y almacena IV y EV.
 STAT_ORDER_ROLERUN = ("hp", "attack", "defense", "sp_attack", "sp_defense", "speed")
+# ``parse_pk5_party`` lee los PP en 0x30-0x33 y los Más PP en 0x34-0x37.
+PK5_MOVE_OFFSET = 0x28
+PK5_MOVE_PP_OFFSET = 0x30
+PK5_MOVE_PP_UPS_OFFSET = 0x34
 PK5_EV_OFFSETS = {
     "hp": 0x18, "attack": 0x19, "defense": 0x1A,
     "speed": 0x1B, "sp_attack": 0x1C, "sp_defense": 0x1D,
@@ -256,6 +260,53 @@ def _reshuffle_pk5(pid: int, order: tuple[int, ...], canonical: bytearray) -> by
         stored_blocks[stored_index] = canonical_blocks[canonical_index]
     header = bytes(canonical[:6]) + struct.pack("<H", checksum)
     return header + _crypt(b"".join(stored_blocks), checksum)
+
+
+def pk5_party_healed(block: bytes, *, base_pp_for) -> bytes:
+    """Devuelve el PK5 de party completamente curado.
+
+    Curar en RoleRun es lo que hace un Centro Pokémon: PS al máximo, estado
+    alterado a cero y PP de los cuatro movimientos al tope, contando los Más PP
+    que cada movimiento tenga aplicados.
+
+    ``base_pp_for`` debe devolver el PP base **de quinta generación**. No se
+    admite un cero: varios movimientos cambiaron de PP entre generaciones, así
+    que un PP desconocido detiene la curación en lugar de inventar un valor.
+    """
+    if len(block) != PK5_PARTY_SIZE:
+        raise B2W2LiveError("El bloque PK5 de party no mide 220 bytes.")
+    pid, order, canonical = _unshuffle_pk5(block)
+
+    for index in range(4):
+        move_id = struct.unpack_from("<H", canonical, PK5_MOVE_OFFSET + index * 2)[0]
+        pp_ups = canonical[PK5_MOVE_PP_UPS_OFFSET + index]
+        if move_id == 0:
+            canonical[PK5_MOVE_PP_OFFSET + index] = 0
+            continue
+        if not 0 <= pp_ups <= 3:
+            raise B2W2LiveError(
+                f"Los Más PP del movimiento #{move_id} son incoherentes; no se curó nada."
+            )
+        base_pp = int(base_pp_for(int(move_id)) or 0)
+        if base_pp <= 0:
+            raise B2W2LiveError(
+                f"No se pudo demostrar el PP máximo del movimiento #{move_id}; no se curó nada."
+            )
+        maximo = base_pp * (5 + int(pp_ups)) // 5
+        if maximo > 0xFF:
+            raise B2W2LiveError(f"El PP calculado del movimiento #{move_id} no cabe en PK5.")
+        canonical[PK5_MOVE_PP_OFFSET + index] = maximo
+
+    extension = bytearray(_crypt(block[136:], pid))
+    # El estado alterado vive en los cuatro primeros bytes de la extensión de
+    # party; los PS actuales, justo después del nivel.
+    struct.pack_into("<I", extension, 0, 0)
+    maximo_ps = struct.unpack_from("<H", extension, 0x90 - 0x88)[0]
+    if maximo_ps <= 0:
+        raise B2W2LiveError("Los PS máximos del PK5 son inválidos; no se curó nada.")
+    struct.pack_into("<H", extension, 0x8E - 0x88, maximo_ps)
+
+    return _reshuffle_pk5(pid, order, canonical) + _crypt(bytes(extension), pid)
 
 
 def pk5_party_with_role(
@@ -846,6 +897,77 @@ class B2W2MelonDSReader:
                     raise B2W2LiveError("La verificación semántica de las marcas B2/W2 falló.")
                 if tuple(verificado.evs) != tuple(peticion.evs):
                     raise B2W2LiveError("La verificación semántica de EV B2/W2 falló.")
+            return after
+        except Exception:
+            restore()
+            raise
+
+    def write_party_heal(
+        self, party_read: B2W2PartyRead, heals, *, base_pp_for,
+    ) -> B2W2PartyRead:
+        """Cura uno o varios miembros de la party como una única transacción.
+
+        ``heals`` son pares ``(slot, identidad)``. Mismo contrato que el resto de
+        writers B2/W2: relectura fresca, identidad fuerte por slot, readback con
+        el parser de producción, verificación semántica y rollback completo.
+        """
+        peticiones = list(heals)
+        if not peticiones:
+            raise B2W2LiveError("No hay ningún miembro del equipo B2/W2 que curar.")
+        before = self.read_party()
+        if before.process_id != party_read.process_id:
+            raise B2W2LiveError("melonDS cambió antes de curar el equipo B2/W2.")
+        old_raw = before.raw
+        new_raw = bytearray(old_raw)
+        objetivos: dict[int, tuple[int, int, int]] = {}
+        for slot, identidad in peticiones:
+            slot = int(slot)
+            if not 0 <= slot < before.count:
+                raise B2W2LiveError("El slot de party B2/W2 está fuera de rango.")
+            if slot in objetivos:
+                raise B2W2LiveError("Dos curaciones B2/W2 sobre el mismo slot.")
+            member = before.pokemon[slot]
+            if (member.pid, member.tid, member.sid) != tuple(identidad):
+                raise B2W2LiveError("La identidad de la curación B2/W2 cambió antes de escribir.")
+            offset = slot * PK5_PARTY_SIZE
+            new_raw[offset:offset + PK5_PARTY_SIZE] = pk5_party_healed(
+                bytes(old_raw[offset:offset + PK5_PARTY_SIZE]), base_pp_for=base_pp_for,
+            )
+            objetivos[slot] = tuple(identidad)
+
+        if bytes(new_raw) == old_raw:
+            # Ya estaban curados: no se escribe un solo byte en la partida.
+            return before
+
+        party_host = before.allocation_base + (PARTY_BASE - DS_RAM_BASE)
+
+        def restore() -> None:
+            self._write_process_bytes(before.process_id, party_host, old_raw)
+            restored = self.read_party()
+            if restored.raw != old_raw:
+                raise B2W2LiveError("Rollback de curación B2/W2 no confirmado; no guardes.")
+
+        try:
+            self._write_process_bytes(before.process_id, party_host, bytes(new_raw))
+            after = self.read_party()
+            if after.count != before.count or after.raw != bytes(new_raw):
+                raise B2W2LiveError("El readback de la curación B2/W2 no coincide.")
+            for slot, identidad in objetivos.items():
+                verificado = after.pokemon[slot]
+                if (verificado.pid, verificado.tid, verificado.sid) != identidad:
+                    raise B2W2LiveError("La identidad B2/W2 verificada no coincide.")
+                if verificado.current_hp != verificado.max_hp:
+                    raise B2W2LiveError("La verificación semántica de los PS curados falló.")
+                if verificado.status_condition != 0:
+                    raise B2W2LiveError("La verificación semántica del estado curado falló.")
+                for indice, move_id in enumerate(verificado.move_ids):
+                    if int(move_id) <= 0:
+                        continue
+                    esperado = int(base_pp_for(int(move_id))) * (
+                        5 + int(verificado.move_pp_ups[indice])
+                    ) // 5
+                    if int(verificado.move_pp[indice]) != esperado:
+                        raise B2W2LiveError("La verificación semántica de los PP curados falló.")
             return after
         except Exception:
             restore()

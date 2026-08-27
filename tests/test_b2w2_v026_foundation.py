@@ -32,7 +32,7 @@ from app.b2w2_live import (
     parse_pk5_boxed,
     parse_pk5_party,
 )
-from app.models import PendingPartyHeal, PendingTeamChange
+from app.models import PendingChange, PendingPartyHeal, PendingTeamChange
 from app.realtime.b2w2_adapter import B2W2RealTimeAdapter
 from app.save_engine_client import SaveGameData, SavePokemon
 from app.ui import RoleRunManager
@@ -543,13 +543,22 @@ def test_reconciliation_never_falls_through_to_other_writers() -> None:
     assert "solo lectura" in ui.sync_status
 
 
-def test_all_b2w2_mutations_are_blocked_by_live_ui_gate() -> None:
+def test_only_capabilities_with_a_writer_pass_the_live_ui_gate() -> None:
+    """La curacion dejo de estar bloqueada en alpha.26, cuando tuvo writer.
+
+    Lo que sigue vigente es la regla: una capacidad solo atraviesa la compuerta
+    cuando existe un writer validado para ella. Los movimientos todavia no lo
+    tienen en B2/W2.
+    """
     ui = SimpleNamespace(_active_azahar_realtime_key=lambda: "b2w2")
-    change = PendingPartyHeal(
-        pokemon_slot=0, pokemon="Tepig", species="Tepig",
-        pokemon_identity="498:0:1234:5678:89e50000",
+    change = PendingChange(
+        role="Mago", pokemon_slot=0, pokemon="Tepig", species="Tepig",
+        move_slot=1, old_move="Placaje", old_move_id=33,
+        new_move="Ascuas", new_move_id=52,
     )
-    assert RoleRunManager._oras_live_unsupported_changes(ui, [change]) == ["curación"]
+    assert RoleRunManager._oras_live_unsupported_changes(ui, [change]) == [
+        "cambios de movimientos",
+    ]
 
 
 class _FakeMelonDS(B2W2MelonDSReader):
@@ -723,18 +732,22 @@ def test_heal_is_offered_only_where_the_gate_really_applies_it(live_key: str) ->
     )
 
 
-def test_b2w2_does_not_offer_the_heal_button_until_it_has_a_writer() -> None:
+def test_b2w2_offers_the_heal_button_now_that_it_has_a_writer() -> None:
+    """alpha.26 le dio a B2/W2 su writer de curacion transaccional."""
     manager = SimpleNamespace(_active_azahar_realtime_key=lambda: "b2w2")
-    assert RoleRunManager._live_party_heal_available(manager) is False
+    assert RoleRunManager._live_party_heal_available(manager) is True
 
 
-def test_a_b2w2_heal_can_no_longer_leave_the_monitor_without_reading() -> None:
-    """La cola vacía es la condición que el monitor necesita para leer."""
+def test_a_b2w2_heal_reaches_the_writer_instead_of_blocking_the_monitor() -> None:
+    """La cola vacia es la condicion que el monitor necesita para leer.
+
+    En alpha.16 la curacion se encolaba sin writer y bloqueaba el monitor para
+    siempre; se cerro el boton. Desde alpha.26 el writer existe, asi que la
+    curacion atraviesa la compuerta, se aplica y sale de la cola.
+    """
     heal = _heal_fixture()
     manager = _auto_apply_manager("b2w2", [heal])
     RoleRunManager._request_oras_live_auto_apply(manager, [heal])
 
-    # La compuerta B2/W2 sigue sin aceptar curaciones, que es correcto mientras
-    # no exista el writer. Lo que se corrige es que ya no se puedan encolar.
-    assert manager._oras_live_auto_apply_ids == set()
-    assert RoleRunManager._live_party_heal_available(manager) is False
+    assert manager._oras_live_auto_apply_ids == {id(heal)}
+    assert RoleRunManager._live_party_heal_available(manager) is True

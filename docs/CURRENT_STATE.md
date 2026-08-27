@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.25`
+- Versión de aplicación: `v0.2.6-alpha.26`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,26 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.26 — writer de curación en B2/W2
+
+El usuario validó físicamente el rol y los EV de alpha.24/25, y la siguiente
+capacidad del documento de paridad es la curación.
+
+Curar deja PS al máximo, estado alterado a cero y los PP de los cuatro
+movimientos al tope contando los Más PP. El PP base procede de una tabla propia
+de quinta generación, `data/b2w2_move_pp.json`, extraída de la misma PKHeX.Core
+que usa el motor de guardados mediante `MoveInfo.GetPPTable(EntityContext.Gen5)`;
+la herramienta que la genera vive en `tools_extract_gen5_move_pp/`. No se
+reutiliza la tabla de sexta generación porque varios movimientos cambiaron de PP
+entre generaciones. Un PP no demostrable detiene la curación en lugar de
+inventarse un valor.
+
+`write_party_heal()` mantiene el contrato transaccional del resto de writers
+B2/W2 y verifica semánticamente PS, estado y PP antes de dar la operación por
+buena. Curar a quien ya está curado no escribe nada.
+
+Baseline completa: **1061 passed**. Validación física pendiente.
 
 ### v0.2.6 Alpha.25 — metadatos vivos y reparto de EV en B2/W2
 
