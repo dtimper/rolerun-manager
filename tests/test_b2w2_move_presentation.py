@@ -257,3 +257,24 @@ def test_la_celda_con_botones_no_lleva_altura_fija() -> None:
     fuente = inspect.getsource(team_pc_view)
     assert "cell.grid_propagate(not accionable)" in fuente
     assert "height=54 if" not in fuente
+
+
+def test_la_tarjeta_deja_sitio_para_el_marco_de_la_fila_de_ataques() -> None:
+    """El marco inferior cortado no era un problema de dibujo, sino de sitio.
+
+    Medido el 27-08-2026: la tarjeta deja 92 píxeles útiles y el contenido
+    pedía 95, así que Tk recortaba tres — exactamente el borde de abajo de la
+    fila de ataques, que es la última. El hueco sale del bloque de
+    estadísticas, que iba sobrado, y no de apretar más la fila.
+
+    Esta prueba fija los números, no el resultado visual: si alguien vuelve a
+    subir la altura del bloque o los márgenes, el recorte reaparece.
+    """
+    import inspect
+
+    from app.ui_views import team_pc_view
+
+    fuente = inspect.getsource(team_pc_view)
+    assert "content, width=265, height=64" in fuente, "el bloque de estadísticas creció"
+    assert 'move_grid.grid(row=3, column=1, columnspan=2, sticky="ew", pady=(2, 0))' in fuente
+    assert 'move_cell.grid(row=0, column=index, sticky="ew", padx=2, pady=(1, 1))' in fuente

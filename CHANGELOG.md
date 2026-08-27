@@ -1,6 +1,17 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.49 — el marco cortado, esta vez medido
+
+Alpha.48 lo intentó a ojo y lo empeoró. Reconstruida la tarjeta real y medida:
+la tarjeta deja **92 píxeles útiles** y el contenido pedía **95**. Tk recortaba
+tres, justo el borde inferior de la fila de ataques. La celda aislada se dibuja
+perfecta: no era un problema de dibujo sino de sitio.
+
+- El bloque de estadísticas pasa de 70 a 64 píxeles, que le sobraban.
+- Se retiran los márgenes que alpha.48 añadió: eran los tres píxeles de más.
+- Medido después: 86 necesarios sobre 92 útiles. Suite completa: 1330.
+
 # v0.2.6-alpha.48 — el Support resoluble, y el marco cortado
 
 - Una celda dorada lleva ya los mismos SUSTITUIR y ELIMINAR que una roja.

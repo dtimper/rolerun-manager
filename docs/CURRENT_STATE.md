@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.48`
+- Versión de aplicación: `v0.2.6-alpha.49`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,23 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.49 — el marco cortado, esta vez medido
+
+Alpha.48 intentó arreglarlo a ojo y lo empeoró. Medido con la tarjeta real
+reconstruida: **la tarjeta deja 92 píxeles útiles y el contenido pedía 95**, así
+que Tk recortaba tres — exactamente el borde inferior de la fila de ataques, que
+es la última. No era un problema de dibujo: la celda aislada se dibuja perfecta.
+
+- El sitio sale del bloque de estadísticas, que iba sobrado: de 70 a 64 píxeles.
+  Dos filas de etiqueta (10) y valor (11) con su margen ocupan unos 46.
+- Se retiran los márgenes que alpha.48 había añadido, que eran justo los tres
+  píxeles de más.
+- Resultado medido: 86 necesarios sobre 92 útiles, seis de margen. Antes
+  faltaban tres.
+- Una prueba fija los tres números para que el recorte no vuelva por descuido.
+
+- Suite completa: 1330.
 
 ### v0.2.6 Alpha.48 — el Support ya se puede resolver, y el marco cortado
 

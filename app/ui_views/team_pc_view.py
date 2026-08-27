@@ -666,7 +666,11 @@ class UnifiedTeamPCView:
             increased = getattr(pokemon, "nature_increased", None)
             decreased = getattr(pokemon, "nature_decreased", None)
             stat_grid = ctk.CTkFrame(
-                content, width=265, height=70, fg_color="#252525", corner_radius=7,
+                # 70 no dejaba sitio: el contenido de la tarjeta pedía 95 px y
+                # solo hay 92 útiles, así que Tk recortaba el último borde de la
+                # fila de ataques. Dos filas de etiqueta (10) y valor (11) con su
+                # margen ocupan unos 46, así que 64 sigue sobrando de largo.
+                content, width=265, height=64, fg_color="#252525", corner_radius=7,
             )
             stat_grid.grid(row=0, column=2, rowspan=3, sticky="nsew", padx=(8, 0))
             stat_grid.grid_propagate(False)
@@ -709,7 +713,7 @@ class UnifiedTeamPCView:
                 pokemon, slot_role, self.support_damage_for, context="team",
             )
             move_grid = ctk.CTkFrame(content, fg_color="transparent", corner_radius=0)
-            move_grid.grid(row=3, column=1, columnspan=2, sticky="ew", pady=(2, 2))
+            move_grid.grid(row=3, column=1, columnspan=2, sticky="ew", pady=(2, 0))
             move_grid.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="team_card_moves")
             for index, move in enumerate(moves):
                 issue = issue_by_slot.get(index + 1)
@@ -718,15 +722,15 @@ class UnifiedTeamPCView:
                 elegible = (index + 1) in support_slots and not issue
                 marcado = bool(issue) or elegible
                 move_cell = ctk.CTkFrame(
-                    # Con marco hace falta un pixel más de alto por lado: con 16
-                    # el borde de abajo quedaba cortado, que es lo que se veía en
-                    # todos los juegos.
+                    # Con marco hacen falta dos píxeles más: uno por borde. El
+                    # sitio para ellos sale del bloque de estadísticas, no de
+                    # apretar la tarjeta, que es lo que recortaba el borde.
                     move_grid, height=18 if marcado else 16, corner_radius=6,
                     fg_color="#341A1A" if issue else ("#292315" if elegible else "#292929"),
                     border_width=1 if marcado else 0,
                     border_color=DANGER if issue else (GOLD if elegible else "#292929"),
                 )
-                move_cell.grid(row=0, column=index, sticky="ew", padx=2, pady=(1, 2))
+                move_cell.grid(row=0, column=index, sticky="ew", padx=2, pady=(1, 1))
                 move_cell.grid_propagate(False)
                 ctk.CTkLabel(
                     move_cell, text=str(move), height=14,
