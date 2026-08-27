@@ -1,6 +1,17 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.57 — el lector de quinta, genérico
+
+El lector recibe el descriptor del juego: 26 direcciones incrustadas pasan a
+`self.memory.*`, y las constantes del módulo quedan como alias derivados. Sin
+argumentos sigue dando Negro 2.
+
+Lo que un juego no tiene demostrado —la tabla de MT y el carril de batalla en
+Blanco— se niega con su motivo, y antes de abrir el proceso.
+
+- `tests/test_bw_memory.py`: 14 pruebas. Suite completa: 1385.
+
 # v0.2.6-alpha.56 — el ancla de Blanco
 
 **`0x02234974`**, con dos confirmaciones independientes: cuatro PK5 seguidos

@@ -12,13 +12,17 @@ from ctypes import wintypes
 from pathlib import Path
 
 from . import perf
+from .gen5_memory import GEN5_MEMORY, Gen5Memory
 
 
 DS_RAM_BASE = 0x02000000
-# Pokémon Negro 2 (España), melonDS 1.1. La dirección invitada se demostró
-# mediante una muestra real y se vuelve a validar en cada captura.
-PARTY_COUNT = 0x0221E3A8
-PARTY_BASE = 0x0221E3AC
+# Las direcciones de Negro 2, que este módulo conserva como alias por
+# compatibilidad. La fuente única es `gen5_memory`: ahí solo se mide el ancla
+# del equipo y el resto sale de los desplazamientos del guardado. Derivarlas
+# aquí evita que las dos copias puedan divergir.
+_B2W2 = GEN5_MEMORY["b2w2"]
+PARTY_COUNT = _B2W2.party_count
+PARTY_BASE = _B2W2.party_data
 PK5_PARTY_SIZE = 220
 PK5_STORED_SIZE = 136
 MAX_PARTY = 6
@@ -26,7 +30,7 @@ MAX_PARTY = 6
 # party 6/6, Azurill, Lillipup y el Sewaddle recién capturado ocuparon Caja 1
 # slots 1..3. La matriz completa dio 3 PK5 y 717 vacíos checksum-válidos en
 # dos lecturas idénticas. Cada caja contiene 30*136 bytes y 16 bytes auxiliares.
-PC_BASE = 0x022059A4
+PC_BASE = _B2W2.pc
 PC_BOX_COUNT = 24
 PC_BOX_SLOT_COUNT = 30
 PC_BOX_STRIDE = 0x1000
@@ -35,8 +39,8 @@ PC_MATRIX_SIZE = PC_BOX_COUNT * PC_BOX_STRIDE
 # Negro 2 España / melonDS 1.1. La captura física del 26-08-2026 demostró
 # dos filas con el mismo Tepig. La segunda publicó el KO 3,36 s antes y es la
 # fuente inmediata; la primera se conserva como testigo de convergencia.
-BATTLE_MIRROR_BASE = 0x0225B1B0
-BATTLE_IMMEDIATE_BASE = 0x0225B5F8
+BATTLE_MIRROR_BASE = _B2W2.battle_presentation
+BATTLE_IMMEDIATE_BASE = _B2W2.battle_logical
 BATTLE_ROW_SIZE = 14
 # Captura controlada del 26-08-2026: el byte situado a +0x14 de la copia de
 # presentación pasó 0 -> 1 al mostrarse PAR y volvió a 0 fuera del combate.
@@ -56,13 +60,13 @@ BASE_REDISCOVERY_SECONDS = 60.0
 # de objetos coherentes por tipo, y las distancias entre sus inicios -1240, 1572
 # y 2008- coinciden BYTE A BYTE con SAV5B2W2.Inventory.Pouches de PKHeX en tres
 # fronteras independientes. El bolsillo Items empieza aqui.
-BAG_BASE = 0x0221D9A4
+BAG_BASE = _B2W2.bag
 BAG_SLOT_SIZE = 4
 BAG_MAX_QUANTITY = 999
 # Demostrado con la traza de dos estados del 27-08-2026: de 2 candidatos
 # iniciales, esta es la unica direccion que paso de 4524 a 4224 al gastar dinero
 # dentro del juego (diagnostics/manual/b2w2_bag_latest.json).
-MONEY_ADDRESS = 0x022266A4
+MONEY_ADDRESS = _B2W2.money
 # TRES bytes, no cuatro. PKHeX solo toca 0x21100..0x21102 del guardado al
 # cambiar el dinero, y el guardado real del usuario confirma la equivalencia:
 # ahi pone 4524, que es exactamente el valor con el que empezo la traza.
@@ -75,7 +79,7 @@ MONEY_MAX = 999_999
 # propio PKHeX: cambiar Misc5B2W2.Badges mueve el byte 0x21104 del guardado y
 # el dinero los 0x21100..0x21102, o sea dinero + 4. Es la misma vecindad que
 # ORAS, donde ORAS_BADGES_ADDRESS tambien es ORAS_MONEY_ADDRESS + 4.
-BADGES_ADDRESS = MONEY_ADDRESS + 4
+BADGES_ADDRESS = _B2W2.badges
 BADGES_SIZE = 1
 BADGES_TOTAL = 8
 # Demostrado con la captura del 27-08-2026 (b2w2_tm_table_latest.json). En los
@@ -88,7 +92,7 @@ BADGES_TOTAL = 8
 #
 # Se lee en vivo justamente porque RoleRun se juega en randomizers: un
 # randomizer cambia el contenido de esta tabla, no su posicion.
-TM_TABLE_BASE = 0x02090C54
+TM_TABLE_BASE = _B2W2.tm_table
 TM_TABLE_COUNT = 101
 # Ultimo movimiento de quinta generacion.
 MOVE_ID_MAX = 559
@@ -895,7 +899,13 @@ def parse_pk5_boxed(data: bytes, box: int, slot: int) -> B2W2BoxPokemon | None:
 class B2W2MelonDSReader:
     """Lector cerrado de la party nominal B2/W2 dentro del mapeo de melonDS."""
 
-    def __init__(self) -> None:
+    def __init__(self, memory: Gen5Memory | None = None) -> None:
+        # Qué juego de quinta se está leyendo. Sin descriptor, Negro 2: es el
+        # que tenía todas las direcciones demostradas cuando esto se escribió.
+        #
+        # Solo el ancla del equipo se mide contra cada juego; el resto de
+        # direcciones del bloque del guardado salen de ella. Ver gen5_memory.
+        self.memory = memory or GEN5_MEMORY["b2w2"]
         # Reentrante: los writers releen party y PC dentro de su transacción.
         self._lock = threading.RLock()
         # Base ya demostrada: (pid, nombre, allocation_base). Evita recorrer el
@@ -905,6 +915,19 @@ class B2W2MelonDSReader:
         # vuelve a descubrir: la deteccion de lecturas ambiguas depende de el.
         self._resolved_processes: tuple[tuple[int, str], ...] = ()
         self._resolved_at = 0.0
+
+    def _demostrada(self, direccion: int | None, capacidad: str) -> int:
+        """Direccion de una capacidad, o una negativa clara si no se demostro.
+
+        Un juego puede tener ancla y todavia no tener batalla o MT: esas dos no
+        viven en el bloque del guardado, asi que no salen de la resta. Sin esto,
+        la lectura fallaria mas adelante con un error que no dice nada.
+        """
+        if direccion is None:
+            raise B2W2LiveError(
+                f"{capacidad} todavia no esta demostrado en {self.memory.label}."
+            )
+        return int(direccion)
 
     def forget_resolved_base(self) -> None:
         """Olvida la base cacheada; la siguiente lectura vuelve a descubrirla."""
@@ -1029,8 +1052,13 @@ class B2W2MelonDSReader:
             status_condition=64 if runtime_status == 1 else 0,
         )
 
-    @staticmethod
-    def _read_battle_rows(party_read: B2W2PartyRead) -> B2W2BattleRead:
+    def _read_battle_rows(self, party_read: B2W2PartyRead) -> B2W2BattleRead:
+        # Se comprueba ANTES de abrir el proceso: si el juego no tiene el carril
+        # demostrado, no hay nada que leer y no hace falta molestar a melonDS.
+        presentacion = self._demostrada(
+            self.memory.battle_presentation, "El carril de batalla",
+        )
+        logica = self._demostrada(self.memory.battle_logical, "El carril de batalla")
         # Instancia privada: los tipos ya están fijados una sola vez y ningún
         # otro módulo puede invalidarlos a mitad de llamada.
         kernel32 = _KERNEL32
@@ -1055,8 +1083,8 @@ class B2W2MelonDSReader:
             return buffer.raw
 
         try:
-            first = (read_guest(BATTLE_MIRROR_BASE), read_guest(BATTLE_IMMEDIATE_BASE))
-            second = (read_guest(BATTLE_MIRROR_BASE), read_guest(BATTLE_IMMEDIATE_BASE))
+            first = (read_guest(presentacion), read_guest(logica))
+            second = (read_guest(presentacion), read_guest(logica))
             if first != second:
                 raise B2W2LiveError("La fila de batalla cambió durante la doble lectura.")
             return B2W2MelonDSReader.parse_battle_copies(
@@ -1140,7 +1168,7 @@ class B2W2MelonDSReader:
             raise B2W2LiveError(
                 "La identidad del origen PC B2/W2 cambió justo antes de escribir."
             )
-        matrix_host = party_read.allocation_base + (PC_BASE - DS_RAM_BASE)
+        matrix_host = party_read.allocation_base + (self.memory.pc - DS_RAM_BASE)
 
         def restore() -> None:
             self._write_process_bytes(
@@ -1210,8 +1238,8 @@ class B2W2MelonDSReader:
         party_offset = party_slot * PK5_PARTY_SIZE
         outgoing_party = before_party.raw[party_offset:party_offset + PK5_PARTY_SIZE]
         outgoing_stored = outgoing_party[:PK5_STORED_SIZE]
-        party_host = before_party.allocation_base + (PARTY_BASE - DS_RAM_BASE) + party_offset
-        pc_host = before_party.allocation_base + (PC_BASE - DS_RAM_BASE) + pc_offset
+        party_host = before_party.allocation_base + (self.memory.party_data - DS_RAM_BASE) + party_offset
+        pc_host = before_party.allocation_base + (self.memory.pc - DS_RAM_BASE) + pc_offset
 
         def restore() -> None:
             self._write_process_bytes(before_party.process_id, pc_host, incoming_stored)
@@ -1315,8 +1343,8 @@ class B2W2MelonDSReader:
         outgoing_stored = outgoing_party[:PK5_STORED_SIZE]
         cementerio_antes = before_pc.raw[cementerio:cementerio + PK5_STORED_SIZE]
 
-        base_party = before_party.allocation_base + (PARTY_BASE - DS_RAM_BASE)
-        base_pc = before_party.allocation_base + (PC_BASE - DS_RAM_BASE)
+        base_party = before_party.allocation_base + (self.memory.party_data - DS_RAM_BASE)
+        base_pc = before_party.allocation_base + (self.memory.pc - DS_RAM_BASE)
         party_host = base_party + party_offset
         origen_host = base_pc + origen
         cementerio_host = base_pc + cementerio
@@ -1397,7 +1425,7 @@ class B2W2MelonDSReader:
             )
             esperado[slot] = peticion
 
-        party_host = before.allocation_base + (PARTY_BASE - DS_RAM_BASE)
+        party_host = before.allocation_base + (self.memory.party_data - DS_RAM_BASE)
 
         def restore() -> None:
             self._write_process_bytes(before.process_id, party_host, old_raw)
@@ -1461,7 +1489,7 @@ class B2W2MelonDSReader:
             # Ya estaban curados: no se escribe un solo byte en la partida.
             return before
 
-        party_host = before.allocation_base + (PARTY_BASE - DS_RAM_BASE)
+        party_host = before.allocation_base + (self.memory.party_data - DS_RAM_BASE)
 
         def restore() -> None:
             self._write_process_bytes(before.process_id, party_host, old_raw)
@@ -1571,7 +1599,7 @@ class B2W2MelonDSReader:
             # El equipo ya estaba así: no se escribe un solo byte.
             return before
 
-        party_host = before.allocation_base + (PARTY_BASE - DS_RAM_BASE)
+        party_host = before.allocation_base + (self.memory.party_data - DS_RAM_BASE)
 
         def restore() -> None:
             self._write_process_bytes(before.process_id, party_host, old_raw)
@@ -1640,9 +1668,9 @@ class B2W2MelonDSReader:
         if not 0 <= pc_offset <= len(before_pc.raw) - PK5_STORED_SIZE:
             raise B2W2LiveError("El slot PC B2/W2 está fuera de rango.")
         pc_before = before_pc.raw[pc_offset:pc_offset + PK5_STORED_SIZE]
-        party_host = before_party.allocation_base + (PARTY_BASE - DS_RAM_BASE)
-        count_host = before_party.allocation_base + (PARTY_COUNT - DS_RAM_BASE)
-        pc_host = before_party.allocation_base + (PC_BASE - DS_RAM_BASE) + pc_offset
+        party_host = before_party.allocation_base + (self.memory.party_data - DS_RAM_BASE)
+        count_host = before_party.allocation_base + (self.memory.party_count - DS_RAM_BASE)
+        pc_host = before_party.allocation_base + (self.memory.pc - DS_RAM_BASE) + pc_offset
         old_count = before_party.count
         old_raw = before_party.raw
 
@@ -1723,7 +1751,7 @@ class B2W2MelonDSReader:
             raise B2W2LiveError("melonDS desapareció antes de leer el PC.")
 
         def read_matrix() -> bytes:
-            address = party_read.allocation_base + (PC_BASE - DS_RAM_BASE)
+            address = party_read.allocation_base + (self.memory.pc - DS_RAM_BASE)
             buffer = ctypes.create_string_buffer(PC_MATRIX_SIZE)
             received = ctypes.c_size_t()
             if not kernel32.ReadProcessMemory(
@@ -1740,7 +1768,7 @@ class B2W2MelonDSReader:
             empty, pokemon = B2W2MelonDSReader.parse_pc_matrix(first)
             return B2W2PCRead(
                 party_read.process_id, party_read.process_name,
-                party_read.allocation_base, PC_BASE, first, empty, pokemon,
+                party_read.allocation_base, self.memory.pc, first, empty, pokemon,
             )
         finally:
             kernel32.CloseHandle(handle)
@@ -1763,7 +1791,7 @@ class B2W2MelonDSReader:
         if kernel32 is None:
             raise B2W2LiveError("melonDS en Windows es obligatorio.")
         tamano = bag_size()
-        direccion = lectura.allocation_base + (BAG_BASE - DS_RAM_BASE)
+        direccion = lectura.allocation_base + (self.memory.bag - DS_RAM_BASE)
         handle = kernel32.OpenProcess(0x0400 | 0x0010, False, lectura.process_id)
         if not handle:
             raise B2W2LiveError("melonDS desaparecio antes de leer la mochila.")
@@ -1786,7 +1814,7 @@ class B2W2MelonDSReader:
             raise B2W2LiveError("La mochila B2/W2 cambio durante la doble lectura.")
         return B2W2BagRead(
             lectura.process_id, lectura.process_name, lectura.allocation_base,
-            BAG_BASE, primera, parse_bag(primera),
+            self.memory.bag, primera, parse_bag(primera),
         )
 
     @staticmethod
@@ -1828,7 +1856,8 @@ class B2W2MelonDSReader:
         """
         lectura = party_read or self.read_party()
         crudo = self._read_guest_twice(
-            lectura, TM_TABLE_BASE, TM_TABLE_COUNT * 2,
+            lectura, self._demostrada(self.memory.tm_table, "La tabla de MT"),
+            TM_TABLE_COUNT * 2,
         )
         movimientos = struct.unpack(f"<{TM_TABLE_COUNT}H", crudo)
         fuera = [m for m in movimientos if not 1 <= m <= MOVE_ID_MAX]
@@ -1843,7 +1872,7 @@ class B2W2MelonDSReader:
     @_serialized
     def read_money(self, party_read: B2W2PartyRead | None = None) -> int:
         lectura = party_read or self.read_party()
-        crudo = self._read_guest_twice(lectura, MONEY_ADDRESS, MONEY_SIZE)
+        crudo = self._read_guest_twice(lectura, self.memory.money, MONEY_SIZE)
         return int.from_bytes(crudo, "little")
 
     @_serialized
@@ -1854,7 +1883,7 @@ class B2W2MelonDSReader:
         medalla, asi que se cuentan los encendidos.
         """
         lectura = party_read or self.read_party()
-        crudo = self._read_guest_twice(lectura, BADGES_ADDRESS, BADGES_SIZE)
+        crudo = self._read_guest_twice(lectura, self.memory.badges, BADGES_SIZE)
         return parse_b2w2_badges(crudo)
 
     @_serialized
@@ -1887,7 +1916,7 @@ class B2W2MelonDSReader:
             # Ya tenia esas cantidades: no se escribe un solo byte en la partida.
             return before
 
-        bag_host = before.allocation_base + (BAG_BASE - DS_RAM_BASE)
+        bag_host = before.allocation_base + (self.memory.bag - DS_RAM_BASE)
 
         def restore() -> None:
             self._write_process_bytes(before.process_id, bag_host, old_raw)
@@ -1916,23 +1945,23 @@ class B2W2MelonDSReader:
         amount = int(amount)
         if not 0 <= amount <= MONEY_MAX:
             raise B2W2LiveError(f"B2/W2 admite como maximo {MONEY_MAX} P.")
-        antes = self._read_guest_twice(party_read, MONEY_ADDRESS, MONEY_SIZE)
+        antes = self._read_guest_twice(party_read, self.memory.money, MONEY_SIZE)
         deseado = amount.to_bytes(MONEY_SIZE, "little")
         if antes == deseado:
             # Ya tenia esa cantidad: no se escribe un solo byte en la partida.
             return amount
 
-        money_host = party_read.allocation_base + (MONEY_ADDRESS - DS_RAM_BASE)
+        money_host = party_read.allocation_base + (self.memory.money - DS_RAM_BASE)
 
         def restore() -> None:
             self._write_process_bytes(party_read.process_id, money_host, antes)
-            restaurado = self._read_guest_twice(party_read, MONEY_ADDRESS, MONEY_SIZE)
+            restaurado = self._read_guest_twice(party_read, self.memory.money, MONEY_SIZE)
             if restaurado != antes:
                 raise B2W2LiveError("Rollback del dinero B2/W2 no confirmado; no guardes.")
 
         try:
             self._write_process_bytes(party_read.process_id, money_host, deseado)
-            despues = self._read_guest_twice(party_read, MONEY_ADDRESS, MONEY_SIZE)
+            despues = self._read_guest_twice(party_read, self.memory.money, MONEY_SIZE)
             if despues != deseado:
                 raise B2W2LiveError("El readback del dinero B2/W2 no coincide.")
             return amount
@@ -1985,10 +2014,9 @@ class B2W2MelonDSReader:
             kernel32.CloseHandle(snapshot)
         return result
 
-    @staticmethod
-    def _capture_nominal_candidate(read, allocation: int):
+    def _capture_nominal_candidate(self, read, allocation: int):
         """Valida dos capturas estables de la unidad completa count+party."""
-        nominal_count = int(allocation) + (PARTY_COUNT - DS_RAM_BASE)
+        nominal_count = int(allocation) + (self.memory.party_count - DS_RAM_BASE)
         count_1 = read(nominal_count, 1)[0]
         if not 1 <= count_1 <= MAX_PARTY:
             return None
@@ -2007,9 +2035,8 @@ class B2W2MelonDSReader:
         )
         return count_1, raw_1, pokemon
 
-    @staticmethod
     def _read_process(
-        pid: int, name: str, *, known_allocation: int | None = None,
+        self, pid: int, name: str, *, known_allocation: int | None = None,
     ) -> B2W2PartyRead | None:
         """Resuelve la party dentro del proceso indicado.
 
@@ -2051,7 +2078,7 @@ class B2W2MelonDSReader:
         try:
             if known_allocation is not None:
                 with perf.span("b2w2.known_base_read") as measure:
-                    candidate = B2W2MelonDSReader._capture_nominal_candidate(
+                    candidate = self._capture_nominal_candidate(
                         read, int(known_allocation),
                     )
                     measure.add(revalidated=candidate is not None)
@@ -2082,7 +2109,7 @@ class B2W2MelonDSReader:
                     if mbi.State == 0x1000 and allocation and allocation not in seen:
                         seen.add(allocation)
                         try:
-                            candidate = B2W2MelonDSReader._capture_nominal_candidate(
+                            candidate = self._capture_nominal_candidate(
                                 read, allocation,
                             )
                             if candidate is not None:

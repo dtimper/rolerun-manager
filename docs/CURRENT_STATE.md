@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.56`
+- Versión de aplicación: `v0.2.6-alpha.57`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,30 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.57 — el lector de quinta deja de estar clavado a Negro 2
+
+El lector recibe ahora el **descriptor del juego**. Las direcciones dejan de ser
+constantes incrustadas y salen de `gen5_memory`, donde solo el ancla se mide.
+
+- 26 usos de direcciones dentro del lector pasan a `self.memory.*`.
+- Tres métodos estáticos que necesitaban direcciones pasan a ser de instancia.
+- Las constantes del módulo se conservan como alias, pero **derivadas** del
+  descriptor: antes eran números sueltos que podían divergir.
+- Construirlo sin argumentos sigue dando Negro 2, así que nada de lo que ya
+  existía cambia de comportamiento.
+
+**Lo que un juego no tiene demostrado, se niega con su motivo.** La tabla de MT
+y el carril de batalla no viven en el bloque del guardado, así que Blanco no las
+tiene todavía. Pedirlas devuelve «todavía no está demostrado en Negro/Blanco» en
+vez de leer una dirección inventada o fallar más tarde con un error mudo. La
+comprobación va **antes** de abrir el proceso.
+
+- `tests/test_bw_memory.py`: 14 pruebas. Suite completa: 1385.
+
+Con esto Blanco tiene ya, a nivel de lector: equipo, PC, mochila, dinero y
+medallas. Falta conectarlo al adaptador y a la interfaz, y demostrar sus dos
+direcciones que no se derivan.
 
 ### v0.2.6 Alpha.56 — el ancla de Blanco, y sus direcciones derivadas
 

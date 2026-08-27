@@ -170,7 +170,9 @@ def test_reader_uses_two_stable_nominal_reads_without_refuted_mirror() -> None:
             return fixture
         raise OSError("No existe una segunda dirección de party en la regresión.")
 
-    candidate = B2W2MelonDSReader._capture_nominal_candidate(read, allocation)
+    # Desde alpha.57 el lector lleva el descriptor del juego, así que este
+    # método deja de ser estático: la dirección del contador sale de ahí.
+    candidate = B2W2MelonDSReader()._capture_nominal_candidate(read, allocation)
     assert candidate is not None
     count, raw, pokemon = candidate
     assert count == 1 and raw == fixture

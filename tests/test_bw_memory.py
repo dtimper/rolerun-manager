@@ -147,3 +147,69 @@ def test_solo_ese_candidato_predijo_el_dinero(captura) -> None:
 
     assert len(aciertan) == 1
     assert int(aciertan[0]["direccion"], 16) == BW.party_data
+
+
+# --------------------------------------------------------------------------
+# El lector deja de estar clavado a Negro 2
+# --------------------------------------------------------------------------
+
+def _lector(clave: str):
+    from app.b2w2_live import B2W2MelonDSReader
+
+    return B2W2MelonDSReader(GEN5_MEMORY[clave])
+
+
+def test_el_lector_por_defecto_sigue_siendo_negro_2() -> None:
+    """Todo el código que ya existía lo construye sin argumentos."""
+    from app.b2w2_live import B2W2MelonDSReader
+
+    assert B2W2MelonDSReader().memory.key == "b2w2"
+
+
+def test_el_mismo_lector_sirve_para_blanco() -> None:
+    lector = _lector("bw")
+
+    assert lector.memory.party_data == BW.party_data
+    assert lector.memory.bag == BW.bag
+    assert lector.memory.money == BW.money
+
+
+def test_las_constantes_del_modulo_salen_del_descriptor() -> None:
+    """Antes eran números sueltos y podían divergir del descriptor.
+
+    Ahora hay una sola fuente: si alguien corrige una dirección en
+    `gen5_memory`, el módulo la sigue.
+    """
+    import app.b2w2_live as vivo
+
+    assert vivo.PARTY_BASE == B2W2.party_data
+    assert vivo.PC_BASE == B2W2.pc
+    assert vivo.MONEY_ADDRESS == B2W2.money
+    assert vivo.TM_TABLE_BASE == B2W2.tm_table
+
+
+def test_lo_no_demostrado_se_niega_con_su_motivo() -> None:
+    """Sin esto, la lectura fallaba luego con un error que no decía nada.
+
+    Un juego puede tener ancla y todavía no tener batalla ni MT: esas dos no
+    viven en el bloque del guardado, así que no salen de la resta.
+    """
+    from app.b2w2_live import B2W2LiveError
+
+    lector = _lector("bw")
+    for llamada in (
+        lambda: lector.read_tm_table(object()),
+        lambda: lector._read_battle_rows(object()),
+    ):
+        with pytest.raises(B2W2LiveError, match="no esta demostrado en Negro/Blanco"):
+            llamada()
+
+
+def test_negro_2_no_niega_nada_de_eso() -> None:
+    """La negativa es por juego, no una regresión que apague a todos."""
+    lector = _lector("b2w2")
+
+    assert lector._demostrada(lector.memory.tm_table, "MT") == B2W2.tm_table
+    assert lector._demostrada(
+        lector.memory.battle_presentation, "batalla",
+    ) == B2W2.battle_presentation
