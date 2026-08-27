@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.33`
+- Versión de aplicación: `v0.2.6-alpha.34`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
