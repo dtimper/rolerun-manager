@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from . import perf
 from .run_service import RunProject, RunProjectService
 from .save_engine_client import SaveGameData
 
@@ -83,6 +84,7 @@ class ObsSyncService:
         self.project_service = project_service
         self.sprite_dir = sprite_dir
 
+    @perf.timed("obs.sync")
     def sync(self, project: RunProject, game: SaveGameData) -> dict[str, str]:
         obs_dirs = self.project_service.obs_directories(project)
         # La última salida es la carpeta OBS global y única.

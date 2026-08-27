@@ -4,6 +4,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Mapping, Sequence
 
+from .. import perf
 from ..save_engine_client import SaveGameData
 from .adapter import RealTimeGameAdapter
 from .events import RealTimeEvent, diff_realtime_snapshots
@@ -109,12 +110,15 @@ class RealTimeCore:
         save_path: Path | str | None,
         memory_requests: Sequence[tuple[int, int]] = (),
     ) -> RealTimeSnapshot:
-        snapshot = self.adapter.capture_monitor(
-            current,
-            save_path=save_path,
-            memory_requests=self._recording_requests(memory_requests),
-            sequence=self._next_sequence(),
-        )
+        # El Core es el único punto por el que pasan los seis backends, así que
+        # medir aquí da la comparativa por juego sin tocar ningún adaptador.
+        with perf.span("realtime.capture_monitor", adapter=self.adapter.key):
+            snapshot = self.adapter.capture_monitor(
+                current,
+                save_path=save_path,
+                memory_requests=self._recording_requests(memory_requests),
+                sequence=self._next_sequence(),
+            )
         return self._accept(snapshot)
 
     def capture_full(
@@ -124,12 +128,13 @@ class RealTimeCore:
         save_path: Path | str | None,
         memory_requests: Sequence[tuple[int, int]] = (),
     ) -> RealTimeSnapshot:
-        snapshot = self.adapter.capture_full(
-            current,
-            save_path=save_path,
-            memory_requests=self._recording_requests(memory_requests),
-            sequence=self._next_sequence(),
-        )
+        with perf.span("realtime.capture_full", adapter=self.adapter.key):
+            snapshot = self.adapter.capture_full(
+                current,
+                save_path=save_path,
+                memory_requests=self._recording_requests(memory_requests),
+                sequence=self._next_sequence(),
+            )
         return self._accept(snapshot)
 
     def read_tm_inventory(
@@ -140,10 +145,18 @@ class RealTimeCore:
         return self.adapter.read_tm_inventory(saved_items, save_path=save_path)
 
     def read_pc(self, anchors, *, box_count: int | None = None, box_slot_count: int | None = None):
-        return self.adapter.read_pc(anchors, box_count=box_count, box_slot_count=box_slot_count)
+        with perf.span("realtime.read_pc", adapter=self.adapter.key):
+            return self.adapter.read_pc(
+                anchors, box_count=box_count, box_slot_count=box_slot_count
+            )
 
     def apply_changes(self, current: SaveGameData, changes):
-        return self.adapter.apply_changes(current, changes)
+        with perf.span(
+            "realtime.apply_changes",
+            adapter=self.adapter.key,
+            changes=len(tuple(changes)) if isinstance(changes, (list, tuple)) else None,
+        ):
+            return self.adapter.apply_changes(current, changes)
 
     def start_recording(self, path: Path | str, *, include_memory: bool = True) -> Path:
         recorder = RealTimeSessionRecorder(path, include_memory=include_memory)

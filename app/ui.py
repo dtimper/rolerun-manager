@@ -43,6 +43,7 @@ from .config import (
     SUCCESS,
     TEXT,
 )
+from . import perf
 from .draft_engine import DraftEngine
 from .role_content import GLOBAL_ROLE_NOTE, ROLE_GUIDE
 from .pc_browser import filter_pc_pokemon, reset_scrollable_to_top
@@ -2847,6 +2848,7 @@ class RoleRunManager(ctk.CTk):
             self._floating_menu_control_bindings.append(sequence)
         launcher.focus_force()
 
+    @perf.timed_aggregate("ui.poll_gamepad")
     def _poll_gamepad(self) -> None:
         """Publica flancos SDL2 y reserva automáticamente cada atajo.
 
@@ -4724,6 +4726,7 @@ class RoleRunManager(ctk.CTk):
             self._navigation_transition_overlay = None
             self._navigation_transition_image = None
 
+    @perf.timed("ui.navigation_transition")
     def _create_navigation_transition(self):
         """Crea una superficie DWM independiente con el último frame estable.
 
@@ -10310,6 +10313,7 @@ class RoleRunManager(ctk.CTk):
             pass
         return parent
 
+    @perf.timed("ui.save_live_changes")
     def _save_oras_live_changes(
         self, changes, *, automatic: bool = False, base_game: SaveGameData | None = None,
     ) -> bool:
@@ -10719,6 +10723,7 @@ class RoleRunManager(ctk.CTk):
         self._smooth_render_page(preserve_scroll=(self.active_page == "team"))
         return True
 
+    @perf.timed("ui.finalize_live_changes")
     def _finalize_oras_live_changes(self, changes, result, *, automatic: bool = False) -> None:
         """Publica una escritura ya verificada sin modificar el archivo ``main``."""
         if not self.project or not self.current_save:
@@ -11241,6 +11246,7 @@ class RoleRunManager(ctk.CTk):
         generation = self._session_generation
         self.after(0, lambda p=path, g=generation: self._reload_from_watched_save(p, g))
 
+    @perf.timed("ui.reload_from_watched_save")
     def _reload_from_watched_save(self, path: Path, generation: int | None = None) -> None:
         if generation is not None and generation != self._session_generation:
             return
@@ -11377,6 +11383,7 @@ class RoleRunManager(ctk.CTk):
         except Exception:
             return False
 
+    @perf.timed("ui.smooth_render_page")
     def _smooth_render_page(
         self,
         preserve_scroll: bool = False,
@@ -11590,6 +11597,7 @@ class RoleRunManager(ctk.CTk):
             return
         self._begin_page_navigation(page, previous_page)
 
+    @perf.timed("ui.render_page")
     def render_page(self) -> None:
         # Nunca reconstruir widgets mientras el canvas todavía está animándose.
         # Era otra fuente de pequeños flashes/temblores al cambiar de vista.
@@ -12661,6 +12669,7 @@ class RoleRunManager(ctk.CTk):
             return True
         return False
 
+    @perf.timed("ui.start_team_pc_load")
     def _start_team_pc_load(self) -> None:
         if self._team_pc_pc_loading or not self.current_save or not self.current_game or not self.project:
             return
@@ -12727,6 +12736,7 @@ class RoleRunManager(ctk.CTk):
             target=worker, daemon=True, name="RoleRunUnifiedPCLoad",
         ).start()
 
+    @perf.timed("ui.finish_team_pc_load")
     def _finish_team_pc_load(self, data: SavePCData) -> None:
         self._team_pc_pc_loading = False
         self._pc_cache = data
@@ -21106,6 +21116,7 @@ class RoleRunManager(ctk.CTk):
         self._sync_obs_state(self.current_game)
         self._smooth_render_page(preserve_scroll=(self.active_page == "team"))
 
+    @perf.timed("ui.save_pending_changes")
     def save_pending_changes(self) -> None:
         if not self.current_save or not self.current_game or not self.run.pending_changes:
             return

@@ -8,6 +8,7 @@ from typing import Any
 
 from .role_rules import canonical_role, engine_role_name, role_from_markings
 
+from . import perf
 from .config import ENGINE_PUBLISH_DIR
 
 
@@ -137,16 +138,21 @@ class SaveEngineClient:
         )
 
     def _run(self, arguments: list[str]) -> dict[str, Any]:
+        # El primer argumento es siempre el comando del motor ("read",
+        # "read-boxes", "valid-moves", …). Se registra por separado porque el
+        # coste depende del comando, no del cliente.
+        command = str(arguments[0]) if arguments else "—"
         try:
-            result = subprocess.run(
-                [*self._base_command(), *arguments],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=60,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
+            with perf.span("engine.run", command=command):
+                result = subprocess.run(
+                    [*self._base_command(), *arguments],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=60,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
         except FileNotFoundError as exc:
             raise SaveEngineError(
                 "No se encontró .NET. Instala el SDK de .NET 10 y ejecuta preparar_motor.bat."

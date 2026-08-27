@@ -1,6 +1,26 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.15 — instrumentación de rendimiento medible
+
+- Nuevo módulo `app/perf.py` y modo diagnóstico `ROLERUN_PERF=1`. Apagado —el
+  caso normal— su coste es cero: el decorador devuelve la función original sin
+  envolverla. Encendido escribe `Logs/perf_<fecha>.jsonl` con una línea por
+  operación, incluyendo el hilo en que corrió.
+- Puntos medidos: invocaciones del motor .NET por comando, capturas/`read_pc`/
+  escrituras del Core realtime por backend, walk de regiones y lecturas de
+  B2/W2, render completo y transición de navegación, bucle de mando (agregado
+  por ventana de un segundo), cadena de confirmación de cambios, recarga tras
+  guardado del juego, sincronización OBS e historial de la run.
+- La escritura del registro ocurre en un hilo propio, nunca en el hilo medido,
+  para no medir la propia instrumentación en NTFS con antivirus.
+- No cambia comportamiento: se conservan retorno, excepciones y firma, y
+  `inspect.getsource` sigue viendo el cuerpo original de los métodos medidos.
+- Primeras cifras reales en Windows: **~72 ms de suelo por invocación del motor
+  .NET** sin abrir siquiera un save, y 2,5–8,1 ms por `append_history`.
+- Documentación en `docs/PERF_INSTRUMENTATION.md`. Regresiones en
+  `tests/test_perf_instrumentation.py`. Baseline completa: **906 passed**.
+
 # v0.2.6-alpha.14 — depósito B2/W2 y ventana principal maximizada
 
 - Corregida la primera divergencia del depósito Equipo→PC: la cuadrícula se

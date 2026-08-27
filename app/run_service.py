@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from . import perf
+
 
 @dataclass(slots=True)
 class RunProject:
@@ -368,12 +370,18 @@ class RunProjectService:
             return []
 
     def append_history(self, project: RunProject, event: dict[str, Any]) -> None:
-        events = self.history(project)
-        event = {"timestamp": datetime.now().isoformat(timespec="seconds"), **event}
-        events.append(event)
-        path = self.folder(project) / "history.json"
-        path.write_text(json.dumps(events, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        self.save(project)
+        # El coste crece con el historial: se reescribe entero en cada evento.
+        # Se registra el numero de eventos para poder ver esa pendiente.
+        with perf.span("run.append_history") as measure:
+            events = self.history(project)
+            event = {"timestamp": datetime.now().isoformat(timespec="seconds"), **event}
+            events.append(event)
+            measure.add(events=len(events))
+            path = self.folder(project) / "history.json"
+            path.write_text(
+                json.dumps(events, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+            )
+            self.save(project)
 
     def clear_history(self, project: RunProject) -> None:
         """Vacía el registro histórico sin alterar el estado actual de la Run."""

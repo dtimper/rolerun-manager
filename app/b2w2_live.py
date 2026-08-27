@@ -6,6 +6,8 @@ import struct
 from dataclasses import dataclass
 from ctypes import wintypes
 
+from . import perf
+
 
 DS_RAM_BASE = 0x02000000
 # Pokémon Negro 2 (España), melonDS 1.1. La dirección invitada se demostró
@@ -275,6 +277,7 @@ def parse_pk5_boxed(data: bytes, box: int, slot: int) -> B2W2BoxPokemon | None:
 class B2W2MelonDSReader:
     """Lector cerrado de la party nominal B2/W2 dentro del mapeo de melonDS."""
 
+    @perf.timed("b2w2.read_party")
     def read_party(self) -> B2W2PartyRead:
         if os.name != "nt":
             raise B2W2LiveError("melonDS en Windows es obligatorio.")
@@ -681,6 +684,7 @@ class B2W2MelonDSReader:
         finally:
             kernel32.CloseHandle(handle)
 
+    @perf.timed("b2w2.read_pc")
     def read_pc(self, party_read: B2W2PartyRead | None = None) -> B2W2PCRead:
         return self._read_pc_rows(party_read or self.read_party())
 
@@ -808,27 +812,39 @@ class B2W2MelonDSReader:
             address = 0
             seen: set[int] = set()
             candidates = []
-            while address < 0x7FFFFFFFFFFF:
-                mbi = MBI()
-                if not kernel32.VirtualQueryEx(
-                    handle, ctypes.c_void_p(address), ctypes.byref(mbi),
-                    ctypes.sizeof(mbi),
-                ):
-                    break
-                base = int(mbi.BaseAddress or 0)
-                size = int(mbi.RegionSize or 0)
-                allocation = int(mbi.AllocationBase or 0)
-                if mbi.State == 0x1000 and allocation and allocation not in seen:
-                    seen.add(allocation)
-                    try:
-                        candidate = B2W2MelonDSReader._capture_nominal_candidate(
-                            read, allocation,
-                        )
-                        if candidate is not None:
-                            candidates.append((allocation, *candidate))
-                    except (OSError, B2W2LiveError, IndexError):
-                        pass
-                address = base + max(size, 0x1000)
+            # Instrumentación: este recorrido visita todo el espacio de
+            # direcciones de melonDS en cada ciclo. Se cuentan regiones y
+            # allocations sondeadas para dimensionar el coste real antes de
+            # sustituirlo por una base cacheada.
+            regions = 0
+            with perf.span("b2w2.region_walk") as measure:
+                while address < 0x7FFFFFFFFFFF:
+                    mbi = MBI()
+                    if not kernel32.VirtualQueryEx(
+                        handle, ctypes.c_void_p(address), ctypes.byref(mbi),
+                        ctypes.sizeof(mbi),
+                    ):
+                        break
+                    regions += 1
+                    base = int(mbi.BaseAddress or 0)
+                    size = int(mbi.RegionSize or 0)
+                    allocation = int(mbi.AllocationBase or 0)
+                    if mbi.State == 0x1000 and allocation and allocation not in seen:
+                        seen.add(allocation)
+                        try:
+                            candidate = B2W2MelonDSReader._capture_nominal_candidate(
+                                read, allocation,
+                            )
+                            if candidate is not None:
+                                candidates.append((allocation, *candidate))
+                        except (OSError, B2W2LiveError, IndexError):
+                            pass
+                    address = base + max(size, 0x1000)
+                measure.add(
+                    regions=regions,
+                    allocations=len(seen),
+                    candidates=len(candidates),
+                )
             if len(candidates) > 1:
                 raise B2W2LiveError(
                     "melonDS expone varias parties B2/W2 válidas; la lectura es ambigua."

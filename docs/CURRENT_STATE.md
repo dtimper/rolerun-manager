@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.14`
+- Versión de aplicación: `v0.2.6-alpha.15`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,20 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.15 — instrumentación de rendimiento
+
+La auditoría del 27-08-2026 dejó como hipótesis sin medir el coste real en
+Windows del motor .NET, del render completo y del walk de memoria de melonDS.
+Alpha.15 no corrige ni optimiza nada: añade la medición que faltaba para poder
+decidir con evidencia. El modo se activa con `ROLERUN_PERF=1` y está apagado por
+defecto con coste cero.
+
+Primeras cifras demostradas en esta máquina: cada invocación del motor .NET paga
+un suelo de **~72 ms** antes de cargar PKHeX.Core y abrir la partida, así que la
+carga de una run acumula ≥290 ms solo en arranques de proceso; `append_history`
+cuesta 2,5–8,1 ms por evento en NTFS. Detalle y método en
+`docs/PERF_INSTRUMENTATION.md`. Baseline completa: **906 passed**.
 
 ### v0.2.6 Alpha.14 — destino vivo de depósito y ventana maximizada
 
