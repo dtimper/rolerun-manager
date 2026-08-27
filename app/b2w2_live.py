@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import ctypes
+import functools
 import os
 import struct
+import threading
 import time
 from dataclasses import dataclass
 from ctypes import wintypes
@@ -45,6 +47,90 @@ BATTLE_READ_SIZE = BATTLE_STATUS_OFFSET + 1
 # completo- debe seguir ejecutandose por si aparece una segunda party valida
 # dentro del mismo proceso a mitad de sesion.
 BASE_REDISCOVERY_SECONDS = 60.0
+
+
+class _PROCESSENTRY32W(ctypes.Structure):
+    """Entrada de la instantánea de procesos de Windows.
+
+    Definida **una sola vez** a propósito. Estaba declarada dentro de la función
+    que enumera procesos, de modo que cada llamada creaba una clase nueva y
+    volvía a fijar ``argtypes``. Con dos hilos leyendo a la vez —el monitor, el
+    sondeo del PC y una escritura pueden solaparse— uno pisaba los tipos del otro
+    y la llamada en curso fallaba con:
+
+        expected LP_PROCESSENTRY32W instance instead of pointer to PROCESSENTRY32W
+
+    Dos clases distintas con el mismo nombre. El error se veía como «no se pudo
+    aplicar la sustitución», que no tenía nada que ver con la sustitución.
+    """
+
+    _fields_ = [
+        ("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+        ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_size_t),
+        ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+        ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", wintypes.LONG),
+        ("dwFlags", wintypes.DWORD), ("szExeFile", wintypes.WCHAR * 260),
+    ]
+
+
+def _load_kernel32():
+    """Instancia **privada** de kernel32 para B2/W2.
+
+    ``ctypes.windll.kernel32`` es un singleton de todo el proceso y su caché de
+    funciones también. Cuatro módulos de RoleRun declaran su propia
+    ``PROCESSENTRY32W`` y fijan ``argtypes`` sobre ese mismo objeto compartido,
+    así que cualquiera podía invalidar los tipos de otro en mitad de una llamada.
+    Con una instancia propia, B2/W2 queda aislado de los demás.
+    """
+    if os.name != "nt":
+        return None
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32W)]
+    kernel32.Process32FirstW.restype = wintypes.BOOL
+    kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32W)]
+    kernel32.Process32NextW.restype = wintypes.BOOL
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.ReadProcessMemory.argtypes = [
+        wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t,
+        ctypes.POINTER(ctypes.c_size_t),
+    ]
+    kernel32.ReadProcessMemory.restype = wintypes.BOOL
+    kernel32.WriteProcessMemory.argtypes = [
+        wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t,
+        ctypes.POINTER(ctypes.c_size_t),
+    ]
+    kernel32.WriteProcessMemory.restype = wintypes.BOOL
+    kernel32.VirtualQueryEx.argtypes = [
+        wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t,
+    ]
+    kernel32.VirtualQueryEx.restype = ctypes.c_size_t
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    return kernel32
+
+
+_KERNEL32 = _load_kernel32()
+
+
+def _serialized(method):
+    """Serializa una operación del lector sobre la RAM de melonDS.
+
+    El monitor, el sondeo del PC y las escrituras corren en hilos distintos y
+    comparten este lector. Sin serializar, dos lecturas podían solaparse sobre el
+    mismo estado y una escritura podía intercalarse entre la doble lectura de
+    seguridad que precede a cada commit. Es reentrante a propósito: los writers
+    releen la party y el PC dentro de su propia transacción.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
 
 
 class B2W2LiveError(RuntimeError):
@@ -497,6 +583,8 @@ class B2W2MelonDSReader:
     """Lector cerrado de la party nominal B2/W2 dentro del mapeo de melonDS."""
 
     def __init__(self) -> None:
+        # Reentrante: los writers releen party y PC dentro de su transacción.
+        self._lock = threading.RLock()
         # Base ya demostrada: (pid, nombre, allocation_base). Evita recorrer el
         # espacio de direcciones completo de melonDS en cada lectura.
         self._resolved: tuple[int, str, int] | None = None
@@ -531,6 +619,7 @@ class B2W2MelonDSReader:
         except (OSError, B2W2LiveError):
             return None
 
+    @_serialized
     @perf.timed("b2w2.read_party")
     def read_party(self) -> B2W2PartyRead:
         if os.name != "nt":
@@ -611,15 +700,11 @@ class B2W2MelonDSReader:
 
     @staticmethod
     def _read_battle_rows(party_read: B2W2PartyRead) -> B2W2BattleRead:
-        kernel32 = ctypes.windll.kernel32
-        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        kernel32.OpenProcess.restype = wintypes.HANDLE
-        kernel32.ReadProcessMemory.argtypes = [
-            wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t,
-            ctypes.POINTER(ctypes.c_size_t),
-        ]
-        kernel32.ReadProcessMemory.restype = wintypes.BOOL
-        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        # Instancia privada: los tipos ya están fijados una sola vez y ningún
+        # otro módulo puede invalidarlos a mitad de llamada.
+        kernel32 = _KERNEL32
+        if kernel32 is None:
+            raise B2W2LiveError("melonDS en Windows es obligatorio.")
         handle = kernel32.OpenProcess(0x0400 | 0x0010, False, party_read.process_id)
         if not handle:
             raise B2W2LiveError("melonDS desapareció antes de leer batalla.")
@@ -686,15 +771,11 @@ class B2W2MelonDSReader:
 
     @staticmethod
     def _write_process_bytes(process_id: int, host_address: int, payload: bytes) -> None:
-        kernel32 = ctypes.windll.kernel32
-        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        kernel32.OpenProcess.restype = wintypes.HANDLE
-        kernel32.WriteProcessMemory.argtypes = [
-            wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t,
-            ctypes.POINTER(ctypes.c_size_t),
-        ]
-        kernel32.WriteProcessMemory.restype = wintypes.BOOL
-        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        # Instancia privada: los tipos ya están fijados una sola vez y ningún
+        # otro módulo puede invalidarlos a mitad de llamada.
+        kernel32 = _KERNEL32
+        if kernel32 is None:
+            raise B2W2LiveError("melonDS en Windows es obligatorio.")
         handle = kernel32.OpenProcess(0x0400 | 0x0008 | 0x0020, False, process_id)
         if not handle:
             raise B2W2LiveError("Windows no permitió abrir melonDS para escritura.")
@@ -712,6 +793,7 @@ class B2W2MelonDSReader:
         finally:
             kernel32.CloseHandle(handle)
 
+    @_serialized
     def move_pc_slot(
         self, party_read: B2W2PartyRead, source_box: int, source_slot: int,
         destination_box: int, destination_slot: int,
@@ -765,6 +847,7 @@ class B2W2MelonDSReader:
             restore()
             raise
 
+    @_serialized
     def swap_party_pc(
         self, party_read: B2W2PartyRead, party_slot: int, box: int, box_slot: int,
         incoming_party: bytes, *, incoming_identity: tuple[int, int, int],
@@ -836,6 +919,7 @@ class B2W2MelonDSReader:
             restore()
             raise
 
+    @_serialized
     def replace_fainted_party_pc(
         self, party_read: B2W2PartyRead, party_slot: int,
         box: int, box_slot: int, graveyard_box: int, graveyard_box_slot: int,
@@ -941,6 +1025,7 @@ class B2W2MelonDSReader:
             restore()
             raise
 
+    @_serialized
     def write_party_roles(
         self, party_read: B2W2PartyRead, writes,
     ) -> B2W2PartyRead:
@@ -1007,6 +1092,7 @@ class B2W2MelonDSReader:
             restore()
             raise
 
+    @_serialized
     def write_party_heal(
         self, party_read: B2W2PartyRead, heals, *, base_pp_for,
     ) -> B2W2PartyRead:
@@ -1078,6 +1164,7 @@ class B2W2MelonDSReader:
             restore()
             raise
 
+    @_serialized
     def resize_party_pc(
         self, party_read: B2W2PartyRead, *, operation: str,
         party_slot: int, box: int, box_slot: int,
@@ -1164,15 +1251,11 @@ class B2W2MelonDSReader:
 
     @staticmethod
     def _read_pc_rows(party_read: B2W2PartyRead) -> B2W2PCRead:
-        kernel32 = ctypes.windll.kernel32
-        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        kernel32.OpenProcess.restype = wintypes.HANDLE
-        kernel32.ReadProcessMemory.argtypes = [
-            wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t,
-            ctypes.POINTER(ctypes.c_size_t),
-        ]
-        kernel32.ReadProcessMemory.restype = wintypes.BOOL
-        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        # Instancia privada: los tipos ya están fijados una sola vez y ningún
+        # otro módulo puede invalidarlos a mitad de llamada.
+        kernel32 = _KERNEL32
+        if kernel32 is None:
+            raise B2W2LiveError("melonDS en Windows es obligatorio.")
         handle = kernel32.OpenProcess(0x0400 | 0x0010, False, party_read.process_id)
         if not handle:
             raise B2W2LiveError("melonDS desapareció antes de leer el PC.")
@@ -1200,6 +1283,7 @@ class B2W2MelonDSReader:
         finally:
             kernel32.CloseHandle(handle)
 
+    @_serialized
     @perf.timed("b2w2.read_pc")
     def read_pc(self, party_read: B2W2PartyRead | None = None) -> B2W2PCRead:
         return self._read_pc_rows(party_read or self.read_party())
@@ -1229,27 +1313,15 @@ class B2W2MelonDSReader:
 
     @staticmethod
     def _list_melonds_processes() -> list[tuple[int, str]]:
-        kernel32 = ctypes.windll.kernel32
-
-        class PROCESSENTRY32W(ctypes.Structure):
-            _fields_ = [
-                ("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
-                ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_size_t),
-                ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
-                ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", wintypes.LONG),
-                ("dwFlags", wintypes.DWORD), ("szExeFile", wintypes.WCHAR * 260),
-            ]
-        kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
-        kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
-        kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
-        kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
-        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32 = _KERNEL32
+        if kernel32 is None:
+            raise B2W2LiveError("melonDS en Windows es obligatorio.")
         snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
         if ctypes.cast(snapshot, ctypes.c_void_p).value == ctypes.c_void_p(-1).value:
             raise B2W2LiveError("No se pudieron enumerar los procesos de Windows.")
         result: list[tuple[int, str]] = []
         try:
-            entry = PROCESSENTRY32W()
+            entry = _PROCESSENTRY32W()
             entry.dwSize = ctypes.sizeof(entry)
             ok = bool(kernel32.Process32FirstW(snapshot, ctypes.byref(entry)))
             while ok:
@@ -1294,20 +1366,11 @@ class B2W2MelonDSReader:
         validaciones -doble lectura estable de count+party, rango del contador y
         checksum de cada PK5- se ejecutan igual.
         """
-        kernel32 = ctypes.windll.kernel32
-        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        kernel32.OpenProcess.restype = wintypes.HANDLE
-        kernel32.ReadProcessMemory.argtypes = [
-            wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t,
-            ctypes.POINTER(ctypes.c_size_t),
-        ]
-        kernel32.ReadProcessMemory.restype = wintypes.BOOL
-        kernel32.VirtualQueryEx.argtypes = [
-            wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t,
-        ]
-        kernel32.VirtualQueryEx.restype = ctypes.c_size_t
-        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-        kernel32.CloseHandle.restype = wintypes.BOOL
+        # Instancia privada: los tipos ya están fijados una sola vez y ningún
+        # otro módulo puede invalidarlos a mitad de llamada.
+        kernel32 = _KERNEL32
+        if kernel32 is None:
+            raise B2W2LiveError("melonDS en Windows es obligatorio.")
         handle = kernel32.OpenProcess(0x0400 | 0x0010, False, pid)
         if not handle:
             return None

@@ -579,6 +579,9 @@ class _FakeMelonDS(B2W2MelonDSReader):
     NAME = "melonDS.exe"
 
     def __init__(self, count: int, party_raw: bytes, pc_raw: bytes) -> None:
+        # El lector real inicializa aquí su cerrojo y su caché de base; los
+        # writers heredados los necesitan aunque las lecturas estén sustituidas.
+        super().__init__()
         self.count = int(count)
         self.party_raw = bytearray(MAX_PARTY * PK5_PARTY_SIZE)
         self.party_raw[:len(party_raw)] = party_raw

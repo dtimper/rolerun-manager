@@ -1,6 +1,40 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.30 — dos hilos dejan de romperse los tipos entre ellos
+
+Al aplicar una sustitución saltaba un error que no tenía nada que ver con la
+sustitución:
+
+    argument 2: TypeError: expected LP_PROCESSENTRY32W instance
+    instead of pointer to PROCESSENTRY32W
+
+Son **dos clases distintas con el mismo nombre**. Dos causas sumadas:
+
+- `PROCESSENTRY32W` estaba declarada **dentro** de la función que enumera
+  procesos, así que cada llamada creaba una clase nueva y volvía a fijar
+  `argtypes`. Con el monitor, el sondeo del PC y una escritura solapándose en
+  hilos distintos, uno pisaba los tipos del otro en mitad de la llamada.
+- `ctypes.windll.kernel32` es un singleton de todo el proceso, y su caché de
+  funciones también. **Cuatro módulos** de RoleRun declaran su propia
+  `PROCESSENTRY32W` y fijan `argtypes` sobre ese mismo objeto compartido.
+
+Se corrigen las dos: una única estructura de módulo y una **instancia privada**
+de kernel32 para B2/W2, con todos los tipos fijados una sola vez al importar.
+Los cinco puntos del lector que reconfiguraban el kernel32 compartido en cada
+llamada pasan a usarla.
+
+- Además se **serializa el lector** con un cerrojo reentrante. Es el riesgo de
+  concurrencia que la auditoría del 27-08-2026 marcó como ALTO —«`RealTimeCore`
+  no serializa `read_pc`/`capture_*`/`apply_changes`»— y este fallo es su primera
+  manifestación demostrada. Reentrante porque los writers releen party y PC
+  dentro de su propia transacción.
+- Baseline completa: **1100 passed**.
+
+**Pendiente todavía:** que la vida se descuente en el momento del KO y no al
+terminar el combate. Confirmado por el usuario que sigue ocurriendo; no se
+declara cerrado.
+
 # v0.2.6-alpha.29 — la baja de B2/W2 deja de quedarse en un limbo
 
 Alpha.28 detectaba la baja pero no permitía salir de ella. Reportado con detalle:

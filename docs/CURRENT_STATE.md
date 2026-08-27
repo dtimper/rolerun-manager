@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.29`
+- Versión de aplicación: `v0.2.6-alpha.30`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,28 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.30 — aislamiento de ctypes y lector serializado
+
+La prueba física de alpha.29 confirmó que la casilla correcta queda libre, que el
+selector se abre y que curar al debilitado lo devuelve. Aplicar la sustitución
+fallaba con un `TypeError` de ctypes ajeno a la sustitución.
+
+`PROCESSENTRY32W` se declaraba dentro de la función que enumera procesos, de modo
+que cada llamada creaba una clase distinta y refijaba `argtypes` sobre
+`ctypes.windll.kernel32`, que es un singleton compartido por los cuatro módulos
+de RoleRun que declaran esa misma estructura. Dos hilos solapados se invalidaban
+los tipos mutuamente.
+
+B2/W2 pasa a tener una estructura única de módulo y una instancia privada de
+kernel32 con los tipos fijados al importar. El lector queda además serializado
+con un cerrojo reentrante, que es la mitigación concreta del riesgo ALTO de
+concurrencia que la auditoría había anticipado sin poder demostrar.
+
+Queda **abierto** que la vida se descuente en el momento del KO y no al terminar
+el combate.
+
+Baseline completa: **1100 passed**.
 
 ### v0.2.6 Alpha.29 — la baja de B2/W2 vuelve a tener salida
 
