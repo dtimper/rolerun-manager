@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.61`
+- Versión de aplicación: `v0.2.6-alpha.62`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,25 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.62 — Blanco no tenía MT porque preguntaba al juego equivocado
+
+Reportado por el usuario justo después de alpha.61: aunque la dirección de MT de
+Blanco ya estaba demostrada, la pantalla seguía sin funcionar.
+
+**El motivo:** `_get_b2w2_tm_profile` pedía el perfil siempre a
+`b2w2_realtime_adapter`, escrito a mano. Con Blanco abierto leía la dirección de
+Negro 2 —o fallaba— en vez de la suya. Lo mismo pasaba en otros dos sitios: el
+lector de PC del selector y los PP de la tarjeta de drafteo.
+
+Los tres pasan a resolver el adaptador **del juego activo**. Es la misma clase
+de fallo que alpha.58 dejó a medias: quedaban tres referencias por nombre fijo
+que la generalización no alcanzó.
+
+- Un test nuevo comprueba las **dos** rutas: con Negro 2 abierto responde el
+  adaptador de Negro 2, y con Blanco el de Blanco. El anterior solo comprobaba
+  que respondiera alguien.
+- Suite completa: 1398.
 
 ### v0.2.6 Alpha.61 — la tabla de MT de Blanco, y el combate a medias
 

@@ -1,6 +1,16 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.62 — Blanco no tenía MT porque preguntaba al juego equivocado
+
+`_get_b2w2_tm_profile` pedía el perfil siempre al adaptador de Negro 2, escrito
+a mano. Con Blanco abierto leía la dirección equivocada. Lo mismo en el lector
+de PC del selector y en los PP de la tarjeta de drafteo: tres referencias por
+nombre fijo que la generalización de alpha.58 no alcanzó.
+
+El test nuevo comprueba las dos rutas, no solo que responda alguien.
+Suite completa: 1398.
+
 # v0.2.6-alpha.61 — la tabla de MT de Blanco, y el combate a medias
 
 **MT: `0x0209EA88`.** De 381 tramos con la forma correcta, uno solo coincide

@@ -6231,7 +6231,7 @@ class RoleRunManager(ctk.CTk):
                     elif live_key == "bdsp":
                         reader = getattr(self, "bdsp_realtime_adapter", None)
                     elif live_key in MELONDS_REALTIME_GAME_KEYS:
-                        reader = getattr(self, "b2w2_realtime_adapter", None)
+                        reader = getattr(self, f"{live_key}_realtime_adapter", None)
                     else:
                         reader = getattr(self, "oras_live_reader", None)
                     if reader is None:
@@ -12241,8 +12241,11 @@ class RoleRunManager(ctk.CTk):
                 power = int(rom.power(move_id)) or "—"
                 accuracy = int(rom.accuracy(move_id)) or "—"
             else:
+                adaptador = getattr(
+                    self, f"{key}_realtime_adapter", None,
+                )
                 pp = int(
-                    self.b2w2_realtime_adapter.base_pp_for(move_id)
+                    adaptador.base_pp_for(move_id) if adaptador is not None else 0
                 ) or "—"
             # El texto no depende de la randomización —un randomizer cambia qué
             # MT enseña cada movimiento, no lo que hace el movimiento—, así que
@@ -12927,20 +12930,28 @@ class RoleRunManager(ctk.CTk):
             clear_personal_override(familia)
 
     def _get_b2w2_tm_profile(self):
-        """Perfil de MT de B2/W2, leído de la partida que hay delante.
+        """Perfil de MT del juego de quinta que hay delante.
 
         No hay ROM que pedir ni tabla que cargar de disco: la lista vive en la
         RAM del juego. Es la única fuente correcta jugando en randomizers, donde
         cada MT puede enseñar otra cosa.
+
+        Se pide al adaptador **del juego activo**. Preguntárselo siempre al de
+        Negro 2 leía su dirección aunque la partida abierta fuera Blanco: ese
+        era el motivo de que Blanco no tuviera MT.
         """
-        adapter = getattr(self, "b2w2_realtime_adapter", None)
+        clave = self._active_azahar_realtime_key()
+        if clave not in MELONDS_REALTIME_GAME_KEYS:
+            return None
+        adapter = getattr(self, f"{clave}_realtime_adapter", None)
         if adapter is None:
             return None
         try:
             return adapter.read_tm_profile()
         except Exception as exc:
             messagebox.showerror(
-                "No se pudo leer la tabla de MT de Negro 2/Blanco 2",
+                "No se pudo leer la tabla de MT de "
+                + self._active_azahar_realtime_label(),
                 "RoleRun no va a mostrar una tabla supuesta: en una partida "
                 "randomizada cada MT puede enseñar otra cosa.\n\n" + str(exc),
                 parent=self._dialog_parent(),

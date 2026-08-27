@@ -420,18 +420,25 @@ def test_el_drafteo_comparte_writer_con_la_ensenanza_de_mt() -> None:
     assert RoleRunManager._oras_live_unsupported_changes(ui, [movimiento]) == []
 
 
-def test_la_pantalla_de_mt_pide_el_perfil_al_adaptador_vivo() -> None:
-    """B2/W2 no pide ninguna ROM: la tabla está en la RAM del juego."""
+def test_la_pantalla_de_mt_pide_el_perfil_al_adaptador_DEL_JUEGO_ACTIVO() -> None:
+    """Quinta no pide ninguna ROM: la tabla está en la RAM del juego.
+
+    Y se lo pide al adaptador del juego abierto. Preguntárselo siempre al de
+    Negro 2 leía su dirección aunque la partida fuera Blanco: ese fue el motivo
+    de que Blanco no tuviera MT.
+    """
     from types import SimpleNamespace
 
     from app.ui import RoleRunManager
 
-    perfil = object()
-    manager = SimpleNamespace(
-        b2w2_realtime_adapter=SimpleNamespace(read_tm_profile=lambda: perfil),
-    )
-
-    assert RoleRunManager._get_b2w2_tm_profile(manager) is perfil
+    de_negro2, de_blanco = object(), object()
+    for clave, esperado in (("b2w2", de_negro2), ("bw", de_blanco)):
+        manager = SimpleNamespace(
+            _active_azahar_realtime_key=lambda c=clave: c,
+            b2w2_realtime_adapter=SimpleNamespace(read_tm_profile=lambda: de_negro2),
+            bw_realtime_adapter=SimpleNamespace(read_tm_profile=lambda: de_blanco),
+        )
+        assert RoleRunManager._get_b2w2_tm_profile(manager) is esperado
 
 
 def test_sin_adaptador_no_se_inventa_un_perfil() -> None:
@@ -439,7 +446,20 @@ def test_sin_adaptador_no_se_inventa_un_perfil() -> None:
 
     from app.ui import RoleRunManager
 
-    manager = SimpleNamespace(b2w2_realtime_adapter=None)
+    manager = SimpleNamespace(
+        _active_azahar_realtime_key=lambda: "b2w2",
+        b2w2_realtime_adapter=None,
+    )
+
+    assert RoleRunManager._get_b2w2_tm_profile(manager) is None
+
+
+def test_un_juego_que_no_es_de_quinta_no_pide_nada() -> None:
+    from types import SimpleNamespace
+
+    from app.ui import RoleRunManager
+
+    manager = SimpleNamespace(_active_azahar_realtime_key=lambda: "oras")
 
     assert RoleRunManager._get_b2w2_tm_profile(manager) is None
 
