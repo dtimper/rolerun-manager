@@ -1,8 +1,10 @@
 {
-  "format": "rolerun-bw-battle-lanes-v1",
-  "captured_at": "2026-08-27T20:38:34.254190+02:00",
+  "format": "rolerun-bw-battle-lanes-v2",
+  "captured_at": "2026-08-27T20:42:26.375455+02:00",
   "environment": "Negro/Blanco Espana - melonDS 1.1",
-  "metodo": "Se buscan todas las filas que describen al Pokemon en combate y se vigilan a la vez cada 10 ms. La que baja los PS antes es la logica; la que lo hace despues, al ritmo de la barra, la de presentacion.",
+  "metodo": "Dos estados: se guardan las posiciones que contenian los PS viejos y se conservan solo las que, en esa misma posicion, pasan a contener los nuevos. No supone nada sobre el formato de la fila. Despues se vigilan durante otro golpe para ver cual cambia antes.",
+  "ps_antes": 136,
+  "ps_despues": 128,
   "equipo": [
     {
       "mote": "Purrloin",
@@ -40,52 +42,65 @@
       "habilidad": 82
     }
   ],
-  "filas": [
+  "candidatas": [
     {
-      "direccion": "0x0226D670",
-      "offset": 2545264,
-      "mote": "Purrloin",
-      "ps_inicial": 0,
-      "max_hp": 27
+      "direccion": "0x0226D898",
+      "offset": 2545816,
+      "contexto_antes": "d0a226020000000000cb0100f1019600880000000000410032014b8000000000",
+      "contexto_despues": "d0a226020000000000cb0100f1019600800000000000410032014b8000000000"
     },
     {
-      "direccion": "0x0226E56C",
-      "offset": 2549100,
-      "mote": "Purrloin",
-      "ps_inicial": 0,
-      "max_hp": 27
+      "direccion": "0x0226E794",
+      "offset": 2549652,
+      "contexto_antes": "30a826020000000000cb0100f1019600880000000000410032014b8000000000",
+      "contexto_despues": "30a826020000000000cb0100f1019600800000000000410032014b8000000000"
+    },
+    {
+      "direccion": "0x022BEF60",
+      "offset": 2879328,
+      "contexto_antes": "0500000005000000000000000000000088000000960000000000000090000000",
+      "contexto_despues": "0500000005000000000000000000000080000000960000000000000090000000"
     }
   ],
-  "muestras": 8298,
+  "muestras": 656,
   "transiciones": [
     {
       "ms": 0.0,
       "ps": [
-        0,
-        0
-      ],
-      "filas": [
-        [
-          509,
-          27,
-          0,
-          0,
-          0,
-          84,
-          9
-        ],
-        [
-          509,
-          27,
-          0,
-          0,
-          0,
-          84,
-          9
-        ]
+        128,
+        128,
+        128
+      ]
+    },
+    {
+      "ms": 1114.9,
+      "ps": [
+        128,
+        120,
+        128
+      ]
+    },
+    {
+      "ms": 4543.9,
+      "ps": [
+        120,
+        120,
+        128
+      ]
+    },
+    {
+      "ms": 4598.3,
+      "ps": [
+        120,
+        120,
+        120
       ]
     }
   ],
-  "primer_cambio_ms": {},
-  "note": "Diagnostico de solo lectura. Sin dos filas que cambien no se puede decidir cual manda en pantalla."
+  "primer_cambio_ms": {
+    "0x0226E794": 1114.9,
+    "0x0226D898": 4543.9,
+    "0x022BEF60": 4598.3
+  },
+  "note": "Diagnostico de solo lectura. Una direccion aqui no pasa a produccion mientras no se sepa cual manda en pantalla."
 }

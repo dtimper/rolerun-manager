@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.64`
+- Versión de aplicación: `v0.2.6-alpha.65`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,39 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.65 — el combate de Blanco, resuelto y con estructura
+
+La traza de dos estados lo resolvió a la primera, y de paso reveló cómo está
+montado todo.
+
+**Cuál es cuál.** Con el Serperior recibiendo dos golpes:
+
+| | |
+| --- | --- |
+| `0x0226E794` bajó a los **1115 ms** | lógica |
+| `0x0226D898` bajó a los **4544 ms** | presentación, la que sigue la barra |
+
+Los **3429 ms** de diferencia son casi exactamente los **3362 ms** que separan a
+las dos copias de Negro 2 en su propia traza. El mismo retardo de animación,
+medido en dos juegos distintos y con dos métodos distintos.
+
+**La estructura.** Las direcciones del Serperior no coincidían con las que había
+dado la búsqueda anterior para el Purrloin, y ahí estaba la clave: hay **dos
+tablas de filas, una por miembro del equipo**, con un paso de `0x228`. Purrloin
+es el primero y Serperior el segundo, y la diferencia entre sus filas es
+exactamente ese paso, en las dos tablas.
+
+Se guarda la fila del primero, que es donde arranca cada tabla, más el paso.
+
+**Negro 2 no hereda ese paso.** Allí no se ha medido, así que vale `None` y se
+sigue leyendo una sola fila. Suponerle el mismo `0x228` sería justo la analogía
+que este proyecto no admite.
+
+Con esto **Blanco no tiene nada por inventar**: ancla, MT y las dos filas de
+combate, todas medidas contra el juego.
+
+- `tests/test_bw_memory.py`: 26 pruebas. Suite completa: 1400.
 
 ### v0.2.6 Alpha.64 — el combate de Blanco, por dos estados
 

@@ -1,6 +1,18 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.65 — el combate de Blanco, resuelto y con estructura
+
+Lógica `0x0226E794` (1115 ms) y presentación `0x0226D898` (4544 ms). Los 3429 ms
+de diferencia son casi los 3362 ms de Negro 2: el mismo retardo de animación,
+medido en dos juegos y con dos métodos distintos.
+
+Y reveló la estructura: **dos tablas de filas, una por miembro del equipo**, con
+paso `0x228`. Se guarda la del primero más el paso. Negro 2 no lo hereda: allí
+no se ha medido.
+
+Blanco ya no tiene nada por inventar. Suite completa: 1400.
+
 # v0.2.6-alpha.64 — el combate de Blanco, por dos estados
 
 La búsqueda por firma falló dos veces por suponer que Blanco coloca los campos

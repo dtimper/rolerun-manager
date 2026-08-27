@@ -55,8 +55,14 @@ class Gen5Memory:
     save_badges: int
     # Fuera del bloque del guardado: hay que demostrarlas aparte.
     tm_table: int | None = None
+    # Fila del PRIMER miembro del equipo en cada una de las dos tablas de
+    # combate. Ver `battle_stride`.
     battle_presentation: int | None = None
     battle_logical: int | None = None
+    # Distancia de un miembro del equipo al siguiente dentro de cada tabla.
+    # Medida en Blanco sobre dos miembros y las dos tablas; en Negro 2 todavía
+    # no se ha medido, así que vale None y ahí se sigue leyendo una sola fila.
+    battle_stride: int | None = None
 
     @property
     def block_base(self) -> int:
@@ -112,11 +118,22 @@ GEN5_MEMORY: dict[str, Gen5Memory] = {
     # jugador —bajó de 24 a 9 PS al recibir el golpe—. La otra, `0x0226E348`,
     # resultó tener un Pansear a nivel 3342: coincidió una vez por azar.
     #
-    # En Negro 2 las dos copias buenas describen AL MISMO Pokémon y la lógica
-    # se adelanta a la de presentación —3,4 s en su traza—. Con una sola fila no
-    # se puede saber si `0x0226D670` es la que manda en pantalla o la que se
-    # adelanta, y equivocarse cantaría una baja antes de que el jugador la vea.
-    # Hasta saberlo, las dos valen None.
+    # RESUELTO el 27-08-2026 con una traza de dos estados, que no supone nada
+    # sobre el formato de la fila. Con el Serperior luchando y recibiendo dos
+    # golpes:
+    #
+    #   0x0226E794 bajó a los 1115 ms  -> lógica
+    #   0x0226D898 bajó a los 4544 ms  -> presentación, la que sigue la barra
+    #
+    # Los 3429 ms de diferencia son casi exactamente los 3362 ms que separan a
+    # las dos copias de Negro 2 en su propia traza: el mismo retardo de
+    # animación, medido en dos juegos distintos.
+    #
+    # Y la traza reveló la estructura: hay DOS TABLAS de filas, una por miembro
+    # del equipo, separadas 0x228 entre sí. Las direcciones de arriba son las
+    # del Serperior, que es el SEGUNDO del equipo; las del Purrloin, primero,
+    # eran 0x228 menos en ambas tablas. Lo que se guarda aquí es la fila del
+    # primero, que es de donde arranca cada tabla.
     "bw": Gen5Memory(
         key="bw",
         label="Negro/Blanco",
@@ -124,5 +141,8 @@ GEN5_MEMORY: dict[str, Gen5Memory] = {
         save_money=0x21200,
         save_badges=0x21204,
         tm_table=0x0209EA88,
+        battle_presentation=0x0226D670,
+        battle_logical=0x0226E56C,
+        battle_stride=0x228,
     ),
 }

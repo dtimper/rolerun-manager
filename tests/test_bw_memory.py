@@ -98,17 +98,10 @@ def test_las_direcciones_derivadas_de_blanco() -> None:
     assert BW.badges == 0x0223CD70
 
 
-def test_lo_que_todavia_no_se_ha_demostrado_de_blanco() -> None:
-    """El carril de batalla, que no sale de la resta ni de una sola lectura.
-
-    La tabla de MT sí se demostró: vive en el binario del juego y se encontró
-    por forma y contenido. El carril de batalla está localizado pero sin
-    ordenar, y hasta saber cuál de las dos filas manda vale None: declararlo a
-    ojo sería inventarlo.
-    """
-    assert BW.battle_presentation is None
-    assert BW.battle_logical is None
-    assert B2W2.battle_presentation is not None, "Negro 2 sí lo tiene demostrado"
+def test_blanco_ya_tiene_todo_lo_que_necesita_medirse() -> None:
+    """Ancla, MT y las dos filas de combate. Nada quedó por inventar."""
+    assert BW.party_data and BW.tm_table
+    assert BW.battle_presentation and BW.battle_logical
 
 
 # --------------------------------------------------------------------------
@@ -189,15 +182,20 @@ def test_las_constantes_del_modulo_salen_del_descriptor() -> None:
     assert vivo.TM_TABLE_BASE == B2W2.tm_table
 
 
-def test_lo_no_demostrado_se_niega_con_su_motivo() -> None:
-    """Sin esto, la lectura fallaba luego con un error que no decía nada.
+def test_lo_no_demostrado_se_sigue_negando_con_su_motivo() -> None:
+    """La negativa sigue viva aunque Blanco ya no la necesite.
 
-    Un juego puede tener ancla y todavía no tener batalla ni MT: esas dos no
-    viven en el bloque del guardado, así que no salen de la resta.
+    Es la que protege al siguiente juego: un backend puede tener ancla y
+    todavía no tener batalla, y entonces conviene decirlo en vez de leer una
+    dirección inventada. Se comprueba con un descriptor sin demostrar.
     """
-    from app.b2w2_live import B2W2LiveError
+    from dataclasses import replace
 
-    lector = _lector("bw")
+    from app.b2w2_live import B2W2LiveError, B2W2MelonDSReader
+
+    sin_batalla = replace(BW, battle_presentation=None, battle_logical=None)
+    lector = B2W2MelonDSReader(sin_batalla)
+
     with pytest.raises(B2W2LiveError, match="no esta demostrado en Negro/Blanco"):
         lector._read_battle_rows(object())
 
@@ -432,13 +430,34 @@ def test_el_tramo_bueno_coincide_en_las_ciento_una(captura_mt) -> None:
     assert bueno["coincidencias_con_pkhex"] == 101
 
 
-def test_la_batalla_de_blanco_sigue_sin_ordenarse() -> None:
-    """Localizada no es lo mismo que demostrada.
+def test_la_batalla_de_blanco_quedo_ordenada_por_tiempo() -> None:
+    """La lógica bajó a los 1115 ms y la presentación a los 4544 ms.
 
-    La búsqueda por firma encontró exactamente dos filas, pero cuál manda en
-    pantalla solo se ve con una traza temporal: fuera de la animación las dos
-    dicen lo mismo. Equivocarse adelantaría el KO a la animación, así que
-    mientras no se sepa, la capacidad sigue apagada.
+    Los 3429 ms de diferencia son casi los 3362 ms que separan a las dos copias
+    de Negro 2 en su propia traza: el mismo retardo de animación medido en dos
+    juegos distintos. Si estuvieran al revés, RoleRun cantaría la baja antes de
+    que el jugador la viera.
     """
-    assert BW.battle_presentation is None
-    assert BW.battle_logical is None
+    assert BW.battle_presentation == 0x0226D670
+    assert BW.battle_logical == 0x0226E56C
+    assert BW.battle_logical > BW.battle_presentation
+
+
+def test_las_filas_de_combate_van_una_por_miembro_del_equipo() -> None:
+    """Medido sobre dos miembros y las dos tablas, no supuesto.
+
+    Purrloin, primero del equipo, tenía sus filas en 0x0226D670 y 0x0226E56C.
+    Serperior, segundo, exactamente 0x228 más allá en las dos.
+    """
+    assert BW.battle_stride == 0x228
+    assert BW.battle_presentation + BW.battle_stride == 0x0226D898
+    assert BW.battle_logical + BW.battle_stride == 0x0226E794
+
+
+def test_negro_2_no_tiene_medido_ese_paso() -> None:
+    """Y por eso vale None: allí se sigue leyendo una sola fila.
+
+    Suponerle el mismo 0x228 sería exactamente la analogía que este proyecto no
+    admite; ese paso se midió en Blanco, no en Negro 2.
+    """
+    assert B2W2.battle_stride is None
