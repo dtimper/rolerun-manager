@@ -541,3 +541,30 @@ def pk4_party_without_moves(block: bytes, huecos) -> bytes:
         canonico[PK4_MOVE_PP + 3] = 0
         canonico[PK4_MOVE_PP_UPS + 3] = 0
     return reshuffle_pk4(pid, orden, canonico) + block[PK4_STORED_SIZE:]
+
+
+def pk4_party_block(stored: bytes, *, pid: int, level: int, stats) -> bytes:
+    """Convierte un PK4 del PC (136 B) en uno de combate (236 B).
+
+    Un Pokémon guardado no lleva nivel ni estadísticas: las calcula el juego al
+    sacarlo. ``stats`` llega en el orden de RoleRun —PS, Atq, Def, AtEsp, DefEsp,
+    Vel— y el bloque las quiere con la velocidad en medio.
+
+    Entra con los PS al máximo, que es como sale del PC.
+    """
+    if len(stored) != PK4_STORED_SIZE:
+        raise Pk4Error(f"Un PK4 almacenado mide {PK4_STORED_SIZE} bytes.")
+    level = int(level)
+    if not 1 <= level <= 100:
+        raise Pk4Error("El nivel del PK4 que entra al equipo está fuera de rango.")
+    valores = tuple(int(valor) for valor in stats)
+    if len(valores) != 6 or any(valor <= 0 for valor in valores):
+        raise Pk4Error("Las estadísticas del PK4 que entra al equipo no son válidas.")
+    extension = bytearray(PK4_PARTY_SIZE - PK4_STORED_SIZE)
+    extension[PK4_LEVEL - PK4_STORED_SIZE] = level
+    struct.pack_into(
+        "<7H", extension, PK4_CURRENT_HP - PK4_STORED_SIZE,
+        valores[0], valores[0], valores[1], valores[2],
+        valores[5], valores[3], valores[4],
+    )
+    return stored + _crypt(bytes(extension), int(pid))

@@ -1,6 +1,31 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.81 — Equipo ↔ PC en HeartGold
+
+Las cinco operaciones: mover dentro del PC, depositar, retirar, intercambiar y
+sustituir a un debilitado. Todas con el mismo contrato, y todas escribiendo el
+equipo, el PC y el contador como una sola transacción con rollback entero.
+
+**Dos detalles medidos sobre la partida real, no supuestos:**
+
+- Un hueco vacío del PC **no son 136 ceros**: es un PK4 cifrado con semilla
+  cero. Se comprobó sobre los **539 huecos vacíos** del PC del usuario. Escribir
+  ceros haría que el readback de este mismo writer los rechazara por checksum, y
+  toda retirada acabaría en rollback. Es exactamente lo que le pasó a quinta.
+- **El contador se escribe el último.** Mientras el equipo nuevo no esté entero
+  en memoria, el juego no debe verlo declarado. Hay una prueba que lo vigila.
+
+Un PK4 guardado no lleva nivel ni estadísticas —las calcula el juego al
+sacarlo—, así que al retirar se construyen con la misma tabla personal que usa
+el resto de RoleRun: la de la ROM si la partida está randomizada.
+
+**No se sustituye a quien no está debilitado.** La Run cuenta las bajas, y
+falsear una sería peor que no poder hacerlo.
+
+`tests/test_hgss_party_pc.py`: 13 pruebas, la mitad sobre lo que **no** debe
+escribirse. Suite completa: **1728**.
+
 # v0.2.6-alpha.80 — las MT de HeartGold, y se gastan
 
 Cambiar un movimiento pasaba por el selector de MT, y el selector contestaba que

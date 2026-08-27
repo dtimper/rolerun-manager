@@ -34,11 +34,13 @@ from dataclasses import dataclass
 
 from .gen4_memory import MONEY_MAX, SAVE_MONEY_SIZE
 from .hgss_live import (
-    _KERNEL32, DS_RAM_BASE, HgssBagRead, HgssLiveError, HgssMelonDSReader,
+    _KERNEL32, DS_RAM_BASE, MAX_PARTY, HgssBagRead, HgssLiveError, HgssMelonDSReader,
     HgssPartyRead, bag_pocket_for, parse_bag_pocket, set_bag_quantity,
 )
+from .gen4_memory import PC_BOX_COUNT, PC_BOX_SLOT_COUNT, PC_BOX_STRIDE
 from .pk4 import (
-    PK4_PARTY_SIZE, Pk4Error, pk4_party_healed, pk4_party_with_move,
+    PK4_PARTY_SIZE, PK4_STORED_SIZE, Pk4Error, empty_pk4_party, empty_pk4_stored,
+    parse_pk4_boxed, parse_pk4_party, pk4_party_healed, pk4_party_with_move,
     pk4_party_with_role, pk4_party_without_moves,
 )
 
@@ -601,3 +603,305 @@ class HgssMelonDSWriter:
         except Exception:
             deshacer()
             raise
+
+    # ------------------------------------------------------------------
+    # Equipo ↔ PC
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _hueco_del_pc(box: int, box_slot: int) -> int:
+        box, box_slot = int(box), int(box_slot)
+        if not 1 <= box <= PC_BOX_COUNT:
+            raise HgssLiveError("La caja del PC está fuera de rango.")
+        if not 1 <= box_slot <= PC_BOX_SLOT_COUNT:
+            raise HgssLiveError("El hueco del PC está fuera de rango.")
+        return (box - 1) * PC_BOX_STRIDE + (box_slot - 1) * PK4_STORED_SIZE
+
+    def _transaccion_equipo_y_pc(
+        self, party_read: HgssPartyRead, planear, verificar, *, que: str,
+    ):
+        """Armazón común de todo lo que toca el equipo y el PC a la vez.
+
+        ``planear`` recibe las lecturas frescas y devuelve
+        ``(contador_nuevo, equipo_nuevo, {offset_pc: bytes})``. ``verificar``
+        recibe las lecturas de después y lanza si algo no cuadra.
+
+        El contador se escribe **el último**: mientras el equipo nuevo no esté
+        entero en memoria, el juego no debe verlo declarado.
+        """
+        antes_equipo = self.reader.read_party()
+        if antes_equipo.process_id != party_read.process_id:
+            raise HgssLiveError(f"melonDS cambió antes de {que} en HeartGold.")
+        antes_pc = self.reader.read_pc(antes_equipo)
+
+        contador_nuevo, equipo_nuevo, huecos = planear(antes_equipo, antes_pc)
+        if not 1 <= contador_nuevo <= MAX_PARTY:
+            raise HgssLiveError("El equipo se quedaría con un tamaño imposible.")
+
+        base = antes_equipo.allocation_base
+        destino_equipo = base + (self.memory.party_data - DS_RAM_BASE)
+        destino_contador = base + (self.memory.party_count - DS_RAM_BASE)
+        destino_pc = base + (self.memory.pc - DS_RAM_BASE)
+
+        def deshacer() -> None:
+            self._write_process_bytes(
+                antes_equipo.process_id, destino_equipo, antes_equipo.raw,
+            )
+            for offset in huecos:
+                self._write_process_bytes(
+                    antes_equipo.process_id, destino_pc + offset,
+                    antes_pc.raw[offset:offset + PK4_STORED_SIZE],
+                )
+            self._write_process_bytes(
+                antes_equipo.process_id, destino_contador,
+                bytes((antes_equipo.count,)),
+            )
+            restaurado = self.reader.read_party()
+            if restaurado.raw != antes_equipo.raw:
+                raise HgssLiveError(
+                    f"El rollback de {que} no se pudo confirmar; no guardes."
+                )
+            if self.reader.read_pc(restaurado).raw != antes_pc.raw:
+                raise HgssLiveError(
+                    f"El rollback de {que} dejó el PC distinto; no guardes."
+                )
+
+        try:
+            for offset, contenido in huecos.items():
+                self._write_process_bytes(
+                    antes_equipo.process_id, destino_pc + offset, contenido,
+                )
+            self._write_process_bytes(
+                antes_equipo.process_id, destino_equipo, equipo_nuevo,
+            )
+            self._write_process_bytes(
+                antes_equipo.process_id, destino_contador, bytes((contador_nuevo,)),
+            )
+            despues_equipo = self.reader.read_party()
+            if despues_equipo.count != contador_nuevo:
+                raise HgssLiveError(f"El contador del equipo tras {que} no coincide.")
+            if despues_equipo.raw != equipo_nuevo[:contador_nuevo * PK4_PARTY_SIZE]:
+                raise HgssLiveError(f"El readback del equipo tras {que} no coincide.")
+            despues_pc = self.reader.read_pc(despues_equipo)
+            for offset, contenido in huecos.items():
+                if despues_pc.raw[offset:offset + PK4_STORED_SIZE] != contenido:
+                    raise HgssLiveError(f"El readback del PC tras {que} no coincide.")
+            verificar(despues_equipo, despues_pc)
+            return despues_equipo, despues_pc
+        except Exception:
+            deshacer()
+            raise
+
+    def move_pc_slot(
+        self, party_read: HgssPartyRead, origen, destino, *, expected_identity,
+    ):
+        """Mueve un Pokémon de un hueco del PC a otro que esté libre."""
+        desde = self._hueco_del_pc(*origen)
+        hasta = self._hueco_del_pc(*destino)
+        if desde == hasta:
+            raise HgssLiveError("El origen y el destino del PC son el mismo hueco.")
+
+        def planear(antes_equipo, antes_pc):
+            crudo = antes_pc.raw[desde:desde + PK4_STORED_SIZE]
+            movido = parse_pk4_boxed(crudo, 0)
+            if movido is None:
+                raise HgssLiveError("En el hueco de origen del PC no hay nadie.")
+            if (movido.pid, movido.tid, movido.sid) != tuple(expected_identity):
+                raise HgssLiveError("La identidad del Pokémon del PC cambió.")
+            if parse_pk4_boxed(antes_pc.raw[hasta:hasta + PK4_STORED_SIZE], 0) is not None:
+                raise HgssLiveError("El hueco de destino del PC ya está ocupado.")
+            # El hueco que se libera queda como lo deja el juego: un PK4 cifrado
+            # con semilla cero, **no** 136 ceros. Comprobado sobre los 539 huecos
+            # vacíos del PC del usuario.
+            return antes_equipo.count, antes_equipo.raw, {
+                desde: empty_pk4_stored(), hasta: crudo,
+            }
+
+        def verificar(_despues_equipo, despues_pc):
+            if parse_pk4_boxed(despues_pc.raw[desde:desde + PK4_STORED_SIZE], 0) is not None:
+                raise HgssLiveError("El hueco de origen del PC no quedó vacío.")
+            llegado = parse_pk4_boxed(despues_pc.raw[hasta:hasta + PK4_STORED_SIZE], 0)
+            if llegado is None or (llegado.pid, llegado.tid, llegado.sid) != tuple(expected_identity):
+                raise HgssLiveError("El Pokémon no apareció en el hueco de destino.")
+
+        return self._transaccion_equipo_y_pc(
+            party_read, planear, verificar, que="mover dentro del PC",
+        )
+
+    def resize_party_pc(
+        self, party_read: HgssPartyRead, *, operation: str, party_slot: int,
+        box: int, box_slot: int, expected_identity, incoming_party=None,
+    ):
+        """Deposita en el PC o retira de él, cambiando el tamaño del equipo."""
+        offset = self._hueco_del_pc(box, box_slot)
+        party_slot = int(party_slot)
+
+        def planear(antes_equipo, antes_pc):
+            crudo_pc = antes_pc.raw[offset:offset + PK4_STORED_SIZE]
+            if operation == "party-to-box":
+                if antes_equipo.count <= 1:
+                    raise HgssLiveError("No se puede dejar el equipo vacío.")
+                if not 0 <= party_slot < antes_equipo.count:
+                    raise HgssLiveError("Ese miembro del equipo no existe.")
+                saliente = antes_equipo.pokemon[party_slot]
+                if (saliente.pid, saliente.tid, saliente.sid) != tuple(expected_identity):
+                    raise HgssLiveError("La identidad del que sale cambió.")
+                if parse_pk4_boxed(crudo_pc, 0) is not None:
+                    raise HgssLiveError("El hueco del PC ya está ocupado.")
+                desde = party_slot * PK4_PARTY_SIZE
+                equipo = (
+                    antes_equipo.raw[:desde]
+                    + antes_equipo.raw[desde + PK4_PARTY_SIZE:]
+                    + empty_pk4_party()
+                )
+                return (
+                    antes_equipo.count - 1, equipo,
+                    {offset: antes_equipo.raw[desde:desde + PK4_STORED_SIZE]},
+                )
+
+            if operation == "box-to-party":
+                if antes_equipo.count >= MAX_PARTY:
+                    raise HgssLiveError("El equipo ya está lleno.")
+                if incoming_party is None:
+                    raise HgssLiveError("Falta el Pokémon que entra al equipo.")
+                entrante = parse_pk4_boxed(crudo_pc, 0)
+                if entrante is None:
+                    raise HgssLiveError("En ese hueco del PC no hay nadie.")
+                if (entrante.pid, entrante.tid, entrante.sid) != tuple(expected_identity):
+                    raise HgssLiveError("La identidad del que entra cambió.")
+                try:
+                    construido = parse_pk4_party(incoming_party, antes_equipo.count)
+                except Pk4Error as exc:
+                    raise HgssLiveError(str(exc)) from exc
+                if (construido.pid, construido.tid, construido.sid) != tuple(expected_identity):
+                    raise HgssLiveError("El bloque de combate construido no coincide.")
+                return (
+                    antes_equipo.count + 1,
+                    antes_equipo.raw + incoming_party,
+                    {offset: empty_pk4_stored()},
+                )
+
+            raise HgssLiveError(f"La operación «{operation}» no está admitida.")
+
+        def verificar(despues_equipo, despues_pc):
+            guardado = parse_pk4_boxed(despues_pc.raw[offset:offset + PK4_STORED_SIZE], 0)
+            vivos = {
+                (p.pid, p.tid, p.sid) for p in despues_equipo.pokemon
+            }
+            if operation == "party-to-box":
+                if guardado is None or (guardado.pid, guardado.tid, guardado.sid) != tuple(expected_identity):
+                    raise HgssLiveError("El depositado no apareció en el PC.")
+                if tuple(expected_identity) in vivos:
+                    raise HgssLiveError("El depositado sigue en el equipo.")
+            else:
+                if guardado is not None:
+                    raise HgssLiveError("El hueco del PC no quedó vacío.")
+                if tuple(expected_identity) not in vivos:
+                    raise HgssLiveError("El retirado no apareció en el equipo.")
+
+        return self._transaccion_equipo_y_pc(
+            party_read, planear, verificar, que="cambiar el tamaño del equipo",
+        )
+
+    def swap_party_box(
+        self, party_read: HgssPartyRead, *, party_slot: int, box: int, box_slot: int,
+        outgoing_identity, incoming_identity, incoming_party: bytes,
+    ):
+        """Intercambia un miembro del equipo por uno del PC, sin cambiar el tamaño."""
+        offset = self._hueco_del_pc(box, box_slot)
+        party_slot = int(party_slot)
+
+        def planear(antes_equipo, antes_pc):
+            if not 0 <= party_slot < antes_equipo.count:
+                raise HgssLiveError("Ese miembro del equipo no existe.")
+            saliente = antes_equipo.pokemon[party_slot]
+            if (saliente.pid, saliente.tid, saliente.sid) != tuple(outgoing_identity):
+                raise HgssLiveError("La identidad del que sale cambió.")
+            entrante = parse_pk4_boxed(antes_pc.raw[offset:offset + PK4_STORED_SIZE], 0)
+            if entrante is None:
+                raise HgssLiveError("En ese hueco del PC no hay nadie.")
+            if (entrante.pid, entrante.tid, entrante.sid) != tuple(incoming_identity):
+                raise HgssLiveError("La identidad del que entra cambió.")
+            try:
+                construido = parse_pk4_party(incoming_party, party_slot)
+            except Pk4Error as exc:
+                raise HgssLiveError(str(exc)) from exc
+            if (construido.pid, construido.tid, construido.sid) != tuple(incoming_identity):
+                raise HgssLiveError("El bloque de combate construido no coincide.")
+            desde = party_slot * PK4_PARTY_SIZE
+            equipo = (
+                antes_equipo.raw[:desde] + incoming_party
+                + antes_equipo.raw[desde + PK4_PARTY_SIZE:]
+            )
+            return antes_equipo.count, equipo, {
+                offset: antes_equipo.raw[desde:desde + PK4_STORED_SIZE],
+            }
+
+        def verificar(despues_equipo, despues_pc):
+            miembro = despues_equipo.pokemon[party_slot]
+            if (miembro.pid, miembro.tid, miembro.sid) != tuple(incoming_identity):
+                raise HgssLiveError("El que entraba no ocupó la casilla del equipo.")
+            guardado = parse_pk4_boxed(despues_pc.raw[offset:offset + PK4_STORED_SIZE], 0)
+            if guardado is None or (guardado.pid, guardado.tid, guardado.sid) != tuple(outgoing_identity):
+                raise HgssLiveError("El que salía no apareció en el PC.")
+
+        return self._transaccion_equipo_y_pc(
+            party_read, planear, verificar, que="intercambiar equipo y PC",
+        )
+
+    def replace_fainted_party_pc(
+        self, party_read: HgssPartyRead, *, party_slot: int, box: int, box_slot: int,
+        graveyard_box: int, graveyard_box_slot: int, incoming_party: bytes,
+        outgoing_identity, incoming_identity,
+    ):
+        """El debilitado se va al Cementerio y el sustituto ocupa su casilla."""
+        origen = self._hueco_del_pc(box, box_slot)
+        tumba = self._hueco_del_pc(graveyard_box, graveyard_box_slot)
+        if origen == tumba:
+            raise HgssLiveError("El sustituto y el Cementerio comparten hueco.")
+        party_slot = int(party_slot)
+
+        def planear(antes_equipo, antes_pc):
+            if not 0 <= party_slot < antes_equipo.count:
+                raise HgssLiveError("Ese miembro del equipo no existe.")
+            saliente = antes_equipo.pokemon[party_slot]
+            if (saliente.pid, saliente.tid, saliente.sid) != tuple(outgoing_identity):
+                raise HgssLiveError("La identidad del debilitado cambió.")
+            if saliente.current_hp != 0:
+                raise HgssLiveError(
+                    "Ese Pokémon no está debilitado; la sustitución no procede."
+                )
+            entrante = parse_pk4_boxed(antes_pc.raw[origen:origen + PK4_STORED_SIZE], 0)
+            if entrante is None or (entrante.pid, entrante.tid, entrante.sid) != tuple(incoming_identity):
+                raise HgssLiveError("La identidad del sustituto cambió.")
+            if parse_pk4_boxed(antes_pc.raw[tumba:tumba + PK4_STORED_SIZE], 0) is not None:
+                raise HgssLiveError("La casilla del Cementerio ya está ocupada.")
+            try:
+                construido = parse_pk4_party(incoming_party, party_slot)
+            except Pk4Error as exc:
+                raise HgssLiveError(str(exc)) from exc
+            if (construido.pid, construido.tid, construido.sid) != tuple(incoming_identity):
+                raise HgssLiveError("El bloque de combate construido no coincide.")
+            desde = party_slot * PK4_PARTY_SIZE
+            equipo = (
+                antes_equipo.raw[:desde] + incoming_party
+                + antes_equipo.raw[desde + PK4_PARTY_SIZE:]
+            )
+            return antes_equipo.count, equipo, {
+                origen: empty_pk4_stored(),
+                tumba: antes_equipo.raw[desde:desde + PK4_STORED_SIZE],
+            }
+
+        def verificar(despues_equipo, despues_pc):
+            miembro = despues_equipo.pokemon[party_slot]
+            if (miembro.pid, miembro.tid, miembro.sid) != tuple(incoming_identity):
+                raise HgssLiveError("El sustituto no ocupó la casilla del debilitado.")
+            if parse_pk4_boxed(despues_pc.raw[origen:origen + PK4_STORED_SIZE], 0) is not None:
+                raise HgssLiveError("El hueco del sustituto no quedó vacío.")
+            enterrado = parse_pk4_boxed(despues_pc.raw[tumba:tumba + PK4_STORED_SIZE], 0)
+            if enterrado is None or (enterrado.pid, enterrado.tid, enterrado.sid) != tuple(outgoing_identity):
+                raise HgssLiveError("El debilitado no llegó al Cementerio.")
+
+        return self._transaccion_equipo_y_pc(
+            party_read, planear, verificar, que="sustituir al debilitado",
+        )

@@ -23,7 +23,7 @@ from pathlib import Path
 from ..boxed_metadata import (
     ability_name, base_stats_for, boxed_level, item_name, species_name,
 )
-from ..gen4_memory import MONEY_MAX
+from ..gen4_memory import MONEY_MAX, PC_BOX_STRIDE
 from ..gen4_memory import GEN4_MEMORY, Gen4Memory
 from ..hgss_live import (
     PC_BOX_SLOT_COUNT, HgssLiveError, HgssMelonDSReader,
@@ -32,11 +32,16 @@ from ..hgss_tm_service import build_tm_profile
 from ..hgss_write import HgssMelonDSWriter, HgssRoleWrite
 from ..models import (
     PendingChange, PendingInventoryChange, PendingPartyHeal, PendingRoleChange,
-    PendingTMTeach,
+    PendingTeamChange, PendingTMTeach,
 )
-from ..pk4 import STAT_ORDER_PERSONAL
+from ..pk4 import (
+    PK4_STORED_SIZE, STAT_ORDER_PERSONAL, parse_pk4_boxed, pk4_party_block,
+)
 from ..pokemon_stats import nature_presentation, stat_dict
-from ..role_rules import ROLE_TO_MARKING, canonical_role, role_from_markings
+from ..role_rules import (
+    ROLE_SYMBOLS, ROLE_TO_KEY, ROLE_TO_MARKING, canonical_role,
+    role_from_markings,
+)
 from ..save_engine_client import SaveGameData, SavePokemon
 from .adapter import RealTimeGameAdapter
 from .models import (
@@ -572,9 +577,189 @@ class HgssRealTimeAdapter(RealTimeGameAdapter):
             )
             return self._resultado(current, len(objetivos))
 
+        if len(cambios) == 1 and isinstance(cambios[0], PendingTeamChange):
+            return self._aplicar_equipo_pc(current, cambios[0])
+
         raise HgssLiveError(
             "Esa operación todavía no tiene writer demostrado en HeartGold."
         )
+
+    # ------------------------------------------------------------------
+    # Equipo ↔ PC
+    # ------------------------------------------------------------------
+
+    def _party_block(self, stored: bytes, pokemon) -> bytes:
+        """Construye el bloque de combate de un Pokémon que sale del PC.
+
+        Un PK4 guardado no lleva nivel ni estadísticas: las calcula el juego al
+        sacarlo, y aquí se calculan con la misma tabla personal que usa el resto
+        de RoleRun —la de la ROM si la partida está randomizada—.
+        """
+        base = base_stats_for(self.game_key, pokemon.species_id, pokemon.form)
+        nivel = boxed_level(
+            self.game_key, pokemon.species_id, pokemon.form, pokemon.experience,
+        )
+        return pk4_party_block(
+            stored, pid=pokemon.pid, level=nivel,
+            stats=self._calculated_stats(
+                base, pokemon.ivs, pokemon.evs, nivel, pokemon.nature_id,
+            ),
+        )
+
+    @staticmethod
+    def _identidad_de(instantanea) -> tuple[int, int, int]:
+        datos = dict(instantanea or {})
+        return tuple(int(datos.get(clave, 0) or 0) for clave in ("pid", "tid", "sid"))
+
+    def _pc_en(self, pc_read, box: int, box_slot: int):
+        """El Pokémon que hay en esa caja y ese hueco, con sus bytes."""
+        offset = (
+            (int(box) - 1) * PC_BOX_STRIDE
+            + (int(box_slot) - 1) * PK4_STORED_SIZE
+        )
+        if not 0 <= offset <= len(pc_read.raw) - PK4_STORED_SIZE:
+            raise HgssLiveError("Ese hueco del PC está fuera de rango.")
+        guardado = pc_read.raw[offset:offset + PK4_STORED_SIZE]
+        return parse_pk4_boxed(guardado, 0), guardado
+
+    def _aplicar_equipo_pc(self, current: SaveGameData, change: PendingTeamChange):
+        operacion = str(change.operation)
+        party_read = self.reader.read_party()
+        box, box_slot = int(change.box or 0), int(change.box_slot or 0)
+
+        if operacion == "move-box-slot":
+            destino_box = int(change.destination_box or 0)
+            destino_slot = int(change.destination_box_slot or 0)
+            identidad = self._identidad_de(change.outgoing_snapshot) or ()
+            if not any(identidad):
+                identidad = self._identidad_de(change.incoming_snapshot)
+            if not all(identidad):
+                raise HgssLiveError("El traslado dentro del PC no trae identidad.")
+            self.writer.move_pc_slot(
+                party_read, (box, box_slot), (destino_box, destino_slot),
+                expected_identity=identidad,
+            )
+            return self._resultado_equipo_pc(current, change, 1)
+
+        if operacion in {"party-to-box", "box-to-party"}:
+            party_slot = int(change.party_slot or 0)
+            if operacion == "party-to-box":
+                identidad = self._identidad_de(change.outgoing_snapshot)
+                construido = None
+            else:
+                pc_read = self.reader.read_pc(party_read)
+                entrante, guardado = self._pc_en(pc_read, box, box_slot)
+                if entrante is None:
+                    raise HgssLiveError("En ese hueco del PC no hay nadie.")
+                if entrante.held_item_id != 0:
+                    raise HgssLiveError(
+                        "La retirada exige por ahora un entrante sin objeto."
+                    )
+                identidad = self._identidad_de(change.incoming_snapshot)
+                if identidad != (entrante.pid, entrante.tid, entrante.sid):
+                    raise HgssLiveError("La identidad del que entra no coincide.")
+                construido = self._party_block(guardado, entrante)
+            if not all(identidad):
+                raise HgssLiveError("Falta la identidad del Pokémon que se mueve.")
+            self.writer.resize_party_pc(
+                party_read, operation=operacion, party_slot=party_slot,
+                box=box, box_slot=box_slot, expected_identity=identidad,
+                incoming_party=construido,
+            )
+            return self._resultado_equipo_pc(current, change, 1)
+
+        if operacion == "swap-party-box":
+            party_slot = int(change.party_slot or 0)
+            pc_read = self.reader.read_pc(party_read)
+            entrante, guardado = self._pc_en(pc_read, box, box_slot)
+            if entrante is None:
+                raise HgssLiveError("En ese hueco del PC no hay nadie.")
+            if entrante.held_item_id != 0:
+                raise HgssLiveError(
+                    "El intercambio exige por ahora un entrante sin objeto."
+                )
+            entra = self._identidad_de(change.incoming_snapshot)
+            sale = self._identidad_de(change.outgoing_snapshot)
+            if entra != (entrante.pid, entrante.tid, entrante.sid) or not all(sale):
+                raise HgssLiveError("Los testigos del intercambio no coinciden.")
+            self.writer.swap_party_box(
+                party_read, party_slot=party_slot, box=box, box_slot=box_slot,
+                outgoing_identity=sale, incoming_identity=entra,
+                incoming_party=self._party_block(guardado, entrante),
+            )
+            return self._resultado_equipo_pc(current, change, 1)
+
+        if operacion == "replace-fainted":
+            party_slot = int(change.party_slot or 0)
+            tumba_box = int(change.graveyard_box or 0)
+            tumba_slot = int(change.graveyard_box_slot or 0)
+            if not (tumba_box and tumba_slot):
+                raise HgssLiveError(
+                    "La sustitución no declara casilla de Cementerio."
+                )
+            pc_read = self.reader.read_pc(party_read)
+            entrante, guardado = self._pc_en(pc_read, box, box_slot)
+            if entrante is None:
+                raise HgssLiveError("En ese hueco del PC no hay nadie.")
+            if entrante.held_item_id != 0:
+                raise HgssLiveError(
+                    "La sustitución exige por ahora un sustituto sin objeto."
+                )
+            entra = self._identidad_de(change.incoming_snapshot)
+            sale = self._identidad_de(change.outgoing_snapshot)
+            if entra != (entrante.pid, entrante.tid, entrante.sid) or not all(sale):
+                raise HgssLiveError("Los testigos de la sustitución no coinciden.")
+            self.writer.replace_fainted_party_pc(
+                party_read, party_slot=party_slot, box=box, box_slot=box_slot,
+                graveyard_box=tumba_box, graveyard_box_slot=tumba_slot,
+                incoming_party=self._party_block(guardado, entrante),
+                outgoing_identity=sale, incoming_identity=entra,
+            )
+            return self._resultado_equipo_pc(current, change, 1)
+
+        raise HgssLiveError(
+            f"La operación «{operacion}» todavía no tiene writer demostrado "
+            "en HeartGold."
+        )
+
+    def _resultado_equipo_pc(
+        self, current: SaveGameData, change: PendingTeamChange, aplicados: int,
+    ):
+        """Publica la lectura de después conservando los roles de la Run.
+
+        El que entra hereda el rol de la casilla que deja libre el que sale: es
+        la regla nuclear de RoleRun, y cuarta todavía no escribe las marcas, así
+        que hay que conservarla aquí.
+        """
+        vivo = self._capture(current, 0)
+        entra = self._identidad_de(change.incoming_snapshot)
+        instantanea = dict(change.incoming_snapshot or {})
+        miembro = next(
+            (p for p in vivo.game.party if (p.pid, p.tid, p.sid) == entra), None,
+        )
+        if miembro is not None:
+            heredado = str(instantanea.get("role", "") or change.incoming_role or "")
+            if heredado in ROLE_TO_KEY:
+                miembro.role = heredado
+                miembro.role_symbol = ROLE_SYMBOLS.get(heredado, "")
+        self._restaurar_roles(vivo.game, change.party_role_snapshot)
+        vivo.game.raw["writes_enabled"] = True
+        vivo.game.raw["live_write"] = True
+        return HgssRealTimeWriteResult(vivo.game, vivo.process, 2, aplicados)
+
+    @classmethod
+    def _restaurar_roles(cls, game: SaveGameData, roles) -> None:
+        """Devuelve a cada miembro el rol que la Run tenía guardado para él."""
+        guardados = dict(roles or {})
+        for pokemon in game.party:
+            clave = (
+                f"{int(pokemon.pid or 0)}:{int(pokemon.tid or 0)}:"
+                f"{int(pokemon.sid or 0)}"
+            )
+            rol = str(guardados.get(clave, "") or "")
+            if rol in ROLE_TO_KEY:
+                pokemon.role = rol
+                pokemon.role_symbol = ROLE_SYMBOLS.get(rol, "")
 
     # ------------------------------------------------------------------
     # Estado
