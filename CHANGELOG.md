@@ -1,6 +1,31 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.27 — un cambio sin writer ya no puede congelar el seguimiento
+
+Este fallo ha aparecido dos veces con síntomas muy distintos y siempre por la
+misma causa, así que se cierra la clase entera en lugar de caso a caso.
+
+- `_oras_live_reconciliation_can_read` exigía la cola de cambios
+  **completamente vacía**. Esperar a un cambio que el adaptador vivo no sabe
+  aplicar es esperar para siempre: la partida deja de actualizarse y el usuario
+  no tiene forma de saber por qué.
+- Ocurrió con la curación en alpha.16 y con los roles en alpha.23. La segunda vez
+  se manifestó como tres fallos aparentemente distintos —«los roles no
+  funcionan», «los EV siguen a cero», «la vida no se refleja»— que resultaron ser
+  uno solo.
+- Ahora **solo bloquean la lectura los cambios que de verdad tienen writer**. Un
+  cambio sin writer sigue en la cola, para poder guardarlo por archivo, pero no
+  secuestra el seguimiento en vivo.
+- Comprobado además que el selector de MT ya rechaza B2/W2 con un aviso claro y
+  sin encolar nada; el drafteo sí puede crear cambios de movimientos, y esos son
+  precisamente los que esta red de seguridad desactiva como bloqueo.
+- Se registran las validaciones físicas del usuario: rol + EV (alpha.24/25) y
+  curación (alpha.26), ambas en Negro 2 España/melonDS 1.1.
+- Se elimina una fila duplicada del documento de paridad que seguía declarando el
+  writer de roles como cerrado.
+- Baseline completa: **1071 passed**.
+
 # v0.2.6-alpha.26 — curación de B2/W2
 
 El botón CURAR vuelve a B2/W2, esta vez con writer propio. Se cerró en alpha.16

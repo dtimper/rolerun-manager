@@ -8147,10 +8147,30 @@ class RoleRunManager(ctk.CTk):
             and getattr(self.save_engine, "key", "") in REALTIME_READ_GAME_KEYS
         )
 
+    def _oras_live_pending_changes_block_reads(self) -> bool:
+        """¿Hay en cola algo que este backend vivo pueda llegar a escribir?
+
+        El monitor no lee mientras el usuario tiene cambios preparados, para no
+        sustituir su vista por una lectura del juego a medio camino. Pero esperar
+        a un cambio que el adaptador activo **no sabe aplicar** es esperar para
+        siempre: la partida deja de actualizarse y el usuario no tiene forma de
+        saber por qué.
+
+        Eso fue exactamente lo que pasó con la curación en alpha.16 y con los
+        roles en alpha.23. La red de seguridad es esta: solo bloquean la lectura
+        los cambios que de verdad tienen writer.
+        """
+        pendientes = list(getattr(getattr(self, "run", None), "pending_changes", ()) or ())
+        if not pendientes:
+            return False
+        return any(
+            not self._oras_live_unsupported_changes([cambio]) for cambio in pendientes
+        )
+
     def _oras_live_reconciliation_can_read(self) -> bool:
         return bool(
             self._oras_live_reconciliation_is_active()
-            and not self.run.pending_changes
+            and not self._oras_live_pending_changes_block_reads()
             and not self._live_sync_in_progress
             and not self._live_write_in_progress
             and not self._oras_live_monitor_in_progress

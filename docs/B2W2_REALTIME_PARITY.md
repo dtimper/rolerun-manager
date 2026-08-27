@@ -14,8 +14,7 @@ revisión, región y melonDS concretos.
 | Equipo | Conteo, identidad, orden, especie, forma, apodo y huevo | Conteo, identidad, orden y seis miembros **VALIDADOS FÍSICAMENTE**; forma/apodo/huevo **IMPLEMENTADOS** | Equipo controlado con forma/apodo/huevo |
 | Ficha | Nivel, PS, estado, stats, naturaleza, IV y EV | IV/EV/nivel/PS **VALIDADOS FÍSICAMENTE**; resto **IMPLEMENTADO · TEST** | Cambiar estado/naturaleza y observar UI |
 | Ataques | IDs, orden, PP, PP Up, habilidad y objeto | Movimientos/habilidad/objeto **VALIDADOS FÍSICAMENTE**; PP interno sin presentación visual | Gastar PP para contrastar reader mediante diagnóstico, no UI |
-| Roles | Leer seis marcas y actualizar ficha/barra/OBS · **escribir rol y EV** | Lectura **IMPLEMENTADA · TEST**; writer de rol+EV con recálculo de estadísticas **IMPLEMENTADO · TEST** desde alpha.24, validación física pendiente | Asignar un rol desde RoleRun y comprobar marca, EV y estadísticas en el juego |
-| Roles | Escribir rol, swap atómico y EV asociados | **PENDIENTE; WRITER CERRADO** | Stored+party, checksum, readback y rollback |
+| Roles | Leer seis marcas y actualizar ficha/barra/OBS · **escribir rol y EV** | Lectura y writer de rol+EV con recálculo de estadísticas: **IMPLEMENTADO · TEST · VALIDADO FÍSICAMENTE** (27-08-2026, alpha.24/25) | Repetir con Líbero y sus dos características elegidas |
 | Combate | Entrada/salida, filas, identidad, PS, cambio y animación | PS/animación sin spoiler y PAR durante combate: **IMPLEMENTADO · TEST · VALIDADO FÍSICAMENTE** | Probar cambio con varios miembros y otros estados |
 | Muertes | Baseline, >0→0, varios KO, selector, sustituto y evento único | Core común listo; lane B2/W2 **PENDIENTE** | Cerrar primero combate |
 | PC lectura | Dimensiones, nombres/caja actual, matriz y vacíos válidos | Matriz 24×30: **DEMOSTRADA · IMPLEMENTADA · TEST · VALIDADA FÍSICAMENTE** | Contrastar nombres de cajas y otras cajas ocupadas |
@@ -24,7 +23,7 @@ revisión, región y melonDS concretos.
 | Sustitución | Baja→Cementerio, sustituto, rol heredado, retirada de ataques | **PENDIENTE; WRITER CERRADO** | Depende de combate, roles y PC |
 | Mochila | Bolsillos, MT/cantidades y utilidades | **PENDIENTE** | Estructura estable en dos estados |
 | MT/drafteo | Compatibilidad, posesión, enseñar/borrar y consumo Gen 5 | Lectura de ataques lista; resto **PENDIENTE** | Reader mochila antes de cualquier writer |
-| Curación | PS, estado y PP de todo el equipo | **IMPLEMENTADO · TEST** desde alpha.26: writer transaccional con PP base Gen 5 extraídos de PKHeX.Core; validación física pendiente | Curar con el equipo herido, envenenado y con PP gastados |
+| Curación | PS, estado y PP de todo el equipo | **IMPLEMENTADO · TEST · VALIDADO FÍSICAMENTE** (27-08-2026, Negro 2 España/melonDS 1.1, alpha.26). PP base Gen 5 extraídos de PKHeX.Core | Repetir con Más PP y varios estados alterados |
 | Utilidades | Caramelo Raro, Repelente Máximo y dinero | **PENDIENTE; WRITER CERRADO** | Campo exacto por utilidad |
 | Progreso | Medallas/gimnasios sin retroceso ni duplicado | **PENDIENTE** | Flags antes/después de medalla |
 | UI | Barra, ficha, PC, avisos live/stale/inválido y compuertas | Equipo y miembros SIN ROL en barra **VALIDADOS FÍSICAMENTE**; resto por lane | Validación visible por incorporación |

@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.26`
+- Versión de aplicación: `v0.2.6-alpha.27`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,26 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.27 — el monitor deja de esperar a lo inaplicable
+
+El usuario validó físicamente la curación. Antes de abrir la siguiente capacidad
+se cierra la clase de fallo que ha costado tres rondas de diagnóstico.
+
+`_oras_live_reconciliation_can_read` exigía la cola de cambios completamente
+vacía. Un cambio que el adaptador activo no sabe aplicar nunca sale de esa cola,
+así que el monitor dejaba de leer para siempre. Pasó con la curación en alpha.16
+y con los roles en alpha.23, esta última manifestándose como tres fallos
+aparentemente distintos que eran uno.
+
+Ahora solo bloquean la lectura los cambios con writer. Los demás siguen en cola
+para el flujo de archivo, sin secuestrar el seguimiento en vivo.
+
+Estado de B2/W2 tras las validaciones físicas del 27-08-2026: party, ficha,
+combate, PC (lectura, cambios externos y escritura completa), roles con EV y
+curación. Quedan mochila/MT, bajas con sustitución, utilidades y medallas.
+
+Baseline completa: **1071 passed**.
 
 ### v0.2.6 Alpha.26 — writer de curación en B2/W2
 
