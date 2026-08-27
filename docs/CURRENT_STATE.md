@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.38`
+- Versión de aplicación: `v0.2.6-alpha.39`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,24 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.39 — las utilidades de la cabecera escriben en B2/W2
+
+Los tres botones junto a la vida (Caramelos Raros ×999, Repelentes Máximos ×999
+y dinero al máximo) ya escriben en Negro 2/Blanco 2.
+
+- Mochila: `set_bag_quantity` respeta el compactado del bolsillo. Caramelo Raro
+  (#50) va a Medicinas y Repelente Máximo (#77) a Objetos, según el reparto
+  extraído de `SAV5B2W2.Inventory`.
+- Dinero: `0x022266A4`, demostrado en la traza de dos estados del 27-08-2026
+  (único superviviente de 2 candidatos: 4524 → 4224). Tope 999 999, que es el
+  único valor demostrado que la utilidad escribe.
+- Ambos writers usan el contrato transaccional B2/W2 completo, y el adaptador
+  contrasta el rótulo con la tabla de PKHeX antes de escribir.
+- Sin melonDS sincronizado la utilidad avisa y no deja nada pendiente.
+- **Pendiente de validación física.** Falta también el perfil de MT de B2/W2
+  (qué movimiento enseña cada MT y qué Pokémon puede aprenderla), que se puede
+  extraer de PKHeX y de `data/pkhex_personal_b2w2.bin` sin necesitar la ROM.
 
 ### v0.2.6 Alpha.38 — la mochila publicada por el contrato común
 

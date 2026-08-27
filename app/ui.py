@@ -7774,10 +7774,14 @@ class RoleRunManager(ctk.CTk):
                     supported_ids.add(id(change))
                 continue
             if live_key == "b2w2":
-                if isinstance(change, (PendingRoleChange, PendingPartyHeal)):
+                if isinstance(change, (
+                    PendingRoleChange, PendingPartyHeal, PendingInventoryChange,
+                )):
                     # alpha.24: el writer de roles B2/W2 escribe marcas y EV en el
                     # PK5 vivo, recalcula las estadísticas con la tabla personal y
                     # verifica el resultado con el parser de producción.
+                    # alpha.39: las utilidades de la cabecera escriben la mochila
+                    # y el dinero en direcciones demostradas con el mismo contrato.
                     supported_ids.add(id(change))
                 elif (
                     isinstance(change, PendingTeamChange)
@@ -10591,7 +10595,9 @@ class RoleRunManager(ctk.CTk):
             }
             result: list[str] = []
             for change in changes:
-                if isinstance(change, (PendingRoleChange, PendingPartyHeal)):
+                if isinstance(change, (
+                    PendingRoleChange, PendingPartyHeal, PendingInventoryChange,
+                )):
                     continue
                 if (
                     isinstance(change, PendingTeamChange)
@@ -12753,7 +12759,9 @@ class RoleRunManager(ctk.CTk):
 
     @staticmethod
     def _inventory_money_max_for_engine(engine_key: str) -> int:
-        return 999_999 if str(engine_key) == "bdsp" else 9_999_999
+        # B2/W2 escribe RAM en una dirección demostrada, y el único tope
+        # demostrado para ella es el que usa la propia utilidad de RoleRun.
+        return 999_999 if str(engine_key) in {"bdsp", "b2w2"} else 9_999_999
 
     def _resolve_global_tm_profile(self):
         """Resuelve únicamente fuentes ya usadas por el selector individual."""
@@ -18442,6 +18450,21 @@ class RoleRunManager(ctk.CTk):
                 False,
             )
             return
+        is_b2w2_live = bool(engine_key == "b2w2" and self._oras_live_active)
+        if engine_key == "b2w2" and not is_b2w2_live:
+            # B2/W2 solo tiene writer vivo. Encolar sin él dejaría el cambio
+            # pendiente para siempre y el monitor vivo, que exige la cola vacía,
+            # se quedaría congelado: es la clase de fallo que cerró alpha.27.
+            self._show_live_sync_toast(
+                "MELONDS NO ESTÁ SINCRONIZADO",
+                (
+                    "Espera a que la cabecera indique Negro 2/Blanco 2 en vivo y "
+                    "vuelve a pulsar la utilidad. No quedó ningún cambio pendiente "
+                    "ni se escribió ningún byte."
+                ),
+                False,
+            )
+            return
         is_oras_live = bool(engine_key == "oras" and self._oras_live_active)
         is_xy_live = bool(engine_key == "xy" and self._oras_live_active)
         is_sm_live = bool(engine_key in GEN7_REALTIME_GAME_KEYS and self._oras_live_active)
@@ -18509,6 +18532,19 @@ class RoleRunManager(ctk.CTk):
             desired_inventory_witness=desired_inventory_witness,
             desired_misc_witness=desired_misc_witness,
         ))
+        if is_b2w2_live:
+            self._smooth_render_page(preserve_scroll=(self.active_page == "team"))
+            self._show_live_sync_toast(
+                "APLICANDO EN NEGRO 2/BLANCO 2",
+                (
+                    "Dinero máximo"
+                    if item_key == "money-max"
+                    else f"{item_name} ×{quantity}"
+                ),
+                True,
+            )
+            self._request_oras_live_auto_apply_since(pending_ids_before)
+            return
         if is_bdsp_live:
             self._smooth_render_page(preserve_scroll=(self.active_page == "team"))
             self._show_live_sync_toast(

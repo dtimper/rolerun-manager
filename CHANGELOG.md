@@ -1,6 +1,38 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.39 — las utilidades de la cabecera, escribiendo en Negro 2
+
+Los tres botones que hay junto a la vida (Caramelos Raros ×999, Repelentes
+Máximos ×999 y dinero al máximo) ya funcionan en B2/W2. Hasta ahora estaban
+ahí pero no escribían nada en este juego.
+
+- **Mochila.** `set_bag_quantity` coloca el objeto respetando el compactado que
+  el juego espera: si ya lo tienes, solo cambia la cantidad y no mueve nada; si
+  no, lo añade justo detrás del último. El bolsillo sale del reparto extraído
+  de `SAV5B2W2.Inventory`, no de una suposición: Caramelo Raro (#50) vive en
+  Medicinas y Repelente Máximo (#77) en Objetos.
+- **Dinero.** `MONEY_ADDRESS = 0x022266A4`, demostrado en la traza de dos
+  estados del 27-08-2026: de **dos** candidatos iniciales, fue el único que
+  pasó de 4524 a 4224 al gastar dinero dentro del juego. El tope se fija en
+  999 999, que es el único valor que la utilidad escribe; un límite mayor no
+  está demostrado en B2/W2 y no se admite.
+- Ambos writers usan el contrato transaccional del resto de B2/W2: relectura
+  fresca, construcción validada con el parser de producción, readback,
+  verificación semántica y rollback completo. Si ya tenías esa cantidad, **no
+  se escribe un solo byte**.
+- El adaptador contrasta el rótulo de cada utilidad con la tabla de PKHeX antes
+  de escribir. Es exactamente lo que falló en BDSP alpha.85, donde un botón
+  rotulado «Repelente Máximo» modificó el Repelente normal.
+- Sin melonDS sincronizado, la utilidad avisa y **no deja nada pendiente**:
+  B2/W2 solo tiene writer vivo, y una cola que nunca se vacía congelaría el
+  monitor (la clase de fallo que cerró alpha.27).
+- Decisión de alcance del usuario: **no** se añade un visor de mochila. El
+  inventario se registra para saber qué MT tienes y poder enseñarlas desde
+  RoleRun, que es el siguiente paso.
+- `tests/test_b2w2_bag_writer.py`: 37 pruebas nuevas. Suite completa: 1166.
+- Falta la validación física de los tres botones y el perfil de MT de B2/W2.
+
 # v0.2.6-alpha.38 — la mochila de B2/W2, por el contrato común
 
 El lector quedó **validado físicamente**: lo que RoleRun lee coincide con la

@@ -7,11 +7,13 @@ from dataclasses import replace
 from pathlib import Path
 
 from ..b2w2_live import (
-    BAG_BASE,
+    BAG_BASE, MONEY_MAX,
     STAT_ORDER_PERSONAL, B2W2LiveError, B2W2MelonDSReader, B2W2RoleWrite,
     PK5_PARTY_SIZE, PK5_STORED_SIZE, _crypt,
 )
-from ..models import PendingPartyHeal, PendingRoleChange, PendingTeamChange
+from ..models import (
+    PendingInventoryChange, PendingPartyHeal, PendingRoleChange, PendingTeamChange,
+)
 from ..boxed_metadata import (
     ability_name, base_stats_for, boxed_level, item_name, species_name,
 )
@@ -25,6 +27,16 @@ from .models import (
     BattleState, DiagnosticLevel, LiveDiagnostic, LiveProcessInfo,
     RealTimeSnapshot,
 )
+
+
+# Las utilidades de la cabecera, con el identificador que usa la misma tabla de
+# PKHeX con la que se validó físicamente la mochila real del usuario (Poción 17,
+# Poké Ball 4, MT21 348). El bolsillo sale del reparto extraído de PKHeX, no de
+# una suposición: 50 vive en Medicine y 77 en Items.
+B2W2_UTILITY_ITEMS = {
+    "rare-candy": 50,
+    "max-repel": 77,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,8 +272,50 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
         slot, member = candidatos[0]
         return slot, (int(member.pid), int(member.tid), int(member.sid))
 
+    @staticmethod
+    def _utility_item_for(change: PendingInventoryChange) -> int:
+        """Traduce una utilidad de la cabecera a un objeto demostrado.
+
+        El nombre se contrasta con la tabla de PKHeX antes de escribir: en BDSP
+        una utilidad rotulada «Repelente Máximo» acabó modificando el Repelente
+        normal, y esa comprobación es lo que impide repetirlo aquí.
+        """
+        item_id = B2W2_UTILITY_ITEMS.get(str(change.item_key))
+        if item_id is None:
+            raise B2W2LiveError(
+                f"La utilidad «{change.item_key}» no tiene objeto demostrado en B2/W2."
+            )
+        if str(change.item_name).strip() != item_name(item_id):
+            raise B2W2LiveError(
+                f"La utilidad «{change.item_key}» dice ser «{change.item_name}» pero "
+                f"el objeto #{item_id} es «{item_name(item_id)}»."
+            )
+        return item_id
+
+    def _apply_inventory(self, current: SaveGameData, changes):
+        party_read = self.reader.read_party()
+        dinero = [item for item in changes if str(item.item_key) == "money-max"]
+        objetos = [item for item in changes if str(item.item_key) != "money-max"]
+        if len(dinero) > 1:
+            raise B2W2LiveError("Dos utilidades de dinero B2/W2 en la misma transacción.")
+        if objetos:
+            self.reader.write_bag_items(party_read, [
+                (self._utility_item_for(item), int(item.quantity)) for item in objetos
+            ])
+        if dinero:
+            cantidad = int(dinero[0].quantity)
+            if not 0 <= cantidad <= MONEY_MAX:
+                raise B2W2LiveError(f"B2/W2 admite como máximo {MONEY_MAX} ₽.")
+            self.reader.write_money(party_read, cantidad)
+        live = self._capture(current, 0)
+        live.game.raw["writes_enabled"] = True
+        live.game.raw["live_write"] = True
+        return B2W2RealTimeWriteResult(live.game, live.process, 2, len(changes))
+
     def apply_changes(self, current: SaveGameData, changes):
         changes = list(changes)
+        if changes and all(isinstance(item, PendingInventoryChange) for item in changes):
+            return self._apply_inventory(current, changes)
         if changes and all(isinstance(item, PendingPartyHeal) for item in changes):
             party_read = self.reader.read_party()
             objetivos = [self._heal_target_for(party_read, item) for item in changes]

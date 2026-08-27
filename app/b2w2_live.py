@@ -59,6 +59,14 @@ BASE_REDISCOVERY_SECONDS = 60.0
 BAG_BASE = 0x0221D9A4
 BAG_SLOT_SIZE = 4
 BAG_MAX_QUANTITY = 999
+# Demostrado con la traza de dos estados del 27-08-2026: de 2 candidatos
+# iniciales, esta es la unica direccion que paso de 4524 a 4224 al gastar dinero
+# dentro del juego (diagnostics/manual/b2w2_bag_latest.json).
+MONEY_ADDRESS = 0x022266A4
+MONEY_SIZE = 4
+# Es el tope que escribe la utilidad de RoleRun. Un limite mayor no esta
+# demostrado en B2/W2, asi que no se admite.
+MONEY_MAX = 999_999
 _BAG_LAYOUT_PATH = Path(__file__).resolve().parent.parent / "data" / "b2w2_bag_layout.json"
 
 
@@ -179,6 +187,49 @@ def parse_bag(raw: bytes) -> tuple[B2W2BagEntry, ...]:
             vistos.add(item_id)
             entradas.append(B2W2BagEntry(pocket.tipo, hueco, item_id, cantidad))
     return tuple(entradas)
+
+
+def bag_pocket_for(item_id: int) -> B2W2BagPocket:
+    """Bolsillo al que pertenece un objeto, segun el reparto de PKHeX."""
+    for pocket in bag_pockets():
+        if int(item_id) in pocket.legal:
+            return pocket
+    raise B2W2LiveError(
+        f"El objeto #{int(item_id)} no pertenece a ningun bolsillo de B2/W2."
+    )
+
+
+def set_bag_quantity(raw: bytes, item_id: int, quantity: int) -> bytes:
+    """Fija la cantidad de un objeto conservando el compactado del bolsillo.
+
+    Si el objeto ya esta, solo cambia su cantidad y no mueve nada. Si no esta, se
+    anade en el primer hueco libre, que es justo detras del ultimo ocupado: es la
+    unica posicion que mantiene el bolsillo compactado, que es lo que el juego
+    espera y lo que ``parse_bag`` exige.
+    """
+    item_id, quantity = int(item_id), int(quantity)
+    if not 1 <= quantity <= BAG_MAX_QUANTITY:
+        raise B2W2LiveError(
+            f"B2/W2 admite entre 1 y {BAG_MAX_QUANTITY} unidades por objeto."
+        )
+    pocket = bag_pocket_for(item_id)
+    # Releer con el parser de produccion: si la mochila de partida no fuera
+    # valida, no se escribe encima de ella.
+    actuales = [e for e in parse_bag(raw) if e.pocket == pocket.tipo]
+    destino = next((e.slot for e in actuales if e.item_id == item_id), None)
+    if destino is None:
+        destino = len(actuales)
+        if destino >= pocket.slots:
+            raise B2W2LiveError(f"El bolsillo {pocket.tipo} de B2/W2 esta lleno.")
+    nuevo = bytearray(raw)
+    struct.pack_into(
+        "<HH", nuevo, pocket.offset + destino * BAG_SLOT_SIZE, item_id, quantity,
+    )
+    resultado = bytes(nuevo)
+    # El resultado tiene que seguir siendo una mochila legible; si no, se rechaza
+    # antes de tocar un solo byte de la partida.
+    parse_bag(resultado)
+    return resultado
 
 
 
@@ -1477,6 +1528,124 @@ class B2W2MelonDSReader:
             lectura.process_id, lectura.process_name, lectura.allocation_base,
             BAG_BASE, primera, parse_bag(primera),
         )
+
+    @staticmethod
+    def _read_guest_twice(lectura: B2W2PartyRead, guest: int, tamano: int) -> bytes:
+        """Doble lectura estable de una direccion invitada ya demostrada."""
+        kernel32 = _KERNEL32
+        if kernel32 is None:
+            raise B2W2LiveError("melonDS en Windows es obligatorio.")
+        direccion = lectura.allocation_base + (guest - DS_RAM_BASE)
+        handle = kernel32.OpenProcess(0x0400 | 0x0010, False, lectura.process_id)
+        if not handle:
+            raise B2W2LiveError("melonDS desaparecio antes de leer la memoria B2/W2.")
+        try:
+            def leer() -> bytes:
+                buffer = ctypes.create_string_buffer(tamano)
+                recibido = ctypes.c_size_t()
+                if not kernel32.ReadProcessMemory(
+                    handle, ctypes.c_void_p(direccion), buffer, tamano,
+                    ctypes.byref(recibido),
+                ) or recibido.value != tamano:
+                    raise B2W2LiveError("Lectura incompleta de la memoria B2/W2.")
+                return buffer.raw
+
+            primera = leer()
+            segunda = leer()
+        finally:
+            kernel32.CloseHandle(handle)
+        if primera != segunda:
+            raise B2W2LiveError("La memoria B2/W2 cambio durante la doble lectura.")
+        return primera
+
+    @_serialized
+    def read_money(self, party_read: B2W2PartyRead | None = None) -> int:
+        lectura = party_read or self.read_party()
+        crudo = self._read_guest_twice(lectura, MONEY_ADDRESS, MONEY_SIZE)
+        return int(struct.unpack("<I", crudo)[0])
+
+    @_serialized
+    def write_bag_items(self, party_read: B2W2PartyRead, peticiones) -> B2W2BagRead:
+        """Fija cantidades de objetos como una unica transaccion.
+
+        ``peticiones`` son pares ``(item_id, cantidad)``. Mismo contrato que el
+        resto de writers B2/W2: relectura fresca, construccion validada con el
+        parser de produccion, readback, verificacion semantica y rollback
+        completo si algo no cuadra.
+        """
+        pedidos = [(int(item), int(cantidad)) for item, cantidad in peticiones]
+        if not pedidos:
+            raise B2W2LiveError("No hay ningun objeto B2/W2 que escribir.")
+        vistos: set[int] = set()
+        for item_id, _cantidad in pedidos:
+            if item_id in vistos:
+                raise B2W2LiveError("Dos utilidades B2/W2 sobre el mismo objeto.")
+            vistos.add(item_id)
+
+        before = self.read_bag(party_read)
+        if before.process_id != party_read.process_id:
+            raise B2W2LiveError("melonDS cambio antes de escribir la mochila B2/W2.")
+        old_raw = before.raw
+        new_raw = old_raw
+        for item_id, cantidad in pedidos:
+            new_raw = set_bag_quantity(new_raw, item_id, cantidad)
+
+        if new_raw == old_raw:
+            # Ya tenia esas cantidades: no se escribe un solo byte en la partida.
+            return before
+
+        bag_host = before.allocation_base + (BAG_BASE - DS_RAM_BASE)
+
+        def restore() -> None:
+            self._write_process_bytes(before.process_id, bag_host, old_raw)
+            restored = self.read_bag(party_read)
+            if restored.raw != old_raw:
+                raise B2W2LiveError("Rollback de la mochila B2/W2 no confirmado; no guardes.")
+
+        try:
+            self._write_process_bytes(before.process_id, bag_host, new_raw)
+            after = self.read_bag(party_read)
+            if after.raw != new_raw:
+                raise B2W2LiveError("El readback de la mochila B2/W2 no coincide.")
+            for item_id, cantidad in pedidos:
+                if after.quantity_of(item_id) != cantidad:
+                    raise B2W2LiveError(
+                        "La verificacion semantica de la mochila B2/W2 fallo."
+                    )
+            return after
+        except Exception:
+            restore()
+            raise
+
+    @_serialized
+    def write_money(self, party_read: B2W2PartyRead, amount: int) -> int:
+        """Fija el dinero con el mismo contrato transaccional de la mochila."""
+        amount = int(amount)
+        if not 0 <= amount <= MONEY_MAX:
+            raise B2W2LiveError(f"B2/W2 admite como maximo {MONEY_MAX} P.")
+        antes = self._read_guest_twice(party_read, MONEY_ADDRESS, MONEY_SIZE)
+        deseado = struct.pack("<I", amount)
+        if antes == deseado:
+            # Ya tenia esa cantidad: no se escribe un solo byte en la partida.
+            return amount
+
+        money_host = party_read.allocation_base + (MONEY_ADDRESS - DS_RAM_BASE)
+
+        def restore() -> None:
+            self._write_process_bytes(party_read.process_id, money_host, antes)
+            restaurado = self._read_guest_twice(party_read, MONEY_ADDRESS, MONEY_SIZE)
+            if restaurado != antes:
+                raise B2W2LiveError("Rollback del dinero B2/W2 no confirmado; no guardes.")
+
+        try:
+            self._write_process_bytes(party_read.process_id, money_host, deseado)
+            despues = self._read_guest_twice(party_read, MONEY_ADDRESS, MONEY_SIZE)
+            if despues != deseado:
+                raise B2W2LiveError("El readback del dinero B2/W2 no coincide.")
+            return amount
+        except Exception:
+            restore()
+            raise
 
     @staticmethod
     def parse_pc_matrix(raw: bytes) -> tuple[int, tuple[B2W2BoxPokemon, ...]]:
