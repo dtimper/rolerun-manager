@@ -71,8 +71,23 @@ class B2W2TM:
 
 
 @dataclass(frozen=True, slots=True)
+class B2W2TMSource:
+    """Procedencia del perfil, con la misma forma que los perfiles con archivo.
+
+    Los demás backends leen la tabla de un archivo y la interfaz muestra
+    ``profile.source.name``. Aquí no hay archivo —la tabla vive en la RAM del
+    juego— pero se expone igual para que la pantalla no tenga que distinguir.
+    """
+
+    name: str
+
+    def __str__(self) -> str:
+        return self.name
+
+
+@dataclass(frozen=True, slots=True)
 class B2W2TMProfile:
-    source: str
+    source: B2W2TMSource
     tms: dict[int, B2W2TM]
     move_base_pp: dict[int, int]
 
@@ -154,4 +169,4 @@ def build_tm_profile(move_ids, *, source: str) -> B2W2TMProfile:
         raise B2W2TMError(
             f"Estas MT enseñan un movimiento sin PP en quinta: {', '.join(sin_pp)}."
         )
-    return B2W2TMProfile(source=str(source), tms=tms, move_base_pp=pp)
+    return B2W2TMProfile(source=B2W2TMSource(str(source)), tms=tms, move_base_pp=pp)

@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.42`
+- Versión de aplicación: `v0.2.6-alpha.43`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,29 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.43 — la pantalla de MT, por rol y por partida
+
+Verificado de extremo a extremo con el motor de reglas real, no con dobles.
+
+- **El filtro por rol ya funcionaba y es el mismo de los demás juegos**:
+  `_tm_move_compatible_with_role`. Al Mago no se le ofrecen ataques físicos, al
+  Asesino no se le ofrecen especiales, y a un Support que ya conserva dos
+  ataques solo se le ofrecen MT de estado. No hay una regla propia de B2/W2.
+- **La compatibilidad por especie se sigue ignorando**, a propósito: quien
+  decide es el rol. Magikarp, que en quinta no aprende ninguna MT, recibe las
+  que su rol permita.
+- **Randomizada, se ofrece y se escribe el movimiento de esta partida.** El
+  caso que más fácil se rompería queda cubierto: la MT26 vanilla es Terremoto
+  y a un Mago no se le ofrece; si la partida la randomiza a un ataque especial,
+  sí. Y al revés. El `PendingTMTeach` que llega al writer lleva el movimiento
+  vivo, y el número y el objeto de la MT no cambian.
+- `B2W2TMSource` expone `.name`, que es lo que la pantalla muestra en todos los
+  backends. Antes la procedencia se degradaba a «fuente validada».
+- `tests/test_b2w2_tm_roles.py`: 20 pruebas nuevas. Suite completa: 1260.
+- Nota abierta: la categoría física/especial de cada movimiento sale todavía del
+  catálogo estático. Un randomizer que altere los datos de movimientos (no es
+  su ajuste por defecto) desalinearía el filtro. Mismo caso que los PP.
 
 ### v0.2.6 Alpha.42 — enseñar MT en B2/W2
 

@@ -1,6 +1,18 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.43 — la pantalla de MT, por rol y por partida
+
+- El filtro por rol ya funcionaba y es el **mismo de los demás juegos**. Ahora
+  queda verificado con `DraftEngine` real: Mago sin físicos, Asesino sin
+  especiales, y Support con dos ataques solo recibe MT de estado.
+- La compatibilidad por especie se sigue ignorando a propósito: manda el rol.
+- **Randomizada, se ofrece y se escribe el movimiento de esta partida.** La
+  MT26 vanilla es Terremoto y a un Mago no se le ofrece; randomizada a especial,
+  sí, y al revés. El `PendingTMTeach` lleva el movimiento vivo hasta el writer.
+- `B2W2TMSource` expone `.name`: la procedencia ya no se degrada en pantalla.
+- `tests/test_b2w2_tm_roles.py`: 20 pruebas. Suite completa: 1260.
+
 # v0.2.6-alpha.42 — enseñar MT en B2/W2
 
 La pantalla MT y el selector individual ya funcionan en Negro 2/Blanco 2.

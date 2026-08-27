@@ -237,7 +237,7 @@ def test_el_adaptador_publica_el_perfil_de_la_partida_viva(referencia) -> None:
 
     assert len(publicado.tms) == 95
     assert publicado.tm(21).move_id == 218
-    assert "0x02090C54" in publicado.source
+    assert "0x02090C54" in publicado.source.name
 
 
 # --------------------------------------------------------------------------
