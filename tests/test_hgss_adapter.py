@@ -488,3 +488,21 @@ def test_la_curacion_completa_ya_esta_disponible_en_heartgold() -> None:
     fuente = inspect.getsource(RoleRunManager._live_party_heal_available)
     assert "MELONDS_REALTIME_GAME_KEYS" in fuente
     assert "MELONDS_GEN5_REALTIME_GAME_KEYS" not in fuente
+
+
+def test_cada_intento_de_escritura_viva_queda_registrado() -> None:
+    """Cuando una acción «no hace nada», hay que poder saber dónde se quedó.
+
+    El usuario no usa la línea de comandos: si la curación se descarta en una
+    compuerta de la interfaz, sin este registro no hay forma de distinguirlo de
+    un writer roto. Se anotan las cuatro etapas del camino.
+    """
+    import inspect
+
+    from app.ui import RoleRunManager, _anotar_intento_vivo
+
+    fuente = inspect.getsource(RoleRunManager)
+    for etapa in ("curar-descartado", "curar-encolado", "enviando", "terminado"):
+        assert f'"{etapa}"' in fuente, f"falta la etapa {etapa}"
+    # Y no puede tumbar nada por no existir el método.
+    _anotar_intento_vivo(object(), "prueba", dato=1)

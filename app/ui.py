@@ -198,6 +198,17 @@ SPRITE_DOWNLOAD_TIMEOUT_SECONDS = 8.0
 GAMEPAD_DISCOVERY_INTERVAL_SECONDS = 2.0
 
 
+def _anotar_intento_vivo(app, etapa: str, **datos) -> None:
+    """Registra un intento de escritura viva, si quien llama sabe hacerlo.
+
+    Los dobles de prueba no traen el método, y un registro de diagnóstico no
+    puede romper una ruta de escritura por existir.
+    """
+    metodo = getattr(app, "_registrar_intento_vivo", None)
+    if callable(metodo):
+        metodo(etapa, **datos)
+
+
 class RoleRunManager(ctk.CTk):
     def _centered_geometry(self, width: int, height: int) -> str:
         """Centra una geometría normal en la pantalla principal de Windows."""
@@ -10840,6 +10851,11 @@ class RoleRunManager(ctk.CTk):
                     False,
                 )
             return False
+        _anotar_intento_vivo(
+            self, "enviando",
+            tipos=[type(c).__name__ for c in changes],
+            automatico=bool(automatic),
+        )
         unsupported = self._oras_live_unsupported_changes(changes)
         if unsupported:
             if automatic:
@@ -11037,6 +11053,12 @@ class RoleRunManager(ctk.CTk):
     def _finish_oras_live_write(
         self, generation: int, project_slug: str, changes, result, error: str | None, automatic: bool = False,
     ) -> None:
+        _anotar_intento_vivo(
+            self, "terminado",
+            tipos=[type(c).__name__ for c in changes],
+            error=error,
+            aplicados=int(getattr(result, "applied_count", 0) or 0),
+        )
         self._live_write_in_progress = False
         hide_busy = getattr(self, "_hide_busy_indicator", None)
         if callable(hide_busy):
@@ -13617,9 +13639,39 @@ class RoleRunManager(ctk.CTk):
                 replace_existing=bool(int(move_ids[slot_index - 1] or 0)),
             )
 
+    def _registrar_intento_vivo(self, etapa: str, **datos) -> None:
+        """Deja constancia de cada intento de escritura viva, en un archivo.
+
+        El usuario no usa la línea de comandos, así que cuando una acción «no
+        hace nada» no hay forma de saber dónde se quedó. Esto la deja escrita:
+        una línea por etapa, con lo justo para reconstruir el camino.
+
+        No puede tumbar la interfaz por nada del mundo: cualquier fallo al
+        escribirlo se traga en silencio.
+        """
+        try:
+            registro = {
+                "cuando": datetime.now().isoformat(timespec="milliseconds"),
+                "etapa": etapa,
+                "juego": str(getattr(self.save_engine, "key", "") or ""),
+                "vivo": str(self._active_azahar_realtime_key()),
+                "enlace_activo": bool(getattr(self, "_oras_live_active", False)),
+                **datos,
+            }
+            LOG_DIR.mkdir(parents=True, exist_ok=True)
+            with (LOG_DIR / "escrituras_vivas.jsonl").open("a", encoding="utf-8") as salida:
+                salida.write(json.dumps(registro, ensure_ascii=False) + chr(10))
+        except Exception:
+            pass
+
     def _heal_bdsp_party(self) -> None:
-        """Cura toda la party como una sola transacción PB8 verificada."""
+        """Cura toda la party como una sola transacción verificada."""
         if not RoleRunManager._live_party_heal_available(self) or not self.current_game:
+            self._registrar_intento_vivo(
+                "curar-descartado",
+                disponible=bool(RoleRunManager._live_party_heal_available(self)),
+                hay_partida=bool(self.current_game),
+            )
             return
         pending_ids_before = {id(change) for change in self.run.pending_changes}
         self.run.pending_changes.extend(
@@ -13634,6 +13686,12 @@ class RoleRunManager(ctk.CTk):
         self._set_operation_status(
             "applying", "CURANDO EL EQUIPO",
             "Restaurando PS, problemas de estado y PP; después se hará readback completo.",
+        )
+        disponible = getattr(self, "_oras_live_auto_apply_available", None)
+        _anotar_intento_vivo(
+            self, "curar-encolado",
+            cuantos=len(self.current_game.party),
+            auto_disponible=bool(disponible()) if callable(disponible) else None,
         )
         self._request_oras_live_auto_apply_since(pending_ids_before)
 
