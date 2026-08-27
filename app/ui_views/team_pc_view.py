@@ -39,6 +39,31 @@ def _move_issue_map(
     }
 
 
+def _support_damage_map(
+    pokemon: Any,
+    role: str,
+    support_damage_for: Callable[[Any, str], tuple[int, list[dict[str, Any]]]] | None,
+    *,
+    context: str = "team",
+) -> tuple[int, set[int]]:
+    """Huecos que el Support puede elegir para quitar, y cuántos le sobran.
+
+    El límite de dos ataques de daño es de conjunto, no de hueco: ninguno de
+    ellos es ilegal por sí solo, así que se marcan en dorado —«elige»— y no en
+    rojo. Solo tiene sentido en el equipo: un Pokémon del PC no tiene rol
+    activo.
+    """
+    if context != "team" or support_damage_for is None:
+        return 0, set()
+    excess, candidates = support_damage_for(pokemon, role)
+    if excess <= 0:
+        return 0, set()
+    return int(excess), {
+        int(item["move_slot"]) for item in candidates
+        if 1 <= int(item.get("move_slot", 0) or 0) <= 4
+    }
+
+
 def _available_body_height(master) -> int:
     canvas = getattr(master, "_parent_canvas", None)
     try:
@@ -87,6 +112,8 @@ class UnifiedTeamPCView:
         role_icon_for: Callable[[str, int], Any | None],
         pending_for: Callable[[Any, str], bool],
         move_issues_for: Callable[[Any, str], list[dict[str, Any]]] | None,
+        support_damage_for: Callable[[Any, str], tuple[int, list[dict[str, Any]]]] | None = None,
+        on_support_damage: Callable[[Any], None] | None = None,
         on_box_change: Callable[[int], tuple[int, dict[int, Any]]],
         on_search: Callable[[str], list[tuple[int, int, Any]]],
         on_action: Callable[[str, Any], None],
@@ -120,6 +147,8 @@ class UnifiedTeamPCView:
         self.base_stats_for = base_stats_for
         self.pending_for = pending_for
         self.move_issues_for = move_issues_for
+        self.support_damage_for = support_damage_for
+        self.on_support_damage = on_support_damage
         self.on_box_change = on_box_change
         self.on_search = on_search
         self.on_action = on_action
@@ -676,26 +705,46 @@ class UnifiedTeamPCView:
             issue_by_slot = _move_issue_map(
                 pokemon, slot_role, self.move_issues_for, context="team",
             )
+            support_excess, support_slots = _support_damage_map(
+                pokemon, slot_role, self.support_damage_for, context="team",
+            )
             move_grid = ctk.CTkFrame(content, fg_color="transparent", corner_radius=0)
             move_grid.grid(row=3, column=1, columnspan=2, sticky="ew", pady=(2, 0))
             move_grid.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="team_card_moves")
             for index, move in enumerate(moves):
                 issue = issue_by_slot.get(index + 1)
+                # El dorado no dice «ilegal», dice «elige cuál sobra». Una
+                # incompatibilidad real manda sobre él.
+                elegible = (index + 1) in support_slots and not issue
                 move_cell = ctk.CTkFrame(
                     move_grid, height=16, corner_radius=6,
-                    fg_color="#341A1A" if issue else "#292929",
-                    border_width=1 if issue else 0,
-                    border_color=DANGER if issue else "#292929",
+                    fg_color="#341A1A" if issue else ("#292315" if elegible else "#292929"),
+                    border_width=1 if (issue or elegible) else 0,
+                    border_color=DANGER if issue else (GOLD if elegible else "#292929"),
                 )
                 move_cell.grid(row=0, column=index, sticky="ew", padx=2, pady=1)
                 move_cell.grid_propagate(False)
                 ctk.CTkLabel(
                     move_cell, text=str(move), height=14,
                     fg_color="transparent",
-                    text_color=DANGER if issue else (TEXT if move != "—" else MUTED),
+                    text_color=(
+                        DANGER if issue
+                        else (GOLD if elegible else (TEXT if move != "—" else MUTED))
+                    ),
                     font=ctk.CTkFont("Segoe UI", 9, "bold"),
                 ).place(relx=0.5, rely=0.5, anchor="center")
-            info_rowspan = 4
+            if support_excess and self.on_support_damage is not None:
+                ctk.CTkButton(
+                    content,
+                    text=f"ELEGIR {support_excess} ATAQUE(S) A ELIMINAR",
+                    command=lambda p=pokemon: self.on_support_damage(p),
+                    height=22, corner_radius=6, fg_color="transparent",
+                    border_width=1, border_color=GOLD, hover_color="#332B1D",
+                    text_color=GOLD, font=ctk.CTkFont("Segoe UI", 9, "bold"),
+                ).grid(row=4, column=1, columnspan=2, sticky="ew", pady=(3, 0))
+                info_rowspan = 5
+            else:
+                info_rowspan = 4
 
         role_icon = self.role_icon_for(slot_role, 27)
         if role_icon is not None:

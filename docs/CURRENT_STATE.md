@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.46`
+- Versión de aplicación: `v0.2.6-alpha.47`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,29 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.47 — dos fallos de la interfaz reportados con captura
+
+**1 · Las tarjetas de drafteo salían vacías.** «Pot. — · Prec. — · PP —» y sin
+descripción: `_draft_move_metadata` no tenía rama para B2/W2. Ahora la potencia,
+la precisión y los PP salen de la ROM cargada —valores de quinta, y de *esta*
+partida si está randomizada— y la descripción del catálogo español que RoleRun
+ya trae. Sin ROM se muestra un guion en vez del número de otra generación; los
+PP se conservan porque su tabla de quinta ya está demostrada.
+
+**2 · Un Support con cuatro ataques no marcaba nada.** La tarjeta antigua ponía
+en dorado los ataques candidatos y ofrecía elegir cuáles quitar; la vista
+compacta de «Equipo y PC» solo conocía las incompatibilidades rojas, así que el
+Support quedaba mudo. Ahora la vista recibe la misma regla y la misma acción.
+El dorado no significa «ilegal» sino «elige cuál sobra», y una incompatibilidad
+real manda sobre él.
+
+**Decisión de alcance del usuario:** los Pokémon del PC **no** necesitan cambio
+de rol, siempre que al entrar al equipo entren con el rol que les toca. Esa
+capacidad queda descartada, no pendiente. Lo que sí queda por hacer en B2/W2 son
+las **medallas en tiempo real**.
+
+- `tests/test_b2w2_move_presentation.py`: 13 pruebas. Suite completa: 1325.
 
 ### v0.2.6 Alpha.46 — el drafteo, y VALIDACIÓN FÍSICA de alpha.42-45
 

@@ -12171,6 +12171,27 @@ class RoleRunManager(ctk.CTk):
             localized_description = str(metadata.get("description_es") or "").strip()
             if localized_description:
                 description = localized_description
+        elif key == "b2w2":
+            # Potencia, precisión y PP salen de la ROM cargada: son los valores
+            # de quinta generación y, si la partida está randomizada, los de
+            # esta partida. Sin ROM no se enseña un número de otra generación.
+            rom = self._get_b2w2_rom_profile()
+            if rom is not None:
+                pp = int(rom.base_pp(move_id)) or "—"
+                power = int(rom.power(move_id)) or "—"
+                accuracy = int(rom.accuracy(move_id)) or "—"
+            else:
+                pp = int(
+                    self.b2w2_realtime_adapter.base_pp_for(move_id)
+                ) or "—"
+            # El texto no depende de la randomización —un randomizer cambia qué
+            # MT enseña cada movimiento, no lo que hace el movimiento—, así que
+            # se reutiliza el catálogo español que RoleRun ya trae.
+            localized_description = str(
+                self.oras_move_metadata.get(move_id, {}).get("description_es") or ""
+            ).strip()
+            if localized_description:
+                description = localized_description
         return {
             "category": self._damage_class_for_move(move_id),
             "pp": pp,
@@ -13030,6 +13051,8 @@ class RoleRunManager(ctk.CTk):
             base_stats_for=self._team_pc_base_stats,
             pending_for=self._team_pc_pokemon_has_pending_change,
             move_issues_for=self._collect_pokemon_move_issues,
+            support_damage_for=self._support_damage_excess,
+            on_support_damage=self._open_support_damage_removal_selector,
             on_box_change=self._team_pc_change_box,
             on_search=self._team_pc_global_search,
             on_action=self._team_pc_action,

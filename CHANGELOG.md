@@ -1,6 +1,17 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.47 — dos fallos de la interfaz, reportados con captura
+
+- **Tarjetas de drafteo vacías**: potencia, precisión y PP ya salen de la ROM
+  cargada, y la descripción del catálogo español. Sin ROM, guion en vez del
+  número de otra generación.
+- **Support sin marcar**: la vista compacta de Equipo y PC no conocía el exceso
+  de ataques de daño. Ahora pinta en dorado los candidatos y ofrece elegir
+  cuáles quitar, como hacía la tarjeta antigua.
+- Los roles de Pokémon en el PC quedan **descartados** por decisión del usuario.
+- `tests/test_b2w2_move_presentation.py`: 13 pruebas. Suite completa: 1325.
+
 # v0.2.6-alpha.46 — el drafteo en B2/W2
 
 **alpha.42-45 VALIDADAS FÍSICAMENTE** (27-08-2026): enseñar una MT funciona, la
