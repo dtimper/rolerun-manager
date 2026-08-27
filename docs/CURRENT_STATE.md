@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.59`
+- Versión de aplicación: `v0.2.6-alpha.60`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,34 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.60 — Blanco VALIDADO: lectura y escritura
+
+El usuario confirmó (27-08-2026) sobre su partida de Blanco:
+
+- El **equipo** se lee entero y correcto.
+- Las **cajas del PC** también, y los **intercambios Equipo↔PC funcionan**.
+- El **botón de dinero escribe**: la partida quedó al máximo.
+
+Y en Negro 2, que el PC sigue bien tras el arreglo de alpha.59.
+
+Es más de lo que parece: los intercambios y el dinero son **escrituras**, así
+que el contrato transaccional entero —relectura fresca, readback, verificación y
+rollback— queda validado en Blanco con sus propias direcciones, todas derivadas
+de una única ancla medida.
+
+**Lo que queda de Blanco** son las dos cosas que no salen del cálculo:
+
+- `buscar_mts_blanco.bat`: la herramienta de MT, ahora con descriptor de juego.
+  Busca 101 movimientos seguidos y los contrasta con la referencia de PKHeX.
+- `buscar_combate_blanco.bat`: nuevo. Aprovecha que ya se conoce la forma de la
+  fila para buscar con una **firma de cuatro campos** —especie, PS máximos,
+  habilidad y nivel— contra un miembro del equipo que RoleRun ya sabe leer, en
+  vez de rastrear transiciones a ciegas como hubo que hacer en Negro 2. Descarta
+  las posiciones que caen dentro del bloque de equipo y separa presentación de
+  lógica por los PS que el usuario ve en pantalla.
+
+- Suite completa: 1393.
 
 ### v0.2.6 Alpha.59 — el PC vuelve a leerse (fallo introducido en alpha.57)
 

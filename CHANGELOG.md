@@ -1,6 +1,18 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.60 — Blanco VALIDADO: lectura y escritura
+
+Confirmado sobre la partida real: equipo, cajas PC, intercambios Equipo↔PC y el
+botón de dinero. Los dos últimos son **escrituras**, así que el contrato
+transaccional queda validado en Blanco con sus propias direcciones.
+
+Quedan las dos cosas que no salen del cálculo, con su herramienta cada una:
+`buscar_mts_blanco.bat` y `buscar_combate_blanco.bat`. Esta última busca por
+firma de cuatro campos contra el equipo, en vez de rastrear a ciegas.
+
+Suite completa: 1393.
+
 # v0.2.6-alpha.59 — el PC vuelve a leerse
 
 El equipo de Blanco se lee perfecto, así que el ancla queda validada. El PC no,

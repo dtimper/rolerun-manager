@@ -35,18 +35,19 @@ from pathlib import Path
 
 from app.b2w2_live import (
     DS_RAM_BASE,
-    TM_TABLE_BASE,
     B2W2LiveError,
     B2W2MelonDSReader,
     _KERNEL32,
 )
+from app.gen5_memory import GEN5_MEMORY
 from app.b2w2_tm_service import reference_move_ids
 
 # RAM principal de la DS: 4 MiB a partir de 0x02000000.
 TAMANO_RAM = 0x00400000
 TOTAL_MT = 101
 MOVIMIENTO_MAXIMO = 559
-SALIDA = Path("diagnostics/manual/b2w2_tm_table_latest.json")
+def _salida(clave: str) -> Path:
+    return Path(f"diagnostics/manual/{clave}_tm_table_latest.json")
 
 
 def _texto(valor: str) -> str:
@@ -110,8 +111,10 @@ def _candidatos(ram: bytes) -> list[dict]:
     return salida
 
 
-def main() -> None:
-    lector = B2W2MelonDSReader()
+def main(clave: str = "b2w2") -> None:
+    memoria = GEN5_MEMORY[clave]
+    print(f"Juego: {memoria.label}")
+    lector = B2W2MelonDSReader(memoria)
     party = lector.read_party()
     pid, base = party.process_id, party.allocation_base
     print(f"melonDS PID {pid} - base 0x{base:X}")
@@ -148,17 +151,23 @@ def main() -> None:
     if len(candidatos) > 12:
         print(f"  ... y {len(candidatos) - 12} mas (todas en el archivo).")
 
-    conocida = next(
-        (c for c in candidatos if c["direccion"] == f"0x{TM_TABLE_BASE:08X}"), None,
+    esperada = (
+        f"0x{memoria.tm_table:08X}" if memoria.tm_table is not None else None
     )
+    conocida = next(
+        (c for c in candidatos if c["direccion"] == esperada), None,
+    ) if esperada else None
 
     print()
-    print(
-        f"Direccion ya demostrada (0x{TM_TABLE_BASE:08X}): "
-        + ("presente" if conocida else "NO APARECE")
-    )
-    if conocida:
-        print(f"  {conocida['coincidencias_con_pkhex']}/101 coinciden con la referencia.")
+    if esperada is None:
+        print(f"{memoria.label} todavia no tiene direccion de MT demostrada.")
+    else:
+        print(
+            f"Direccion ya demostrada ({esperada}): "
+            + ("presente" if conocida else "NO APARECE")
+        )
+        if conocida:
+            print(f"  {conocida['coincidencias_con_pkhex']}/101 coinciden con la referencia.")
     print()
     if len(exactos) == 1:
         print(f"DEMOSTRADA: {exactos[0]['direccion']}")
@@ -174,7 +183,7 @@ def main() -> None:
     payload = {
         "format": "rolerun-b2w2-tm-table-v1",
         "captured_at": datetime.now().astimezone().isoformat(),
-        "environment": "Pokemon Negro 2 Espana - melonDS 1.1",
+        "environment": f"{memoria.label} Espana - melonDS 1.1",
         "metodo": (
             "Se buscan 101 movimientos consecutivos de 16 bits, todos entre 1 y "
             f"{MOVIMIENTO_MAXIMO} y todos distintos. En una partida no randomizada "
@@ -185,13 +194,15 @@ def main() -> None:
         "referencia_pkhex": referencia,
         "candidatos": candidatos,
         "identicas_a_pkhex": [c["direccion"] for c in exactos],
-        "direccion_en_produccion": f"0x{TM_TABLE_BASE:08X}",
+        "juego": memoria.key,
+        "direccion_en_produccion": esperada,
         "direccion_en_produccion_presente": conocida is not None,
         "note": (
             "Diagnostico de solo lectura. Un tramo aqui no pasa a produccion "
             "mientras no sea el unico que cumple forma y contenido."
         ),
     }
+    SALIDA = _salida(clave)
     SALIDA.parent.mkdir(parents=True, exist_ok=True)
     SALIDA.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     print()
@@ -201,8 +212,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    import sys
+
     try:
-        main()
+        main(sys.argv[1] if len(sys.argv) > 1 else "b2w2")
     except B2W2LiveError as exc:
         print(f"\nNo se pudo leer melonDS: {_texto(str(exc))}")
         input()
