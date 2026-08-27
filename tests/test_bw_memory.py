@@ -270,12 +270,14 @@ def test_blanco_entra_en_las_listas_de_la_interfaz() -> None:
         AUTOMATIC_BADGE_GAME_KEYS,
         INSTANT_REALTIME_UI_GAME_KEYS,
         LIVE_PC_READ_GAME_KEYS,
-        MELONDS_REALTIME_GAME_KEYS,
+        MELONDS_GEN5_REALTIME_GAME_KEYS,
         REALTIME_READ_GAME_KEYS,
         ROLE_EV_WRITER_GAME_KEYS,
     )
 
-    assert MELONDS_REALTIME_GAME_KEYS == {"b2w2", "bw"}
+    # Desde alpha.72 el conjunto de melonDS incluye también cuarta generación,
+    # que todavía no escribe. Lo que Blanco necesita es el de quinta.
+    assert MELONDS_GEN5_REALTIME_GAME_KEYS == {"b2w2", "bw"}
     for conjunto in (
         REALTIME_READ_GAME_KEYS, LIVE_PC_READ_GAME_KEYS,
         INSTANT_REALTIME_UI_GAME_KEYS, AUTOMATIC_BADGE_GAME_KEYS,

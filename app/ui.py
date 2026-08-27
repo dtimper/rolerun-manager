@@ -76,6 +76,11 @@ from .gen5_rom_service import (
     discover_gen5_rom,
     load_gen5_rom_profile_cached,
 )
+from .gen4_rom_service import (
+    GEN4_GAMES,
+    discover_gen4_rom,
+    load_gen4_rom_profile_cached,
+)
 from .boxed_metadata import clear_personal_override, set_personal_override
 from .xy_rom_service import XYRomProfileError, load_xy_rom_tm_profile
 from .sm_rom_service import SMRomProfileError, load_sm_rom_tm_profile
@@ -108,7 +113,7 @@ from .ui_views import (
 )
 from .realtime import (
     ORASRealTimeAdapter, XYRealTimeAdapter, XYMultiRealTimeAdapter, SMRealTimeAdapter, USUMRealTimeAdapter,
-    BDSPRealTimeAdapter, B2W2RealTimeAdapter,
+    BDSPRealTimeAdapter, B2W2RealTimeAdapter, HgssRealTimeAdapter,
     CitraBridge, RealTimeRegistry, RealTimeReplay,
 )
 from .realtime.models import badge_source_is_live
@@ -147,7 +152,16 @@ DEFERRED_LIVE_TM_INVENTORY_GAME_KEYS = GEN7_REALTIME_GAME_KEYS | {"bdsp"}
 # contra el juego. Blanco entra en alpha.58 con equipo, PC, mochila, dinero y
 # medallas: su carril de batalla y su tabla de MT todavía no están demostrados
 # y el lector los niega con su motivo en vez de leer una dirección inventada.
-MELONDS_REALTIME_GAME_KEYS = {"b2w2", "bw"}
+MELONDS_GEN5_REALTIME_GAME_KEYS = {"b2w2", "bw"}
+# Cuarta generación sobre el mismo emulador, desde alpha.72. Va aparte porque
+# **todavía no escribe**: publica equipo, PC y medallas en vivo, y nada más.
+# Meterla en el conjunto de quinta le atribuiría writers que no existen, y la
+# interfaz ofrecería curar, fijar roles o enseñar MT sobre un backend que no
+# sabe hacerlo.
+MELONDS_GEN4_REALTIME_GAME_KEYS = {"hgss"}
+MELONDS_REALTIME_GAME_KEYS = (
+    MELONDS_GEN5_REALTIME_GAME_KEYS | MELONDS_GEN4_REALTIME_GAME_KEYS
+)
 FULL_MATRIX_LIVE_PC_GAME_KEYS = {"sm", "usum", "bdsp"} | MELONDS_REALTIME_GAME_KEYS
 LIVE_PC_READ_GAME_KEYS = (
     GEN6_REALTIME_GAME_KEYS | GEN7_REALTIME_GAME_KEYS | {"bdsp"}
@@ -166,7 +180,7 @@ AUTOMATIC_BADGE_GAME_KEYS = {"oras", "xy", "sm", "usum"} | MELONDS_REALTIME_GAME
 # juego escribiera la marca del rol pero no sus EV: exactamente lo que le
 # pasaba a B2/W2 antes de tener writer.
 ROLE_EV_WRITER_GAME_KEYS = (
-    {"bdsp", "oras", "xy", "sm", "usum"} | MELONDS_REALTIME_GAME_KEYS
+    {"bdsp", "oras", "xy", "sm", "usum"} | MELONDS_GEN5_REALTIME_GAME_KEYS
 )
 # Equipo y PC son una sola pantalla desde la unificación de la vista. La barra
 # principal solo ofrece "team"; "pc" sobrevive como destino histórico y como
@@ -393,6 +407,13 @@ class RoleRunManager(ctk.CTk):
             memory=GEN5_MEMORY["bw"],
         )
 
+        # HeartGold/SoulSilver. Mismo emulador que quinta y misma disciplina de
+        # lectura, pero formato PK4 y, de momento, sin escritura.
+        self.hgss_realtime_adapter = HgssRealTimeAdapter(
+            role_layout_getter=lambda: self.native_save_engine.role_marker_layout,
+            rom_getter=lambda: self._get_gen4_rom_profile("hgss"),
+        )
+
         self.realtime_registry = RealTimeRegistry()
         self.oras_realtime_core = self.realtime_registry.register(self.oras_realtime_adapter)
         self.xy_realtime_core = self.realtime_registry.register(self.xy_realtime_adapter)
@@ -401,6 +422,7 @@ class RoleRunManager(ctk.CTk):
         self.bdsp_realtime_core = self.realtime_registry.register(self.bdsp_realtime_adapter)
         self.b2w2_realtime_core = self.realtime_registry.register(self.b2w2_realtime_adapter)
         self.bw_realtime_core = self.realtime_registry.register(self.bw_realtime_adapter)
+        self.hgss_realtime_core = self.realtime_registry.register(self.hgss_realtime_adapter)
         # Alias al Core de la Run activa. _set_selected_game_engine lo cambia
         # antes de cargar cada partida, de modo que la UI nunca elige adaptadores.
         self.realtime_core = self.oras_realtime_core
@@ -3529,7 +3551,7 @@ class RoleRunManager(ctk.CTk):
         máximo, estado a cero y PP al tope con los Más PP aplicados.
         """
         return self._active_azahar_realtime_key() in (
-            {"bdsp", "sm", "usum", "xy", "oras"} | MELONDS_REALTIME_GAME_KEYS
+            {"bdsp", "sm", "usum", "xy", "oras"} | MELONDS_GEN5_REALTIME_GAME_KEYS
         )
 
     # ---------- WELCOME / GAME SELECTION ----------
@@ -7345,7 +7367,7 @@ class RoleRunManager(ctk.CTk):
         return {
             "xy": "X/Y", "sm": "Sol/Luna", "usum": "UltraSol/UltraLuna",
             "bdsp": "Perla Reluciente", "b2w2": "Negro 2/Blanco 2",
-            "bw": "Negro/Blanco",
+            "bw": "Negro/Blanco", "hgss": "Oro HeartGold/Plata SoulSilver",
         }.get(self._active_azahar_realtime_key(), "ORAS")
 
     def _active_azahar_realtime_display_name(self) -> str:
@@ -7356,6 +7378,7 @@ class RoleRunManager(ctk.CTk):
             "bdsp": "Pokémon Perla Reluciente",
             "b2w2": "Pokémon Negro 2/Blanco 2",
             "bw": "Pokémon Negro/Blanco",
+            "hgss": "Pokémon Oro HeartGold / Plata SoulSilver",
         }.get(self._active_azahar_realtime_key(), "Omega Rubí/Zafiro Alfa")
 
     @staticmethod
@@ -7404,6 +7427,13 @@ class RoleRunManager(ctk.CTk):
                 "tabla de MT todavía no están demostrados y permanecen "
                 "deshabilitados en lugar de leer una dirección supuesta."
             ),
+            "hgss": (
+                "Oro HeartGold/Plata SoulSilver lee en tiempo real equipo, cajas "
+                "PC, dinero y medallas desde melonDS mediante PK4 validados por "
+                "checksum e identidad. La escritura, el carril de combate y la "
+                "tabla de MT todavía no están demostrados: la Run se sigue "
+                "guardando por el motor de archivo, que sí está validado."
+            ),
         }
         return descriptions.get(str(live_key or ""), "Backend realtime no identificado.")
 
@@ -7429,7 +7459,7 @@ class RoleRunManager(ctk.CTk):
         return bool(
             self.run.pending_changes
             and self._active_azahar_realtime_key() not in (
-                {"sm", "usum", "bdsp"} | MELONDS_REALTIME_GAME_KEYS
+                {"sm", "usum", "bdsp"} | MELONDS_GEN5_REALTIME_GAME_KEYS
             )
         )
 
@@ -12915,6 +12945,46 @@ class RoleRunManager(ctk.CTk):
         self._gen5_rom_profiles[game_key] = perfil
         return perfil
 
+    def _get_gen4_rom_profile(self, game_key: str):
+        """Datos de juego de la ROM de cuarta que melonDS tiene cargada.
+
+        Mismo papel y misma política que en quinta: un randomizer cambia las
+        estadísticas base, y sin esto RoleRun las enseñaría mal. Se intenta una
+        sola vez por guardado; un fallo no bloquea nada, solo deja las tablas de
+        PKHeX, que es lo correcto en una partida sin randomizar.
+        """
+        game_key = str(game_key)
+        if str(getattr(self.save_engine, "key", "") or "") != game_key:
+            return None
+        save_path = str(getattr(self.current_save, "path", "") or "")
+        if not save_path:
+            return None
+        if self._gen5_rom_checked_for.get(game_key) == save_path:
+            return self._gen5_rom_profiles.get(game_key)
+        self._gen5_rom_checked_for[game_key] = save_path
+        self._gen5_rom_profiles[game_key] = None
+        self._gen5_rom_last_error[game_key] = None
+        try:
+            ruta = discover_gen4_rom(save_path, game_key)
+            if ruta is None:
+                self._gen5_rom_last_error[game_key] = (
+                    "No se encontró la ROM junto al guardado."
+                )
+                return None
+            perfil = load_gen4_rom_profile_cached(ruta, game_key)
+        except Exception as exc:
+            self._gen5_rom_last_error[game_key] = str(exc)
+            return None
+        try:
+            set_personal_override(perfil.game.key, perfil.personal, len(perfil.personal) // perfil.game.personal_count)
+        except Exception as exc:
+            # Una tabla que no encaja no se instala a medias.
+            clear_personal_override(game_key)
+            self._gen5_rom_last_error[game_key] = str(exc)
+            return None
+        self._gen5_rom_profiles[game_key] = perfil
+        return perfil
+
     def _get_b2w2_rom_profile(self):
         """Compatibilidad: el resto de la interfaz sigue preguntando por juego."""
         return self._get_gen5_rom_profile(
@@ -12926,7 +12996,7 @@ class RoleRunManager(ctk.CTk):
         self._gen5_rom_profiles.clear()
         self._gen5_rom_checked_for.clear()
         self._gen5_rom_last_error.clear()
-        for familia in ("b2w2", "bw"):
+        for familia in ("b2w2", "bw", *GEN4_GAMES):
             clear_personal_override(familia)
 
     def _get_b2w2_tm_profile(self):
@@ -12970,7 +13040,7 @@ class RoleRunManager(ctk.CTk):
                 parent=self._dialog_parent(),
             )
             return None
-        if key in MELONDS_REALTIME_GAME_KEYS:
+        if key in MELONDS_GEN5_REALTIME_GAME_KEYS:
             # Quinta no pide ninguna ROM: la tabla se lee de la RAM del juego,
             # que es lo único correcto jugando en randomizers.
             return self._get_b2w2_tm_profile()
@@ -15377,7 +15447,7 @@ class RoleRunManager(ctk.CTk):
         is_sm = engine_key == "sm"
         is_usum = engine_key == "usum"
         is_gen7 = engine_key in GEN7_REALTIME_GAME_KEYS
-        is_b2w2 = engine_key in MELONDS_REALTIME_GAME_KEYS
+        is_b2w2 = engine_key in MELONDS_GEN5_REALTIME_GAME_KEYS
         if engine_key not in {"bdsp", "oras", "xy", "sm", "usum", "b2w2"}:
             messagebox.showinfo(
                 "MTs todavía no disponibles",

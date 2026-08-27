@@ -81,7 +81,9 @@ PK4_STATUS = 0x88
 PK4_LEVEL = 0x8C
 PK4_CURRENT_HP = 0x8E
 PK4_MAX_HP = 0x90
-PK4_STATS = 0x90        # PS máx., ataque, defensa, velocidad, at. esp., def. esp.
+# PS máximos, ataque, defensa, VELOCIDAD, at. especial y def. especial: el orden
+# de la tabla personal, no el que usa RoleRun.
+PK4_STATS = 0x90
 
 # Cuarta guarda los EV y las estadísticas en el orden de la tabla personal.
 STAT_ORDER_PERSONAL = ("hp", "attack", "defense", "speed", "sp_attack", "sp_defense")
@@ -266,7 +268,12 @@ def parse_pk4_party(data: bytes, slot: int) -> Pk4Pokemon:
     }
     marcas = bloque[PK4_MARKINGS]
     nivel = bloque[PK4_LEVEL]
-    estadisticas = struct.unpack_from("<6H", bloque, PK4_STATS)
+    # El juego las guarda en el orden de la tabla personal -PS, Atq, Def, Vel,
+    # AtEsp, DefEsp- y RoleRun las usa en el suyo, con la velocidad al final.
+    # Se traducen aquí, igual que los IV y los EV, para que quien lea un
+    # `Pk4Pokemon` no tenga que acordarse de cuál es cuál.
+    crudas = struct.unpack_from("<6H", bloque, PK4_STATS)
+    estadisticas = (crudas[0], crudas[1], crudas[2], crudas[4], crudas[5], crudas[3])
 
     return Pk4Pokemon(
         slot=int(slot),

@@ -22,8 +22,23 @@ _DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 
 @dataclass(frozen=True, slots=True)
 class _PersonalTableSpec:
+    """Dónde vive cada campo dentro del registro personal de esa edición.
+
+    Los desplazamientos van aquí porque **no son los mismos en todas las
+    generaciones**: cuarta guarda el ritmo de crecimiento en 0x13 y de quinta en
+    adelante está en 0x15. Darlo por hecho haría que un Pokémon de HeartGold
+    subiera de nivel con la curva equivocada.
+    """
+
     file_name: str
     record_size: int
+    # Ritmo de crecimiento (curva de experiencia).
+    growth_offset: int = 0x15
+    # Dónde empiezan los registros de forma y cuántas formas hay. En cuarta van
+    # en otro sitio; una tabla que no los traiga -por ejemplo la que se lee de
+    # la ROM- deja ceros ahí y se usa el registro de la forma base.
+    form_index_offset: int = 0x1C
+    form_count_offset: int = 0x20
 
 
 _SPECS = {
@@ -36,6 +51,20 @@ _SPECS = {
     "oras": _PersonalTableSpec("pkhex_personal_ao.bin", 0x50),
     "sm": _PersonalTableSpec("pkhex_personal_sm.bin", 0x54),
     "usum": _PersonalTableSpec("pkhex_personal_uu.bin", 0x54),
+    # Cuarta generacion. El registro mide 0x2C y los campos NO estan donde en
+    # quinta: el ritmo de crecimiento va en 0x13, y las formas en 0x2A/0x29.
+    # Sondeado sobre la copia de PKHeX: Deoxys declara 4 formas que arrancan en
+    # el registro 496, y ahi estan sus estadisticas de la forma Ataque.
+    #
+    # AVISO: la tabla que trae la ROM de HeartGold no incluye esos campos -los
+    # deja a cero- ni los registros de Giratina Origen, Shaymin Cielo y las
+    # formas de Rotom, que en ese cartucho viven en otro sitio. Con la tabla de
+    # la ROM instalada, las formas caen a la base, que es lo correcto mientras
+    # no se demuestre de donde sacarlas.
+    "hgss": _PersonalTableSpec(
+        "pkhex_personal_hgss.bin", 0x2C,
+        growth_offset=0x13, form_index_offset=0x2A, form_count_offset=0x29,
+    ),
 }
 
 
@@ -124,6 +153,9 @@ def _personal_blob(family: str) -> tuple[bytes, int]:
 
 
 def _record_for(family: str, species: int, form: int) -> bytes:
+    spec = _SPECS.get(str(family or "").casefold())
+    if spec is None:
+        raise BoxedMetadataError(f"Familia de datos personales no compatible: {family!r}.")
     data, size = _personal_blob(family)
     species = int(species)
     form = int(form)
@@ -140,8 +172,8 @@ def _record_for(family: str, species: int, form: int) -> bytes:
     # form > 0, FormStatsIndex > 0 y form < FormCount.
     if form <= 0:
         return base
-    first_form = struct.unpack_from("<H", base, 0x1C)[0]
-    form_count = int(base[0x20])
+    first_form = struct.unpack_from("<H", base, spec.form_index_offset)[0]
+    form_count = int(base[spec.form_count_offset])
     if first_form <= 0 or form >= form_count:
         return base
     index = int(first_form) + form - 1
@@ -153,8 +185,11 @@ def _record_for(family: str, species: int, form: int) -> bytes:
 
 
 def exp_growth_for(family: str, species: int, form: int = 0) -> int:
+    spec = _SPECS.get(str(family or "").casefold())
+    if spec is None:
+        raise BoxedMetadataError(f"Familia de datos personales no compatible: {family!r}.")
     record = _record_for(family, species, form)
-    growth = int(record[0x15])
+    growth = int(record[spec.growth_offset])
     if not 0 <= growth <= 5:
         raise BoxedMetadataError(
             f"La especie #{species}, forma {form}, declara una curva EXP no compatible ({growth})."

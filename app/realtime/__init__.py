@@ -24,6 +24,7 @@ from .sm_adapter import SMRealTimeAdapter
 from .usum_adapter import USUMRealTimeAdapter
 from .bdsp_adapter import BDSPRealTimeAdapter
 from .b2w2_adapter import B2W2RealTimeAdapter
+from .hgss_adapter import HgssRealTimeAdapter
 from .recorder import RealTimeSessionRecorder, snapshot_payload
 from .replay import RealTimeReplay, ReplaySummary
 from .registry import RealTimeRegistry
@@ -33,6 +34,7 @@ __all__ = [
     "BattleState",
     "BDSPRealTimeAdapter",
     "B2W2RealTimeAdapter",
+    "HgssRealTimeAdapter",
     "CitraBridge",
     "DiagnosticLevel",
     "EmulatorBridge",

@@ -73,7 +73,13 @@ def test_el_equipo_se_lee_igual_que_en_pkhex(caso):
     assert leido.move_pp_ups == tuple(caso["move_pp_ups"])
     assert leido.ivs == tuple(caso["ivs_rolerun"])
     assert leido.evs == tuple(caso["evs_rolerun"])
-    assert leido.stats == tuple(caso["stats_stored"])
+    # PKHeX las vuelca en el orden de la tabla personal; `Pk4Pokemon` las
+    # publica en el de RoleRun, con la velocidad al final.
+    esperadas = caso["stats_stored"]
+    assert leido.stats == (
+        esperadas[0], esperadas[1], esperadas[2],
+        esperadas[4], esperadas[5], esperadas[3],
+    )
     assert leido.current_hp == caso["current_hp"]
     assert leido.max_hp == caso["stats_stored"][0]
     assert leido.status_condition == caso["status"]
@@ -238,6 +244,6 @@ def test_las_estadisticas_de_la_partida_real_cuadran_con_la_tabla_personal() -> 
             level=leido.level,
             nature_id=leido.nature_id,
         )
-        assert tuple(calculadas[clave] for clave in STAT_ORDER_PERSONAL) == leido.stats, (
+        assert tuple(calculadas[clave] for clave in STAT_ORDER_ROLERUN) == leido.stats, (
             f"{leido.nickname} (#{leido.species_id})"
         )

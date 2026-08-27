@@ -1,6 +1,37 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.72 — HeartGold, dentro de RoleRun
+
+`app/realtime/hgss_adapter.py`, enchufado a la interfaz. Al abrir una Run de
+HeartGold, RoleRun enlaza con melonDS y publica el equipo con sus PS, naturaleza,
+estadísticas, IV, EV y movimientos; las 18 cajas del PC; y las medallas.
+
+**Lo que NO hace, y por qué está separado.** Cuarta entra solo con lectura, así
+que los conjuntos de la interfaz se han partido en dos:
+`MELONDS_GEN5_REALTIME_GAME_KEYS` para lo que ya escribe y
+`MELONDS_GEN4_REALTIME_GAME_KEYS` para lo que todavía no. Meter HeartGold en el
+conjunto de quinta le habría atribuido curación, FIJAR ROLES y enseñanza de MT
+que no existen. La Run se sigue guardando por el motor de archivo, que sí está
+validado.
+
+Detalles que la partida real obligó a resolver:
+
+- **Un rol ya guardado no se borra** porque el PK4 vivo no tenga marcas. Cuarta
+  todavía no las escribe; si el rol vivo mandara, abrir la Run dejaría al equipo
+  entero SIN ROL.
+- **El equipo publica las estadísticas que el juego escribió**; el PC las
+  calcula, porque un PK4 almacenado no las trae y su nivel sale de la
+  experiencia.
+- **`boxed_metadata` ya no supone dónde está cada campo.** El ritmo de
+  crecimiento vive en `0x13` en cuarta y en `0x15` de quinta en adelante; darlo
+  por hecho habría hecho subir de nivel con la curva equivocada. Ahora el
+  desplazamiento va en el descriptor de cada edición.
+- **Las estadísticas del PK4 se publican en el orden de RoleRun**, no en el de
+  la tabla personal. El juego las guarda con la velocidad en medio.
+
+`tests/test_hgss_adapter.py`: 18 pruebas. Suite completa: **1634**.
+
 # v0.2.6-alpha.71 — HeartGold se lee en vivo: equipo, PC y entrenador
 
 `app/hgss_live.py`, con la disciplina de quinta entera: doble lectura estable,
