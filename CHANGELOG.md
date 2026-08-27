@@ -1,6 +1,40 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.69 — cuarta generación: la ROM y el formato PK4, demostrados
+
+Primer ladrillo de HeartGold/SoulSilver. Nada de esto adivina: cada dato se
+contrastó contra un oráculo independiente.
+
+**Los datos de juego** (`app/gen4_rom_service.py`). Cuarta guarda la tabla
+personal en registros de 44 bytes y la de movimientos en 16, con **los campos en
+otro orden que quinta y la categoría invertida** (0=físico, 1=especial,
+2=estado). Además conserva el tipo «???» en el índice 9, así que de Fuego en
+adelante todo va desplazado uno; se traduce al leer.
+
+- HeartGold coincide con la copia de PKHeX en **las 501 especies** en
+  estadísticas base, ritmo de crecimiento y habilidad 1. Lo que difiere está
+  explicado y comprobado sin excepciones.
+- De los 467 movimientos, los 170 de categoría «estado» tienen potencia cero y
+  los 297 restantes potencia mayor que cero. Sin una sola excepción.
+- Descriptores para los tres juegos: las tres ROM del usuario se leen.
+
+**El formato PK4** (`app/pk4.py`). Mismo cifrado que quinta, pero el registro de
+combate mide 236 bytes, **la naturaleza no se guarda** —sale del PID— y los
+nombres no son UTF-16: usan la tabla de caracteres de cuarta, volcada de PKHeX
+código a código en `data/gen4_charmap.json`.
+
+- 24 Pokémon generados por PKHeX, uno por cada disposición de bloque: todos los
+  campos coinciden.
+- Y sobre la partida real: los cinco del equipo se leen enteros, y sus seis
+  estadísticas recalculadas con la tabla personal salen **exactamente** las que
+  el juego dejó escritas.
+- El equipo vive en `0x94` (contador) y `0x98`, separados 236 bytes. Medido
+  recorriendo el guardado entero, no supuesto.
+
+`tests/test_pk4.py` (128) y `tests/test_gen4_rom_service.py` (30).
+Suite completa: **1582**.
+
 # v0.2.6-alpha.68 — FIJAR ROLES, en los diez juegos
 
 Botón en la cabecera de EQUIPO que asigna de una vez el rol de su casilla a
