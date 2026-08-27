@@ -1,6 +1,20 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.46 — el drafteo en B2/W2
+
+**alpha.42-45 VALIDADAS FÍSICAMENTE** (27-08-2026): enseñar una MT funciona, la
+MT no se gasta, y leer los datos de la ROM no cambió nada de lo que ya iba.
+
+Nuevo: cambiar un movimiento a mano ya escribe en Negro 2.
+
+- Comparte writer con la enseñanza de MT: la escritura en el PK5 es idéntica.
+- Borrar un movimiento compacta los huecos, como `_remove_move_slots` en ORAS.
+  Lo necesita un Support al perder los ataques de daño que le sobran.
+- Dar uno y quitar otro al mismo Pokémon va en una sola transacción.
+- No se deja a un Pokémon sin ningún movimiento.
+- `tests/test_b2w2_draft_writer.py`: 23 pruebas. Suite completa: 1312.
+
 # v0.2.6-alpha.45 — la ROM se lee sin congelar la interfaz
 
 Alpha.44 leía la ROM entera para consultar unos kilobytes: 512 MiB en el hilo

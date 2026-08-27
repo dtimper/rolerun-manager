@@ -648,6 +648,48 @@ def pk5_party_with_move(
     return _reshuffle_pk5(pid, order, canonical) + block[136:]
 
 
+def pk5_party_without_moves(block: bytes, huecos) -> bytes:
+    """Devuelve el PK5 sin los movimientos indicados, compactando los huecos.
+
+    ``huecos`` son posiciones 1..4. Se borran de atrás hacia delante y el resto
+    sube, que es lo que hace el juego: un Pokémon no puede tener un hueco vacío
+    delante de uno lleno. Es la misma operación que `_remove_move_slots` en
+    ORAS.
+    """
+    if len(block) != PK5_PARTY_SIZE:
+        raise B2W2LiveError("El bloque PK5 de party no mide 220 bytes.")
+    posiciones = sorted({int(valor) for valor in huecos}, reverse=True)
+    if not posiciones:
+        raise B2W2LiveError("No hay ningún movimiento B2/W2 que borrar.")
+    for posicion in posiciones:
+        if not 1 <= posicion <= 4:
+            raise B2W2LiveError("El hueco de movimiento B2/W2 tiene que estar entre 1 y 4.")
+
+    pid, order, canonical = _unshuffle_pk5(block)
+    for posicion in posiciones:
+        indice = posicion - 1
+        if struct.unpack_from("<H", canonical, PK5_MOVE_OFFSET + indice * 2)[0] == 0:
+            raise B2W2LiveError(f"El hueco {posicion} de ese Pokémon ya estaba vacío.")
+        for actual in range(indice, 3):
+            siguiente = actual + 1
+            struct.pack_into(
+                "<H", canonical, PK5_MOVE_OFFSET + actual * 2,
+                struct.unpack_from("<H", canonical, PK5_MOVE_OFFSET + siguiente * 2)[0],
+            )
+            canonical[PK5_MOVE_PP_OFFSET + actual] = canonical[PK5_MOVE_PP_OFFSET + siguiente]
+            canonical[PK5_MOVE_PP_UPS_OFFSET + actual] = (
+                canonical[PK5_MOVE_PP_UPS_OFFSET + siguiente]
+            )
+        struct.pack_into("<H", canonical, PK5_MOVE_OFFSET + 3 * 2, 0)
+        canonical[PK5_MOVE_PP_OFFSET + 3] = 0
+        canonical[PK5_MOVE_PP_UPS_OFFSET + 3] = 0
+
+    if struct.unpack_from("<H", canonical, PK5_MOVE_OFFSET)[0] == 0:
+        raise B2W2LiveError("Un Pokémon no puede quedarse sin ningún movimiento.")
+
+    return _reshuffle_pk5(pid, order, canonical) + block[136:]
+
+
 def pk5_party_with_role(
     block: bytes, *, markings, evs, base_stats: dict[str, int],
 ) -> bytes:
@@ -1439,42 +1481,76 @@ class B2W2MelonDSReader:
     def write_party_moves(
         self, party_read: B2W2PartyRead, ensenanzas, *, base_pp_for,
     ) -> B2W2PartyRead:
-        """Enseña uno o varios movimientos como una única transacción.
+        """Cambia uno o varios movimientos como una única transacción.
 
-        ``ensenanzas`` son tuplas ``(slot, identidad, hueco, move_id)``. Mismo
-        contrato que el resto de writers B2/W2: relectura fresca, identidad
-        fuerte por slot, readback con el parser de producción, verificación
-        semántica y rollback completo.
+        ``ensenanzas`` son tuplas ``(slot, identidad, hueco, move_id)``. Un
+        ``move_id`` de cero **borra** ese movimiento y compacta los huecos, que
+        es lo que necesita un Support al perder los ataques que le sobran.
 
-        En quinta las MT son reutilizables: no se toca la mochila.
+        Dentro de un mismo Pokémon se escriben primero los movimientos nuevos y
+        después los borrados, de atrás hacia delante: así cada hueco significa
+        lo mismo que cuando el usuario lo eligió, y las compactaciones no se
+        pisan entre sí.
+
+        Mismo contrato que el resto de writers B2/W2: relectura fresca,
+        identidad fuerte por slot, readback con el parser de producción,
+        verificación semántica y rollback completo. En quinta las MT son
+        reutilizables, así que la mochila no se toca nunca.
         """
         peticiones = list(ensenanzas)
         if not peticiones:
-            raise B2W2LiveError("No hay ningún movimiento B2/W2 que enseñar.")
+            raise B2W2LiveError("No hay ningún movimiento B2/W2 que cambiar.")
         before = self.read_party()
         if before.process_id != party_read.process_id:
-            raise B2W2LiveError("melonDS cambió antes de enseñar el movimiento B2/W2.")
+            raise B2W2LiveError("melonDS cambió antes de escribir el movimiento B2/W2.")
         old_raw = before.raw
         new_raw = bytearray(old_raw)
-        objetivos: dict[tuple[int, int], tuple[tuple[int, int, int], int]] = {}
+
+        por_pokemon: dict[int, list[tuple[int, int]]] = {}
+        identidades: dict[int, tuple[int, int, int]] = {}
+        vistos: set[tuple[int, int]] = set()
         for slot, identidad, hueco, move_id in peticiones:
             slot, hueco, move_id = int(slot), int(hueco), int(move_id)
             if not 0 <= slot < before.count:
                 raise B2W2LiveError("El slot de party B2/W2 está fuera de rango.")
-            if (slot, hueco) in objetivos:
-                raise B2W2LiveError("Dos enseñanzas B2/W2 sobre el mismo hueco.")
+            if (slot, hueco) in vistos:
+                raise B2W2LiveError("Dos cambios B2/W2 sobre el mismo hueco.")
+            vistos.add((slot, hueco))
             member = before.pokemon[slot]
             if (member.pid, member.tid, member.sid) != tuple(identidad):
-                raise B2W2LiveError("La identidad de la enseñanza B2/W2 cambió antes de escribir.")
+                raise B2W2LiveError("La identidad del cambio B2/W2 cambió antes de escribir.")
+            identidades[slot] = tuple(identidad)
+            por_pokemon.setdefault(slot, []).append((hueco, move_id))
+
+        # Qué se espera ver en cada Pokémon después de escribir: los que tienen
+        # que estar, los que ya no, y en qué hueco exacto cuando no ha habido
+        # borrados que muevan nada de sitio.
+        esperados: dict[int, tuple[set[int], set[int], dict[int, int]]] = {}
+        for slot, cambios in por_pokemon.items():
             offset = slot * PK5_PARTY_SIZE
-            new_raw[offset:offset + PK5_PARTY_SIZE] = pk5_party_with_move(
-                bytes(new_raw[offset:offset + PK5_PARTY_SIZE]), hueco, move_id,
-                base_pp_for=base_pp_for,
-            )
-            objetivos[(slot, hueco)] = (tuple(identidad), move_id)
+            bloque = bytes(new_raw[offset:offset + PK5_PARTY_SIZE])
+            original = before.pokemon[slot]
+            borrados = [hueco for hueco, move_id in cambios if move_id <= 0]
+            presentes: set[int] = set()
+            ausentes = {int(original.move_ids[hueco - 1]) for hueco in borrados}
+            posiciones: dict[int, int] = {}
+
+            for hueco, move_id in cambios:
+                if move_id <= 0:
+                    continue
+                bloque = pk5_party_with_move(
+                    bloque, hueco, move_id, base_pp_for=base_pp_for,
+                )
+                presentes.add(move_id)
+                if not borrados:
+                    posiciones[hueco] = move_id
+            if borrados:
+                bloque = pk5_party_without_moves(bloque, borrados)
+            new_raw[offset:offset + PK5_PARTY_SIZE] = bloque
+            esperados[slot] = (presentes, ausentes - presentes, posiciones)
 
         if bytes(new_raw) == old_raw:
-            # Ya conocía ese movimiento ahí: no se escribe un solo byte.
+            # El equipo ya estaba así: no se escribe un solo byte.
             return before
 
         party_host = before.allocation_base + (PARTY_BASE - DS_RAM_BASE)
@@ -1483,22 +1559,50 @@ class B2W2MelonDSReader:
             self._write_process_bytes(before.process_id, party_host, old_raw)
             restored = self.read_party()
             if restored.raw != old_raw:
-                raise B2W2LiveError("Rollback de la enseñanza B2/W2 no confirmado; no guardes.")
+                raise B2W2LiveError(
+                    "Rollback del cambio de movimientos B2/W2 no confirmado; no guardes."
+                )
 
         try:
             self._write_process_bytes(before.process_id, party_host, bytes(new_raw))
             after = self.read_party()
             if after.count != before.count or after.raw != bytes(new_raw):
-                raise B2W2LiveError("El readback de la enseñanza B2/W2 no coincide.")
-            for (slot, hueco), (identidad, move_id) in objetivos.items():
+                raise B2W2LiveError("El readback del cambio de movimientos B2/W2 no coincide.")
+            for slot, (presentes, ausentes, posiciones) in esperados.items():
                 verificado = after.pokemon[slot]
-                if (verificado.pid, verificado.tid, verificado.sid) != identidad:
+                if (verificado.pid, verificado.tid, verificado.sid) != identidades[slot]:
                     raise B2W2LiveError("La identidad B2/W2 verificada no coincide.")
-                if int(verificado.move_ids[hueco - 1]) != move_id:
-                    raise B2W2LiveError("La verificación semántica del movimiento enseñado falló.")
-                esperado = int(base_pp_for(move_id) or 0)
-                if int(verificado.move_pp[hueco - 1]) != esperado:
-                    raise B2W2LiveError("La verificación semántica de los PP enseñados falló.")
+                actuales = [int(valor) for valor in verificado.move_ids]
+                for move_id in presentes:
+                    if move_id not in actuales:
+                        raise B2W2LiveError(
+                            "La verificación semántica del movimiento escrito falló."
+                        )
+                    posicion = actuales.index(move_id)
+                    esperado = int(base_pp_for(move_id) or 0)
+                    if int(verificado.move_pp[posicion]) != esperado:
+                        raise B2W2LiveError("La verificación semántica de los PP falló.")
+                for move_id in ausentes:
+                    if move_id in actuales:
+                        raise B2W2LiveError(
+                            "El movimiento que había que borrar sigue ahí."
+                        )
+                # Con borrados, el hueco final cambia; sin ellos, tiene que ser
+                # exactamente el que eligió el usuario.
+                for hueco, move_id in posiciones.items():
+                    if actuales[hueco - 1] != move_id:
+                        raise B2W2LiveError(
+                            "El movimiento escrito no quedó en el hueco elegido."
+                        )
+                # Un hueco vacío delante de uno lleno no es un moveset válido.
+                vacio = False
+                for move_id in actuales:
+                    if move_id == 0:
+                        vacio = True
+                    elif vacio:
+                        raise B2W2LiveError(
+                            "El Pokémon quedó con un hueco vacío delante de un movimiento."
+                        )
             return after
         except Exception:
             restore()

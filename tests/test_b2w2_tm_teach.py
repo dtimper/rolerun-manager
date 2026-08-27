@@ -307,7 +307,7 @@ def test_el_adaptador_localiza_al_pokemon_por_identidad_no_por_slot() -> None:
     party = lector.read_party()
     segundo = party.pokemon[1]
 
-    objetivo = adaptador._teach_target_for(party, _cambio(_clave(segundo), 4, TERREMOTO))
+    objetivo = adaptador._move_target_for(party, _cambio(_clave(segundo), 4, TERREMOTO))
 
     assert objetivo[0] == 1, "encuentra al segundo miembro, no al slot 0 del cambio"
     assert objetivo[1] == _identidad(segundo)
@@ -319,7 +319,7 @@ def test_una_identidad_ausente_no_escribe_nada() -> None:
     adaptador = B2W2RealTimeAdapter(reader=lector)
 
     with pytest.raises(B2W2LiveError, match="forma única"):
-        adaptador._teach_target_for(
+        adaptador._move_target_for(
             lector.read_party(), _cambio("1:2:3:4", 4, TERREMOTO),
         )
 
@@ -398,10 +398,12 @@ def test_una_mt_llega_a_la_auto_aplicacion() -> None:
     assert manager._oras_live_auto_apply_ids == {id(mt)}
 
 
-def test_los_movimientos_sueltos_siguen_sin_writer_en_b2w2() -> None:
-    """Una capacidad solo se declara compatible cuando tiene writer propio.
+def test_el_drafteo_comparte_writer_con_la_ensenanza_de_mt() -> None:
+    """Cambiar un movimiento a mano y enseñar una MT escriben lo mismo.
 
-    Enseñar una MT lo tiene desde alpha.42; cambiar un movimiento a mano, no.
+    Lo único que cambia es de dónde sale el movimiento. Mantener dos writers
+    para la misma escritura habría sido la clase de duplicado que este proyecto
+    ya pagó caro entre Sol/Luna y UltraSol.
     """
     from types import SimpleNamespace
 
@@ -412,12 +414,10 @@ def test_los_movimientos_sueltos_siguen_sin_writer_en_b2w2() -> None:
     movimiento = PendingChange(
         role="Mago", pokemon_slot=0, pokemon="Tepig", species="Tepig",
         move_slot=1, old_move="Placaje", old_move_id=33,
-        new_move="Ascuas", new_move_id=52,
+        new_move="Ascuas", new_move_id=52, pokemon_identity="1:2:3:4",
     )
 
-    assert RoleRunManager._oras_live_unsupported_changes(ui, [movimiento]) == [
-        "cambios de movimientos",
-    ]
+    assert RoleRunManager._oras_live_unsupported_changes(ui, [movimiento]) == []
 
 
 def test_la_pantalla_de_mt_pide_el_perfil_al_adaptador_vivo() -> None:

@@ -32,7 +32,7 @@ from app.b2w2_live import (
     parse_pk5_boxed,
     parse_pk5_party,
 )
-from app.models import PendingChange, PendingPartyHeal, PendingTeamChange
+from app.models import PendingChange, PendingPCRoleChange, PendingPartyHeal, PendingTeamChange
 from app.realtime.b2w2_adapter import B2W2RealTimeAdapter
 from app.save_engine_client import SaveGameData, SavePokemon
 from app.ui import RoleRunManager
@@ -548,20 +548,19 @@ def test_reconciliation_never_falls_through_to_other_writers() -> None:
 
 
 def test_only_capabilities_with_a_writer_pass_the_live_ui_gate() -> None:
-    """La curacion dejo de estar bloqueada en alpha.26, cuando tuvo writer.
+    """Una capacidad solo atraviesa la compuerta cuando tiene writer propio.
 
-    Lo que sigue vigente es la regla: una capacidad solo atraviesa la compuerta
-    cuando existe un writer validado para ella. Los movimientos todavia no lo
-    tienen en B2/W2.
+    La curación se abrió en alpha.26, los movimientos sueltos en alpha.46. Lo
+    que esta prueba protege es la regla, no la lista: el rol de un Pokémon que
+    se queda en el PC sigue sin writer en B2/W2 y no debe pasar.
     """
     ui = SimpleNamespace(_active_azahar_realtime_key=lambda: "b2w2")
-    change = PendingChange(
-        role="Mago", pokemon_slot=0, pokemon="Tepig", species="Tepig",
-        move_slot=1, old_move="Placaje", old_move_id=33,
-        new_move="Ascuas", new_move_id=52,
+    change = PendingPCRoleChange(
+        box=0, box_slot=0, pokemon="Tepig", species="Tepig",
+        pokemon_identity="1:2:3:4", old_role="SIN ROL", new_role="Mago",
     )
     assert RoleRunManager._oras_live_unsupported_changes(ui, [change]) == [
-        "cambios de movimientos",
+        "roles del PC",
     ]
 
 

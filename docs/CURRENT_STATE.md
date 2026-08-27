@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.45`
+- Versión de aplicación: `v0.2.6-alpha.46`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,38 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.46 — el drafteo, y VALIDACIÓN FÍSICA de alpha.42-45
+
+**Validado físicamente el 27-08-2026** por el usuario: enseñar una MT funciona,
+la MT no se gasta, y nada de lo que ya iba (roles, EVs, curación, estadísticas)
+cambió al pasar a leer los datos de la ROM.
+
+Con esto, alpha.42, 43, 44 y 45 quedan cerradas.
+
+**Nuevo: el drafteo.** Cambiar un movimiento a mano ya escribe en Negro 2.
+
+- Comparte writer con la enseñanza de MT: en el PK5 la escritura es idéntica y
+  lo único que cambia es de dónde sale el movimiento. Dos writers para la misma
+  escritura habrían sido la clase de duplicado que ya se pagó caro entre
+  Sol/Luna y UltraSol.
+- **Borrar** un movimiento (`new_move_id = 0`) compacta los huecos: un Pokémon
+  no puede tener un hueco vacío delante de uno lleno. Misma operación que
+  `_remove_move_slots` en ORAS. Lo necesita un Support al perder los ataques de
+  daño que le sobran.
+- Dar uno y quitar otro al mismo Pokémon va en **una sola transacción**: primero
+  el nuevo —el hueco significa lo que el usuario vio— y después el borrado, que
+  lo desplaza como haría el juego.
+- No se deja a un Pokémon sin ningún movimiento, ni se borra un hueco vacío.
+- La verificación se adapta: sin borrados exige el hueco exacto; con borrados
+  exige que el movimiento esté, que el borrado no esté, y que no quede ningún
+  hueco vacío por delante.
+- Sin identidad del Pokémon no se escribe: el índice de party puede estar
+  obsoleto.
+- `tests/test_b2w2_draft_writer.py`: 23 pruebas. Suite completa: 1312.
+- **Pendiente de validación física.**
+
+Lo que sigue sin writer en B2/W2: los roles de Pokémon que permanecen en el PC.
 
 ### v0.2.6 Alpha.45 — la ROM se lee sin congelar la interfaz
 

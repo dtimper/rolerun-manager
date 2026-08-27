@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.models import (  # noqa: E402
     PendingChange,
+    PendingPCRoleChange,
     PendingPartyHeal,
     PendingRoleChange,
     PendingTeamChange,
@@ -59,6 +60,20 @@ def _rol() -> PendingRoleChange:
     return PendingRoleChange(0, "Tepig", "Tepig", "SIN ROL", "Mago")
 
 
+def _sin_writer() -> PendingPCRoleChange:
+    """Un cambio que B2/W2 todavía no sabe escribir.
+
+    Los movimientos sueltos lo eran hasta alpha.46, cuando tuvieron writer. Lo
+    que esta prueba protege no es la lista, sino la regla: esperar por algo que
+    nunca se va a escribir es esperar para siempre. El rol de un Pokémon que se
+    queda en el PC sigue sin writer, así que sirve igual de ejemplo.
+    """
+    return PendingPCRoleChange(
+        box=0, box_slot=0, pokemon="Tepig", species="Tepig",
+        pokemon_identity="1:2:3:4", old_role="SIN ROL", new_role="Mago",
+    )
+
+
 def _curacion() -> PendingPartyHeal:
     return PendingPartyHeal(
         pokemon_slot=0, pokemon="Tepig", species="Tepig", pokemon_identity="x",
@@ -82,18 +97,18 @@ def test_un_cambio_con_writer_si_bloquea_la_lectura(cambio) -> None:
 
 
 def test_un_cambio_sin_writer_no_secuestra_el_seguimiento() -> None:
-    """B2/W2 todavía no escribe movimientos: esperar sería esperar para siempre."""
-    manager = _manager("b2w2", [_movimiento()])
+    """Esperar por algo que nunca se escribirá es esperar para siempre."""
+    manager = _manager("b2w2", [_sin_writer()])
     assert RoleRunManager._oras_live_pending_changes_block_reads(manager) is False
 
 
 def test_basta_uno_aplicable_para_esperar() -> None:
-    manager = _manager("b2w2", [_movimiento(), _rol()])
+    manager = _manager("b2w2", [_sin_writer(), _rol()])
     assert RoleRunManager._oras_live_pending_changes_block_reads(manager) is True
 
 
 def test_varios_inaplicables_siguen_sin_bloquear() -> None:
-    manager = _manager("b2w2", [_movimiento(), _movimiento()])
+    manager = _manager("b2w2", [_sin_writer(), _sin_writer()])
     assert RoleRunManager._oras_live_pending_changes_block_reads(manager) is False
 
 

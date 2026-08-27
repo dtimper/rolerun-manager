@@ -407,7 +407,7 @@ def test_la_mt_randomizada_llega_al_writer_con_su_movimiento() -> None:
     primero = lector.read_party().pokemon[0]
     pendiente.pokemon_identity = _clave(primero)
 
-    objetivo = adaptador._teach_target_for(lector.read_party(), pendiente)
+    objetivo = adaptador._move_target_for(lector.read_party(), pendiente)
 
     assert objetivo == (0, _identidad(primero), 4, LANZALLAMAS)
 

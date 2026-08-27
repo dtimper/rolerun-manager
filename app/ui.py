@@ -7791,7 +7791,7 @@ class RoleRunManager(ctk.CTk):
             if live_key == "b2w2":
                 if isinstance(change, (
                     PendingRoleChange, PendingPartyHeal, PendingInventoryChange,
-                    PendingTMTeach,
+                    PendingTMTeach, PendingChange,
                 )):
                     # alpha.24: el writer de roles B2/W2 escribe marcas y EV en el
                     # PK5 vivo, recalcula las estadísticas con la tabla personal y
@@ -10613,7 +10613,7 @@ class RoleRunManager(ctk.CTk):
             for change in changes:
                 if isinstance(change, (
                     PendingRoleChange, PendingPartyHeal, PendingInventoryChange,
-                    PendingTMTeach,
+                    PendingTMTeach, PendingChange,
                 )):
                     continue
                 if (

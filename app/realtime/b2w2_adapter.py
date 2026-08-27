@@ -13,8 +13,8 @@ from ..b2w2_live import (
 )
 from ..b2w2_tm_service import build_tm_profile
 from ..models import (
-    PendingInventoryChange, PendingPartyHeal, PendingRoleChange, PendingTeamChange,
-    PendingTMTeach,
+    PendingChange, PendingInventoryChange, PendingPartyHeal, PendingRoleChange,
+    PendingTeamChange, PendingTMTeach,
 )
 from ..boxed_metadata import (
     ability_name, base_stats_for, boxed_level, item_name, species_name,
@@ -341,21 +341,28 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
         live.game.raw["live_write"] = True
         return B2W2RealTimeWriteResult(live.game, live.process, 2, len(changes))
 
-    def _teach_target_for(self, party_read, change: PendingTMTeach):
+    def _move_target_for(self, party_read, change):
         """Resuelve (slot, identidad, hueco, movimiento) sin fiarse del slot.
 
-        El índice de party que traía el cambio puede haber quedado obsoleto: se
-        localiza al Pokémon por su identidad fuerte, igual que en roles y
-        curación.
+        Sirve igual para una MT y para un drafteo: el índice de party que traía
+        el cambio puede haber quedado obsoleto, así que se localiza al Pokémon
+        por su identidad fuerte, como en roles y curación.
+
+        Un movimiento cero significa borrar ese hueco; es lo que necesita un
+        Support al perder los ataques de daño que le sobran.
         """
         objetivo = str(change.pokemon_identity or "")
+        if not objetivo:
+            raise B2W2LiveError(
+                "El cambio de movimiento B2/W2 no trae identidad del Pokémon."
+            )
         candidatos = [
             (indice, member) for indice, member in enumerate(party_read.pokemon)
             if self._strong_identity(member) == objetivo
         ]
         if len(candidatos) != 1:
             raise B2W2LiveError(
-                "La MT B2/W2 no identifica de forma única a un miembro del equipo."
+                "El cambio B2/W2 no identifica de forma única a un miembro del equipo."
             )
         indice, member = candidatos[0]
         hueco = int(change.move_slot)
@@ -370,9 +377,11 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
         changes = list(changes)
         if changes and all(isinstance(item, PendingInventoryChange) for item in changes):
             return self._apply_inventory(current, changes)
-        if changes and all(isinstance(item, PendingTMTeach) for item in changes):
+        if changes and all(
+            isinstance(item, (PendingTMTeach, PendingChange)) for item in changes
+        ):
             party_read = self.reader.read_party()
-            ensenanzas = [self._teach_target_for(party_read, item) for item in changes]
+            ensenanzas = [self._move_target_for(party_read, item) for item in changes]
             self.reader.write_party_moves(
                 party_read, ensenanzas, base_pp_for=self.base_pp_for,
             )

@@ -32,7 +32,7 @@ from app.b2w2_live import (  # noqa: E402
     pk5_party_with_role,
 )
 from app.boxed_metadata import base_stats_for  # noqa: E402
-from app.models import PendingChange, PendingRoleChange  # noqa: E402
+from app.models import PendingChange, PendingPCRoleChange, PendingRoleChange  # noqa: E402
 from app.realtime.b2w2_adapter import B2W2RealTimeAdapter  # noqa: E402
 from app.role_rules import ROLE_ORDER  # noqa: E402
 from app.ui import RoleRunManager  # noqa: E402
@@ -336,21 +336,19 @@ def test_la_compuerta_ya_admite_los_cambios_de_rol_en_b2w2() -> None:
 
 
 def test_abrir_roles_no_abre_de_rebote_lo_que_no_tiene_writer() -> None:
-    """La curación se abrió en alpha.26, con su propio writer.
+    """Una capacidad solo atraviesa la compuerta cuando tiene writer propio.
 
-    Lo que este test protege es la regla, no la lista: una capacidad solo se
-    declara compatible cuando tiene writer propio. Los movimientos siguen sin
-    tenerlo en B2/W2.
+    La curación se abrió en alpha.26, los movimientos sueltos en alpha.46. Lo
+    que esta prueba protege es la regla, no la lista: el rol de un Pokémon que
+    se queda en el PC sigue sin writer en B2/W2 y no debe pasar.
     """
     ui = SimpleNamespace(_active_azahar_realtime_key=lambda: "b2w2")
-    movimiento = PendingChange(
-        role="Mago", pokemon_slot=0, pokemon="Tepig", species="Tepig",
-        move_slot=1, old_move="Placaje", old_move_id=33,
-        new_move="Ascuas", new_move_id=52,
+    change = PendingPCRoleChange(
+        box=0, box_slot=0, pokemon="Tepig", species="Tepig",
+        pokemon_identity="1:2:3:4", old_role="SIN ROL", new_role="Mago",
     )
-
-    assert RoleRunManager._oras_live_unsupported_changes(ui, [movimiento]) == [
-        "cambios de movimientos",
+    assert RoleRunManager._oras_live_unsupported_changes(ui, [change]) == [
+        "roles del PC",
     ]
 
 
