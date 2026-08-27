@@ -1,0 +1,491 @@
+{
+  "format": "rolerun-b2w2-battle-faint-v1",
+  "captured_at": "2026-08-27T14:43:00.896759+02:00",
+  "environment": "Pokémon Negro 2 España · melonDS 1.1",
+  "pregunta_1": "¿El bloque de party refleja el daño durante el combate o solo al terminar? Mirar cuándo cambia party[].hp.",
+  "pregunta_2": "¿Qué hace la lane de presentación al morir? Mirar status_byte y parser_de_produccion.motivo cuando el HP llega a 0.",
+  "duracion_segundos": 180.0,
+  "intervalo_segundos": 0.1,
+  "cambios_registrados": 6,
+  "muestras": [
+    {
+      "ms": 0.0,
+      "party_count": 6,
+      "party": [
+        {
+          "slot": 0,
+          "species": 504,
+          "hp": 16,
+          "max_hp": 16,
+          "status": 0
+        },
+        {
+          "slot": 1,
+          "species": 540,
+          "hp": 21,
+          "max_hp": 21,
+          "status": 0
+        },
+        {
+          "slot": 2,
+          "species": 506,
+          "hp": 18,
+          "max_hp": 18,
+          "status": 0
+        },
+        {
+          "slot": 3,
+          "species": 179,
+          "hp": 25,
+          "max_hp": 25,
+          "status": 0
+        },
+        {
+          "slot": 4,
+          "species": 498,
+          "hp": 40,
+          "max_hp": 40,
+          "status": 0
+        },
+        {
+          "slot": 5,
+          "species": 298,
+          "hp": 20,
+          "max_hp": 20,
+          "status": 0
+        }
+      ],
+      "battle_rows": {
+        "mirror": {
+          "row": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "status_byte": 0
+        },
+        "immediate": {
+          "row": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "status_byte": 0
+        }
+      },
+      "parser_de_produccion": {
+        "aceptado": true,
+        "active": false,
+        "party_slot": null,
+        "current_hp": 0,
+        "max_hp": 0,
+        "converged": false,
+        "status": 0
+      }
+    },
+    {
+      "ms": 20486.7,
+      "party_count": 6,
+      "party": [
+        {
+          "slot": 0,
+          "species": 504,
+          "hp": 16,
+          "max_hp": 16,
+          "status": 0
+        },
+        {
+          "slot": 1,
+          "species": 540,
+          "hp": 21,
+          "max_hp": 21,
+          "status": 0
+        },
+        {
+          "slot": 2,
+          "species": 506,
+          "hp": 18,
+          "max_hp": 18,
+          "status": 0
+        },
+        {
+          "slot": 3,
+          "species": 179,
+          "hp": 25,
+          "max_hp": 25,
+          "status": 0
+        },
+        {
+          "slot": 4,
+          "species": 498,
+          "hp": 40,
+          "max_hp": 40,
+          "status": 0
+        },
+        {
+          "slot": 5,
+          "species": 298,
+          "hp": 20,
+          "max_hp": 20,
+          "status": 0
+        }
+      ],
+      "battle_rows": {
+        "mirror": {
+          "row": [
+            504,
+            16,
+            16,
+            0,
+            0,
+            51,
+            3
+          ],
+          "status_byte": 0
+        },
+        "immediate": {
+          "row": [
+            506,
+            18,
+            18,
+            0,
+            0,
+            72,
+            516
+          ],
+          "status_byte": 0
+        }
+      },
+      "parser_de_produccion": {
+        "aceptado": false,
+        "motivo": "Las dos copias de batalla no coinciden en identidad."
+      }
+    },
+    {
+      "ms": 27049.8,
+      "party_count": 6,
+      "party": [
+        {
+          "slot": 0,
+          "species": 504,
+          "hp": 16,
+          "max_hp": 16,
+          "status": 0
+        },
+        {
+          "slot": 1,
+          "species": 540,
+          "hp": 21,
+          "max_hp": 21,
+          "status": 0
+        },
+        {
+          "slot": 2,
+          "species": 506,
+          "hp": 18,
+          "max_hp": 18,
+          "status": 0
+        },
+        {
+          "slot": 3,
+          "species": 179,
+          "hp": 25,
+          "max_hp": 25,
+          "status": 0
+        },
+        {
+          "slot": 4,
+          "species": 498,
+          "hp": 40,
+          "max_hp": 40,
+          "status": 0
+        },
+        {
+          "slot": 5,
+          "species": 298,
+          "hp": 20,
+          "max_hp": 20,
+          "status": 0
+        }
+      ],
+      "battle_rows": {
+        "mirror": {
+          "row": [
+            504,
+            16,
+            3,
+            0,
+            0,
+            51,
+            3
+          ],
+          "status_byte": 0
+        },
+        "immediate": {
+          "row": [
+            506,
+            18,
+            18,
+            0,
+            0,
+            72,
+            516
+          ],
+          "status_byte": 0
+        }
+      },
+      "parser_de_produccion": {
+        "aceptado": false,
+        "motivo": "Las dos copias de batalla no coinciden en identidad."
+      }
+    },
+    {
+      "ms": 39459.6,
+      "party_count": 6,
+      "party": [
+        {
+          "slot": 0,
+          "species": 504,
+          "hp": 16,
+          "max_hp": 16,
+          "status": 0
+        },
+        {
+          "slot": 1,
+          "species": 540,
+          "hp": 21,
+          "max_hp": 21,
+          "status": 0
+        },
+        {
+          "slot": 2,
+          "species": 506,
+          "hp": 18,
+          "max_hp": 18,
+          "status": 0
+        },
+        {
+          "slot": 3,
+          "species": 179,
+          "hp": 25,
+          "max_hp": 25,
+          "status": 0
+        },
+        {
+          "slot": 4,
+          "species": 498,
+          "hp": 40,
+          "max_hp": 40,
+          "status": 0
+        },
+        {
+          "slot": 5,
+          "species": 298,
+          "hp": 20,
+          "max_hp": 20,
+          "status": 0
+        }
+      ],
+      "battle_rows": {
+        "mirror": {
+          "row": [
+            504,
+            16,
+            0,
+            0,
+            0,
+            51,
+            3
+          ],
+          "status_byte": 0
+        },
+        "immediate": {
+          "row": [
+            506,
+            18,
+            18,
+            0,
+            0,
+            72,
+            516
+          ],
+          "status_byte": 0
+        }
+      },
+      "parser_de_produccion": {
+        "aceptado": false,
+        "motivo": "Las dos copias de batalla no coinciden en identidad."
+      }
+    },
+    {
+      "ms": 47232.1,
+      "party_count": 6,
+      "party": [
+        {
+          "slot": 0,
+          "species": 504,
+          "hp": 0,
+          "max_hp": 16,
+          "status": 0
+        },
+        {
+          "slot": 1,
+          "species": 540,
+          "hp": 21,
+          "max_hp": 21,
+          "status": 0
+        },
+        {
+          "slot": 2,
+          "species": 506,
+          "hp": 18,
+          "max_hp": 18,
+          "status": 0
+        },
+        {
+          "slot": 3,
+          "species": 179,
+          "hp": 25,
+          "max_hp": 25,
+          "status": 0
+        },
+        {
+          "slot": 4,
+          "species": 498,
+          "hp": 40,
+          "max_hp": 40,
+          "status": 0
+        },
+        {
+          "slot": 5,
+          "species": 298,
+          "hp": 20,
+          "max_hp": 20,
+          "status": 0
+        }
+      ],
+      "battle_rows": {
+        "mirror": {
+          "row": [
+            504,
+            16,
+            0,
+            0,
+            0,
+            51,
+            3
+          ],
+          "status_byte": 0
+        },
+        "immediate": {
+          "row": [
+            506,
+            18,
+            18,
+            0,
+            0,
+            72,
+            516
+          ],
+          "status_byte": 0
+        }
+      },
+      "parser_de_produccion": {
+        "aceptado": false,
+        "motivo": "Las dos copias de batalla no coinciden en identidad."
+      }
+    },
+    {
+      "ms": 47636.2,
+      "party_count": 6,
+      "party": [
+        {
+          "slot": 0,
+          "species": 504,
+          "hp": 0,
+          "max_hp": 16,
+          "status": 0
+        },
+        {
+          "slot": 1,
+          "species": 540,
+          "hp": 21,
+          "max_hp": 21,
+          "status": 0
+        },
+        {
+          "slot": 2,
+          "species": 506,
+          "hp": 18,
+          "max_hp": 18,
+          "status": 0
+        },
+        {
+          "slot": 3,
+          "species": 179,
+          "hp": 25,
+          "max_hp": 25,
+          "status": 0
+        },
+        {
+          "slot": 4,
+          "species": 498,
+          "hp": 40,
+          "max_hp": 40,
+          "status": 0
+        },
+        {
+          "slot": 5,
+          "species": 298,
+          "hp": 20,
+          "max_hp": 20,
+          "status": 0
+        }
+      ],
+      "battle_rows": {
+        "mirror": {
+          "row": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "status_byte": 0
+        },
+        "immediate": {
+          "row": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "status_byte": 0
+        }
+      },
+      "parser_de_produccion": {
+        "aceptado": true,
+        "active": false,
+        "party_slot": null,
+        "current_hp": 0,
+        "max_hp": 0,
+        "converged": false,
+        "status": 0
+      }
+    }
+  ],
+  "note": "Diagnóstico de solo lectura; no activa ninguna capacidad ni escribe RAM."
+}

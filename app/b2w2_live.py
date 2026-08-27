@@ -663,38 +663,56 @@ class B2W2MelonDSReader:
         live = struct.unpack("<7H", immediate[:BATTLE_ROW_SIZE])
         if old[0] == live[0] == 0:
             return B2W2BattleRead(False)
-        # especie, HP máximo, habilidad y nivel deben identificar de forma única
-        # al miembro. El HP del mirror puede estar retrasado; sus metadatos no.
-        if (old[0], old[1], old[5], old[6]) != (live[0], live[1], live[5], live[6]):
-            raise B2W2LiveError("Las dos copias de batalla no coinciden en identidad.")
+        if old[0] == 0:
+            # Sin copia de presentación no hay nada que publicar sin arriesgarse
+            # a adelantar el daño a la animación.
+            return B2W2BattleRead(False)
+
+        # La copia de presentación (``old``) es la autoridad de la HUD. La
+        # segunda fila solo **corrobora**.
+        #
+        # Hasta alpha.31 un desacuerdo entre ambas anulaba la lectura entera. La
+        # traza física del 27-08-2026 con seis miembros lo refutó: durante todo
+        # el combate la presentación siguió correctamente al Patrat activo
+        # (16 -> 3 -> 0) mientras la segunda fila se quedó congelada describiendo
+        # a otro miembro del equipo y con un nivel imposible (516). Es decir,
+        # estaba obsoleta. Con la lectura anulada, RoleRun caía al bloque de
+        # party, que en Gen 5 **no se actualiza hasta que termina el combate**:
+        # de ahí que ni los PS ni la baja se vieran en tiempo real.
+        corrobora = (old[0], old[1], old[5], old[6]) == (live[0], live[1], live[5], live[6])
+
         matches = [
             pokemon for pokemon in party
             if (
                 pokemon.species_id, pokemon.max_hp, pokemon.ability_id, pokemon.level
-            ) == (live[0], live[1], live[5], live[6])
+            ) == (old[0], old[1], old[5], old[6])
         ]
         if len(matches) != 1:
             raise B2W2LiveError(
                 "La fila de batalla no identifica de forma única un miembro del equipo."
             )
-        if live[1] <= 0 or live[2] > live[1] or old[2] > old[1]:
+        if old[1] <= 0 or old[2] > old[1]:
+            raise B2W2LiveError("Los PS de batalla B2/W2 son incoherentes.")
+        if corrobora and (live[1] <= 0 or live[2] > live[1]):
             raise B2W2LiveError("Los PS de batalla B2/W2 son incoherentes.")
         runtime_status = int(mirror[BATTLE_STATUS_OFFSET])
         if runtime_status not in (0, 1):
             raise B2W2LiveError(
                 f"Estado de batalla B2/W2 no demostrado: {runtime_status}."
             )
-        # La captura visual demostró que ``live`` adelanta el resultado del
-        # golpe. ``old`` converge después de la animación y gobierna la HUD para
-        # no revelar daño/KO antes que el juego.
+        # Con corroboración se conserva el comportamiento validado en alpha.5:
+        # ``live`` adelanta el resultado del golpe y ``old`` converge tras la
+        # animación, así que la HUD muestra ``old``. Sin corroboración se muestra
+        # igualmente ``old``, que es exactamente la misma fuente y la que nunca
+        # adelanta daño; simplemente no hay nada pendiente de converger.
         return B2W2BattleRead(
             active=True,
             party_slot=matches[0].slot,
             current_hp=old[2],
-            max_hp=live[1],
+            max_hp=old[1],
             mirror_hp=old[2],
-            immediate_hp=live[2],
-            converged=old[2] == live[2],
+            immediate_hp=live[2] if corrobora else old[2],
+            converged=(old[2] == live[2]) if corrobora else True,
             status_condition=64 if runtime_status == 1 else 0,
         )
 

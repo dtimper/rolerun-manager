@@ -1,6 +1,42 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.32 — los PS y la baja, ya en tiempo real
+
+La traza física del usuario resolvió el diagnóstico. Tres hallazgos, todos
+medidos, ninguno supuesto:
+
+1. **El bloque de party de Gen 5 no refleja el daño durante el combate.** A los
+   27 s la copia de presentación mostraba a Patrat con 3/16 PS y la party seguía
+   diciendo 16/16; a los 39 s la presentación decía 0 y la party seguía en 16/16.
+   La party solo se actualizó a los 47 s, al terminar el combate. Esa era la
+   fuente a la que RoleRun estaba cayendo.
+2. **La segunda fila de batalla estaba obsoleta todo el combate**: describía a
+   otro miembro del equipo, sin moverse, y con un nivel imposible (516). Como
+   `parse_battle_copies` exigía que ambas filas coincidieran en identidad,
+   rechazaba la lectura entera y descartaba la única fuente que sí tenía el dato.
+3. **El byte de estado se mantuvo en 0** todo el combate, incluso con el Pokémon
+   ya debilitado. La sospecha de que un estado no demostrado rompía la lane
+   —anticipada por la auditoría— queda **descartada**.
+
+El arreglo: la copia de presentación es la autoridad y la segunda fila solo
+**corrobora**. Su desacuerdo ya no anula la lectura.
+
+- **No se relaja ninguna comprobación que proteja.** La presentación sigue
+  teniendo que identificar de forma única a un miembro del equipo, los PS
+  imposibles se siguen rechazando, y un estado no demostrado también.
+- Con las dos filas de acuerdo, el comportamiento validado físicamente en
+  alpha.5 no cambia: la HUD muestra la presentación y no adelanta el KO a la
+  animación.
+- Sin copia de presentación no se publica nada: no se usa la otra fila como
+  sustituta para no arriesgarse a adelantar daño.
+- Las pruebas usan **los bytes reales de la traza**, no valores inventados.
+- Baseline completa: **1112 passed**.
+
+Limitación conocida, ahora demostrada: durante el combate solo se conoce el PS
+del Pokémon **activo**. El resto procede del bloque de party, que Gen 5 no
+actualiza hasta el final.
+
 # v0.2.6-alpha.31 — diagnóstico de la baja durante el combate
 
 La sustitución quedó **validada físicamente**. Queda un único fallo abierto en el

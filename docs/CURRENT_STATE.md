@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.31`
+- Versión de aplicación: `v0.2.6-alpha.32`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,32 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.32 — PS y bajas en tiempo real durante el combate
+
+La traza `b2w2_battle_faint_latest.json` del 27-08-2026 zanjó el diagnóstico con
+tres hechos medidos.
+
+El bloque de party de quinta generación **no refleja el daño durante el
+combate**: la copia de presentación mostró 3/16 y luego 0/16 mientras la party
+seguía en 16/16, y esta solo se actualizó al terminar. La segunda fila de batalla
+estuvo **obsoleta todo el combate** —otro miembro, inmóvil, nivel 516 imposible—,
+y como `parse_battle_copies` exigía identidad común entre ambas filas, descartaba
+la única fuente válida. El byte de estado se mantuvo en 0 incluso con el Pokémon
+debilitado, lo que **descarta** la sospecha de la auditoría sobre estados no
+demostrados.
+
+La copia de presentación pasa a ser la autoridad y la segunda fila solo
+corrobora. Se conservan intactas la identificación única contra el equipo, el
+rechazo de PS imposibles y el de estados no demostrados; y con ambas filas de
+acuerdo se mantiene el comportamiento validado en alpha.5 de no adelantar el KO a
+la animación.
+
+Limitación demostrada: durante el combate solo se conoce el PS del Pokémon
+activo; el resto procede del bloque de party, que el juego no actualiza hasta el
+final.
+
+Baseline completa: **1112 passed**. Validación física pendiente.
 
 ### v0.2.6 Alpha.31 — el ciclo de bajas, cerrado salvo el tiempo real
 
