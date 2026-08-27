@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.36`
+- Versión de aplicación: `v0.2.6-alpha.37`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,22 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.37 — lector de la mochila B2/W2
+
+`read_bag()` lee los 2456 bytes de la mochila con doble lectura estable y bajo el
+cerrojo que serializa el lector. `parse_bag()` exige que cada bolsillo esté
+compactado, que cada identificador sea legal en ese bolsillo según la lista de
+PKHeX, que las cantidades estén entre 1 y 999 y que no haya objetos repetidos;
+ante cualquier divergencia rechaza la mochila entera.
+
+El número de huecos por bolsillo se deriva de la distancia hasta el siguiente
+—310, 83, 109, 48 y 64—, todos por encima de su lista de objetos legales. La
+mochila real del usuario pasa el validador completa y termina antes del contador
+de party, que ya estaba demostrado.
+
+`comprobar_mochila_b2w2.bat` contrasta contra el juego usando el lector de
+producción. No se muestra en la interfaz ni se abre ninguna escritura todavía.
 
 ### v0.2.6 Alpha.36 — estructura completa de la mochila B2/W2
 

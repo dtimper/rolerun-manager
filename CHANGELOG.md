@@ -1,6 +1,31 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.37 — lector de la mochila de B2/W2
+
+Con la estructura ya demostrada, el lector.
+
+- `read_bag()` con la misma disciplina que el resto de lecturas B2/W2: **doble
+  lectura** que debe coincidir byte a byte, y el cerrojo que serializa el lector.
+- `parse_bag()` valida **antes de publicar**: cada bolsillo tiene que estar
+  compactado —sus objetos al principio y ceros detrás—, cada identificador tiene
+  que ser legal **en ese bolsillo concreto** según la lista de PKHeX, las
+  cantidades entre 1 y 999, y ningún objeto repetido. Cualquier fallo rechaza la
+  mochila entera en vez de publicar medio inventario inventado.
+- El reparto de huecos por bolsillo se **deriva** de la distancia hasta el
+  siguiente, que es exactamente lo que se midió en la RAM: 310, 83, 109, 48 y 64.
+  Todos son mayores que su lista de objetos legales, como debe ser.
+- Comprobado que la mochila **real** del usuario pasa el validador entera y que
+  sus ocho objetos son legales en su bolsillo. Si la lista de PKHeX no hubiera
+  cubierto alguno, el lector lo habría rechazado.
+- Comprobado también que la mochila termina antes del contador de party, que está
+  en una dirección ya demostrada: no se solapan.
+- Nueva herramienta `comprobar_mochila_b2w2.bat`, que usa **el lector de
+  producción** y no una copia simplificada, para contrastar contra el juego.
+- Baseline completa: **1127 passed**.
+
+Todavía no se muestra en la interfaz ni se abre ninguna escritura.
+
 # v0.2.6-alpha.36 — la estructura completa de la mochila, demostrada
 
 El mapa de la RAM del usuario y la estructura que PKHeX declara para el guardado

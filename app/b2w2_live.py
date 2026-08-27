@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import ctypes
 import functools
+import json
 import os
 import struct
 import threading
 import time
 from dataclasses import dataclass
 from ctypes import wintypes
+from pathlib import Path
 
 from . import perf
 
@@ -47,6 +49,137 @@ BATTLE_READ_SIZE = BATTLE_STATUS_OFFSET + 1
 # completo- debe seguir ejecutandose por si aparece una segunda party valida
 # dentro del mismo proceso a mitad de sesion.
 BASE_REDISCOVERY_SECONDS = 60.0
+# Negro 2 España / melonDS 1.1. Traza de dos estados del 27-08-2026: la Poción
+# del jugador estaba en 0x0221E17C y paso de 2 a 3 unidades en esa misma
+# direccion al usar una; la casilla contigua contenia Antiparalizador, un objeto
+# por el que la busqueda no preguntaba. El mapa posterior encontro cuatro tiras
+# de objetos coherentes por tipo, y las distancias entre sus inicios -1240, 1572
+# y 2008- coinciden BYTE A BYTE con SAV5B2W2.Inventory.Pouches de PKHeX en tres
+# fronteras independientes. El bolsillo Items empieza aqui.
+BAG_BASE = 0x0221D9A4
+BAG_SLOT_SIZE = 4
+BAG_MAX_QUANTITY = 999
+_BAG_LAYOUT_PATH = Path(__file__).resolve().parent.parent / "data" / "b2w2_bag_layout.json"
+
+
+@dataclass(frozen=True, slots=True)
+class B2W2BagPocket:
+    tipo: str
+    offset: int
+    slots: int
+    legal: frozenset[int]
+
+
+@dataclass(frozen=True, slots=True)
+class B2W2BagEntry:
+    pocket: str
+    slot: int
+    item_id: int
+    quantity: int
+
+
+@dataclass(frozen=True, slots=True)
+class B2W2BagRead:
+    process_id: int
+    process_name: str
+    allocation_base: int
+    guest_base: int
+    raw: bytes
+    entries: tuple[B2W2BagEntry, ...]
+
+    def by_pocket(self, tipo: str) -> tuple[B2W2BagEntry, ...]:
+        return tuple(entry for entry in self.entries if entry.pocket == tipo)
+
+    def quantity_of(self, item_id: int) -> int:
+        return sum(
+            entry.quantity for entry in self.entries if entry.item_id == int(item_id)
+        )
+
+
+@functools.lru_cache(maxsize=1)
+def bag_pockets() -> tuple[B2W2BagPocket, ...]:
+    """Reparto de bolsillos y objetos legales, extraido de PKHeX.
+
+    El numero de huecos de cada bolsillo se deduce de la distancia hasta el
+    siguiente, que es exactamente lo que se midio en la RAM real.
+    """
+    try:
+        documento = json.loads(_BAG_LAYOUT_PATH.read_text(encoding="utf-8-sig"))
+    except OSError as exc:
+        raise B2W2LiveError("Falta data/b2w2_bag_layout.json.") from exc
+    crudos = list(documento.get("bolsillos", []))
+    if not crudos:
+        raise B2W2LiveError("El reparto de bolsillos B2/W2 esta vacio.")
+    pockets: list[B2W2BagPocket] = []
+    for indice, bolsillo in enumerate(crudos):
+        offset = int(bolsillo["desplazamiento"])
+        if indice + 1 < len(crudos):
+            siguiente = int(crudos[indice + 1]["desplazamiento"])
+        else:
+            siguiente = offset + int(bolsillo["huecos"]) * BAG_SLOT_SIZE
+        huecos = (siguiente - offset) // BAG_SLOT_SIZE
+        if huecos <= 0:
+            raise B2W2LiveError("Reparto de bolsillos B2/W2 incoherente.")
+        pockets.append(B2W2BagPocket(
+            tipo=str(bolsillo["tipo"]),
+            offset=offset,
+            slots=huecos,
+            legal=frozenset(int(value) for value in bolsillo.get("items_legales", ())),
+        ))
+    return tuple(pockets)
+
+
+def bag_size() -> int:
+    ultimo = bag_pockets()[-1]
+    return ultimo.offset + ultimo.slots * BAG_SLOT_SIZE
+
+
+def parse_bag(raw: bytes) -> tuple[B2W2BagEntry, ...]:
+    """Decodifica la mochila entera y rechaza cualquier bolsillo incoherente.
+
+    Cada bolsillo esta compactado: sus objetos ocupan los primeros huecos y el
+    resto queda a cero. Un hueco vacio detras de uno lleno, un identificador que
+    no pertenece a ese bolsillo, una cantidad imposible o un objeto repetido
+    significan que no se esta leyendo una mochila, y se rechaza entera en lugar
+    de publicar medio inventario inventado.
+    """
+    esperado = bag_size()
+    if len(raw) != esperado:
+        raise B2W2LiveError(f"El bloque de mochila B2/W2 no mide {esperado} bytes.")
+    entradas: list[B2W2BagEntry] = []
+    for pocket in bag_pockets():
+        vistos: set[int] = set()
+        terminado = False
+        for hueco in range(pocket.slots):
+            posicion = pocket.offset + hueco * BAG_SLOT_SIZE
+            item_id, cantidad = struct.unpack_from("<HH", raw, posicion)
+            if item_id == 0:
+                terminado = True
+                if cantidad != 0:
+                    raise B2W2LiveError(
+                        f"Hueco vacio con cantidad en el bolsillo {pocket.tipo} B2/W2."
+                    )
+                continue
+            if terminado:
+                raise B2W2LiveError(
+                    f"El bolsillo {pocket.tipo} B2/W2 no esta compactado."
+                )
+            if pocket.legal and item_id not in pocket.legal:
+                raise B2W2LiveError(
+                    f"Objeto #{item_id} imposible en el bolsillo {pocket.tipo} B2/W2."
+                )
+            if not 1 <= cantidad <= BAG_MAX_QUANTITY:
+                raise B2W2LiveError(
+                    f"Cantidad imposible del objeto #{item_id} en B2/W2: {cantidad}."
+                )
+            if item_id in vistos:
+                raise B2W2LiveError(
+                    f"Objeto #{item_id} repetido en el bolsillo {pocket.tipo} B2/W2."
+                )
+            vistos.add(item_id)
+            entradas.append(B2W2BagEntry(pocket.tipo, hueco, item_id, cantidad))
+    return tuple(entradas)
+
 
 
 class _PROCESSENTRY32W(ctypes.Structure):
@@ -1305,6 +1438,45 @@ class B2W2MelonDSReader:
     @perf.timed("b2w2.read_pc")
     def read_pc(self, party_read: B2W2PartyRead | None = None) -> B2W2PCRead:
         return self._read_pc_rows(party_read or self.read_party())
+
+    @_serialized
+    @perf.timed("b2w2.read_bag")
+    def read_bag(self, party_read: B2W2PartyRead | None = None) -> B2W2BagRead:
+        """Lee la mochila completa con doble lectura estable.
+
+        Misma disciplina que el resto de lecturas B2/W2: dos capturas seguidas
+        que deben coincidir byte a byte, y validacion completa antes de publicar.
+        """
+        lectura = party_read or self.read_party()
+        kernel32 = _KERNEL32
+        if kernel32 is None:
+            raise B2W2LiveError("melonDS en Windows es obligatorio.")
+        tamano = bag_size()
+        direccion = lectura.allocation_base + (BAG_BASE - DS_RAM_BASE)
+        handle = kernel32.OpenProcess(0x0400 | 0x0010, False, lectura.process_id)
+        if not handle:
+            raise B2W2LiveError("melonDS desaparecio antes de leer la mochila.")
+        try:
+            def leer() -> bytes:
+                buffer = ctypes.create_string_buffer(tamano)
+                recibido = ctypes.c_size_t()
+                if not kernel32.ReadProcessMemory(
+                    handle, ctypes.c_void_p(direccion), buffer, tamano,
+                    ctypes.byref(recibido),
+                ) or recibido.value != tamano:
+                    raise B2W2LiveError("Lectura incompleta de la mochila B2/W2.")
+                return buffer.raw
+
+            primera = leer()
+            segunda = leer()
+        finally:
+            kernel32.CloseHandle(handle)
+        if primera != segunda:
+            raise B2W2LiveError("La mochila B2/W2 cambio durante la doble lectura.")
+        return B2W2BagRead(
+            lectura.process_id, lectura.process_name, lectura.allocation_base,
+            BAG_BASE, primera, parse_bag(primera),
+        )
 
     @staticmethod
     def parse_pc_matrix(raw: bytes) -> tuple[int, tuple[B2W2BoxPokemon, ...]]:
