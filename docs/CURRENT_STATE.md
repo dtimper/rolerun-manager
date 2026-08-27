@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.35`
+- Versión de aplicación: `v0.2.6-alpha.36`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,26 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.36 — estructura completa de la mochila B2/W2
+
+El mapa de bolsillos leído en la RAM del usuario coincide **byte a byte** con la
+estructura que `SAV5B2W2.Inventory.Pouches` de PKHeX declara para el guardado, en
+tres fronteras independientes: 1240, 1572 y 2008 desde el inicio del primer
+bolsillo. No es una analogía entre juegos, sino un ajuste verificado tres veces
+contra datos reales.
+
+Mochila en `0x0221D9A4`. Bolsillos: Items +0, Objetos clave +1240, MT/MO +1572,
+Medicinas +2008, Bayas +2200. Cada hueco son dos enteros de 16 bits,
+identificador y cantidad, alineados a 4 bytes. El contenido confirma cada
+bolsillo por su tipo, y ninguno de esos objetos formaba parte de la búsqueda.
+
+`data/b2w2_bag_layout.json` recoge los desplazamientos y la lista de objetos
+legales por bolsillo, que es lo que permitirá validar cada hueco al leer.
+
+Dinero en `0x022266A4`, confirmado con dos estados.
+
+Falta el reader y su validación; ninguna capacidad se abre todavía.
 
 ### v0.2.6 Alpha.35 — anclas de mochila y dinero demostradas
 

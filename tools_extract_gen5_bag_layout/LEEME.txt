@@ -1,0 +1,16 @@
+Extractor del reparto de bolsillos de la mochila de quinta generacion.
+
+Genera data/b2w2_bag_layout.json con el desplazamiento de cada bolsillo y su
+lista de objetos legales, leidos de SAV5B2W2.Inventory.Pouches del mismo
+PKHeX.Core.dll que usa el motor de guardados de RoleRun.
+
+Estos desplazamientos NO se dan por buenos por venir de PKHeX: coinciden byte
+a byte con las distancias medidas en la RAM real del usuario el 27-08-2026
+(1240, 1572 y 2008 desde el primer bolsillo), en tres fronteras
+independientes. Ver diagnostics/manual/b2w2_bag_map_latest.json.
+
+Uso, desde la raiz del repositorio y con el motor ya publicado:
+
+    dotnet run --project tools_extract_gen5_bag_layout -- data2w2_bag_layout.json
+
+Solo hay que volver a ejecutarlo si se actualiza PKHeX.Core.

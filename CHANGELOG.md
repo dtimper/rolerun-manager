@@ -1,6 +1,36 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.36 — la estructura completa de la mochila, demostrada
+
+El mapa de la RAM del usuario y la estructura que PKHeX declara para el guardado
+**coinciden byte a byte en tres fronteras independientes**. No es una analogía:
+es un ajuste verificado tres veces contra datos reales.
+
+| Frontera entre bolsillos | Medido en la RAM | `SAV5B2W2` de PKHeX |
+|---|---|---|
+| Items → Objetos clave | 1240 | 1240 |
+| … → MT/MO | 1572 | 1572 |
+| … → Medicinas | 2008 | 2008 |
+
+- **Mochila en `0x0221D9A4`**, con los bolsillos en Items +0, Objetos clave
+  +1240, MT/MO +1572, Medicinas +2008 y Bayas +2200. Cada hueco son dos enteros
+  de 16 bits: identificador y cantidad.
+- El contenido encontrado confirma cada bolsillo por separado: Videomisor, Bloc
+  de Amigos y Mapa en objetos clave; MT21 en el de MT; Poción y Antiparalizador
+  en medicinas. Ninguno de esos objetos se buscó.
+- La traza comprobó además que el contador de party sigue cuadrando en su
+  dirección ya demostrada, lo que confirma que se está leyendo el bloque espejo
+  del guardado y no una copia temporal.
+- Nuevo `data/b2w2_bag_layout.json` con el desplazamiento de cada bolsillo y su
+  **lista de objetos legales**, extraído de la misma PKHeX.Core que usa el motor,
+  con la herramienta reproducible `tools_extract_gen5_bag_layout/`.
+- Esa lista de objetos legales es lo que permitirá validar cada hueco al leer, en
+  lugar de aceptar cualquier número.
+- El dinero sigue en `0x022266A4`, confirmado con dos estados.
+
+Falta el reader y su validación. Ninguna capacidad se abre todavía.
+
 # v0.2.6-alpha.35 — la mochila y el dinero, localizados
 
 El método de dos estados funcionó a la primera y dejó **una sola dirección** en
