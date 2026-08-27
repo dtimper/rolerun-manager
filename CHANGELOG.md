@@ -1,6 +1,36 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.35 — la mochila y el dinero, localizados
+
+El método de dos estados funcionó a la primera y dejó **una sola dirección** en
+cada caso, no un puñado de candidatos.
+
+- **Bolsillo de medicinas en `0x0221E17C`.** De cinco posiciones que contenían
+  «Poción ×2», solo esa pasó a contener «Poción ×3» al usar una. Las otras cuatro
+  eran coincidencias.
+- **Dinero en `0x022266A4`.** De dos posiciones con 4524, solo esa pasó a 4224
+  tras la compra.
+- **Corroboración que no se buscaba:** la casilla contigua al ancla contiene
+  Antiparalizador ×2, un objeto por el que la herramienta no preguntaba. Que
+  aparezca justo ahí, con formato válido, es evidencia independiente de que se
+  trata de un bolsillo real. Todo lo anterior y posterior está a cero, como
+  corresponde a un bolsillo compactado.
+- La estructura queda confirmada: pares de dos enteros de 16 bits,
+  identificador y cantidad, alineados a 4 bytes.
+- El ancla cae 0x230 bytes antes del contador de party, que ya estaba demostrado.
+  Es decir, la mochila vive en el mismo bloque espejo del guardado.
+
+Nueva herramienta `tools_b2w2_bag_map_capture.py` con su lanzador
+`mapear_mochila_b2w2.bat`, para el paso que falta: **dónde empieza y acaba cada
+bolsillo**. Vuelca la zona alrededor del ancla decodificada y agrupa las tiras de
+objetos válidos consecutivos. Comprueba además que el contador de party sigue
+cuadrando, lo que demuestra que el bloque leído es el espejo del guardado y no
+una copia temporal. No pide nada al usuario dentro del juego.
+
+Ninguna de estas direcciones pasa a producción todavía: falta el mapa y una
+confirmación tras reiniciar el juego.
+
 # v0.2.6-alpha.34 — la mochila se busca con dos estados, no con un número
 
 La primera traza lo dejó claro: buscar solo el par (identificador, cantidad)

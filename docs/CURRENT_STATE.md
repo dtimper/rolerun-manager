@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.34`
+- Versión de aplicación: `v0.2.6-alpha.35`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,25 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.35 — anclas de mochila y dinero demostradas
+
+El método de dos estados dejó una sola dirección en cada caso.
+
+El **bolsillo de medicinas está en `0x0221E17C`**: de cinco posiciones que
+contenían «Poción ×2», solo esa pasó a «Poción ×3» al usar una. La casilla
+contigua contiene Antiparalizador ×2, un objeto que la búsqueda no pedía, lo que
+corrobora de forma independiente que es un bolsillo real; el resto de la zona está
+a cero, como corresponde a un bolsillo compactado. La estructura son pares de dos
+enteros de 16 bits —identificador y cantidad— alineados a 4 bytes. El ancla cae
+0x230 antes del contador de party ya demostrado, de modo que la mochila vive en el
+mismo bloque espejo del guardado.
+
+El **dinero está en `0x022266A4`** como entero de 32 bits: de dos posiciones con
+4524, solo esa pasó a 4224 tras una compra.
+
+Falta mapear dónde empieza y acaba cada bolsillo, y confirmar ambas direcciones
+tras reiniciar el juego. Hasta entonces no son direcciones de producción.
 
 ### v0.2.6 Alpha.33 — el siguiente paso de B2/W2 es evidencia, no código
 
