@@ -69,9 +69,13 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
                 pokemon.role = role
                 pokemon.role_symbol = ROLE_SYMBOLS.get(role, "")
 
-    def __init__(self, reader=None, role_layout_getter=None) -> None:
+    def __init__(self, reader=None, role_layout_getter=None, rom_getter=None) -> None:
         self.reader = reader or B2W2MelonDSReader()
         self.role_layout_getter = role_layout_getter or (lambda: 2)
+        # Datos de juego leídos de la ROM que melonDS tiene cargada. Sin ella se
+        # sigue funcionando con las tablas de quinta original, que es lo correcto
+        # en una partida sin randomizar.
+        self.rom_getter = rom_getter or (lambda: None)
         path = Path(__file__).resolve().parents[2] / "data" / "move_catalog.json"
         try:
             raw = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -94,7 +98,16 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
             self.move_base_pp = {}
 
     def base_pp_for(self, move_id: int) -> int:
-        """PP base Gen 5 del movimiento. Cero significa «no demostrado»."""
+        """PP del movimiento en **esta** partida. Cero significa «no demostrado».
+
+        Con la ROM delante manda ella: un randomizer puede cambiar los PP, y
+        curar o enseñar con el valor original dejaría el PP mal escrito.
+        """
+        rom = self.rom_getter()
+        if rom is not None:
+            desde_rom = int(rom.base_pp(move_id))
+            if desde_rom > 0:
+                return desde_rom
         return int(self.move_base_pp.get(int(move_id), 0))
 
     @staticmethod
@@ -166,9 +179,11 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
         publicarse; si no cuadra, no se publica un perfil a medias.
         """
         movimientos = self.reader.read_tm_table()
-        return build_tm_profile(
-            movimientos, source=f"melonDS · 0x{TM_TABLE_BASE:08X}",
-        )
+        rom = self.rom_getter()
+        origen = f"melonDS · 0x{TM_TABLE_BASE:08X}"
+        if rom is not None:
+            origen = f"{rom.name} · {origen}"
+        return build_tm_profile(movimientos, source=origen, rom=rom)
 
     def read_pc(
         self, anchors, *, box_count: int | None = None,

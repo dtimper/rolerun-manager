@@ -90,6 +90,10 @@ class B2W2TMProfile:
     source: B2W2TMSource
     tms: dict[int, B2W2TM]
     move_base_pp: dict[int, int]
+    # Datos de movimiento leídos de la ROM del juego. Cuando están, mandan:
+    # un randomizer puede cambiar categoría, potencia, precisión y PP, y solo
+    # la ROM dice cuáles son en esta partida.
+    rom: object | None = None
 
     def tm(self, number: int) -> B2W2TM | None:
         return self.tms.get(int(number))
@@ -99,8 +103,29 @@ class B2W2TMProfile:
         return next((tm for tm in self.tms.values() if tm.item_id == item_id), None)
 
     def base_pp(self, move_id: int) -> int:
-        """PP base de quinta generación; 0 si el movimiento no existe en Gen 5."""
+        """PP base del movimiento en **esta** partida."""
+        if self.rom is not None:
+            desde_rom = int(self.rom.base_pp(move_id))
+            if desde_rom > 0:
+                return desde_rom
         return int(self.move_base_pp.get(int(move_id), 0))
+
+    def damage_class(self, move_id: int) -> str:
+        """Categoría real del movimiento; «unknown» si no se ha demostrado.
+
+        Sin la ROM no se responde: el catálogo estático describe la quinta
+        generación original y en una partida randomizada podría mentir. La
+        interfaz ya sabe caer a su propio catálogo cuando recibe «unknown».
+        """
+        if self.rom is None:
+            return "unknown"
+        return str(self.rom.damage_class(move_id))
+
+    def power(self, move_id: int) -> int:
+        return int(self.rom.power(move_id)) if self.rom is not None else 0
+
+    def accuracy(self, move_id: int) -> int:
+        return int(self.rom.accuracy(move_id)) if self.rom is not None else 0
 
 
 @lru_cache(maxsize=1)
@@ -136,7 +161,7 @@ def reference_move_ids() -> tuple[int, ...]:
     return tuple(por_objeto[item] for item in TM_TABLE_ITEM_IDS)
 
 
-def build_tm_profile(move_ids, *, source: str) -> B2W2TMProfile:
+def build_tm_profile(move_ids, *, source: str, rom=None) -> B2W2TMProfile:
     """Construye el perfil a partir de la lista que el juego tiene cargada.
 
     ``move_ids`` son los 101 movimientos en orden de objeto. Se publican solo
@@ -149,6 +174,13 @@ def build_tm_profile(move_ids, *, source: str) -> B2W2TMProfile:
         )
 
     pp = _move_base_pp()
+    if rom is not None:
+        # Con la ROM delante, los PP de esta partida sustituyen a los de la
+        # quinta generación original para todo lo que venga después.
+        pp = {
+            move_id: int(rom.base_pp(move_id)) or valor
+            for move_id, valor in pp.items()
+        }
     tms: dict[int, B2W2TM] = {}
     for item_id, (tipo, numero), move_id in zip(
         TM_TABLE_ITEM_IDS, TM_TABLE_SLOTS, movimientos,
@@ -169,4 +201,6 @@ def build_tm_profile(move_ids, *, source: str) -> B2W2TMProfile:
         raise B2W2TMError(
             f"Estas MT enseñan un movimiento sin PP en quinta: {', '.join(sin_pp)}."
         )
-    return B2W2TMProfile(source=B2W2TMSource(str(source)), tms=tms, move_base_pp=pp)
+    return B2W2TMProfile(
+        source=B2W2TMSource(str(source)), tms=tms, move_base_pp=pp, rom=rom,
+    )

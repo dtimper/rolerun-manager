@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.43`
+- Versión de aplicación: `v0.2.6-alpha.44`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,39 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.44 — B2/W2 lee los datos de juego de su ROM
+
+Cierra el hueco que quedaba frente a randomizers, y lo hace como los juegos
+terminados: ORAS y X/Y leen su ROM, Perla Reluciente su masterdata, y ahora
+B2/W2 lee el `.nds` que melonDS tiene cargado.
+
+**El riesgo que elimina.** Con tablas estáticas, aplicar un rol en una partida
+randomizada recalculaba las estadísticas del Pokémon con las bases del juego
+original y **las escribía en la partida**. Eso corrompe el equipo del jugador.
+
+- `app/b2w2_rom_service.py`: sistema de archivos NDS (FNT/FAT), contenedores
+  NARC, tabla personal (`a/0/1/6`) y tabla de movimientos (`a/0/2/1`).
+- **Sin preguntar nada.** melonDS guarda la partida junto a la ROM y con el
+  mismo nombre, así que se descubre desde `current_save.path`.
+- `boxed_metadata.set_personal_override()`: la tabla del juego sustituye a la
+  copia de PKHeX en un solo sitio, y todo lo que dependa del Personal
+  —estadísticas base, curva de EXP, nivel derivado— pasa a usarla. Es la misma
+  idea que `personal_for` en ORAS. Se olvida al cambiar de Run.
+- Los PP de curar y enseñar, y la categoría que filtra las MT por rol, salen de
+  la ROM cuando está.
+
+**Formato demostrado contra oráculos independientes** (27-08-2026, ROM real):
+- Personal: 709 registros de 76 bytes; idénticos a `pkhex_personal_b2w2.bin`
+  salvo habilidades 2 y oculta, que PKHeX normaliza. Estadísticas base
+  **iguales en los 709**.
+- Movimientos: tipo y PP **559/559** contra `MoveInfo` de PKHeX; categoría
+  separa limpiamente las tres; potencia y precisión coinciden con la tabla de
+  sexta **salvo donde quinta difiere de verdad** (Lanzallamas 95→90,
+  Hidrobomba 120→110, Píncers 14/85→25/95). La ROM corrige datos que la tabla
+  estática tenía mal para quinta.
+- `tests/test_b2w2_rom_service.py`: 28 pruebas. Suite completa: 1288.
+- Pendiente de validación física.
 
 ### v0.2.6 Alpha.43 — la pantalla de MT, por rol y por partida
 

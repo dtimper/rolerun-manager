@@ -48,8 +48,55 @@ class BoxedMetadataError(ValueError):
     pass
 
 
+# Tabla personal leída del juego real, que sustituye a la copia de PKHeX.
+#
+# RoleRun se juega en randomizers, y un randomizer puede cambiar las
+# estadísticas base de cada especie. Con la copia estática, aplicar un rol
+# recalcularía las estadísticas con valores equivocados y las escribiría en la
+# partida. Cuando el backend consigue leer la tabla del juego, la instala aquí y
+# todo lo que dependa del Personal —estadísticas base, curva de experiencia,
+# nivel derivado de la EXP— pasa a usarla sin que cada consumidor se entere.
+#
+# Es la misma idea que `personal_for` en ORAS, resuelta en un solo sitio.
+_OVERRIDES: dict[str, tuple[bytes, int]] = {}
+
+
+def set_personal_override(family: str, blob: bytes, record_size: int) -> None:
+    """Instala la tabla personal del juego activo para esa familia."""
+    key = str(family or "").casefold()
+    spec = _SPECS.get(key)
+    if spec is None:
+        raise BoxedMetadataError(f"Familia de datos personales no compatible: {family!r}.")
+    if int(record_size) != spec.record_size:
+        raise BoxedMetadataError(
+            f"La tabla de {key} usa registros de 0x{spec.record_size:X}, "
+            f"no de 0x{int(record_size):X}."
+        )
+    if not blob or len(blob) % spec.record_size:
+        raise BoxedMetadataError(
+            f"La tabla personal de {key} no mide un múltiplo de 0x{spec.record_size:X}."
+        )
+    _OVERRIDES[key] = (bytes(blob), spec.record_size)
+
+
+def clear_personal_override(family: str | None = None) -> None:
+    """Vuelve a la copia de PKHeX. Sin argumento, para todas las familias.
+
+    Se llama al cerrar o cambiar de Run: conservar la tabla de otra partida
+    sería peor que no tener ninguna.
+    """
+    if family is None:
+        _OVERRIDES.clear()
+        return
+    _OVERRIDES.pop(str(family or "").casefold(), None)
+
+
+def personal_override_is_active(family: str) -> bool:
+    return str(family or "").casefold() in _OVERRIDES
+
+
 @lru_cache(maxsize=None)
-def _personal_blob(family: str) -> tuple[bytes, int]:
+def _personal_file(family: str) -> tuple[bytes, int]:
     key = str(family or "").casefold()
     spec = _SPECS.get(key)
     if spec is None:
@@ -64,6 +111,12 @@ def _personal_blob(family: str) -> tuple[bytes, int]:
             f"{spec.file_name} no tiene un tamaño múltiplo de 0x{spec.record_size:X}."
         )
     return data, spec.record_size
+
+
+def _personal_blob(family: str) -> tuple[bytes, int]:
+    """La tabla del juego activo si la hay; si no, la copia de PKHeX."""
+    instalada = _OVERRIDES.get(str(family or "").casefold())
+    return instalada if instalada is not None else _personal_file(family)
 
 
 def _record_for(family: str, species: int, form: int) -> bytes:

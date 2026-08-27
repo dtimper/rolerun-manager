@@ -60,7 +60,8 @@ class _Pantalla:
     _allowed_move_ids_for_role = RoleRunManager._allowed_move_ids_for_role
     _tm_pp_for_profile = RoleRunManager._tm_pp_for_profile
 
-    def __init__(self, rol: str, movimientos=(0, 0, 0, 0)) -> None:
+    def __init__(self, rol: str, movimientos=(0, 0, 0, 0), rom=None) -> None:
+        self.rom = rom
         self.engine = DraftEngine(
             DATOS / "moves.json", DATOS / "roles.json", DATOS / "move_catalog.json",
         )
@@ -80,6 +81,12 @@ class _Pantalla:
 
     def _get_bdsp_tm_profile(self, prompt: bool = False):
         return None                      # no es Perla Reluciente
+
+    def _get_b2w2_rom_profile(self):
+        # Sin ROM, la categoría sale del catálogo estático. Es lo correcto en
+        # una partida sin randomizar y es el caso de la mayoría de estas
+        # pruebas; las que sí randomizan datos de movimiento pasan una.
+        return self.rom
 
     def _draft_move_metadata(self, move_id: int):
         return {}

@@ -71,6 +71,12 @@ from .oras_rom_service import (
     discover_azahar_oras_source,
     load_oras_rom_tm_profile,
 )
+from .b2w2_rom_service import (
+    PERSONAL_RECORD_SIZE as B2W2_PERSONAL_RECORD_SIZE,
+    discover_b2w2_rom,
+    load_b2w2_rom_profile_cached,
+)
+from .boxed_metadata import clear_personal_override, set_personal_override
 from .xy_rom_service import XYRomProfileError, load_xy_rom_tm_profile
 from .sm_rom_service import SMRomProfileError, load_sm_rom_tm_profile
 from .usum_rom_service import USUMRomProfileError, load_usum_rom_tm_profile
@@ -354,8 +360,14 @@ class RoleRunManager(ctk.CTk):
         )
         # v0.2.6-alpha.1: B2/W2 comienza con la única unidad demostrada en
         # melonDS, party PK5 y PS. No expone writers, PC ni batalla.
+        # Datos de juego de B2/W2 leídos de la ROM que melonDS tiene cargada.
+        # Se resuelve una sola vez por Run y se conserva mientras no cambie.
+        self._b2w2_rom_profile = None
+        self._b2w2_rom_checked_for: str | None = None
+        self._b2w2_rom_last_error: str | None = None
         self.b2w2_realtime_adapter = B2W2RealTimeAdapter(
             role_layout_getter=lambda: self.native_save_engine.role_marker_layout,
+            rom_getter=lambda: self._get_b2w2_rom_profile(),
         )
 
         self.realtime_registry = RealTimeRegistry()
@@ -4016,6 +4028,9 @@ class RoleRunManager(ctk.CTk):
         self._clear_oras_rom_tm_runtime_profile()
         self._clear_sm_rom_tm_runtime_profile()
         self._clear_usum_rom_tm_runtime_profile()
+        # Conservar la tabla personal de otra partida sería peor que no tener
+        # ninguna: se escribirían estadísticas calculadas con datos ajenos.
+        self._forget_b2w2_rom_profile()
         try:
             self.realtime_core.reset()
         except Exception:
@@ -12765,6 +12780,59 @@ class RoleRunManager(ctk.CTk):
         # demostrado para ella es el que usa la propia utilidad de RoleRun.
         return 999_999 if str(engine_key) in {"bdsp", "b2w2"} else 9_999_999
 
+    def _get_b2w2_rom_profile(self):
+        """Datos de juego de la ROM que melonDS tiene cargada, o ``None``.
+
+        Un randomizer cambia estadísticas base y datos de movimientos. Sin esto,
+        aplicar un rol recalcularía las estadísticas con la tabla original y las
+        **escribiría** en la partida. Es el mismo papel que cumple la ROM en
+        ORAS y X/Y, aquí resuelto sin preguntar: melonDS guarda la partida junto
+        a la ROM y con el mismo nombre.
+
+        Se intenta una sola vez por guardado. Un fallo no bloquea nada: RoleRun
+        sigue con las tablas de quinta original, que es lo correcto en una
+        partida sin randomizar, y lo dice en la cabecera.
+        """
+        if str(getattr(self.save_engine, "key", "") or "") != "b2w2":
+            return None
+        save_path = str(getattr(self.current_save, "path", "") or "")
+        if not save_path:
+            return None
+        if self._b2w2_rom_checked_for == save_path:
+            return self._b2w2_rom_profile
+        self._b2w2_rom_checked_for = save_path
+        self._b2w2_rom_profile = None
+        self._b2w2_rom_last_error = None
+        try:
+            ruta = discover_b2w2_rom(save_path)
+            if ruta is None:
+                self._b2w2_rom_last_error = (
+                    "No se encontró la ROM de Negro 2/Blanco 2 junto al guardado."
+                )
+                return None
+            perfil = load_b2w2_rom_profile_cached(ruta)
+        except Exception as exc:
+            self._b2w2_rom_last_error = str(exc)
+            return None
+        try:
+            set_personal_override(
+                "b2w2", perfil.personal, B2W2_PERSONAL_RECORD_SIZE,
+            )
+        except Exception as exc:
+            # Una tabla que no encaja no se instala a medias.
+            clear_personal_override("b2w2")
+            self._b2w2_rom_last_error = str(exc)
+            return None
+        self._b2w2_rom_profile = perfil
+        return perfil
+
+    def _forget_b2w2_rom_profile(self) -> None:
+        """Olvida la ROM al cambiar de Run: la de otra partida sería peor que nada."""
+        self._b2w2_rom_profile = None
+        self._b2w2_rom_checked_for = None
+        self._b2w2_rom_last_error = None
+        clear_personal_override("b2w2")
+
     def _get_b2w2_tm_profile(self):
         """Perfil de MT de B2/W2, leído de la partida que hay delante.
 
@@ -14606,6 +14674,14 @@ class RoleRunManager(ctk.CTk):
         profile = self._get_bdsp_tm_profile(prompt=False)
         if profile is not None:
             category = profile.damage_class(move_id)
+            if category != "unknown":
+                return category
+        # B2/W2 lee la categoría de la ROM cargada. Es lo que decide si una MT
+        # se le ofrece a un Mago o a un Asesino, así que en una partida
+        # randomizada el catálogo estático no sirve.
+        rom = self._get_b2w2_rom_profile()
+        if rom is not None:
+            category = rom.damage_class(move_id)
             if category != "unknown":
                 return category
         return self.engine.damage_class(move_id)

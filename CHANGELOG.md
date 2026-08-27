@@ -1,6 +1,26 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.44 — B2/W2 lee los datos de juego de su ROM
+
+Cierra el hueco frente a randomizers como los juegos terminados: ORAS y X/Y
+leen su ROM, Perla Reluciente su masterdata, y ahora B2/W2 su `.nds`.
+
+**El riesgo que elimina:** con tablas estáticas, aplicar un rol en una partida
+randomizada recalculaba las estadísticas con las bases del juego original y las
+**escribía en la partida**.
+
+- `app/b2w2_rom_service.py`: FNT/FAT del NDS, NARC, personal (`a/0/1/6`) y
+  movimientos (`a/0/2/1`).
+- Se descubre sola: melonDS guarda la partida junto a la ROM con el mismo nombre.
+- `boxed_metadata.set_personal_override()` sustituye la copia de PKHeX en un
+  único sitio; se olvida al cambiar de Run.
+- PP de curar/enseñar y categoría para filtrar por rol salen de la ROM.
+- Formato demostrado: personal idéntico a PKHeX salvo habilidades normalizadas;
+  tipo y PP 559/559; potencia y precisión corrigen valores que la tabla de sexta
+  tenía mal para quinta.
+- `tests/test_b2w2_rom_service.py`: 28 pruebas. Suite completa: 1288.
+
 # v0.2.6-alpha.43 — la pantalla de MT, por rol y por partida
 
 - El filtro por rol ya funcionaba y es el **mismo de los demás juegos**. Ahora
