@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.18`
+- Versión de aplicación: `v0.2.6-alpha.19`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,28 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.19 — el seguimiento del PC vivo vuelve a existir
+
+El fallo físico del 27-08-2026 demostró que RoleRun no detectaba ningún cambio
+del PC hecho dentro del juego. La causa no estaba en el backend ni en el writer:
+`_bdsp_pc_poll_is_active` exigía `active_page == "pc"` y, desde que Equipo y PC
+se unificaron en una sola pantalla, ninguna ruta de navegación produce ese valor.
+La barra principal solo ofrece `"team"` y los controles secundarios están
+ocultos precisamente para `{"team", "pc"}`. El sondeo permanente del PC vivo, el
+refresco al entrar en la vista y la cancelación al salir eran código inalcanzable
+para B2/W2 y BDSP.
+
+Los tres puntos usan ahora `TEAM_PC_PAGES`, declarado una sola vez. El resto del
+archivo ya comprobaba `in {"team", "pc"}` en diez sitios.
+
+Queda **sin demostrar** el mecanismo exacto de la duplicación observada al
+retirar desde la vista desfasada; su precondición está cerrada. El writer valida
+identidad y coordenadas contra la RAM antes de escribir, por lo que la partida no
+estuvo en riesgo en ningún momento. La capacidad «PC cambios externos» de
+`B2W2_REALTIME_PARITY.md` sigue **pendiente de validación física**.
+
+Baseline completa: **953 passed**.
 
 ### v0.2.6 Alpha.18 — el bucle de mando deja de robar CPU al hilo Tk
 

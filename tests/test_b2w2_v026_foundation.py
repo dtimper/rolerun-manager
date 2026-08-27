@@ -472,7 +472,14 @@ def test_b2w2_pc_poll_tracks_external_moves_only_while_pc_is_visible() -> None:
     callbacks.pop(0)()
     assert reads == [(game, game, True)]
 
+    # El fallo fisico del 27-08-2026 (Azurill movido dentro del juego que
+    # RoleRun seguia mostrando en su slot antiguo) venia de aqui: la vista
+    # unificada es "team", de modo que exigir "pc" dejaba el sondeo inalcanzable.
     manager.active_page = "team"
+    RoleRunManager._schedule_bdsp_pc_poll(manager, 200)
+    assert manager._bdsp_pc_poll_after_id == "b2w2-poll"
+
+    manager.active_page = "tms"
     RoleRunManager._schedule_bdsp_pc_poll(manager, 200)
     assert manager._bdsp_pc_poll_after_id is None
 

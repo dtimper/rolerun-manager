@@ -142,6 +142,12 @@ AZAHAR_REALTIME_GAME_KEYS = {"oras", "xy", "sm", "usum"}
 REALTIME_READ_GAME_KEYS = AZAHAR_REALTIME_GAME_KEYS | {"bdsp", "b2w2"}
 INSTANT_REALTIME_UI_GAME_KEYS = AZAHAR_REALTIME_GAME_KEYS | {"bdsp", "b2w2"}
 AUTOMATIC_BADGE_GAME_KEYS = {"oras", "xy", "sm", "usum"}
+# Equipo y PC son una sola pantalla desde la unificación de la vista. La barra
+# principal solo ofrece "team"; "pc" sobrevive como destino histórico y como
+# página restaurable, pero ambas renderizan exactamente lo mismo. Todo lo que
+# dependa de "estar en Equipo y PC" debe usar este conjunto: comprobar solo
+# "pc" dejó el seguimiento del PC vivo inalcanzable para B2/W2 y BDSP.
+TEAM_PC_PAGES = {"team", "pc"}
 # Sin este límite, una descarga de sprite sin red enrutada podía quedarse
 # colgada indefinidamente. La barrera inicial espera a los sprites, así que ese
 # cuelgue dejaba RoleRun en la pantalla de carga para siempre.
@@ -4907,7 +4913,9 @@ class RoleRunManager(ctk.CTk):
             self._destroy_navigation_transition(overlay)
             return
         self.active_page = page
-        if previous_page == "pc" and page != "pc":
+        # "team" y "pc" son la misma pantalla: solo se sale de verdad cuando el
+        # destino ya no pertenece a la vista unificada.
+        if previous_page in TEAM_PC_PAGES and page not in TEAM_PC_PAGES:
             self._cancel_bdsp_pc_poll()
         try:
             self._smooth_render_page(
@@ -4918,7 +4926,9 @@ class RoleRunManager(ctk.CTk):
         except Exception:
             self._destroy_navigation_transition(overlay)
             raise
-        if page == "pc" and previous_page != "pc":
+        if page in TEAM_PC_PAGES and previous_page not in TEAM_PC_PAGES:
+            # Al abrir Equipo y PC hay que mirar el PC del juego, no la copia
+            # anterior. Comprobar solo "pc" hacía que esto no ocurriera nunca.
             try:
                 self.after(90, self._schedule_gen6_live_pc_refresh)
             except Exception:
@@ -6136,7 +6146,7 @@ class RoleRunManager(ctk.CTk):
 
     def _bdsp_pc_poll_is_active(self) -> bool:
         if (
-            getattr(self, "active_page", "") != "pc"
+            getattr(self, "active_page", "") not in TEAM_PC_PAGES
             or not getattr(self, "_oras_live_active", False)
             or not getattr(self, "current_game", None)
             or self._active_azahar_realtime_key() not in {"bdsp", "b2w2"}

@@ -1,6 +1,36 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.19 — RoleRun vuelve a mirar el PC del juego
+
+Fallo físico reportado el 27-08-2026 en Negro 2/melonDS: un Azurill movido al
+slot 7 del PC desde RoleRun y movido después al slot 2 **dentro del juego**
+seguía apareciendo en el 7 dentro de RoleRun; al retirarlo al equipo desde esa
+vista desfasada apareció duplicado.
+
+- **Causa raíz demostrada.** `_bdsp_pc_poll_is_active` exigía
+  `active_page == "pc"`, pero desde que Equipo y PC se unificaron en una sola
+  pantalla **ninguna ruta de navegación produce ese valor**: la barra principal
+  solo ofrece `("team", "♟ EQUIPO Y PC")` y `_render_context_navigation` oculta
+  los controles secundarios justamente para `{"team", "pc"}`. El sondeo
+  permanente del PC vivo quedó inalcanzable para B2/W2 y BDSP, así que RoleRun
+  leía el PC del juego al cargar y **no volvía a mirarlo nunca**.
+- Lo mismo ocurría al entrar y salir de la vista: el refresco de entrada y la
+  cancelación del sondeo comprobaban solo `"pc"`.
+- Los tres puntos pasan a usar `TEAM_PC_PAGES = {"team", "pc"}`, declarado una
+  sola vez. El resto del archivo ya comprobaba `in {"team", "pc"}` en diez
+  sitios: estos se habían quedado atrás en la unificación.
+- Con el predicado corregido, el sondeo vuelve a rearmarse tras cada
+  reconciliación, que es lo que restaura el seguimiento continuo del PC.
+- Tres regresiones existentes afirmaban que `"team"` debía detener el sondeo.
+  Esa expectativa era el defecto y se corrige de forma explícita, no relajando
+  la comprobación.
+- **No demostrado todavía:** el mecanismo exacto de la duplicación. Su
+  precondición —RoleRun operando sobre un PC que nunca refrescaba— queda
+  cerrada. Ninguna partida estuvo en riesgo: el writer valida identidad y
+  coordenadas contra la RAM y hace rollback antes de escribir.
+- Baseline completa: **953 passed**.
+
 # v0.2.6-alpha.18 — el bucle de mando deja de robar CPU a la interfaz
 
 - Mientras no hubiera un mando resuelto, el bucle de mando buscaba Ryujinx en

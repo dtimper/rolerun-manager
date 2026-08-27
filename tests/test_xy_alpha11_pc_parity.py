@@ -152,9 +152,16 @@ def test_live_empty_override_becomes_reusable_pc_destination() -> None:
 
 
 def test_navigate_to_pc_schedules_one_live_refresh() -> None:
+    """Abrir Equipo y PC pide una lectura viva del PC; moverse dentro, no.
+
+    Antes este test navegaba de "team" a "pc" esperando el refresco. Equipo y PC
+    son la misma pantalla desde que se unificaron, asi que esa navegacion no es
+    una entrada real: la entrada ocurre al llegar desde otra seccion. Escribirlo
+    como antes ocultaba que el refresco no se disparaba nunca en el uso normal.
+    """
     calls = []
     manager = SimpleNamespace(
-        active_page="team",
+        active_page="tms",
         _cancel_help_animations=lambda: None,
         _navigation_transition_token=0,
         _navigation_transition_after_ids=set(),
@@ -170,11 +177,16 @@ def test_navigate_to_pc_schedules_one_live_refresh() -> None:
     manager._begin_page_navigation = lambda page, previous: (
         RoleRunManager._begin_page_navigation(manager, page, previous)
     )
-    RoleRunManager.navigate(manager, "pc")
-    assert manager.active_page == "pc"
+
+    # Entrada real a la vista unificada desde otra seccion.
+    RoleRunManager.navigate(manager, "team")
+    assert manager.active_page == "team"
     assert ("after", 90) in calls
     assert ("refresh", None) in calls
 
+    # Moverse dentro de la misma pantalla no vuelve a pedir nada.
     calls.clear()
     RoleRunManager.navigate(manager, "pc")
+    assert manager.active_page == "pc"
     assert not any(kind == "refresh" for kind, _value in calls)
+    assert not any(kind == "cancel-poll" for kind, _value in calls)

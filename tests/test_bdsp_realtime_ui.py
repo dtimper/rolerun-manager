@@ -1393,7 +1393,15 @@ def test_bdsp_pc_poll_only_runs_while_the_pc_page_is_visible() -> None:
     assert reads == [(game, game, True)]
     assert len(callbacks) == 1
 
+    # Hasta alpha.18 aqui se comprobaba que "team" detenia el sondeo. Esa
+    # expectativa ERA el defecto: Equipo y PC se unificaron en una sola vista y
+    # "team" es la pagina que el usuario ve realmente, asi que el sondeo dejo de
+    # correr nunca. Solo salir de la vista unificada debe detenerlo.
     manager.active_page = "team"
+    RoleRunManager._schedule_bdsp_pc_poll(manager, 200)
+    assert manager._bdsp_pc_poll_after_id == "poll-id"
+
+    manager.active_page = "tms"
     RoleRunManager._schedule_bdsp_pc_poll(manager, 200)
     assert manager._bdsp_pc_poll_after_id is None
 
