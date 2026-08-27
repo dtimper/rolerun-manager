@@ -593,6 +593,61 @@ def pk5_party_healed(block: bytes, *, base_pp_for) -> bytes:
     return _reshuffle_pk5(pid, order, canonical) + _crypt(bytes(extension), pid)
 
 
+def pk5_party_with_move(
+    block: bytes, move_slot: int, move_id: int, *, base_pp_for,
+) -> bytes:
+    """Devuelve el PK5 de party con un movimiento nuevo en el hueco indicado.
+
+    ``move_slot`` es 1..4, como lo cuenta la interfaz. Los PP quedan al máximo
+    del movimiento nuevo y los Más PP de ese hueco vuelven a cero, que es lo que
+    hace el juego al enseñar una MT: los Más PP se aplicaron al movimiento
+    anterior y no se heredan.
+
+    En quinta generación las MT son reutilizables, así que enseñar no gasta el
+    objeto. Nada de la mochila se toca aquí.
+    """
+    if len(block) != PK5_PARTY_SIZE:
+        raise B2W2LiveError("El bloque PK5 de party no mide 220 bytes.")
+    move_slot = int(move_slot)
+    if not 1 <= move_slot <= 4:
+        raise B2W2LiveError("El hueco de movimiento B2/W2 tiene que estar entre 1 y 4.")
+    move_id = int(move_id)
+    if not 1 <= move_id <= MOVE_ID_MAX:
+        raise B2W2LiveError(f"El movimiento #{move_id} no existe en quinta generación.")
+
+    pid, order, canonical = _unshuffle_pk5(block)
+    indice = move_slot - 1
+    actuales = struct.unpack_from("<4H", canonical, PK5_MOVE_OFFSET)
+    # Incluido el propio hueco: el juego tampoco deja enseñar un movimiento que
+    # el Pokémon ya conoce, y reescribirlo encima le borraría los Más PP que
+    # tuviera puestos. La interfaz ya filtra los movimientos conocidos, así que
+    # llegar aquí significa que algo se ha desalineado.
+    repetido = next(
+        (posicion for posicion, valor in enumerate(actuales) if valor == move_id),
+        None,
+    )
+    if repetido is not None:
+        raise B2W2LiveError(
+            f"Ese Pokémon ya conoce el movimiento #{move_id} en el hueco {repetido + 1}."
+        )
+
+    base_pp = int(base_pp_for(move_id) or 0)
+    if base_pp <= 0:
+        raise B2W2LiveError(
+            f"No se pudo demostrar el PP del movimiento #{move_id}; no se enseñó nada."
+        )
+    if base_pp > 0xFF:
+        raise B2W2LiveError(f"El PP del movimiento #{move_id} no cabe en PK5.")
+
+    struct.pack_into("<H", canonical, PK5_MOVE_OFFSET + indice * 2, move_id)
+    canonical[PK5_MOVE_PP_OFFSET + indice] = base_pp
+    canonical[PK5_MOVE_PP_UPS_OFFSET + indice] = 0
+
+    # La extensión de party no cambia: enseñar un movimiento no toca PS,
+    # estado ni estadísticas. Se reescribe tal cual estaba.
+    return _reshuffle_pk5(pid, order, canonical) + block[136:]
+
+
 def pk5_party_with_role(
     block: bytes, *, markings, evs, base_stats: dict[str, int],
 ) -> bytes:
@@ -1375,6 +1430,75 @@ class B2W2MelonDSReader:
                     ) // 5
                     if int(verificado.move_pp[indice]) != esperado:
                         raise B2W2LiveError("La verificación semántica de los PP curados falló.")
+            return after
+        except Exception:
+            restore()
+            raise
+
+    @_serialized
+    def write_party_moves(
+        self, party_read: B2W2PartyRead, ensenanzas, *, base_pp_for,
+    ) -> B2W2PartyRead:
+        """Enseña uno o varios movimientos como una única transacción.
+
+        ``ensenanzas`` son tuplas ``(slot, identidad, hueco, move_id)``. Mismo
+        contrato que el resto de writers B2/W2: relectura fresca, identidad
+        fuerte por slot, readback con el parser de producción, verificación
+        semántica y rollback completo.
+
+        En quinta las MT son reutilizables: no se toca la mochila.
+        """
+        peticiones = list(ensenanzas)
+        if not peticiones:
+            raise B2W2LiveError("No hay ningún movimiento B2/W2 que enseñar.")
+        before = self.read_party()
+        if before.process_id != party_read.process_id:
+            raise B2W2LiveError("melonDS cambió antes de enseñar el movimiento B2/W2.")
+        old_raw = before.raw
+        new_raw = bytearray(old_raw)
+        objetivos: dict[tuple[int, int], tuple[tuple[int, int, int], int]] = {}
+        for slot, identidad, hueco, move_id in peticiones:
+            slot, hueco, move_id = int(slot), int(hueco), int(move_id)
+            if not 0 <= slot < before.count:
+                raise B2W2LiveError("El slot de party B2/W2 está fuera de rango.")
+            if (slot, hueco) in objetivos:
+                raise B2W2LiveError("Dos enseñanzas B2/W2 sobre el mismo hueco.")
+            member = before.pokemon[slot]
+            if (member.pid, member.tid, member.sid) != tuple(identidad):
+                raise B2W2LiveError("La identidad de la enseñanza B2/W2 cambió antes de escribir.")
+            offset = slot * PK5_PARTY_SIZE
+            new_raw[offset:offset + PK5_PARTY_SIZE] = pk5_party_with_move(
+                bytes(new_raw[offset:offset + PK5_PARTY_SIZE]), hueco, move_id,
+                base_pp_for=base_pp_for,
+            )
+            objetivos[(slot, hueco)] = (tuple(identidad), move_id)
+
+        if bytes(new_raw) == old_raw:
+            # Ya conocía ese movimiento ahí: no se escribe un solo byte.
+            return before
+
+        party_host = before.allocation_base + (PARTY_BASE - DS_RAM_BASE)
+
+        def restore() -> None:
+            self._write_process_bytes(before.process_id, party_host, old_raw)
+            restored = self.read_party()
+            if restored.raw != old_raw:
+                raise B2W2LiveError("Rollback de la enseñanza B2/W2 no confirmado; no guardes.")
+
+        try:
+            self._write_process_bytes(before.process_id, party_host, bytes(new_raw))
+            after = self.read_party()
+            if after.count != before.count or after.raw != bytes(new_raw):
+                raise B2W2LiveError("El readback de la enseñanza B2/W2 no coincide.")
+            for (slot, hueco), (identidad, move_id) in objetivos.items():
+                verificado = after.pokemon[slot]
+                if (verificado.pid, verificado.tid, verificado.sid) != identidad:
+                    raise B2W2LiveError("La identidad B2/W2 verificada no coincide.")
+                if int(verificado.move_ids[hueco - 1]) != move_id:
+                    raise B2W2LiveError("La verificación semántica del movimiento enseñado falló.")
+                esperado = int(base_pp_for(move_id) or 0)
+                if int(verificado.move_pp[hueco - 1]) != esperado:
+                    raise B2W2LiveError("La verificación semántica de los PP enseñados falló.")
             return after
         except Exception:
             restore()

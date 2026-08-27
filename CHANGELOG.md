@@ -1,6 +1,23 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.42 — enseñar MT en B2/W2
+
+La pantalla MT y el selector individual ya funcionan en Negro 2/Blanco 2.
+
+- **No se gasta la MT**: en quinta son reutilizables y el writer no toca la
+  mochila. Misma regla que ORAS y X/Y.
+- `pk5_party_with_move()` deja los PP al máximo y los Más PP del hueco a cero
+  (se aplicaron al movimiento anterior y no se heredan).
+- Un movimiento ya conocido se rechaza, **incluso en su propio hueco**:
+  reescribirlo encima borraría los Más PP del jugador a cambio de nada.
+- Enseñar no toca PS, estado ni estadísticas.
+- `write_party_moves()` con el contrato transaccional completo; el adaptador
+  localiza al Pokémon por identidad fuerte, no por el índice de party.
+- La interfaz no pide ROM: lee la tabla viva. Sin melonDS enlazado, no lee nada.
+- `tests/test_b2w2_tm_teach.py`: 33 pruebas. Suite completa: 1240.
+- Pendiente de validación física.
+
 # v0.2.6-alpha.41 — la tabla de MT, demostrada y leída en vivo
 
 **`0x02090C54`**, demostrada con la captura del usuario del 27-08-2026.

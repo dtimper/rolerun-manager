@@ -14,6 +14,7 @@ from ..b2w2_live import (
 from ..b2w2_tm_service import build_tm_profile
 from ..models import (
     PendingInventoryChange, PendingPartyHeal, PendingRoleChange, PendingTeamChange,
+    PendingTMTeach,
 )
 from ..boxed_metadata import (
     ability_name, base_stats_for, boxed_level, item_name, species_name,
@@ -325,10 +326,45 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
         live.game.raw["live_write"] = True
         return B2W2RealTimeWriteResult(live.game, live.process, 2, len(changes))
 
+    def _teach_target_for(self, party_read, change: PendingTMTeach):
+        """Resuelve (slot, identidad, hueco, movimiento) sin fiarse del slot.
+
+        El índice de party que traía el cambio puede haber quedado obsoleto: se
+        localiza al Pokémon por su identidad fuerte, igual que en roles y
+        curación.
+        """
+        objetivo = str(change.pokemon_identity or "")
+        candidatos = [
+            (indice, member) for indice, member in enumerate(party_read.pokemon)
+            if self._strong_identity(member) == objetivo
+        ]
+        if len(candidatos) != 1:
+            raise B2W2LiveError(
+                "La MT B2/W2 no identifica de forma única a un miembro del equipo."
+            )
+        indice, member = candidatos[0]
+        hueco = int(change.move_slot)
+        if not 1 <= hueco <= 4:
+            raise B2W2LiveError("El hueco de movimiento B2/W2 tiene que estar entre 1 y 4.")
+        return (
+            indice, (int(member.pid), int(member.tid), int(member.sid)),
+            hueco, int(change.new_move_id),
+        )
+
     def apply_changes(self, current: SaveGameData, changes):
         changes = list(changes)
         if changes and all(isinstance(item, PendingInventoryChange) for item in changes):
             return self._apply_inventory(current, changes)
+        if changes and all(isinstance(item, PendingTMTeach) for item in changes):
+            party_read = self.reader.read_party()
+            ensenanzas = [self._teach_target_for(party_read, item) for item in changes]
+            self.reader.write_party_moves(
+                party_read, ensenanzas, base_pp_for=self.base_pp_for,
+            )
+            live = self._capture(current, 0)
+            live.game.raw["writes_enabled"] = True
+            live.game.raw["live_write"] = True
+            return B2W2RealTimeWriteResult(live.game, live.process, 2, len(ensenanzas))
         if changes and all(isinstance(item, PendingPartyHeal) for item in changes):
             party_read = self.reader.read_party()
             objetivos = [self._heal_target_for(party_read, item) for item in changes]

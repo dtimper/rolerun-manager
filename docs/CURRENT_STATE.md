@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.41`
+- Versión de aplicación: `v0.2.6-alpha.42`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,31 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.42 — enseñar MT en B2/W2
+
+La pantalla MT y el selector individual ya funcionan en Negro 2/Blanco 2, con
+el writer de enseñanza completo.
+
+- **No se gasta la MT.** En quinta generación son reutilizables, así que el
+  writer no toca la mochila. Misma regla que ORAS y X/Y; solo Perla Reluciente
+  consume la máquina.
+- `pk5_party_with_move()` escribe el movimiento y deja sus PP al máximo. Los
+  Más PP del hueco vuelven a cero: se aplicaron al movimiento anterior y no se
+  heredan, que es lo que hace el juego.
+- Un movimiento que el Pokémon **ya conoce** se rechaza, incluso en su propio
+  hueco: el juego tampoco lo permite y reescribirlo encima borraría los Más PP
+  del jugador a cambio de nada.
+- Enseñar no toca PS, estado ni estadísticas: la extensión de party se conserva
+  byte a byte.
+- `write_party_moves()` usa el contrato transaccional B2/W2 completo, y el
+  adaptador localiza al Pokémon por **identidad fuerte**, no por el índice de
+  party que traía el cambio.
+- La interfaz no pide ninguna ROM: `_get_b2w2_tm_profile()` lee la tabla viva.
+  Sin melonDS enlazado avisa y no lee nada.
+- Lo que sigue sin writer en B2/W2: cambiar un movimiento a mano
+  (`PendingChange`) y los roles de Pokémon que permanecen en el PC.
+- **Pendiente de validación física.**
 
 ### v0.2.6 Alpha.41 — la tabla de MT, demostrada y leída en vivo
 

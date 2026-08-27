@@ -7776,6 +7776,7 @@ class RoleRunManager(ctk.CTk):
             if live_key == "b2w2":
                 if isinstance(change, (
                     PendingRoleChange, PendingPartyHeal, PendingInventoryChange,
+                    PendingTMTeach,
                 )):
                     # alpha.24: el writer de roles B2/W2 escribe marcas y EV en el
                     # PK5 vivo, recalcula las estadísticas con la tabla personal y
@@ -10597,6 +10598,7 @@ class RoleRunManager(ctk.CTk):
             for change in changes:
                 if isinstance(change, (
                     PendingRoleChange, PendingPartyHeal, PendingInventoryChange,
+                    PendingTMTeach,
                 )):
                     continue
                 if (
@@ -12763,10 +12765,31 @@ class RoleRunManager(ctk.CTk):
         # demostrado para ella es el que usa la propia utilidad de RoleRun.
         return 999_999 if str(engine_key) in {"bdsp", "b2w2"} else 9_999_999
 
+    def _get_b2w2_tm_profile(self):
+        """Perfil de MT de B2/W2, leído de la partida que hay delante.
+
+        No hay ROM que pedir ni tabla que cargar de disco: la lista vive en la
+        RAM del juego. Es la única fuente correcta jugando en randomizers, donde
+        cada MT puede enseñar otra cosa.
+        """
+        adapter = getattr(self, "b2w2_realtime_adapter", None)
+        if adapter is None:
+            return None
+        try:
+            return adapter.read_tm_profile()
+        except Exception as exc:
+            messagebox.showerror(
+                "No se pudo leer la tabla de MT de Negro 2/Blanco 2",
+                "RoleRun no va a mostrar una tabla supuesta: en una partida "
+                "randomizada cada MT puede enseñar otra cosa.\n\n" + str(exc),
+                parent=self._dialog_parent(),
+            )
+            return None
+
     def _resolve_global_tm_profile(self):
         """Resuelve únicamente fuentes ya usadas por el selector individual."""
         key = str(getattr(self.save_engine, "key", "") or "")
-        if key not in {"bdsp", "oras", "xy", "sm", "usum"} or not self.current_save:
+        if key not in {"bdsp", "oras", "xy", "sm", "usum", "b2w2"} or not self.current_save:
             return None
         if not self._oras_live_active:
             messagebox.showinfo(
@@ -12775,6 +12798,10 @@ class RoleRunManager(ctk.CTk):
                 parent=self._dialog_parent(),
             )
             return None
+        if key == "b2w2":
+            # B2/W2 no pide ninguna ROM: la tabla se lee de la RAM del juego,
+            # que es lo único correcto jugando en randomizers.
+            return self._get_b2w2_tm_profile()
         if key == "bdsp":
             return self._get_bdsp_tm_profile(prompt=True)
         if key == "xy":
@@ -14765,7 +14792,7 @@ class RoleRunManager(ctk.CTk):
         su array ``saveItem`` y Gen7 sus bloques propios; ninguno se lee al pintar.
         """
         engine_key = str(getattr(self.save_engine, "key", "") or "")
-        if engine_key not in (*GEN7_REALTIME_GAME_KEYS, "bdsp", "oras", "xy"):
+        if engine_key not in (*GEN7_REALTIME_GAME_KEYS, "bdsp", "oras", "xy", "b2w2"):
             if on_failed is not None:
                 on_failed()
             return
@@ -14775,6 +14802,7 @@ class RoleRunManager(ctk.CTk):
             "bdsp": "Perla Reluciente",
             "oras": "Omega Rubí/Zafiro Alfa",
             "xy": "Pokémon X/Y",
+            "b2w2": "Negro 2/Blanco 2",
         }[engine_key]
         if self._sm_tm_inventory_load_in_progress:
             if on_failed is not None:
@@ -15147,7 +15175,8 @@ class RoleRunManager(ctk.CTk):
         is_sm = engine_key == "sm"
         is_usum = engine_key == "usum"
         is_gen7 = engine_key in GEN7_REALTIME_GAME_KEYS
-        if engine_key not in {"bdsp", "oras", "xy", "sm", "usum"}:
+        is_b2w2 = engine_key == "b2w2"
+        if engine_key not in {"bdsp", "oras", "xy", "sm", "usum", "b2w2"}:
             messagebox.showinfo(
                 "MTs todavía no disponibles",
                 "El selector automático de MTs todavía no está conectado a este adaptador de juego.",
@@ -15164,7 +15193,29 @@ class RoleRunManager(ctk.CTk):
             messagebox.showinfo("Hueco ocupado", "Ese hueco ya no está vacío.")
             return
 
-        if is_gen7:
+        if is_b2w2:
+            if not self._oras_live_active:
+                messagebox.showinfo(
+                    "Negro 2/Blanco 2 todavía no está enlazado",
+                    "Abre tu partida en melonDS y RoleRun se sincronizará "
+                    "automáticamente. Si quieres forzarlo, pulsa F5.",
+                    parent=self._dialog_parent(),
+                )
+                return
+            profile = _live_preloaded_profile or self._get_b2w2_tm_profile()
+            if profile is None:
+                return
+            if _live_preloaded_inventory is None:
+                self._start_live_tm_inventory_load(
+                    pokemon, move_slot, replace_existing=replace_existing, profile=profile,
+                )
+                return
+            inventory = dict(_live_preloaded_inventory)
+            profile_description = (
+                f"Tabla de MT viva · {profile.source} · mochila RAM validada · "
+                "MT reutilizable · escritura directa al PK5"
+            )
+        elif is_gen7:
             label = "UltraSol/UltraLuna" if is_usum else "Sol/Luna"
             if not self._oras_live_active:
                 messagebox.showinfo(
