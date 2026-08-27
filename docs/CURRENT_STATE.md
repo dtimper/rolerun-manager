@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.15`
+- Versión de aplicación: `v0.2.6-alpha.16`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,28 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.16 — retirada B2/W2 posible y CURAR coherente
+
+Dos defectos demostrados de B2/W2, ambos con regresión determinista.
+
+La retirada PC→Equipo nunca pudo funcionar. `resize_party_pc` escribía 136 ceros
+en el slot PC liberado y su propio readback los rechazaba, de modo que la
+operación siempre terminaba en rollback. El vacío real del juego es un PK5
+almacenado cifrado con semilla 0: lo demuestra la captura física
+`b2w2_party_resize_latest.json`, donde tras retirar desde el propio juego el
+parser de producción leyó `pc_empty: 717` sin lanzar, y coincide byte por byte
+con el prefijo de la cola de party validada en alpha.13.
+
+El botón CURAR se ofrecía en B2/W2 sin writer de curación. Los seis
+`PendingPartyHeal` que encolaba no los aplicaba ni los retiraba nadie, y el
+monitor —que exige la cola vacía— dejaba de leer la partida viva. El botón queda
+retirado hasta que exista el writer. La regresión es un invariante para los seis
+backends: botón y compuerta deben coincidir siempre.
+
+Estado real: la retirada 5→6 queda **implementada y con prueba**, pendiente de
+validación física en Negro 2/melonDS. La curación B2/W2 sigue **cerrada**.
+Baseline completa: **918 passed**.
 
 ### v0.2.6 Alpha.15 — instrumentación de rendimiento
 

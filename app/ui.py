@@ -3337,8 +3337,16 @@ class RoleRunManager(ctk.CTk):
         return RoleRunManager._live_party_heal_available(self)
 
     def _live_party_heal_available(self) -> bool:
-        """Centraliza los backends con curación completa ya demostrada."""
-        return self._active_azahar_realtime_key() in {"bdsp", "b2w2", "sm", "usum", "xy", "oras"}
+        """Centraliza los backends con curación completa ya demostrada.
+
+        B2/W2 quedó fuera en alpha.16: el botón se renderizaba, encolaba seis
+        ``PendingPartyHeal`` y la compuerta de auto-aplicación B2/W2 solo acepta
+        ``PendingTeamChange``, así que nadie los escribía ni los retiraba. Como
+        el monitor exige la cola vacía para leer, la curación dejaba la sesión
+        viva sin lecturas hasta que el usuario descartaba a mano. Volverá a esta
+        lista cuando exista su writer y esté validado físicamente.
+        """
+        return self._active_azahar_realtime_key() in {"bdsp", "sm", "usum", "xy", "oras"}
 
     # ---------- WELCOME / GAME SELECTION ----------
 

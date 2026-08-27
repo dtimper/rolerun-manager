@@ -20,7 +20,7 @@ revisión, región y melonDS concretos.
 | Muertes | Baseline, >0→0, varios KO, selector, sustituto y evento único | Core común listo; lane B2/W2 **PENDIENTE** | Cerrar primero combate |
 | PC lectura | Dimensiones, nombres/caja actual, matriz y vacíos válidos | Matriz 24×30: **DEMOSTRADA · IMPLEMENTADA · TEST · VALIDADA FÍSICAMENTE** | Contrastar nombres de cajas y otras cajas ocupadas |
 | PC cambios externos | PC↔PC y Equipo↔PC por identidad | **IMPLEMENTADO · TEST**; validación física pendiente | Mover desde el juego con la vista PC abierta |
-| PC escritura | Swap, depósito, retirada, compactación, tamaño 1–6 | PC→PC y 1:1: **VALIDADO FÍSICAMENTE**; tamaño 1–6: **IMPLEMENTADO · TEST**, validación física pendiente | Depositar y retirar desde RoleRun |
+| PC escritura | Swap, depósito, retirada, compactación, tamaño 1–6 | PC→PC y 1:1: **VALIDADO FÍSICAMENTE**; tamaño 1–6: **IMPLEMENTADO · TEST** desde alpha.16, validación física pendiente. Hasta alpha.15 la fila decía «TEST» sin que existiera ninguna prueba del writer, y la retirada 5→6 no podía superar su propio readback (B1) | Depositar y retirar desde RoleRun |
 | Sustitución | Baja→Cementerio, sustituto, rol heredado, retirada de ataques | **PENDIENTE; WRITER CERRADO** | Depende de combate, roles y PC |
 | Mochila | Bolsillos, MT/cantidades y utilidades | **PENDIENTE** | Estructura estable en dos estados |
 | MT/drafteo | Compatibilidad, posesión, enseñar/borrar y consumo Gen 5 | Lectura de ataques lista; resto **PENDIENTE** | Reader mochila antes de cualquier writer |

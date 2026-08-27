@@ -1,6 +1,33 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.16 — retirada B2/W2 y botón CURAR coherente
+
+- **B1 corregido.** Retirar del PC al equipo (`box-to-party`) era imposible: el
+  writer dejaba 136 ceros en el slot PC liberado y su propia relectura los
+  rechazaba por checksum, así que toda retirada acababa en rollback. El juego no
+  deja ceros, deja un PK5 almacenado cifrado con semilla 0. Lo demuestran la
+  captura física `b2w2_party_resize_latest.json` —tras retirar desde el juego, el
+  parser de producción leyó `pc_empty: 717` sin error— y la cola de party ya
+  validada en alpha.13, que empieza exactamente por esos mismos 136 bytes.
+- Nueva función `empty_pk5_stored()` como única fuente de esa representación;
+  `empty_pk5_party()` se construye sobre ella y conserva sus bytes exactos
+  (mismo SHA-256 `0a62191d…a2856`).
+- **B2 corregido.** B2/W2 mostraba el botón CURAR sin tener writer de curación.
+  Encolaba seis `PendingPartyHeal` que la compuerta B2/W2 no acepta y que
+  `_discard_b2w2_ghost_team_changes` no retiraba; como el monitor exige la cola
+  vacía para leer, la partida viva dejaba de actualizarse hasta descartarlos a
+  mano. El botón se retira hasta que exista su writer validado.
+- La regresión de B2 se escribió como invariante para los seis backends: el
+  botón CURAR y la compuerta de auto-aplicación deben coincidir siempre.
+- Nuevo simulador de RAM de melonDS en las pruebas: ejercita el ciclo completo
+  del writer —escritura, relectura con el parser de producción y rollback— de
+  forma determinista y sin proceso real. No sustituye a la validación física.
+- Corregida la fila de paridad que afirmaba tener pruebas del tamaño 1–6 sin
+  que existiera ninguna.
+- Baseline completa: **918 passed**. Validación física de la retirada PC→Equipo
+  en Negro 2/melonDS: **pendiente**.
+
 # v0.2.6-alpha.15 — instrumentación de rendimiento medible
 
 - Nuevo módulo `app/perf.py` y modo diagnóstico `ROLERUN_PERF=1`. Apagado —el

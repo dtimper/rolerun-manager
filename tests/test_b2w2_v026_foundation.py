@@ -14,10 +14,13 @@ from app.b2w2_live import (
     B2W2PartyRead,
     B2W2Pokemon,
     DS_RAM_BASE,
+    MAX_PARTY,
+    PARTY_BASE,
     PARTY_COUNT,
     PC_BASE,
     PC_BOX_COUNT,
     PC_BOX_DATA_SIZE,
+    PC_BOX_SLOT_COUNT,
     PC_BOX_STRIDE,
     PC_MATRIX_SIZE,
     PK5_PARTY_SIZE,
@@ -25,6 +28,7 @@ from app.b2w2_live import (
     _PERMUTATIONS,
     _crypt,
     empty_pk5_party,
+    empty_pk5_stored,
     parse_pk5_boxed,
     parse_pk5_party,
 )
@@ -534,3 +538,191 @@ def test_all_b2w2_mutations_are_blocked_by_live_ui_gate() -> None:
         pokemon_identity="498:0:1234:5678:89e50000",
     )
     assert RoleRunManager._oras_live_unsupported_changes(ui, [change]) == ["curación"]
+
+
+class _FakeMelonDS(B2W2MelonDSReader):
+    """Simula la RAM de melonDS para ejercitar los writers sin proceso real.
+
+    No sustituye a la validación física, pero permite reproducir de forma
+    determinista el ciclo completo del writer: escritura, relectura con el
+    parser de producción y rollback. Cualquier byte que el juego no aceptaría
+    hace fallar aquí el mismo readback que falla en la máquina real.
+    """
+
+    ALLOCATION = 0x10000000
+    PID = 4242
+    NAME = "melonDS.exe"
+
+    def __init__(self, count: int, party_raw: bytes, pc_raw: bytes) -> None:
+        self.count = int(count)
+        self.party_raw = bytearray(MAX_PARTY * PK5_PARTY_SIZE)
+        self.party_raw[:len(party_raw)] = party_raw
+        self.pc_raw = bytearray(pc_raw)
+
+    def read_party(self) -> B2W2PartyRead:
+        raw = bytes(self.party_raw[:self.count * PK5_PARTY_SIZE])
+        pokemon = tuple(
+            parse_pk5_party(raw[index * PK5_PARTY_SIZE:(index + 1) * PK5_PARTY_SIZE], index)
+            for index in range(self.count)
+        )
+        return B2W2PartyRead(
+            self.PID, self.NAME, self.ALLOCATION, self.count, raw, pokemon,
+        )
+
+    def read_pc(self, party_read: B2W2PartyRead | None = None) -> B2W2PCRead:
+        empty, pokemon = B2W2MelonDSReader.parse_pc_matrix(bytes(self.pc_raw))
+        return B2W2PCRead(
+            self.PID, self.NAME, self.ALLOCATION, PC_BASE,
+            bytes(self.pc_raw), empty, pokemon,
+        )
+
+    def _write_process_bytes(self, process_id, host_address, payload) -> None:
+        assert process_id == self.PID
+        guest = host_address - self.ALLOCATION + DS_RAM_BASE
+        if guest == PARTY_COUNT:
+            self.count = payload[0]
+        elif guest == PARTY_BASE:
+            self.party_raw[:len(payload)] = payload
+        elif PC_BASE <= guest < PC_BASE + PC_MATRIX_SIZE:
+            offset = guest - PC_BASE
+            self.pc_raw[offset:offset + len(payload)] = payload
+        else:
+            raise AssertionError(f"Escritura fuera de las regiones conocidas: {guest:#010x}")
+
+
+def _withdraw_scenario() -> tuple[_FakeMelonDS, bytes, tuple[int, int, int]]:
+    """Party de 1 y un Tepig en Caja 1 slot 1, listo para retirarse."""
+    incoming_party = _pk5_fixture(pid=3 << 13)
+    fake = _FakeMelonDS(1, _pk5_fixture(), _pc_matrix_fixture())
+    return fake, incoming_party, (3 << 13, 1234, 5678)
+
+
+def test_empty_pk5_stored_is_the_representation_the_production_parser_accepts() -> None:
+    """El vacío de un slot PC liberado es un PK5 semilla-0, no 136 ceros.
+
+    Evidencia: la captura física ``b2w2_party_resize_latest.json`` retiró un
+    Pokémon desde el propio juego y el parser de producción leyó después
+    ``pc_empty: 717`` sin error. Si el juego dejase ceros, ese mismo parser
+    habría lanzado, porque los rechaza.
+    """
+    vacio = empty_pk5_stored()
+    assert len(vacio) == PK5_STORED_SIZE
+    assert parse_pk5_boxed(vacio, 1, 1) is None
+
+    with pytest.raises(B2W2LiveError, match="Checksum"):
+        parse_pk5_boxed(bytes(PK5_STORED_SIZE), 1, 1)
+
+    # El vacío de party ya validado físicamente en alpha.13 empieza exactamente
+    # por el vacío almacenado: una sola representación, dos longitudes.
+    assert empty_pk5_party()[:PK5_STORED_SIZE] == vacio
+
+
+def test_box_to_party_writes_an_empty_its_own_readback_accepts() -> None:
+    """Regresión de B1: la retirada no podía superar su propio readback.
+
+    ``resize_party_pc`` escribía 136 ceros en el slot PC liberado. La relectura
+    valida los 720 slots con ``parse_pk5_boxed``, que rechaza esos ceros, así
+    que la operación caía siempre en el rollback y la retirada era imposible.
+    """
+    fake, incoming_party, identity = _withdraw_scenario()
+
+    after_party, after_pc = fake.resize_party_pc(
+        fake.read_party(), operation="box-to-party",
+        party_slot=0, box=1, box_slot=1,
+        expected_identity=identity, incoming_party=incoming_party,
+    )
+
+    assert after_party.count == 2
+    assert after_party.pokemon[1].pid == identity[0]
+    # El origen queda libre y sigue siendo legible como vacío por el parser.
+    assert not any((p.box, p.slot) == (1, 1) for p in after_pc.pokemon)
+    assert after_pc.empty_slots == PC_BOX_COUNT * PC_BOX_SLOT_COUNT
+    assert bytes(fake.pc_raw[:PK5_STORED_SIZE]) == empty_pk5_stored()
+
+
+def test_box_to_party_still_rolls_back_when_the_identity_changed() -> None:
+    """El arreglo de B1 no debe relajar ninguna validación existente."""
+    fake, incoming_party, _ = _withdraw_scenario()
+    antes_pc = bytes(fake.pc_raw)
+    antes_count = fake.count
+
+    with pytest.raises(B2W2LiveError, match="identidad entrante"):
+        fake.resize_party_pc(
+            fake.read_party(), operation="box-to-party",
+            party_slot=0, box=1, box_slot=1,
+            expected_identity=(0xDEADBEEF, 1, 2), incoming_party=incoming_party,
+        )
+
+    assert bytes(fake.pc_raw) == antes_pc
+    assert fake.count == antes_count
+
+
+def test_party_to_box_keeps_working_after_the_empty_slot_fix() -> None:
+    """El depósito comparte writer con la retirada: no puede regresar."""
+    fake = _FakeMelonDS(2, _pk5_fixture() + _pk5_fixture(pid=5 << 13), _pc_matrix_fixture())
+    identidad = (5 << 13, 1234, 5678)
+
+    after_party, after_pc = fake.resize_party_pc(
+        fake.read_party(), operation="party-to-box",
+        party_slot=1, box=1, box_slot=2, expected_identity=identidad,
+    )
+
+    assert after_party.count == 1
+    depositado = next(p for p in after_pc.pokemon if (p.box, p.slot) == (1, 2))
+    assert (depositado.pid, depositado.tid, depositado.sid) == identidad
+
+
+def _heal_fixture() -> PendingPartyHeal:
+    return PendingPartyHeal(
+        pokemon_slot=0, pokemon="Tepig", species="Tepig", pokemon_identity="tepig",
+    )
+
+
+def _auto_apply_manager(live_key: str, changes) -> SimpleNamespace:
+    return SimpleNamespace(
+        _active_azahar_realtime_key=lambda: live_key,
+        run=SimpleNamespace(pending_changes=list(changes)),
+        _oras_live_auto_apply_available=lambda: True,
+        _oras_live_auto_apply_ids=set(),
+        _schedule_oras_live_auto_apply=lambda *args, **kwargs: None,
+        save_engine=SimpleNamespace(key=live_key),
+    )
+
+
+@pytest.mark.parametrize("live_key", ["b2w2", "bdsp", "sm", "usum", "xy", "oras"])
+def test_heal_is_offered_only_where_the_gate_really_applies_it(live_key: str) -> None:
+    """Regresión de B2, escrita como invariante para todos los backends.
+
+    Ofrecer CURAR donde la compuerta de auto-aplicación no acepta un
+    ``PendingPartyHeal`` deja seis cambios encolados que nadie escribe ni
+    retira. Y como ``_oras_live_reconciliation_can_read`` exige la cola vacía,
+    el monitor deja de leer la partida viva. El botón y la compuerta tienen que
+    decir siempre lo mismo, en cualquier juego.
+    """
+    heal = _heal_fixture()
+    manager = _auto_apply_manager(live_key, [heal])
+
+    RoleRunManager._request_oras_live_auto_apply(manager, [heal])
+    la_compuerta_lo_aplica = bool(manager._oras_live_auto_apply_ids)
+    se_ofrece_el_boton = RoleRunManager._live_party_heal_available(manager)
+
+    assert se_ofrece_el_boton == la_compuerta_lo_aplica, (
+        f"{live_key}: el botón CURAR y la compuerta no coinciden"
+    )
+
+
+def test_b2w2_does_not_offer_the_heal_button_until_it_has_a_writer() -> None:
+    manager = SimpleNamespace(_active_azahar_realtime_key=lambda: "b2w2")
+    assert RoleRunManager._live_party_heal_available(manager) is False
+
+
+def test_a_b2w2_heal_can_no_longer_leave_the_monitor_without_reading() -> None:
+    """La cola vacía es la condición que el monitor necesita para leer."""
+    heal = _heal_fixture()
+    manager = _auto_apply_manager("b2w2", [heal])
+    RoleRunManager._request_oras_live_auto_apply(manager, [heal])
+
+    # La compuerta B2/W2 sigue sin aceptar curaciones, que es correcto mientras
+    # no exista el writer. Lo que se corrige es que ya no se puedan encolar.
+    assert manager._oras_live_auto_apply_ids == set()
+    assert RoleRunManager._live_party_heal_available(manager) is False

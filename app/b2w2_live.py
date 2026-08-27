@@ -143,9 +143,22 @@ def _crypt(data: bytes, seed: int) -> bytes:
     return bytes(out)
 
 
+def empty_pk5_stored() -> bytes:
+    """Representación vacía de un slot PC (136 B) en Negro 2.
+
+    Un slot PC liberado **no** queda a ceros: el juego deja un PK5 almacenado
+    cifrado con semilla 0. La captura física ``b2w2_party_resize_latest.json``
+    lo demuestra: tras retirar un Pokémon desde el propio juego, el parser de
+    producción leyó ``pc_empty: 717`` sin lanzar, y ese parser rechaza 136 ceros
+    por checksum inválido. Es además el mismo prefijo que la cola de party ya
+    validada físicamente en alpha.13.
+    """
+    return bytes(8) + _crypt(bytes(128), 0)
+
+
 def empty_pk5_party() -> bytes:
     """Representación vacía observada al compactar party en Negro 2."""
-    return bytes(8) + _crypt(bytes(128), 0) + _crypt(bytes(84), 0)
+    return empty_pk5_stored() + _crypt(bytes(84), 0)
 
 
 _PERMUTATIONS = (
@@ -612,7 +625,11 @@ class B2W2MelonDSReader:
             party_slot = old_count
             new_count = old_count + 1
             new_raw = old_raw + incoming_party
-            pc_after = bytes(PK5_STORED_SIZE)
+            # El slot PC liberado debe quedar como lo deja el juego: un PK5
+            # almacenado cifrado con semilla 0. Escribir 136 ceros hacía que el
+            # readback de este mismo writer los rechazara por checksum y toda
+            # retirada terminase en rollback.
+            pc_after = empty_pk5_stored()
         else:
             raise B2W2LiveError("Operación de tamaño B2/W2 no admitida.")
 
