@@ -1,6 +1,16 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.59 — el PC vuelve a leerse
+
+El equipo de Blanco se lee perfecto, así que el ancla queda validada. El PC no,
+y el fallo era de alpha.57: al sustituir las direcciones, una cayó dentro de un
+`@staticmethod` que no tiene `self`. Rompía el PC de **los dos** juegos.
+
+Ninguna prueba se enteró porque los dobles sustituyen `read_pc` entero y nunca
+llegan a ese método. Ahora hay dos: una estructural que cubre la clase de error
+y otra que ejercita la lectura de verdad. Suite completa: 1393.
+
 # v0.2.6-alpha.58 — Blanco, conectado
 
 Adaptador vivo de Blanco, registrado junto al de Negro 2 y compartiendo lector,

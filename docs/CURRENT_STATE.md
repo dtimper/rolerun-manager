@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.58`
+- Versión de aplicación: `v0.2.6-alpha.59`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,29 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.59 — el PC vuelve a leerse (fallo introducido en alpha.57)
+
+**El equipo de Blanco se lee perfecto** —Snivy, Purrloin, Patrat y Lillipup, con
+sus niveles, PS y movimientos—, así que el ancla y todo lo derivado quedan
+validados. Pero el PC fallaba, y el fallo era mío.
+
+Al sustituir las direcciones por `self.memory.*` en alpha.57, una de ellas cayó
+dentro de un `@staticmethod`, que no tiene `self`. **El PC dejó de leerse en los
+dos juegos**, no solo en Blanco.
+
+**Por qué ninguna prueba se enteró:** los dobles de melonDS sustituyen `read_pc`
+entero, así que nunca llegan a `_read_pc_rows`. La ruta que pide la dirección no
+estaba cubierta.
+
+- El método pasa a ser de instancia.
+- `test_ningun_metodo_usa_self_sin_tenerlo` recorre el módulo con el analizador
+  de sintaxis y cubre **la clase entera de error**, no el caso concreto.
+- `test_el_pc_se_lee_de_la_direccion_de_su_juego` ejercita `_read_pc_rows` de
+  verdad para los dos juegos, sustituyendo solo la lectura de memoria: la
+  dirección que pide, la doble lectura y el parseo son código de producción.
+
+- Suite completa: 1393.
 
 ### v0.2.6 Alpha.58 — Blanco, conectado
 

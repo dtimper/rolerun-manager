@@ -295,3 +295,101 @@ def test_la_ayuda_de_blanco_no_promete_lo_que_no_tiene() -> None:
 
     assert "no están demostrados" in texto
     assert "medallas" in texto
+
+
+# --------------------------------------------------------------------------
+# La lectura del PC, que es donde se coló el fallo de alpha.58
+# --------------------------------------------------------------------------
+
+def test_ningun_metodo_usa_self_sin_tenerlo() -> None:
+    """El fallo de alpha.58, convertido en regla.
+
+    Al sustituir las direcciones por `self.memory.*` una de ellas cayó dentro
+    de un `@staticmethod`, que no tiene `self`. El PC dejó de leerse en los dos
+    juegos y ninguna prueba se enteró, porque los dobles de melonDS sustituyen
+    `read_pc` y nunca llegan a ese método.
+
+    Esta comprobación es estructural y cubre la clase entera de error, no solo
+    el caso concreto que lo destapó.
+    """
+    import ast
+
+    from app import b2w2_live
+
+    fuente = Path(b2w2_live.__file__).read_text(encoding="utf-8")
+    arbol = ast.parse(fuente)
+    culpables = []
+    for clase in [n for n in ast.walk(arbol) if isinstance(n, ast.ClassDef)]:
+        for funcion in [n for n in clase.body if isinstance(n, ast.FunctionDef)]:
+            primero = funcion.args.args[0].arg if funcion.args.args else None
+            usa_self = any(
+                isinstance(nodo, ast.Name) and nodo.id == "self"
+                for nodo in ast.walk(funcion)
+            )
+            if usa_self and primero != "self":
+                culpables.append(f"{clase.name}.{funcion.name}")
+
+    assert culpables == []
+
+
+def test_el_pc_se_lee_de_la_direccion_de_su_juego() -> None:
+    """Ejercita `_read_pc_rows` de verdad, que es lo que faltaba.
+
+    Se sustituye solo la lectura de memoria: todo lo demás —la dirección que
+    pide, la doble lectura y el parseo— es el código de producción.
+    """
+    import struct
+
+    from app.b2w2_live import (
+        DS_RAM_BASE,
+        PC_MATRIX_SIZE,
+        B2W2MelonDSReader,
+        B2W2PartyRead,
+    )
+
+    for clave in ("b2w2", "bw"):
+        memoria = GEN5_MEMORY[clave]
+        lector = B2W2MelonDSReader(memoria)
+        party = B2W2PartyRead(
+            process_id=1, process_name="melonDS.exe", allocation_base=0x10000000,
+            count=1, raw=b"", pokemon=(),
+        )
+        pedidas: list[int] = []
+
+        # Un hueco vacío no son 136 ceros: es el cifrado de esos ceros, que es
+        # lo que el juego deja de verdad y lo que el parser acepta.
+        from test_b2w2_v026_foundation import _pc_matrix_fixture
+
+        matriz = _pc_matrix_fixture()
+
+        def leer(handle, direccion, buffer, tamano, recibido, _pedidas=pedidas):
+            _pedidas.append(int(direccion.value))
+            buffer.raw = matriz[:tamano]
+            recibido._obj.value = tamano
+            return 1
+
+        import app.b2w2_live as vivo
+
+        class _Kernel:
+            @staticmethod
+            def OpenProcess(*args):
+                return 99
+
+            ReadProcessMemory = staticmethod(leer)
+
+            @staticmethod
+            def CloseHandle(*args):
+                return 1
+
+        original = vivo._KERNEL32
+        vivo._KERNEL32 = _Kernel
+        try:
+            lectura = lector._read_pc_rows(party)
+        finally:
+            vivo._KERNEL32 = original
+
+        esperada = party.allocation_base + (memoria.pc - DS_RAM_BASE)
+        assert pedidas == [esperada, esperada], clave
+        assert lectura.guest_base == memoria.pc
+        assert lectura.empty_slots == 24 * 30 - 1
+        assert [p.nickname for p in lectura.pokemon] == ["Tepig"]

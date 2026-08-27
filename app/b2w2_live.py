@@ -1739,8 +1739,7 @@ class B2W2MelonDSReader:
             restore()
             raise
 
-    @staticmethod
-    def _read_pc_rows(party_read: B2W2PartyRead) -> B2W2PCRead:
+    def _read_pc_rows(self, party_read: B2W2PartyRead) -> B2W2PCRead:
         # Instancia privada: los tipos ya están fijados una sola vez y ningún
         # otro módulo puede invalidarlos a mitad de llamada.
         kernel32 = _KERNEL32
