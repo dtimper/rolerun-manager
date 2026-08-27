@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.19`
+- Versión de aplicación: `v0.2.6-alpha.20`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,25 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.20 — base de melonDS cacheada y revalidada
+
+Primera pieza de la Fase 5. Cada lectura de B2/W2 recorría entero el espacio de
+direcciones de melonDS para volver a encontrar la misma base; alpha.19, al
+devolver la vida al sondeo del PC, hizo que ese coste se pagara además cada
+pocos segundos.
+
+La base se resuelve una vez y se revalida en cada uso con la doble lectura
+estable de `count`+party ya existente: no se relaja ninguna comprobación, solo se
+deja de buscar. El recorrido completo —único lugar donde se detectan lecturas
+ambiguas— se rehace al cambiar el conjunto de procesos melonDS y cada 60 s. Si la
+revalidación falla o melonDS desaparece, la base se olvida y se vuelve a
+descubrir.
+
+La doble lectura interna de `resize_party_pc` se conserva intacta: es la captura
+fresca previa a escribir y pertenece al contrato del writer.
+
+Baseline completa: **961 passed**.
 
 ### v0.2.6 Alpha.19 — el seguimiento del PC vivo vuelve a existir
 
@@ -30,8 +49,13 @@ para B2/W2 y BDSP.
 Los tres puntos usan ahora `TEAM_PC_PAGES`, declarado una sola vez. El resto del
 archivo ya comprobaba `in {"team", "pc"}` en diez sitios.
 
+El usuario confirmó físicamente el 27-08-2026, en Pokémon Negro 2 España con
+melonDS 1.1, que el seguimiento de los cambios del PC hechos dentro del juego
+funciona correctamente desde RoleRun. Con eso la fila «PC cambios externos» del
+documento de paridad pasa a **VALIDADA FÍSICAMENTE**.
+
 Queda **sin demostrar** el mecanismo exacto de la duplicación observada al
-retirar desde la vista desfasada; su precondición está cerrada. El writer valida
+retirar desde la vista desfasada; su precondición está cerrada y no reapareció. El writer valida
 identidad y coordenadas contra la RAM antes de escribir, por lo que la partida no
 estuvo en riesgo en ningún momento. La capacidad «PC cambios externos» de
 `B2W2_REALTIME_PARITY.md` sigue **pendiente de validación física**.

@@ -1,6 +1,33 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.20 — la base de melonDS se resuelve una vez, no en cada lectura
+
+- Hasta ahora, **cada** `read_party()` y **cada** `read_pc()` de B2/W2 recorrían
+  entero el espacio de direcciones de melonDS con `VirtualQueryEx` y sondeaban
+  con lecturas de memoria cada `AllocationBase` distinta. Se pagaba en cada ciclo
+  del monitor, otra vez en cada escritura y, desde alpha.19, también en cada
+  sondeo del PC vivo.
+- La base demostrada se cachea y se reutiliza. **No es un atajo que se salte
+  comprobaciones**: cada lectura vuelve a ejecutar la misma doble lectura estable
+  de `count`+party, el mismo rango del contador y el mismo checksum de cada PK5.
+  Lo único que se omite es *buscar dónde está* esa base.
+- La detección de lecturas ambiguas solo existe en el recorrido completo, así que
+  se redescubre siempre que cambia el conjunto de procesos melonDS (abrir o
+  cerrar una segunda instancia) y, por seguridad, cada 60 s aunque nada cambie.
+- Si la revalidación de la base falla —por ejemplo tras un state-load que remapee
+  la memoria— se vuelve a descubrir en silencio en vez de dar error. Si melonDS
+  desaparece, la base se olvida.
+- Con el sondeo del PC cada ~2,5 s, los recorridos completos pasan de uno por
+  lectura a como mucho uno por minuto.
+- **No se toca** la doble lectura interna de `resize_party_pc`: es la captura
+  fresca inmediatamente anterior a escribir y forma parte del contrato del
+  writer. Eliminar esa relectura ahorraría tiempo a costa de seguridad.
+- Es además la primera pieza pensada para reutilizarse en los otros juegos NDS:
+  resolver la base del emulador es común; las direcciones y el formato del bloque
+  no lo son.
+- Baseline completa: **961 passed**.
+
 # v0.2.6-alpha.19 — RoleRun vuelve a mirar el PC del juego
 
 Fallo físico reportado el 27-08-2026 en Negro 2/melonDS: un Azurill movido al

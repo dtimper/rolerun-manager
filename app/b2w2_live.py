@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import os
 import struct
+import time
 from dataclasses import dataclass
 from ctypes import wintypes
 
@@ -38,6 +39,12 @@ BATTLE_ROW_SIZE = 14
 # Se lee junto a la fila, pero solo se publica el valor observado (1 = PAR).
 BATTLE_STATUS_OFFSET = 0x14
 BATTLE_READ_SIZE = BATTLE_STATUS_OFFSET + 1
+# Una vez demostrada la base del mapeo, cada lectura la revalida con la misma
+# doble lectura count+party. Aun asi se rehace el descubrimiento completo cada
+# cierto tiempo: la comprobacion de ambiguedad -que solo existe en el recorrido
+# completo- debe seguir ejecutandose por si aparece una segunda party valida
+# dentro del mismo proceso a mitad de sesion.
+BASE_REDISCOVERY_SECONDS = 60.0
 
 
 class B2W2LiveError(RuntimeError):
@@ -290,21 +297,72 @@ def parse_pk5_boxed(data: bytes, box: int, slot: int) -> B2W2BoxPokemon | None:
 class B2W2MelonDSReader:
     """Lector cerrado de la party nominal B2/W2 dentro del mapeo de melonDS."""
 
+    def __init__(self) -> None:
+        # Base ya demostrada: (pid, nombre, allocation_base). Evita recorrer el
+        # espacio de direcciones completo de melonDS en cada lectura.
+        self._resolved: tuple[int, str, int] | None = None
+        # Conjunto de procesos melonDS con el que se resolvio. Si cambia, se
+        # vuelve a descubrir: la deteccion de lecturas ambiguas depende de el.
+        self._resolved_processes: tuple[tuple[int, str], ...] = ()
+        self._resolved_at = 0.0
+
+    def forget_resolved_base(self) -> None:
+        """Olvida la base cacheada; la siguiente lectura vuelve a descubrirla."""
+        self._resolved = None
+        self._resolved_processes = ()
+        self._resolved_at = 0.0
+
+    def _cached_party_read(
+        self, signature: tuple[tuple[int, str], ...], *, now: float,
+    ) -> B2W2PartyRead | None:
+        """Relee en la base ya demostrada, o devuelve ``None`` para redescubrir.
+
+        No es un atajo que se salte validaciones: se ejecuta exactamente la misma
+        doble lectura estable de count+party y el mismo parseo con checksum. Lo
+        unico que se omite es la busqueda de donde esta esa base.
+        """
+        resolved = self._resolved
+        if resolved is None or signature != self._resolved_processes:
+            return None
+        if now - self._resolved_at >= BASE_REDISCOVERY_SECONDS:
+            return None
+        pid, name, allocation = resolved
+        try:
+            return self._read_process(pid, name, known_allocation=allocation)
+        except (OSError, B2W2LiveError):
+            return None
+
     @perf.timed("b2w2.read_party")
     def read_party(self) -> B2W2PartyRead:
         if os.name != "nt":
             raise B2W2LiveError("melonDS en Windows es obligatorio.")
         candidates = self._list_melonds_processes()
         if not candidates:
+            self.forget_resolved_base()
             raise B2W2LiveError("melonDS no está abierto.")
+        signature = tuple(sorted(candidates))
+        now = time.monotonic()
+
+        cached = self._cached_party_read(signature, now=now)
+        if cached is not None:
+            perf.record("b2w2.base_cache", 0.0, hit=True)
+            return cached
+
+        perf.record("b2w2.base_cache", 0.0, hit=False)
         last_error = "No se localizó la RAM DS validada de B2/W2."
         for pid, name in sorted(candidates, reverse=True):
             try:
                 result = self._read_process(pid, name)
                 if result is not None:
+                    self._resolved = (
+                        result.process_id, result.process_name, result.allocation_base,
+                    )
+                    self._resolved_processes = signature
+                    self._resolved_at = now
                     return result
             except (OSError, B2W2LiveError) as exc:
                 last_error = str(exc)
+        self.forget_resolved_base()
         raise B2W2LiveError(last_error)
 
     @staticmethod
@@ -785,7 +843,16 @@ class B2W2MelonDSReader:
         return count_1, raw_1, pokemon
 
     @staticmethod
-    def _read_process(pid: int, name: str) -> B2W2PartyRead | None:
+    def _read_process(
+        pid: int, name: str, *, known_allocation: int | None = None,
+    ) -> B2W2PartyRead | None:
+        """Resuelve la party dentro del proceso indicado.
+
+        Con ``known_allocation`` se relee directamente en una base ya demostrada
+        y se omite unicamente el recorrido del espacio de direcciones. Todas las
+        validaciones -doble lectura estable de count+party, rango del contador y
+        checksum de cada PK5- se ejecutan igual.
+        """
         kernel32 = ctypes.windll.kernel32
         kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
         kernel32.OpenProcess.restype = wintypes.HANDLE
@@ -826,6 +893,16 @@ class B2W2MelonDSReader:
             return buffer.raw
 
         try:
+            if known_allocation is not None:
+                with perf.span("b2w2.known_base_read") as measure:
+                    candidate = B2W2MelonDSReader._capture_nominal_candidate(
+                        read, int(known_allocation),
+                    )
+                    measure.add(revalidated=candidate is not None)
+                if candidate is None:
+                    return None
+                count, raw, pokemon = candidate
+                return B2W2PartyRead(pid, name, int(known_allocation), count, raw, pokemon)
             address = 0
             seen: set[int] = set()
             candidates = []
