@@ -1,6 +1,38 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.22 — el parpadeo de la barra flotante y los PS de B2/W2
+
+Dos fallos reportados por el usuario, **con una única causa raíz**: la rama
+B2/W2 del monitor hacía justo lo contrario de lo necesario.
+
+- **El parpadeo, por fin.** Cuando nada había cambiado, esa rama llamaba en cada
+  ciclo —cada 950 ms— a `_sync_live_layout(refresh_floating=True)`, que fuerza
+  una reconstrucción **completa** de la barra flotante: destruye todos sus
+  widgets y relee dos PNG del disco. Ese era el parpadeo de una vez por segundo
+  que llevaba muchas versiones. Ahora, cuando no hay novedad, no se toca la
+  barra.
+- **Los PS de B2/W2.** Era el único backend que no publicaba la salud viva por
+  el camino común. Como `diff_live_party` ignora los PS a propósito —su trabajo
+  es la composición del equipo, no la vida—, un cambio de vida dejaba
+  `difference.changed` en falso y no llegaba nunca a `current_game`. La ventana
+  principal no podía enseñarlo.
+- Se extrae `_publish_live_health()`, la parte de `_process_oras_health_snapshot`
+  que **no** decide bajas, y B2/W2 la usa. Su maquinaria de KO sigue cerrada
+  porque todavía no tiene writer de sustitución seguro.
+- Solo se publica salud demostrada: en combate la copia de presentación, fuera
+  de combate el bloque de party. Con la lane de batalla en un estado no
+  confirmado no se publica nada, que es justo para lo que existe esa copia.
+- **La barra flotante también se actualiza en su sitio.** Un cambio de PS ya no
+  la reconstruye: se mueve la barra y ya está. Cede a la reconstrucción cuando
+  cambia un contador, el ocupante de un rol, su visibilidad, el sprite, cuando
+  aparece o desaparece un estado o cuando la vida cruza por cero, porque al 0 %
+  la casilla no tiene barra sino un carril neutro.
+- La firma de la barra pasa a ser `(contadores, roles)` en vez de una tupla
+  plana, para poder distinguir «solo cambiaron los PS» de «cambió la
+  composición».
+- Baseline completa: **996 passed**.
+
 # v0.2.6-alpha.21 — los PS en vivo dejan de reconstruir la página
 
 Primera pieza de la Fase 3, la de velocidad percibida, y la primera medida sobre

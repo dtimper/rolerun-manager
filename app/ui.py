@@ -574,6 +574,9 @@ class RoleRunManager(ctk.CTk):
         self._floating_bar_drag_origin: tuple[int, int, int, int] | None = None
         self._floating_bar_poll_id: str | None = None
         self._floating_bar_last_signature: tuple | None = None
+        # Barra de PS y presencia de estado por rol, para refrescar la barra
+        # flotante sin destruirla entera en cada cambio de PS.
+        self._floating_health_widgets: dict[str, dict[str, Any]] = {}
         self._floating_launcher: ctk.CTkToplevel | None = None
         self._game_overlay_active = False
         self._game_overlay_previous_geometry: str | None = None
@@ -2503,7 +2506,9 @@ class RoleRunManager(ctk.CTk):
                 role_key, identity, hidden, sprite_ready,
                 hp, max_hp, status,
             ))
-        return counters + tuple(roles)
+        # Estructurada a propósito: permite distinguir «solo cambiaron los PS»
+        # de «cambió la composición», y actualizar en su sitio el primer caso.
+        return (counters, tuple(roles))
 
     def _floating_health_values(self, pokemon: SavePokemon | None) -> tuple[int, int, int]:
         """Devuelve salud live demostrada sin convertir una muestra provisional en KO.
@@ -3216,6 +3221,68 @@ class RoleRunManager(ctk.CTk):
                 continue
             child.destroy()
 
+    def _update_floating_bar_health_in_place(self, signature: tuple) -> bool:
+        """Refresca solo las barras de PS de la barra flotante.
+
+        Reconstruir la barra destruye todos sus widgets y vuelve a leer dos PNG
+        del disco. En combate los PS cambian en cada ciclo del monitor, así que
+        hacerlo entero era un parpadeo constante justo cuando el usuario más
+        necesita mirarla.
+
+        Devuelve ``False`` —y entonces se reconstruye como siempre— cuando cambia
+        cualquier otra cosa: contadores, ocupante de un rol, visibilidad, sprite,
+        la aparición o desaparición de un estado, o el cruce por cero de la vida,
+        que cambia la barra por un carril neutro.
+        """
+        previous = self._floating_bar_last_signature
+        if previous is None or not signature:
+            return False
+        try:
+            old_counters, old_roles = previous
+            new_counters, new_roles = signature
+        except (TypeError, ValueError):
+            return False
+        if old_counters != new_counters or len(old_roles) != len(new_roles):
+            return False
+
+        pendientes = []
+        for old_role, new_role in zip(old_roles, new_roles):
+            # role_key, identidad, oculto y sprite deben ser idénticos: cualquier
+            # diferencia ahí es un cambio de composición, no de salud.
+            if old_role[:4] != new_role[:4]:
+                return False
+            if old_role[4:] == new_role[4:]:
+                continue
+            role_key = new_role[0]
+            _identity, _hidden, _sprite, hp, max_hp, status = new_role[1:]
+            entry = self._floating_health_widgets.get(role_key)
+            if not entry:
+                return False
+            bar = entry.get("bar")
+            fraction = max(0.0, min(1.0, hp / max_hp)) if max_hp > 0 else 0.0
+            # Al 0 % la casilla no tiene barra sino un carril neutro, y un estado
+            # que aparece o desaparece añade o quita una etiqueta: ninguno de los
+            # dos casos se puede resolver moviendo un valor.
+            if (bar is None) != (fraction <= 0.0):
+                return False
+            if bool(entry.get("has_status")) != bool(self._floating_status_style(status)):
+                return False
+            if bar is not None:
+                pendientes.append((bar, fraction))
+
+        if not pendientes:
+            return True
+        try:
+            for bar, fraction in pendientes:
+                if not bar.winfo_exists():
+                    return False
+                color = DANGER if fraction <= .25 else (GOLD if fraction <= .5 else SUCCESS)
+                bar.configure(progress_color=color)
+                bar.set(fraction)
+        except Exception:
+            return False
+        return True
+
     def _render_floating_bar(self, force: bool = False) -> None:
         bar = self.floating_bar
         if not bar or not bar.winfo_exists():
@@ -3224,7 +3291,15 @@ class RoleRunManager(ctk.CTk):
         if not force and signature == self._floating_bar_last_signature:
             self._schedule_floating_bar_poll()
             return
+        with perf.span("ui.floating_bar_health_in_place") as measure:
+            en_su_sitio = self._update_floating_bar_health_in_place(signature)
+            measure.add(applied=en_su_sitio)
+        if en_su_sitio:
+            self._floating_bar_last_signature = signature
+            self._schedule_floating_bar_poll()
+            return
         self._floating_bar_last_signature = signature
+        self._floating_health_widgets.clear()
         self._clear_floating_bar_render_children(bar)
         self.floating_bar_images.clear()
         self._floating_role_drop_targets = []
@@ -3328,6 +3403,7 @@ class RoleRunManager(ctk.CTk):
             # CTkProgressBar conserva un cap redondeado del color de progreso aun
             # con valor 0. Eso fabricaba la raya roja visible en roles vacíos y
             # debilitados. Al 0% mostramos solo el carril neutro.
+            hp_bar = None
             if pokemon is not None and hp_fraction > 0.0:
                 hp_bar = ctk.CTkProgressBar(
                     hp_row, width=54, height=6,
@@ -3341,6 +3417,9 @@ class RoleRunManager(ctk.CTk):
                     fg_color="#383838", corner_radius=3,
                 ).pack(side="left", fill="x", expand=True, pady=1)
             status_style = self._floating_status_style(status)
+            self._floating_health_widgets[role_key] = {
+                "bar": hp_bar, "has_status": bool(status_style),
+            }
             if status_style:
                 color, short = status_style
                 ctk.CTkLabel(
@@ -8663,6 +8742,32 @@ class RoleRunManager(ctk.CTk):
         except Exception:
             self._oras_delayed_faint_payloads.pop(identity, None)
 
+    def _publish_live_health(self, game: SaveGameData | None) -> bool:
+        """Fusiona la salud viva y refresca **solo si algo cambió de verdad**.
+
+        Es la parte de ``_process_oras_health_snapshot`` que no decide bajas.
+        B2/W2 la necesita exactamente así: publica PS pero su maquinaria de KO
+        sigue cerrada porque todavía no tiene writer de sustitución seguro.
+
+        El «solo si cambió» no es un detalle de rendimiento. Refrescar la barra
+        flotante la destruye y la reconstruye entera —incluidas dos imágenes
+        releídas del disco—, así que hacerlo en cada ciclo del monitor produce un
+        parpadeo visible una vez por segundo.
+        """
+        changed = RoleRunManager._merge_live_health_fields(self.current_game, game)
+        if not changed:
+            return False
+        self._floating_bar_last_signature = None
+        if self._floating_bar_is_visible():
+            self._render_floating_bar(force=True)
+            self._main_ui_dirty_while_floating = True
+        elif (
+            self.active_page in TEAM_PC_PAGES
+            and self._live_health_render_after_id is None
+        ):
+            self._live_health_render_after_id = self.after(90, self._refresh_live_health_page)
+        return True
+
     def _process_oras_health_snapshot(self, game: SaveGameData, *, source: str = "overworld") -> None:
         """Publica salud viva y observa PS > 0 -> 0.
 
@@ -8673,17 +8778,7 @@ class RoleRunManager(ctk.CTk):
         """
         previous = self._oras_live_health_snapshot
         self._oras_live_health_snapshot = game
-        health_changed = RoleRunManager._merge_live_health_fields(self.current_game, game)
-        if health_changed:
-            self._floating_bar_last_signature = None
-            if self._floating_bar_is_visible():
-                self._render_floating_bar(force=True)
-                self._main_ui_dirty_while_floating = True
-            elif (
-                self.active_page in TEAM_PC_PAGES
-                and self._live_health_render_after_id is None
-            ):
-                self._live_health_render_after_id = self.after(90, self._refresh_live_health_page)
+        self._publish_live_health(game)
         if not self.project:
             return
 
@@ -9439,12 +9534,25 @@ class RoleRunManager(ctk.CTk):
             before_game = self.current_game
             probe_state = getattr(battle_probe, "state", "unknown")
             probe_health = getattr(battle_probe, "health_game", None)
+            # Solo estas dos situaciones tienen salud demostrada. Con la lane de
+            # batalla en un estado no confirmado no se publica nada: la copia de
+            # presentación existe precisamente para no adelantar el daño antes
+            # de que el juego lo muestre.
+            published_health = None
             if probe_state == "battle" and probe_health is not None:
                 self._oras_battle_probe_last_state = "battle"
                 self._oras_live_health_snapshot = probe_health
+                published_health = probe_health
             elif probe_state == "none":
                 self._oras_battle_probe_last_state = "none"
                 self._oras_live_health_snapshot = snapshot.game
+                published_health = snapshot.game
+            # ``diff_live_party`` ignora los PS a propósito: su trabajo es la
+            # composición del equipo. B2/W2 era el único backend que no llamaba
+            # después a la publicación de salud, así que un cambio de PS no
+            # llegaba nunca ni a ``current_game`` ni a la vista principal.
+            if published_health is not None:
+                self._publish_live_health(published_health)
             difference = diff_live_party(before_game, snapshot.game)
             if difference.changed:
                 self._publish_oras_live_snapshot(snapshot, difference=difference)
@@ -9454,7 +9562,12 @@ class RoleRunManager(ctk.CTk):
                 )
                 self._update_top_status()
             else:
-                self._sync_live_layout(refresh_floating=True)
+                # Antes se forzaba aquí una reconstrucción completa de la barra
+                # flotante en CADA ciclo del monitor, es decir una vez por
+                # segundo, aunque no hubiera cambiado absolutamente nada. Ese era
+                # el parpadeo. La barra la refresca ahora quien tiene algo nuevo
+                # que contar, y su propio sondeo de 500 ms recoge el resto.
+                self._sync_live_layout(refresh_floating=False)
             self._schedule_oras_live_reconciliation(
                 250 if probe_state == "battle" else 950
             )

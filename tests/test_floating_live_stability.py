@@ -103,9 +103,11 @@ def test_floating_signature_hides_pending_fainted_pokemon() -> None:
         _sprite_source=lambda pokemon: None,
         _floating_health_values=lambda pokemon: (0, 0, 0),
     )
-    signature = RoleRunManager._floating_bar_signature(manager)
-    # counters + seis casillas; la casilla Líbero queda vacía tras la baja.
-    assert signature[4][1] is None
+    counters, roles = RoleRunManager._floating_bar_signature(manager)
+    # Contadores y seis casillas; la casilla Líbero queda vacía tras la baja.
+    assert counters == (3, 0, 0, 0)
+    assert len(roles) == 6
+    assert roles[0][1] is None
 
 
 def test_floating_signature_places_a_roleless_party_member_in_a_free_slot() -> None:
@@ -125,9 +127,10 @@ def test_floating_signature_places_a_roleless_party_member_in_a_free_slot() -> N
         _floating_health_values=lambda pokemon: (24, 24, 0) if pokemon else (0, 0, 0),
     )
 
-    signature = RoleRunManager._floating_bar_signature(manager)
-    assert signature[4][1] == "visible-tepig"
-    assert signature[4][4:7] == (24, 24, 0)
+    _counters, roles = RoleRunManager._floating_bar_signature(manager)
+    assert roles[0][1] == "visible-tepig"
+    # Los tres últimos campos de cada casilla son la salud: PS, máximo y estado.
+    assert roles[0][4:7] == (24, 24, 0)
 
 
 def test_floating_health_prefers_the_unique_validated_live_sample() -> None:

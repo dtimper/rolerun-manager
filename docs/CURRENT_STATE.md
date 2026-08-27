@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.21`
+- Versión de aplicación: `v0.2.6-alpha.22`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,31 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.22 — la rama B2/W2 del monitor, corregida
+
+El usuario reportó dos fallos el 27-08-2026 y resultaron ser el mismo defecto.
+La rama B2/W2 de `_finish_oras_live_reconciliation` reconstruía la barra flotante
+entera en cada ciclo cuando **no** había cambiado nada, y no publicaba la salud
+cuando sí había cambiado.
+
+Lo primero producía el parpadeo de una vez por segundo que arrastraba desde
+v0.2.6-alpha.1: `_sync_live_layout(refresh_floating=True)` destruye todos los
+widgets de la barra y relee dos PNG del disco. Lo segundo dejaba los PS
+congelados en la ventana principal, porque `diff_live_party` ignora la vida por
+diseño y B2/W2 era el único backend que no llamaba después a la publicación de
+salud.
+
+Se extrae `_publish_live_health()` —la parte de `_process_oras_health_snapshot`
+que no decide bajas— y B2/W2 la usa. El KO de B2/W2 permanece cerrado. Solo se
+publica salud demostrada: la copia de presentación en combate y el bloque de
+party fuera de él; con la lane de batalla en estado no confirmado no se publica
+nada, para no adelantar el daño antes de que el juego lo muestre.
+
+La barra flotante gana además actualización en su sitio de sus barras de PS, con
+las mismas condiciones de cesión que las tarjetas del equipo.
+
+Baseline completa: **996 passed**.
 
 ### v0.2.6 Alpha.21 — actualización incremental de los PS en vivo
 
