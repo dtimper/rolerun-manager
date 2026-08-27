@@ -1,6 +1,16 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.66 — el combate de Blanco, conectado y por equipo entero
+
+Con el paso medido, Blanco lee **las seis filas**, una por miembro, y publica los
+PS vivos del equipo entero durante el combate. Cada fila se valida contra su
+propio miembro; una fila mala descarta ese Pokémon, no el combate.
+
+Negro 2 no cambia: su paso no está medido y sigue leyendo una sola fila.
+
+`tests/test_bw_memory.py`: 31 pruebas. Suite completa: 1400.
+
 # v0.2.6-alpha.65 — el combate de Blanco, resuelto y con estructura
 
 Lógica `0x0226E794` (1115 ms) y presentación `0x0226D898` (4544 ms). Los 3429 ms

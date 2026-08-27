@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.65`
+- Versión de aplicación: `v0.2.6-alpha.66`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,25 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.66 — el combate de Blanco, conectado y por equipo entero
+
+Con el paso entre filas medido, Blanco no lee una fila: lee **las seis**, una por
+miembro del equipo. Publica los PS vivos de todos durante el combate, no solo
+los del que está en el campo — que es más de lo que hace Negro 2.
+
+- `read_battle_party()`: una fila por miembro, con doble lectura y **validada
+  contra su propio miembro**. Si la del tercero no describe al tercero, se
+  descarta esa sola y ese Pokémon conserva lo que diga el bloque de equipo. No
+  se pierde el combate entero por una fila mala.
+- El adaptador usa esa vía cuando el paso está medido y la de siempre cuando no.
+  Negro 2 no cambia de comportamiento.
+- Pedirle la lectura por miembro a Negro 2 se niega con su motivo: su paso no
+  está medido y suponerlo sería la analogía de siempre.
+
+- `tests/test_bw_memory.py`: 31 pruebas. Suite completa: 1400.
+- **Pendiente de validación física**: entrar en combate en Blanco y ver bajar la
+  vida en directo.
 
 ### v0.2.6 Alpha.65 — el combate de Blanco, resuelto y con estructura
 

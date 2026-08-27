@@ -1093,6 +1093,85 @@ class B2W2MelonDSReader:
         finally:
             kernel32.CloseHandle(handle)
 
+    @_serialized
+    def read_battle_party(
+        self, party_read: B2W2PartyRead,
+    ) -> tuple[B2W2BattleRead | None, ...]:
+        """Una fila de combate por miembro del equipo.
+
+        Solo para los juegos con `battle_stride` medido. En Blanco se demostró
+        que hay dos tablas de filas, una por miembro, con un paso de 0x228:
+        Purrloin, primero del equipo, tenía las suyas 0x228 antes que las del
+        Serperior, segundo, en las dos tablas.
+
+        Eso permite publicar los PS vivos del **equipo entero** durante el
+        combate, y no solo los del que está en el campo. Cada fila se valida
+        contra su propio miembro: si la que corresponde al tercero no describe
+        al tercero, esa posición se descarta en vez de publicarse.
+
+        Un miembro sin fila válida devuelve ``None``, y quien llama conserva
+        para él lo que diga el bloque de equipo.
+        """
+        paso = self.memory.battle_stride
+        if paso is None:
+            raise B2W2LiveError(
+                f"El paso entre filas de combate no está medido en {self.memory.label}."
+            )
+        presentacion = self._demostrada(
+            self.memory.battle_presentation, "El carril de batalla",
+        )
+        logica = self._demostrada(self.memory.battle_logical, "El carril de batalla")
+
+        kernel32 = _KERNEL32
+        if kernel32 is None:
+            raise B2W2LiveError("melonDS en Windows es obligatorio.")
+        handle = kernel32.OpenProcess(0x0400 | 0x0010, False, party_read.process_id)
+        if not handle:
+            raise B2W2LiveError("melonDS desapareció antes de leer batalla.")
+
+        def read_guest(guest: int) -> bytes:
+            address = party_read.allocation_base + (guest - DS_RAM_BASE)
+            buffer = ctypes.create_string_buffer(BATTLE_READ_SIZE)
+            received = ctypes.c_size_t()
+            if (
+                not kernel32.ReadProcessMemory(
+                    handle, ctypes.c_void_p(address), buffer, BATTLE_READ_SIZE,
+                    ctypes.byref(received),
+                )
+                or received.value != BATTLE_READ_SIZE
+            ):
+                raise B2W2LiveError("Lectura incompleta de la fila de batalla.")
+            return buffer.raw
+
+        salida: list[B2W2BattleRead | None] = []
+        try:
+            for indice, miembro in enumerate(party_read.pokemon):
+                desplazamiento = indice * paso
+                try:
+                    # Doble lectura, como el resto: una fila a medio escribir no
+                    # se publica.
+                    primera = (
+                        read_guest(presentacion + desplazamiento),
+                        read_guest(logica + desplazamiento),
+                    )
+                    segunda = (
+                        read_guest(presentacion + desplazamiento),
+                        read_guest(logica + desplazamiento),
+                    )
+                    if primera != segunda:
+                        salida.append(None)
+                        continue
+                    salida.append(
+                        self.parse_battle_copies(primera[0], primera[1], (miembro,)),
+                    )
+                except B2W2LiveError:
+                    # La fila de ese miembro no se pudo validar. Se descarta esa
+                    # sola, no el combate entero.
+                    salida.append(None)
+        finally:
+            kernel32.CloseHandle(handle)
+        return tuple(salida)
+
     def read_battle(self, party_read: B2W2PartyRead) -> B2W2BattleRead:
         return self._read_battle_rows(party_read)
 

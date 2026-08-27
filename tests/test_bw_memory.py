@@ -461,3 +461,124 @@ def test_negro_2_no_tiene_medido_ese_paso() -> None:
     admite; ese paso se midió en Blanco, no en Negro 2.
     """
     assert B2W2.battle_stride is None
+
+
+# --------------------------------------------------------------------------
+# La lectura por miembro, que es lo que permite el paso medido
+# --------------------------------------------------------------------------
+
+def _lector_de_filas(clave: str, filas: dict[int, bytes]):
+    """Lector real con la lectura de memoria sustituida por filas dadas."""
+    import app.b2w2_live as vivo
+    from app.b2w2_live import BATTLE_READ_SIZE, DS_RAM_BASE, B2W2MelonDSReader
+
+    lector = B2W2MelonDSReader(GEN5_MEMORY[clave])
+    pedidas: list[int] = []
+
+    class _Kernel:
+        @staticmethod
+        def OpenProcess(*args):
+            return 7
+
+        @staticmethod
+        def ReadProcessMemory(handle, direccion, buffer, tamano, recibido):
+            guest = int(direccion.value) - 0x10000000 + DS_RAM_BASE
+            pedidas.append(guest)
+            buffer.raw = filas.get(guest, b"\x00" * BATTLE_READ_SIZE)[:tamano]
+            recibido._obj.value = tamano
+            return 1
+
+        @staticmethod
+        def CloseHandle(*args):
+            return 1
+
+    lector._kernel_original = vivo._KERNEL32
+    vivo._KERNEL32 = _Kernel
+    lector.pedidas = pedidas
+    return lector, vivo
+
+
+def test_blanco_lee_una_fila_por_miembro_del_equipo() -> None:
+    """Publicar los PS del equipo entero, no solo los del que está en el campo."""
+    import struct
+
+    from app.b2w2_live import BATTLE_READ_SIZE, B2W2PartyRead
+    from test_b2w2_v026_foundation import _pk5_fixture
+    from app.b2w2_live import PK5_PARTY_SIZE, parse_pk5_party
+
+    crudo = b"".join(_pk5_fixture(pid=0x89E50000 + i * 0x10000) for i in range(2))
+    miembros = tuple(
+        parse_pk5_party(crudo[i * PK5_PARTY_SIZE:(i + 1) * PK5_PARTY_SIZE], i)
+        for i in range(2)
+    )
+    party = B2W2PartyRead(1, "melonDS.exe", 0x10000000, 2, crudo, miembros)
+
+    def fila(m, ps):
+        crudo = bytearray(BATTLE_READ_SIZE)
+        struct.pack_into(
+            "<7H", crudo, 0,
+            m.species_id, m.max_hp, ps, 0, 0, m.ability_id, m.level,
+        )
+        return bytes(crudo)
+
+    # Cada miembro con SUS PS, en la fila que le toca según el paso medido.
+    filas = {
+        BW.battle_presentation: fila(miembros[0], 5),
+        BW.battle_logical: fila(miembros[0], 5),
+        BW.battle_presentation + BW.battle_stride: fila(miembros[1], 9),
+        BW.battle_logical + BW.battle_stride: fila(miembros[1], 9),
+    }
+    lector, vivo = _lector_de_filas("bw", filas)
+    try:
+        lectura = lector.read_battle_party(party)
+    finally:
+        vivo._KERNEL32 = lector._kernel_original
+
+    assert len(lectura) == 2
+    assert [f.current_hp for f in lectura] == [5, 9]
+    assert [f.party_slot for f in lectura] == [0, 1]
+
+
+def test_una_fila_que_no_describe_a_su_miembro_se_descarta_sola() -> None:
+    """Se pierde ese miembro, no el combate entero."""
+    import struct
+
+    from app.b2w2_live import BATTLE_READ_SIZE, PK5_PARTY_SIZE, B2W2PartyRead, parse_pk5_party
+    from test_b2w2_v026_foundation import _pk5_fixture
+
+    crudo = b"".join(_pk5_fixture(pid=0x89E50000 + i * 0x10000) for i in range(2))
+    miembros = tuple(
+        parse_pk5_party(crudo[i * PK5_PARTY_SIZE:(i + 1) * PK5_PARTY_SIZE], i)
+        for i in range(2)
+    )
+    party = B2W2PartyRead(1, "melonDS.exe", 0x10000000, 2, crudo, miembros)
+
+    def fila(especie, max_hp, ps, hab, nivel):
+        crudo = bytearray(BATTLE_READ_SIZE)
+        struct.pack_into("<7H", crudo, 0, especie, max_hp, ps, 0, 0, hab, nivel)
+        return bytes(crudo)
+
+    m0 = miembros[0]
+    filas = {
+        BW.battle_presentation: fila(m0.species_id, m0.max_hp, 5, m0.ability_id, m0.level),
+        BW.battle_logical: fila(m0.species_id, m0.max_hp, 5, m0.ability_id, m0.level),
+        # La del segundo describe a otro: nivel imposible, como el Pansear.
+        BW.battle_presentation + BW.battle_stride: fila(513, 39, 39, 62, 3342),
+        BW.battle_logical + BW.battle_stride: fila(513, 39, 39, 62, 3342),
+    }
+    lector, vivo = _lector_de_filas("bw", filas)
+    try:
+        lectura = lector.read_battle_party(party)
+    finally:
+        vivo._KERNEL32 = lector._kernel_original
+
+    assert lectura[0] is not None and lectura[0].current_hp == 5
+    assert lectura[1] is None
+
+
+def test_negro_2_no_puede_leer_por_miembro() -> None:
+    """Su paso no está medido, así que pedirlo se niega con su motivo."""
+    from app.b2w2_live import B2W2LiveError, B2W2MelonDSReader
+
+    with pytest.raises(B2W2LiveError, match="no está medido"):
+        B2W2MelonDSReader(GEN5_MEMORY["b2w2"]).read_battle_party(object())

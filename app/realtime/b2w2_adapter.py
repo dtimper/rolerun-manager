@@ -9,7 +9,7 @@ from pathlib import Path
 from ..b2w2_live import (
     BADGES_ADDRESS, BAG_BASE, MONEY_MAX, TM_TABLE_BASE,
     STAT_ORDER_PERSONAL, B2W2LiveError, B2W2MelonDSReader, B2W2RoleWrite,
-    PK5_PARTY_SIZE, PK5_STORED_SIZE, _crypt,
+    PK5_PARTY_SIZE, PK5_STORED_SIZE, B2W2BattleRead, _crypt,
 )
 from ..b2w2_tm_service import build_tm_profile
 from ..gen5_memory import GEN5_MEMORY, Gen5Memory
@@ -665,7 +665,18 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
             "La fila de batalla B2/W2 no pudo validarse.",
         )
         try:
-            battle_raw = self.reader.read_battle(raw)
+            # Con el paso entre filas medido -Blanco- se leen las seis y se
+            # publican los PS del equipo entero. Sin él -Negro 2- se lee una
+            # sola, como está validado físicamente allí.
+            por_miembro = ()
+            if self.memory.battle_stride is not None:
+                por_miembro = self.reader.read_battle_party(raw)
+                battle_raw = next(
+                    (fila for fila in por_miembro if fila is not None and fila.active),
+                    B2W2BattleRead(False),
+                )
+            else:
+                battle_raw = self.reader.read_battle(raw)
             if not battle_raw.active:
                 battle = BattleState("none")
                 battle_diagnostic = LiveDiagnostic(
@@ -674,18 +685,24 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
                     "mirror + immediate",
                 )
             else:
+                # Cada miembro toma sus PS de SU fila cuando existe. El que no
+                # tenga fila válida conserva lo que diga el bloque de equipo,
+                # que en quinta no se actualiza hasta que acaba el combate.
+                por_slot = {
+                    fila.party_slot: fila
+                    for fila in por_miembro
+                    if fila is not None and fila.active
+                } if por_miembro else {battle_raw.party_slot: battle_raw}
                 health_party = [
                     replace(
                         member,
                         current_hp=(
-                            battle_raw.current_hp
-                            if member.slot == battle_raw.party_slot
-                            else member.current_hp
+                            por_slot[member.slot].current_hp
+                            if member.slot in por_slot else member.current_hp
                         ),
                         status_condition=(
-                            battle_raw.status_condition
-                            if member.slot == battle_raw.party_slot
-                            else member.status_condition
+                            por_slot[member.slot].status_condition
+                            if member.slot in por_slot else member.status_condition
                         ),
                     )
                     for member in game.party
