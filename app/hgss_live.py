@@ -64,6 +64,24 @@ PC_MATRIX_SIZE = PC_BOX_COUNT * PC_BOX_STRIDE
 # Misma política que en quinta: la base se recuerda, pero el descubrimiento
 # completo -el único que detecta ambigüedad- se rehace cada minuto.
 BASE_REDISCOVERY_SECONDS = 60.0
+# Cuántas veces se reintenta la doble lectura antes de darla por imposible.
+#
+# En quinta bastaba con una: su bloque de equipo está quieto. El de HeartGold
+# **no**. Medido el 27-08-2026 sobre la partida del usuario, con el juego
+# corriendo: de 3000 tripletes de lecturas seguidas, 129 no coincidieron, y en
+# 121 de esos las tres salieron distintas —o sea, no es un cambio que se asiente,
+# es trasiego continuo—. En una parte de esas lecturas el checksum del primer
+# miembro ni siquiera cuadraba, así que lo que se lee a veces es un estado roto.
+#
+# El checksum lo caza y nunca se publica; el problema era rendirse al primer
+# intento. Con la reserva ya localizada, la captura se rechazaba en 41 de 161
+# intentos —una de cada cuatro—, y la lectura entera fallaba más de la mitad de
+# las veces con el juego en marcha. Eso dejaba a RoleRun sin curar, sin fijar
+# roles y sin PC.
+#
+# Reintentar NO afloja la garantía: se sigue exigiendo que dos lecturas seguidas
+# coincidan byte a byte y que cada PK4 pase su checksum. Solo se es paciente.
+LECTURAS_ESTABLES_MAXIMAS = 8
 # Un dieciseisavo de la RAM del DS. Es lo mínimo que puede medir la reserva que
 # contiene el mapeo del juego; por debajo de eso no vale la pena ni mirar.
 TAMANO_RAM_DS = 0x00400000
@@ -266,23 +284,31 @@ class HgssMelonDSReader:
         self._resolved_at = 0.0
 
     def _capture_nominal_candidate(self, leer, allocation: int):
-        """Doble lectura estable de contador + equipo en una reserva concreta."""
+        """Doble lectura estable de contador + equipo en una reserva concreta.
+
+        Se reintenta **solo** cuando las dos lecturas no coinciden, que es lo
+        único que significa «el juego estaba escribiendo justo ahora». Los dos
+        veredictos de «esto no es un equipo» —contador imposible o PK4 que no
+        pasa su checksum— no se reintentan nunca: repetirlos sobre las 365
+        reservas del proceso costaría tiempo para llegar a la misma conclusión.
+        """
         direccion_contador = int(allocation) + (self.memory.party_count - DS_RAM_BASE)
-        contador_1 = leer(direccion_contador, 1)[0]
-        if not 1 <= contador_1 <= MAX_PARTY:
-            return None
-        extension = contador_1 * PK4_PARTY_SIZE
         direccion_datos = int(allocation) + (self.memory.party_data - DS_RAM_BASE)
-        crudo_1 = leer(direccion_datos, extension)
-        contador_2 = leer(direccion_contador, 1)[0]
-        crudo_2 = leer(direccion_datos, extension)
-        if contador_1 != contador_2 or crudo_1 != crudo_2:
-            return None
-        try:
-            equipo = parse_party_block(crudo_1, contador_1)
-        except HgssLiveError:
-            return None
-        return contador_1, crudo_1, equipo
+        for _intento in range(LECTURAS_ESTABLES_MAXIMAS):
+            contador_1 = leer(direccion_contador, 1)[0]
+            if not 1 <= contador_1 <= MAX_PARTY:
+                return None
+            extension = contador_1 * PK4_PARTY_SIZE
+            crudo_1 = leer(direccion_datos, extension)
+            contador_2 = leer(direccion_contador, 1)[0]
+            crudo_2 = leer(direccion_datos, extension)
+            if contador_1 != contador_2 or crudo_1 != crudo_2:
+                continue
+            try:
+                return contador_1, crudo_1, parse_party_block(crudo_1, contador_1)
+            except HgssLiveError:
+                return None
+        return None
 
     def _read_process(
         self, pid: int, nombre: str, *, known_allocation: int | None = None,
@@ -423,10 +449,19 @@ class HgssMelonDSReader:
             return buffer.raw
 
         try:
-            primera, segunda = leer_matriz(), leer_matriz()
-            if primera != segunda:
+            # Misma paciencia que con el equipo, y por el mismo motivo: la
+            # matriz mide 72 KiB, así que es aún más fácil pillarla a mitad de
+            # una escritura del juego. Fallar aquí dejaba a RoleRun sin PC.
+            primera = None
+            for _intento in range(LECTURAS_ESTABLES_MAXIMAS):
+                primera, segunda = leer_matriz(), leer_matriz()
+                if primera == segunda:
+                    break
+                primera = None
+            if primera is None:
                 raise HgssLiveError(
-                    "La matriz PC de HeartGold cambió durante la doble lectura."
+                    "La matriz PC de HeartGold no se quedó quieta el tiempo "
+                    "suficiente para leerla entera."
                 )
             vacios, dentro = parse_pc_matrix(primera)
             return HgssPCRead(
@@ -462,10 +497,15 @@ class HgssMelonDSReader:
             )
 
         try:
-            primera, segunda = capturar(), capturar()
-            if primera != segunda:
+            primera = None
+            for _intento in range(LECTURAS_ESTABLES_MAXIMAS):
+                primera, segunda = capturar(), capturar()
+                if primera == segunda:
+                    break
+                primera = None
+            if primera is None:
                 raise HgssLiveError(
-                    "Los datos del entrenador cambiaron durante la doble lectura."
+                    "Los datos del entrenador de HeartGold no se quedaron quietos."
                 )
             dinero, johto, kanto = primera
             if dinero > MONEY_MAX:

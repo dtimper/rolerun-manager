@@ -41,6 +41,15 @@ _PROCESS_VM_READ = 0x0010
 _PROCESS_VM_WRITE = 0x0020
 _PROCESS_VM_OPERATION = 0x0008
 _PROCESS_QUERY_INFORMATION = 0x0400
+# Cuántas veces se intenta la transacción entera antes de rendirse.
+#
+# La RAM de HeartGold dentro de melonDS devuelve lecturas rotas de vez en
+# cuando -medido: 121 de 3000 tripletes de lecturas seguidas salieron los tres
+# distintos-, y una escritura puede caer justo en uno de esos huecos. Solo se
+# reintenta cuando el rollback ha quedado **confirmado**: eso demuestra que la
+# memoria es coherente y que lo que falló fue el intento, no la partida. Si el
+# rollback no se confirma, no se reintenta nada y se avisa.
+INTENTOS_DE_ESCRITURA = 3
 
 if _KERNEL32 is not None:
     _KERNEL32.WriteProcessMemory.argtypes = [
@@ -165,7 +174,7 @@ class HgssMelonDSWriter:
                     f"El rollback de {que} en HeartGold no se pudo confirmar; no guardes."
                 )
 
-        try:
+        def intentar() -> HgssPartyRead:
             self._write_process_bytes(antes.process_id, destino, bytes(crudo_nuevo))
             despues = self.reader.read_party()
             if despues.count != antes.count or despues.raw != bytes(crudo_nuevo):
@@ -176,9 +185,18 @@ class HgssMelonDSWriter:
                     raise HgssLiveError("La identidad verificada de HeartGold no coincide.")
                 verificar(verificado, hueco)
             return despues
-        except Exception:
-            deshacer()
-            raise
+
+        for intento in range(INTENTOS_DE_ESCRITURA):
+            try:
+                return intentar()
+            except Exception:
+                # Se deshace siempre. Si el rollback se confirma, la memoria es
+                # coherente y el fallo fue del intento: se puede repetir. Si no
+                # se confirma, `deshacer` lanza y no se reintenta nada.
+                deshacer()
+                if intento == INTENTOS_DE_ESCRITURA - 1:
+                    raise
+        raise HgssLiveError(f"No se pudo escribir {que} en HeartGold.")
 
     # ------------------------------------------------------------------
     # Capacidades

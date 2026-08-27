@@ -234,6 +234,7 @@ class _MelonDSFalso:
             b"".join(_bloque(indice) for indice in range(cuantos))
         )
         self.escrituras: list[bytes] = []
+        self.original = bytes(self.raw)
         self.process_id = 4242
 
     def read_party(self) -> HgssPartyRead:
@@ -245,24 +246,36 @@ class _MelonDSFalso:
 
 
 class _WriterDePrueba(HgssMelonDSWriter):
-    def __init__(self, emulador: _MelonDSFalso, *, corrompe: bool = False,
+    """El writer real contra un búfer, con la memoria estropeable a voluntad.
+
+    ``corrompe`` dice cuántos intentos de escritura salen mal. Con 1 se prueba
+    que un fallo puntual se reintenta; con un número grande, que al final se
+    rinde y deja la partida como estaba.
+    """
+
+    def __init__(self, emulador: _MelonDSFalso, *, corrompe: int = 0,
                  rollback_roto: bool = False) -> None:
         super().__init__(reader=emulador)
         self.emulador = emulador
-        self.corrompe = corrompe
+        self.corrompe = int(corrompe)
         self.rollback_roto = rollback_roto
-        self.primera = True
+        self.escrituras_reales = 0
 
     def _write_process_bytes(self, process_id, host_address, payload) -> None:
         self.emulador.escrituras.append(bytes(payload))
-        if self.rollback_roto and not self.primera:
-            return          # el rollback no llega a la memoria
-        if self.corrompe and self.primera:
-            self.primera = False
-            # Se escribe otra cosa: simula que el juego pisó lo escrito.
-            self.emulador.raw = bytearray(_bloque(5) + bytes(payload)[PK4_PARTY_SIZE:])
+        restaurando = bytes(payload) == bytes(self.emulador.original)
+        if restaurando:
+            if self.rollback_roto:
+                return      # el rollback no llega a la memoria
+            self.emulador.raw = bytearray(payload)
             return
-        self.primera = False
+        self.escrituras_reales += 1
+        if self.escrituras_reales <= self.corrompe:
+            # Se escribe otra cosa: simula que la escritura no llegó entera.
+            self.emulador.raw = bytearray(
+                _bloque(5) + bytes(payload)[PK4_PARTY_SIZE:]
+            )
+            return
         self.emulador.raw = bytearray(payload)
 
 
@@ -345,24 +358,42 @@ def test_sin_peticiones_no_se_escribe() -> None:
     assert emulador.escrituras == []
 
 
-def test_si_el_readback_no_coincide_se_deshace_todo() -> None:
+def test_una_escritura_que_no_llega_se_reintenta() -> None:
+    """La RAM de HeartGold devuelve lecturas rotas de vez en cuando.
+
+    Medido sobre la partida real: de 3000 tripletes de lecturas seguidas, 121
+    salieron los tres distintos. Rendirse al primer intento es lo que dejaba a
+    RoleRun sin curar ni fijar roles.
+    """
+    emulador = _MelonDSFalso()
+    writer = _WriterDePrueba(emulador, corrompe=1)
+
+    despues = writer.write_party_roles(
+        emulador.read_party(), [_peticion(emulador, 1)],
+    )
+    assert despues.pokemon[1].evs == (252, 0, 0, 252, 6, 0)
+
+
+def test_si_no_hay_manera_se_deshace_todo_y_se_avisa() -> None:
     emulador = _MelonDSFalso()
     original = bytes(emulador.raw)
-    writer = _WriterDePrueba(emulador, corrompe=True)
+    writer = _WriterDePrueba(emulador, corrompe=99)
 
     with pytest.raises(HgssLiveError, match="readback"):
         writer.write_party_roles(emulador.read_party(), [_peticion(emulador, 1)])
 
     assert bytes(emulador.raw) == original, "la partida quedó a medias"
-    assert len(emulador.escrituras) == 2, "no se intentó el rollback"
 
 
-def test_si_el_rollback_tampoco_se_confirma_se_dice_claramente() -> None:
+def test_si_el_rollback_tampoco_se_confirma_se_dice_claramente_y_no_se_reintenta() -> None:
+    # Sin rollback confirmado no se sabe cómo quedó la memoria, así que volver a
+    # escribir encima sería peor.
     emulador = _MelonDSFalso()
-    writer = _WriterDePrueba(emulador, corrompe=True, rollback_roto=True)
+    writer = _WriterDePrueba(emulador, corrompe=99, rollback_roto=True)
 
     with pytest.raises(HgssLiveError, match="no guardes"):
         writer.write_party_roles(emulador.read_party(), [_peticion(emulador, 1)])
+    assert writer.escrituras_reales == 1, "no debería haber reintentado"
 
 
 def test_curar_el_equipo_entero_es_una_sola_transaccion() -> None:

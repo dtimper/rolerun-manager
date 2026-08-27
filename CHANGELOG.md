@@ -1,6 +1,44 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.74 — HeartGold: curar, fijar roles y el PC fallaban por impaciencia
+
+Con el juego en marcha, RoleRun no curaba, no fijaba roles, no aceptaba un
+cambio de rol y avisaba de que no podía leer el PC. Todo era **el mismo fallo**,
+y estaba en la lectura, no en la interfaz: sin lectura no hay escritura, y sin
+enlace vivo la interfaz encola los cambios en vez de aplicarlos.
+
+**La medida, antes de tocar nada.** El ancla es correcta y no se mueve: el equipo
+apareció en `0x0227C304` en cinco búsquedas seguidas. Lo que pasa es que ese
+bloque **no se está quieto**. De 3000 tripletes de lecturas seguidas, 129 no
+coincidieron, y en 121 de ellos salieron **las tres distintas** —o sea, no es un
+cambio que se asiente, es trasiego—. En parte de esas lecturas ni el checksum del
+primer miembro cuadraba.
+
+Quinta no necesitaba paciencia porque su bloque está quieto. Cuarta sí. Con la
+reserva ya localizada, la captura se rechazaba **41 de 161 veces**, y la lectura
+entera fallaba más de la mitad de las veces.
+
+**Lo que se ha cambiado no afloja ni una garantía.** Se sigue exigiendo que dos
+lecturas seguidas coincidan byte a byte y que cada PK4 pase su checksum; lo único
+que se hace ahora es reintentar hasta ocho veces cuando las dos lecturas no
+cuadran. Y solo en ese caso: un contador imposible o un checksum que no pasa
+siguen siendo un «no» inmediato, porque repetirlos sobre las 365 reservas del
+proceso solo costaría tiempo.
+
+Misma paciencia para el PC —72 KiB, aún más fácil de pillar a medias— y para los
+datos del entrenador.
+
+**La escritura también.** Una escritura puede caer en uno de esos huecos, así que
+la transacción se reintenta hasta tres veces, **pero solo si el rollback ha
+quedado confirmado**: eso demuestra que la memoria es coherente y que falló el
+intento, no la partida. Si el rollback no se confirma, no se reintenta nada.
+
+Medido después: 150 de 150 lecturas del equipo correctas, y 60 de 60 leyendo
+equipo, PC y entrenador seguidos, en 23 ms de media.
+
+Suite completa: **1668**.
+
 # v0.2.6-alpha.73 — HeartGold empieza a escribir: roles con sus EV y curación
 
 `app/hgss_write.py`, con el mismo contrato transaccional de quinta y sin saltarse

@@ -235,3 +235,72 @@ def test_el_lector_no_escribe_en_la_memoria_del_emulador() -> None:
     ).read_text(encoding="utf-8")
     for prohibida in ("WriteProcessMemory", "VirtualProtectEx", ".write("):
         assert prohibida not in fuente, f"el lector no debería usar {prohibida}"
+
+
+# --------------------------------------------------------------------------
+# La paciencia con una RAM que no se está quieta
+# --------------------------------------------------------------------------
+
+def test_la_captura_reintenta_cuando_las_dos_lecturas_no_cuadran() -> None:
+    """El bloque de equipo de HeartGold se lee roto de vez en cuando.
+
+    Medido el 27-08-2026 sobre la partida del usuario con el juego corriendo: de
+    3000 tripletes de lecturas seguidas, 121 salieron **los tres distintos**, y
+    en parte de ellos ni el checksum del primer miembro cuadraba. Rendirse al
+    primer intento hacía fallar la lectura más de la mitad de las veces, y eso
+    dejaba a RoleRun sin curar, sin fijar roles y sin PC.
+    """
+    from app.hgss_live import LECTURAS_ESTABLES_MAXIMAS, HgssMelonDSReader
+
+    crudo = _equipo(2)
+    lector = HgssMelonDSReader()
+    llamadas = {"n": 0}
+    basura = bytes(len(crudo))
+
+    def leer(direccion: int, tamano: int) -> bytes:
+        # El contador siempre sale bien; los datos, las dos primeras veces no.
+        if tamano == 1:
+            return bytes([2])
+        llamadas["n"] += 1
+        if llamadas["n"] <= 4:
+            return basura if llamadas["n"] % 2 else crudo
+        return crudo
+
+    resultado = lector._capture_nominal_candidate(leer, 0x1000)
+    assert resultado is not None, "se rindió antes de tiempo"
+    contador, publicado, equipo = resultado
+    assert contador == 2 and publicado == crudo and len(equipo) == 2
+    assert LECTURAS_ESTABLES_MAXIMAS >= 4
+
+
+def test_un_contador_imposible_no_se_reintenta() -> None:
+    """Repetirlo sobre las 365 reservas del proceso solo costaría tiempo."""
+    from app.hgss_live import HgssMelonDSReader
+
+    lector = HgssMelonDSReader()
+    llamadas = {"n": 0}
+
+    def leer(direccion: int, tamano: int) -> bytes:
+        llamadas["n"] += 1
+        return bytes([99])
+
+    assert lector._capture_nominal_candidate(leer, 0x1000) is None
+    assert llamadas["n"] == 1
+
+
+def test_un_bloque_que_no_es_un_equipo_no_se_reintenta() -> None:
+    from app.hgss_live import HgssMelonDSReader
+
+    lector = HgssMelonDSReader()
+    llamadas = {"datos": 0}
+    basura = bytes(PK4_PARTY_SIZE)
+
+    def leer(direccion: int, tamano: int) -> bytes:
+        if tamano == 1:
+            return bytes([1])
+        llamadas["datos"] += 1
+        return basura
+
+    assert lector._capture_nominal_candidate(leer, 0x1000) is None
+    # Dos lecturas -la doble- y ni una más: el checksum ya dijo que no.
+    assert llamadas["datos"] == 2
