@@ -431,3 +431,44 @@ def test_el_lector_sigue_sin_escribir_una_sola_vez() -> None:
         Path(__file__).resolve().parent.parent / "app" / "hgss_live.py"
     ).read_text(encoding="utf-8")
     assert "WriteProcessMemory" not in fuente
+
+
+# --------------------------------------------------------------------------
+# Los PP base: por qué la curación fallaba entera
+# --------------------------------------------------------------------------
+
+def test_curar_no_depende_de_que_la_rom_este_cargada() -> None:
+    """El registro de la partida real lo dijo con todas las letras.
+
+    «No se conocen los PP base del movimiento #44; no se cura con un valor
+    inventado.» El adaptador devolvía cero cuando no tenía la ROM delante, y un
+    cero paraba la curación entera. Ahora cae en la tabla de cuarta de PKHeX,
+    que es lo correcto en una partida sin randomizar.
+    """
+    from app.realtime.hgss_adapter import HgssRealTimeAdapter
+
+    adaptador = HgssRealTimeAdapter(rom_getter=lambda: None)
+    assert adaptador.base_pp_for(44) == 25        # Mordisco
+    assert adaptador.base_pp_for(1) == 35         # Placaje
+    # Un identificador que no existe sigue siendo «no lo sé».
+    assert adaptador.base_pp_for(9999) == 0
+
+    curado = parse_pk4_party(
+        pk4_party_healed(_bloque(), base_pp_for=adaptador.base_pp_for), 0,
+    )
+    assert curado.current_hp == curado.max_hp
+
+
+def test_con_la_rom_delante_manda_la_rom() -> None:
+    """Un randomizer puede cambiar los PP: la tabla estática no puede pisarla."""
+    from app.realtime.hgss_adapter import HgssRealTimeAdapter
+
+    class RomFalsa:
+        @staticmethod
+        def base_pp(move_id: int) -> int:
+            return 7 if int(move_id) == 44 else 0
+
+    adaptador = HgssRealTimeAdapter(rom_getter=RomFalsa)
+    assert adaptador.base_pp_for(44) == 7
+    # Y donde la ROM no dice nada, la tabla de PKHeX sigue estando.
+    assert adaptador.base_pp_for(1) == 35

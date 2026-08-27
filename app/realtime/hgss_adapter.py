@@ -80,6 +80,23 @@ class HgssRealTimeAdapter(RealTimeGameAdapter):
             }
         except Exception:
             self.move_names = {}
+        # PP base de cuarta, extraídos del mismo PKHeX.Core que usa el motor de
+        # guardados. Comprobados contra la ROM real: coinciden en los 467.
+        #
+        # Sin esto, curar dependía de que la ROM estuviera cargada, y cuando no
+        # lo estaba la curación fallaba entera con «no se conocen los PP base
+        # del movimiento #44». Con la ROM delante manda ella —un randomizer
+        # puede cambiarlos—; sin ella, esto es lo correcto.
+        ruta_pp = Path(__file__).resolve().parents[2] / "data" / "gen4_move_pp.json"
+        try:
+            crudo_pp = json.loads(ruta_pp.read_text(encoding="utf-8-sig"))
+            self.move_base_pp = {
+                int(clave): int(valor)
+                for clave, valor in dict(crudo_pp.get("pp", {})).items()
+                if int(valor) > 0
+            }
+        except Exception:
+            self.move_base_pp = {}
 
     # ------------------------------------------------------------------
     # Identidad
@@ -119,12 +136,16 @@ class HgssRealTimeAdapter(RealTimeGameAdapter):
         """PP del movimiento en **esta** partida. Cero significa «no demostrado».
 
         Con la ROM delante manda ella: un randomizer puede cambiar los PP, y
-        curar o enseñar con el valor original dejaría el PP mal escrito.
+        curar con el valor original dejaría el PP mal escrito. Sin ROM se usa la
+        tabla de cuarta de PKHeX, que es lo correcto en una partida sin
+        randomizar y evita que la curación falle entera por no tenerla.
         """
         rom = self.rom_getter()
-        if rom is None:
-            return 0
-        return int(rom.base_pp(int(move_id)))
+        if rom is not None:
+            desde_rom = int(rom.base_pp(int(move_id)))
+            if desde_rom > 0:
+                return desde_rom
+        return int(self.move_base_pp.get(int(move_id), 0))
 
     def _move_names_for(self, move_ids) -> list[str]:
         return [

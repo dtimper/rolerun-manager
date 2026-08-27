@@ -12994,10 +12994,14 @@ class RoleRunManager(ctk.CTk):
                 self._gen5_rom_last_error[game_key] = (
                     "No se encontró la ROM junto al guardado."
                 )
+                _anotar_intento_vivo(
+                    self, "rom-cuarta-no-encontrada", guardado=save_path,
+                )
                 return None
             perfil = load_gen4_rom_profile_cached(ruta, game_key)
         except Exception as exc:
             self._gen5_rom_last_error[game_key] = str(exc)
+            _anotar_intento_vivo(self, "rom-cuarta-fallida", motivo=str(exc))
             return None
         try:
             set_personal_override(perfil.game.key, perfil.personal, len(perfil.personal) // perfil.game.personal_count)
@@ -13005,8 +13009,10 @@ class RoleRunManager(ctk.CTk):
             # Una tabla que no encaja no se instala a medias.
             clear_personal_override(game_key)
             self._gen5_rom_last_error[game_key] = str(exc)
+            _anotar_intento_vivo(self, "rom-cuarta-sin-instalar", motivo=str(exc))
             return None
         self._gen5_rom_profiles[game_key] = perfil
+        _anotar_intento_vivo(self, "rom-cuarta-cargada", archivo=str(ruta.name))
         return perfil
 
     def _get_b2w2_rom_profile(self):

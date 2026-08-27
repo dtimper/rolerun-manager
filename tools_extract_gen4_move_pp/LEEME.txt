@@ -1,0 +1,13 @@
+Extractor de la tabla de PP base de cuarta generacion.
+
+Genera data/hgss_move_pp.json leyendo MoveInfo.GetPPTable(EntityContext.Gen4)
+del mismo PKHeX.Core.dll que usa el motor de guardados de RoleRun. No se usa
+la tabla de sexta generacion (data/oras_move_pp.json) porque los PP de varios
+movimientos cambiaron entre generaciones: darlos por equivalentes seria una
+analogia no demostrada.
+
+Uso, desde la raiz del repositorio y con el motor ya publicado:
+
+    dotnet run --project tools_extract_gen4_move_pp -- data2w2_move_pp.json
+
+Solo hay que volver a ejecutarlo si se actualiza PKHeX.Core.

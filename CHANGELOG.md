@@ -1,6 +1,30 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.77 — la curación fallaba por unos PP que nadie tenía
+
+El registro de escrituras vivas que entró en la versión anterior lo dijo con
+todas las letras a la primera:
+
+> «No se conocen los PP base del movimiento #44; no se cura con un valor
+> inventado.»
+
+El adaptador de cuarta pedía los PP a la ROM y devolvía **cero** si no la tenía
+delante, y un cero paraba la curación entera. El writer estaba bien: ejecutada a
+mano contra la partida real, la curación funcionó a la primera.
+
+Ahora hay `data/gen4_move_pp.json`, extraído del mismo PKHeX.Core que usa el
+motor de guardados. **Comprobado contra la ROM real del usuario: coincide en los
+467 movimientos.** Con la ROM delante sigue mandando la ROM —un randomizer puede
+cambiar los PP—; sin ella se usa esta tabla, que es lo correcto en una partida
+sin randomizar. Es el mismo reparto que ya tenía quinta.
+
+Y el registro anota también si la ROM de cuarta llegó a cargarse, porque sin ella
+las estadísticas base saldrían de PKHeX y una partida randomizada se vería mal.
+
+`tools_extract_gen4_move_pp/`, y dos pruebas nuevas.
+Suite completa: **1674**.
+
 # v0.2.6-alpha.76 — un Líbero sin sus EV ya no se queda callado
 
 El intercambio de roles **sí** pide las dos estadísticas del nuevo Líbero: se ha
