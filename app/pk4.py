@@ -351,3 +351,106 @@ def parse_pk4_boxed(data: bytes, slot: int) -> Pk4Pokemon | None:
         current_hp=0,
         max_hp=0,
     )
+
+
+# --------------------------------------------------------------------------
+# Mutaciones: devuelven un bloque nuevo, nunca tocan el que se les pasa
+# --------------------------------------------------------------------------
+
+def pk4_party_with_role(
+    block: bytes, *, markings, evs, base_stats: dict[str, int],
+) -> bytes:
+    """El PK4 de combate con marcas, EV y estadísticas recalculadas.
+
+    Cambiar los EV sin recalcular las estadísticas dejaría al Pokémon con los
+    valores viejos hasta que el juego los rehiciera por su cuenta, y el PS
+    máximo podría no cuadrar con el actual.
+
+    El daño recibido se conserva: si sube el PS máximo, el actual sube lo mismo.
+    Un Pokémon debilitado sigue debilitado.
+
+    A diferencia de quinta, la naturaleza **no se lee de un byte**: sale del PID,
+    y por eso no hay nada que escribir para ella.
+    """
+    if len(block) != PK4_PARTY_SIZE:
+        raise Pk4Error(f"El bloque PK4 de combate no mide {PK4_PARTY_SIZE} bytes.")
+    marcas = tuple(bool(valor) for valor in markings)
+    if len(marcas) != 6:
+        raise Pk4Error("Las marcas PK4 deben ser exactamente seis.")
+    valores_ev = tuple(int(valor) for valor in evs)
+    if len(valores_ev) != 6 or any(not 0 <= valor <= 255 for valor in valores_ev):
+        raise Pk4Error("Los EV PK4 deben ser seis valores entre 0 y 255.")
+    if sum(valores_ev) > 510:
+        raise Pk4Error("Los EV PK4 no pueden sumar más de 510.")
+
+    pid, orden, canonico = unshuffle_pk4(block[:PK4_STORED_SIZE])
+    canonico[PK4_MARKINGS] = sum(
+        1 << indice for indice, marcado in enumerate(marcas) if marcado
+    )
+    ev_por_clave = dict(zip(STAT_ORDER_ROLERUN, valores_ev))
+    for indice, clave in enumerate(STAT_ORDER_PERSONAL):
+        canonico[PK4_EV_BASE + indice] = ev_por_clave[clave]
+
+    palabra_iv = struct.unpack_from("<I", canonico, PK4_IV32)[0]
+    iv_por_clave = _ivs_from_word(palabra_iv)
+    extension = bytearray(_crypt(block[PK4_STORED_SIZE:], pid))
+    nivel = extension[PK4_LEVEL - PK4_STORED_SIZE]
+    ps_actual, ps_maximo = struct.unpack_from(
+        "<2H", extension, PK4_CURRENT_HP - PK4_STORED_SIZE,
+    )
+    finales = gen4_final_stats(
+        base=base_stats, ivs=iv_por_clave, evs=ev_por_clave,
+        level=nivel, nature_id=nature_from_pid(pid),
+    )
+    nuevo_maximo = int(finales["hp"])
+    if ps_actual <= 0:
+        nuevo_actual = 0
+    else:
+        nuevo_actual = max(
+            1, min(nuevo_maximo, int(ps_actual) + (nuevo_maximo - int(ps_maximo))),
+        )
+    struct.pack_into(
+        "<7H", extension, PK4_CURRENT_HP - PK4_STORED_SIZE,
+        nuevo_actual, nuevo_maximo,
+        finales["attack"], finales["defense"], finales["speed"],
+        finales["sp_attack"], finales["sp_defense"],
+    )
+    return reshuffle_pk4(pid, orden, canonico) + _crypt(bytes(extension), pid)
+
+
+def pk4_party_healed(block: bytes, *, base_pp_for) -> bytes:
+    """El PK4 de combate curado: PS al máximo, estado a cero y PP al tope.
+
+    ``base_pp_for`` lo aporta quien llama, que es quien sabe de qué partida se
+    trata. Un randomizer puede cambiar los PP de un movimiento, y curar con el
+    valor original dejaría el PP mal escrito.
+    """
+    if len(block) != PK4_PARTY_SIZE:
+        raise Pk4Error(f"El bloque PK4 de combate no mide {PK4_PARTY_SIZE} bytes.")
+    pid, orden, canonico = unshuffle_pk4(block[:PK4_STORED_SIZE])
+    extension = bytearray(_crypt(block[PK4_STORED_SIZE:], pid))
+
+    # El estado ocupa los cuatro bytes que abren la extensión.
+    struct.pack_into("<I", extension, PK4_STATUS - PK4_STORED_SIZE, 0)
+    ps_maximo = struct.unpack_from("<H", extension, PK4_MAX_HP - PK4_STORED_SIZE)[0]
+    if ps_maximo <= 0:
+        raise Pk4Error("El PK4 declara cero PS máximos; no se cura a ciegas.")
+    struct.pack_into("<H", extension, PK4_CURRENT_HP - PK4_STORED_SIZE, ps_maximo)
+
+    movimientos = struct.unpack_from("<4H", canonico, PK4_MOVES)
+    for indice, move_id in enumerate(movimientos):
+        if int(move_id) <= 0:
+            canonico[PK4_MOVE_PP + indice] = 0
+            continue
+        base = int(base_pp_for(int(move_id)))
+        if base <= 0:
+            raise Pk4Error(
+                f"No se conocen los PP base del movimiento #{int(move_id)}; "
+                "no se cura con un valor inventado."
+            )
+        mas_pp = int(canonico[PK4_MOVE_PP_UPS + indice])
+        if not 0 <= mas_pp <= 3:
+            raise Pk4Error("El PK4 declara unos Más PP fuera de rango.")
+        canonico[PK4_MOVE_PP + indice] = min(255, base * (5 + mas_pp) // 5)
+
+    return reshuffle_pk4(pid, orden, canonico) + _crypt(bytes(extension), pid)

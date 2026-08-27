@@ -1,6 +1,37 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.73 — HeartGold empieza a escribir: roles con sus EV y curación
+
+`app/hgss_write.py`, con el mismo contrato transaccional de quinta y sin saltarse
+un paso: relectura fresca, identidad fuerte por hueco, readback **con el parser
+de producción** —no con el que escribió—, verificación semántica y rollback
+completo. Si lo que se pide ya está puesto, no se escribe un solo byte.
+
+**Separado del lector a propósito.** `hgss_live` no contiene ni una llamada de
+escritura, y hay una prueba que lo vigila: así queda a la vista qué código puede
+estropear una Run.
+
+Lo que la mutación del PK4 respeta:
+
+- **Las estadísticas se recalculan** al cambiar los EV. Dejarlas viejas
+  descuadraría el PS máximo con el actual.
+- **El daño recibido se conserva.** Si sube el PS máximo, sube igual el actual;
+  y un Pokémon **debilitado sigue debilitado** —resucitarlo al aplicarle un rol
+  sería un desastre silencioso, porque la Run cuenta las bajas—.
+- **La naturaleza no se toca**, porque en cuarta sale del PID y no de un byte.
+- **No se cura con unos PP inventados**: si no se conocen los PP base de un
+  movimiento, se para. Jugando en randomizers pueden ser otros.
+
+En la interfaz, HeartGold entra en las listas de writer de rol y de curación
+completa. Los movimientos, el Equipo↔PC, el combate y las MT siguen fuera: no
+tienen writer demostrado y la ayuda lo dice.
+
+`tests/test_hgss_write.py` (22) y ampliación de `test_hgss_adapter.py` (26).
+Suite completa: **1664**.
+
+Pendiente de validación física: cambiar un rol y curar el equipo desde RoleRun.
+
 # v0.2.6-alpha.72 — HeartGold, dentro de RoleRun
 
 `app/realtime/hgss_adapter.py`, enchufado a la interfaz. Al abrir una Run de

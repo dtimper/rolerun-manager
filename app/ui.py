@@ -180,7 +180,7 @@ AUTOMATIC_BADGE_GAME_KEYS = {"oras", "xy", "sm", "usum"} | MELONDS_REALTIME_GAME
 # juego escribiera la marca del rol pero no sus EV: exactamente lo que le
 # pasaba a B2/W2 antes de tener writer.
 ROLE_EV_WRITER_GAME_KEYS = (
-    {"bdsp", "oras", "xy", "sm", "usum"} | MELONDS_GEN5_REALTIME_GAME_KEYS
+    {"bdsp", "oras", "xy", "sm", "usum"} | MELONDS_REALTIME_GAME_KEYS
 )
 # Equipo y PC son una sola pantalla desde la unificación de la vista. La barra
 # principal solo ofrece "team"; "pc" sobrevive como destino histórico y como
@@ -3551,7 +3551,7 @@ class RoleRunManager(ctk.CTk):
         máximo, estado a cero y PP al tope con los Más PP aplicados.
         """
         return self._active_azahar_realtime_key() in (
-            {"bdsp", "sm", "usum", "xy", "oras"} | MELONDS_GEN5_REALTIME_GAME_KEYS
+            {"bdsp", "sm", "usum", "xy", "oras"} | MELONDS_REALTIME_GAME_KEYS
         )
 
     # ---------- WELCOME / GAME SELECTION ----------
@@ -7430,9 +7430,10 @@ class RoleRunManager(ctk.CTk):
             "hgss": (
                 "Oro HeartGold/Plata SoulSilver lee en tiempo real equipo, cajas "
                 "PC, dinero y medallas desde melonDS mediante PK4 validados por "
-                "checksum e identidad. La escritura, el carril de combate y la "
-                "tabla de MT todavía no están demostrados: la Run se sigue "
-                "guardando por el motor de archivo, que sí está validado."
+                "checksum e identidad. Roles con su reparto de EV y curación "
+                "completa usan escritura transaccional con readback y rollback. "
+                "Los movimientos, el Equipo↔PC, el carril de combate y la tabla "
+                "de MT todavía no están demostrados y permanecen deshabilitados."
             ),
         }
         return descriptions.get(str(live_key or ""), "Backend realtime no identificado.")
@@ -7459,7 +7460,7 @@ class RoleRunManager(ctk.CTk):
         return bool(
             self.run.pending_changes
             and self._active_azahar_realtime_key() not in (
-                {"sm", "usum", "bdsp"} | MELONDS_GEN5_REALTIME_GAME_KEYS
+                {"sm", "usum", "bdsp"} | MELONDS_REALTIME_GAME_KEYS
             )
         )
 

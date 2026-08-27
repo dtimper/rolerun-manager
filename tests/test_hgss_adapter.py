@@ -147,9 +147,9 @@ def test_un_rol_ya_guardado_no_se_borra_porque_el_pk4_no_tenga_marcas(adaptador)
     adapter, lector = adaptador
     _crudo, equipo = _party(lector.cuantos)
     snapshot = adapter.capture_monitor(
-        _guardado(equipo, role="Muro"), save_path=None,
+        _guardado(equipo, role="Tanque"), save_path=None,
     )
-    assert {p.role for p in snapshot.game.party} == {"Muro"}
+    assert {p.role for p in snapshot.game.party} == {"Tanque"}
 
 
 def test_capture_full_y_capture_monitor_publican_lo_mismo(adaptador) -> None:
@@ -245,12 +245,14 @@ def test_un_pc_vacio_no_publica_huecos(adaptador) -> None:
 # Estado del adaptador
 # --------------------------------------------------------------------------
 
-def test_el_estado_publica_el_ancla_y_que_no_escribe(adaptador) -> None:
+def test_el_estado_publica_el_ancla_y_que_writers_tiene(adaptador) -> None:
     adapter, _lector = adaptador
     estado = adapter.runtime_state()
     assert estado["game"] == "hgss"
     assert estado["anchor"] == "0x0227C304"
-    assert estado["writes_enabled"] is False
+    # Solo roles y curación: declararlo evita que nadie suponga el resto.
+    assert estado["writes_enabled"] is True
+    assert estado["writers"] == ("roles", "heal")
 
 
 def test_reiniciar_el_estado_olvida_la_base(adaptador) -> None:
@@ -259,21 +261,26 @@ def test_reiniciar_el_estado_olvida_la_base(adaptador) -> None:
     assert lector.olvidos == 1
 
 
-def test_el_adaptador_no_ofrece_escritura_todavia(adaptador) -> None:
+def test_las_mt_siguen_sin_writer_en_cuarta(adaptador) -> None:
     from app.realtime.adapter import RealTimeAdapterError
 
     adapter, _lector = adaptador
     with pytest.raises(RealTimeAdapterError):
-        adapter.apply_changes(SaveGameData("HG", "SAV4HGSS", 4, None, [], {}), [])
-    with pytest.raises(RealTimeAdapterError):
         adapter.read_tm_inventory()
+
+
+def test_una_operacion_sin_writer_se_niega_con_su_motivo(adaptador) -> None:
+    adapter, lector = adaptador
+    _crudo, equipo = _party(lector.cuantos)
+    with pytest.raises(HgssLiveError, match="no tiene writer demostrado"):
+        adapter.apply_changes(_guardado(equipo), [object()])
 
 
 # --------------------------------------------------------------------------
 # Cómo entra en la interfaz
 # --------------------------------------------------------------------------
 
-def test_heartgold_entra_en_las_listas_de_lectura_pero_no_en_las_de_escritura() -> None:
+def test_heartgold_entra_en_las_listas_que_le_tocan() -> None:
     from app.ui import (
         AUTOMATIC_BADGE_GAME_KEYS,
         INSTANT_REALTIME_UI_GAME_KEYS,
@@ -291,10 +298,10 @@ def test_heartgold_entra_en_las_listas_de_lectura_pero_no_en_las_de_escritura() 
     for conjunto in (
         REALTIME_READ_GAME_KEYS, LIVE_PC_READ_GAME_KEYS,
         INSTANT_REALTIME_UI_GAME_KEYS, AUTOMATIC_BADGE_GAME_KEYS,
+        # Roles con su reparto de EV: escritura demostrada desde alpha.73.
+        ROLE_EV_WRITER_GAME_KEYS,
     ):
         assert "hgss" in conjunto
-    # Y no en la de writers: no existe ninguno todavía.
-    assert "hgss" not in ROLE_EV_WRITER_GAME_KEYS
 
 
 def test_la_ayuda_de_heartgold_no_promete_lo_que_no_tiene() -> None:
@@ -302,8 +309,11 @@ def test_la_ayuda_de_heartgold_no_promete_lo_que_no_tiene() -> None:
 
     texto = RoleRunManager._live_runtime_help_text("hgss")
     assert "medallas" in texto
+    # Lo que sí hace…
+    assert "rollback" in texto
+    # …y lo que todavía no.
     assert "no están demostrados" in texto
-    assert "escritura" in texto.lower()
+    assert "MT" in texto
 
 
 def test_el_pc_de_cuarta_declara_dieciocho_cajas() -> None:
@@ -331,3 +341,150 @@ def test_la_carga_de_mt_en_vivo_es_solo_de_quinta() -> None:
     )
     # Sin corchetes: una etiqueta que falte no puede tumbar la carga.
     assert "}.get(engine_key," in fuente
+
+
+# --------------------------------------------------------------------------
+# Traducción de los cambios de la Run a escrituras PK4
+# --------------------------------------------------------------------------
+
+class _WriterEspia:
+    """Anota lo que le piden en vez de tocar la memoria del emulador."""
+
+    def __init__(self):
+        self.roles = None
+        self.curaciones = None
+
+    def write_party_roles(self, party_read, writes):
+        self.roles = list(writes)
+        return party_read
+
+    def write_party_heal(self, party_read, heals, *, base_pp_for):
+        self.curaciones = list(heals)
+        return party_read
+
+
+def _identidad_de_run(miembro) -> str:
+    return (
+        f"{int(miembro.species_id)}:{int(miembro.pid)}:"
+        f"{int(miembro.tid)}:{int(miembro.sid)}"
+    )
+
+
+def test_un_cambio_de_rol_se_traduce_a_una_marca_y_sus_ev(adaptador) -> None:
+    from app.models import PendingRoleChange
+    from app.role_rules import ROLE_TO_MARKING
+
+    adapter, lector = adaptador
+    espia = _WriterEspia()
+    adapter.writer = espia
+    _crudo, equipo = _party(lector.cuantos)
+    objetivo = equipo[1]
+
+    adapter.apply_changes(_guardado(equipo), [PendingRoleChange(
+        pokemon_slot=objetivo.slot, pokemon=objetivo.nickname, species="",
+        old_role="SIN ROL", new_role="Tanque",
+        pokemon_identity=_identidad_de_run(objetivo),
+        new_evs=(252, 0, 252, 0, 6, 0),
+    )])
+
+    assert espia.roles is not None and len(espia.roles) == 1
+    escritura = espia.roles[0]
+    assert escritura.slot == 1
+    assert escritura.identity == (objetivo.pid, objetivo.tid, objetivo.sid)
+    assert escritura.evs == (252, 0, 252, 0, 6, 0)
+    # Una sola marca gobierna el rol.
+    assert sum(escritura.markings) == 1
+    assert escritura.markings[ROLE_TO_MARKING["Tanque"]] is True
+    # Las estadísticas base vienen en el orden de la tabla personal.
+    assert set(escritura.base_stats) == {
+        "hp", "attack", "defense", "speed", "sp_attack", "sp_defense",
+    }
+
+
+def test_un_rol_sobre_alguien_que_no_esta_en_el_equipo_no_se_escribe(adaptador) -> None:
+    from app.models import PendingRoleChange
+
+    adapter, lector = adaptador
+    espia = _WriterEspia()
+    adapter.writer = espia
+    _crudo, equipo = _party(lector.cuantos)
+
+    with pytest.raises(HgssLiveError, match="no está de forma única"):
+        adapter.apply_changes(_guardado(equipo), [PendingRoleChange(
+            pokemon_slot=0, pokemon="", species="", old_role="SIN ROL",
+            new_role="Tanque", pokemon_identity="1:2:3:4", new_evs=(0,) * 6,
+        )])
+    assert espia.roles is None
+
+
+def test_un_rol_que_no_existe_se_rechaza_antes_de_escribir(adaptador) -> None:
+    from app.models import PendingRoleChange
+
+    adapter, lector = adaptador
+    espia = _WriterEspia()
+    adapter.writer = espia
+    _crudo, equipo = _party(lector.cuantos)
+    objetivo = equipo[0]
+
+    with pytest.raises(HgssLiveError, match="no reconocido"):
+        adapter.apply_changes(_guardado(equipo), [PendingRoleChange(
+            pokemon_slot=0, pokemon=objetivo.nickname, species="",
+            old_role="SIN ROL", new_role="Inventado",
+            pokemon_identity=_identidad_de_run(objetivo), new_evs=(0,) * 6,
+        )])
+    assert espia.roles is None
+
+
+def test_una_curacion_se_traduce_a_hueco_e_identidad(adaptador) -> None:
+    from app.models import PendingPartyHeal
+
+    adapter, lector = adaptador
+    espia = _WriterEspia()
+    adapter.writer = espia
+    _crudo, equipo = _party(lector.cuantos)
+
+    adapter.apply_changes(_guardado(equipo), [
+        PendingPartyHeal(
+            pokemon_slot=m.slot, pokemon=m.nickname, species="",
+            pokemon_identity=_identidad_de_run(m),
+        )
+        for m in equipo
+    ])
+
+    assert espia.curaciones == [
+        (m.slot, (m.pid, m.tid, m.sid)) for m in equipo
+    ]
+
+
+def test_despues_de_escribir_el_guardado_publicado_lo_dice(adaptador) -> None:
+    from app.models import PendingPartyHeal
+
+    adapter, lector = adaptador
+    adapter.writer = _WriterEspia()
+    _crudo, equipo = _party(lector.cuantos)
+
+    resultado = adapter.apply_changes(_guardado(equipo), [
+        PendingPartyHeal(
+            pokemon_slot=0, pokemon=equipo[0].nickname, species="",
+            pokemon_identity=_identidad_de_run(equipo[0]),
+        ),
+    ])
+    assert resultado.applied_count == 1
+    assert resultado.game.raw["writes_enabled"] is True
+    assert resultado.game.raw["live_write"] is True
+
+
+def test_la_curacion_completa_ya_esta_disponible_en_heartgold() -> None:
+    """El botón CURAR EQUIPO no debe salir sin writer detrás.
+
+    Pasó en quinta: en alpha.16 se renderizaba sin tenerlo, encolaba seis
+    curaciones que nadie escribía y dejaba la sesión viva sin lecturas, porque
+    el monitor exige la cola vacía.
+    """
+    import inspect
+
+    from app.ui import RoleRunManager
+
+    fuente = inspect.getsource(RoleRunManager._live_party_heal_available)
+    assert "MELONDS_REALTIME_GAME_KEYS" in fuente
+    assert "MELONDS_GEN5_REALTIME_GAME_KEYS" not in fuente

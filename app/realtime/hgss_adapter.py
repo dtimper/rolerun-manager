@@ -17,6 +17,7 @@ DOS COSAS PROPIAS DE CUARTA QUE ESTE ADAPTADOR TIENE QUE RESPETAR
 """
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 from ..boxed_metadata import (
@@ -26,8 +27,11 @@ from ..gen4_memory import GEN4_MEMORY, Gen4Memory
 from ..hgss_live import (
     PC_BOX_SLOT_COUNT, HgssLiveError, HgssMelonDSReader,
 )
+from ..hgss_write import HgssMelonDSWriter, HgssRoleWrite
+from ..models import PendingPartyHeal, PendingRoleChange
+from ..pk4 import STAT_ORDER_PERSONAL
 from ..pokemon_stats import nature_presentation, stat_dict
-from ..role_rules import role_from_markings
+from ..role_rules import ROLE_TO_MARKING, canonical_role, role_from_markings
 from ..save_engine_client import SaveGameData, SavePokemon
 from .adapter import RealTimeGameAdapter
 from .models import (
@@ -35,6 +39,16 @@ from .models import (
 )
 
 PC_BOX_COUNT_HGSS = 18
+
+
+@dataclass(frozen=True, slots=True)
+class HgssRealTimeWriteResult:
+    game: SaveGameData
+    process: object
+    attempts: int
+    applied_count: int
+    memory_watches: tuple = ()
+    already_applied: bool = False
 
 
 class HgssRealTimeAdapter(RealTimeGameAdapter):
@@ -53,6 +67,7 @@ class HgssRealTimeAdapter(RealTimeGameAdapter):
         )
         self.memory = descriptor
         self.reader = reader or HgssMelonDSReader(descriptor)
+        self.writer = HgssMelonDSWriter(self.reader)
         self.role_layout_getter = role_layout_getter or (lambda: 2)
         # Datos de juego leídos de la ROM que melonDS tiene cargada.
         self.rom_getter = rom_getter or (lambda: None)
@@ -72,7 +87,33 @@ class HgssRealTimeAdapter(RealTimeGameAdapter):
 
     @staticmethod
     def _strong_identity(pokemon) -> tuple[int, int, int]:
+        """La terna que identifica a un Pokémon dentro de la partida."""
         return int(pokemon.pid or 0), int(pokemon.tid or 0), int(pokemon.sid or 0)
+
+    @staticmethod
+    def _run_identity(miembro) -> str:
+        """La misma identidad que usa ``RunProjectService.pokemon_identity_key``.
+
+        No se reinventa el formato: si el adaptador usara otro, un cambio de rol
+        no encontraría nunca a su Pokémon.
+        """
+        return (
+            f"{int(miembro.species_id)}:{int(miembro.pid)}:"
+            f"{int(miembro.tid)}:{int(miembro.sid)}"
+        )
+
+    def _localizar(self, party_read, change, que: str):
+        """El único miembro del equipo con la identidad que pide el cambio."""
+        identidad = str(getattr(change, "pokemon_identity", "") or "")
+        candidatos = [
+            (indice, miembro) for indice, miembro in enumerate(party_read.pokemon)
+            if self._run_identity(miembro) == identidad
+        ]
+        if len(candidatos) != 1:
+            raise HgssLiveError(
+                f"El Pokémon de {que} no está de forma única en el equipo de HeartGold."
+            )
+        return candidatos[0]
 
     def base_pp_for(self, move_id: int) -> int:
         """PP del movimiento en **esta** partida. Cero significa «no demostrado».
@@ -312,6 +353,65 @@ class HgssRealTimeAdapter(RealTimeGameAdapter):
         return tuple(salida)
 
     # ------------------------------------------------------------------
+    # Escritura
+    # ------------------------------------------------------------------
+
+    def _role_write_for(self, party_read, change: PendingRoleChange) -> HgssRoleWrite:
+        """Traduce un cambio de rol de RoleRun a una escritura PK4 concreta."""
+        hueco, miembro = self._localizar(party_read, change, "el cambio de rol")
+        rol = canonical_role(change.new_role)
+        marca = ROLE_TO_MARKING.get(rol)
+        if marca is None:
+            raise HgssLiveError(f"Rol de HeartGold no reconocido: {change.new_role!r}.")
+        # Una sola marca gobierna el rol; «SIN ROL» las deja todas a cero. Es el
+        # mismo contrato que `role_from_markings` usa al leer.
+        marcas = tuple(indice == marca for indice in range(6))
+        evs = tuple(int(valor) for valor in (change.new_evs or miembro.evs))
+        base = dict(zip(
+            STAT_ORDER_PERSONAL,
+            base_stats_for(self.game_key, int(miembro.species_id), int(miembro.form)),
+        ))
+        return HgssRoleWrite(
+            slot=hueco,
+            identity=(int(miembro.pid), int(miembro.tid), int(miembro.sid)),
+            markings=marcas, evs=evs, base_stats=base,
+        )
+
+    def _heal_target_for(self, party_read, change: PendingPartyHeal):
+        hueco, miembro = self._localizar(party_read, change, "la curación")
+        return hueco, (int(miembro.pid), int(miembro.tid), int(miembro.sid))
+
+    def _resultado(self, current: SaveGameData, aplicados: int):
+        vivo = self._capture(current, 0)
+        vivo.game.raw["writes_enabled"] = True
+        vivo.game.raw["live_write"] = True
+        return HgssRealTimeWriteResult(vivo.game, vivo.process, 2, aplicados)
+
+    def apply_changes(self, current: SaveGameData, changes):
+        """Roles y curación. Lo demás sigue sin writer demostrado en cuarta."""
+        cambios = list(changes)
+        if not cambios:
+            raise HgssLiveError("No hay ningún cambio de HeartGold que aplicar.")
+
+        if all(isinstance(item, PendingRoleChange) for item in cambios):
+            party_read = self.reader.read_party()
+            escrituras = [self._role_write_for(party_read, item) for item in cambios]
+            self.writer.write_party_roles(party_read, escrituras)
+            return self._resultado(current, len(escrituras))
+
+        if all(isinstance(item, PendingPartyHeal) for item in cambios):
+            party_read = self.reader.read_party()
+            objetivos = [self._heal_target_for(party_read, item) for item in cambios]
+            self.writer.write_party_heal(
+                party_read, objetivos, base_pp_for=self.base_pp_for,
+            )
+            return self._resultado(current, len(objetivos))
+
+        raise HgssLiveError(
+            "Esa operación todavía no tiene writer demostrado en HeartGold."
+        )
+
+    # ------------------------------------------------------------------
     # Estado
     # ------------------------------------------------------------------
 
@@ -321,7 +421,9 @@ class HgssRealTimeAdapter(RealTimeGameAdapter):
             "game": self.game_key,
             "anchor": f"0x{self.memory.party_data:08X}",
             "block_base": f"0x{self.memory.block_base:08X}",
-            "writes_enabled": False,
+            # Solo roles y curación: lo demás sigue sin writer demostrado.
+            "writes_enabled": True,
+            "writers": ("roles", "heal"),
         }
 
     def reset_runtime_state(self) -> None:
