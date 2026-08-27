@@ -47,10 +47,19 @@ from dataclasses import dataclass
 SAVE_MONEY = 0x000078
 SAVE_MONEY_SIZE = 3
 SAVE_BADGES = 0x00007E
+# HeartGold reparte sus dieciseis medallas en dos bytes: Johto en 0x7E y Kanto
+# en 0x83. Sondeados por separado en PKHeX (`Badges` y `Badges16`).
+SAVE_BADGES_KANTO = 0x000083
 SAVE_COINS = 0x000084
 SAVE_PARTY_COUNT = 0x000094
 SAVE_PARTY_DATA = 0x000098
 SAVE_PC = 0x00F700
+# Reparto del PC, sondeado escribiendo en cuatro huecos concretos y mirando
+# donde caian: caja 1 hueco 1 en 0xF700, hueco 2 a 136 bytes, caja 2 a 0x1000 y
+# la ultima -caja 18 hueco 30- exactamente donde predice la cuenta.
+PC_BOX_COUNT = 18
+PC_BOX_SLOT_COUNT = 30
+PC_BOX_STRIDE = 0x1000
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +81,7 @@ class Gen4Memory:
     # Desplazamientos propios de este juego dentro del guardado.
     save_money: int = SAVE_MONEY
     save_badges: int = SAVE_BADGES
+    save_badges_kanto: int = SAVE_BADGES_KANTO
     save_party_count: int = SAVE_PARTY_COUNT
     save_party_data: int = SAVE_PARTY_DATA
     save_pc: int = SAVE_PC
@@ -96,6 +106,10 @@ class Gen4Memory:
     @property
     def badges(self) -> int:
         return self.block_base + self.save_badges
+
+    @property
+    def badges_kanto(self) -> int:
+        return self.block_base + self.save_badges_kanto
 
 
 GEN4_MEMORY: dict[str, Gen4Memory] = {

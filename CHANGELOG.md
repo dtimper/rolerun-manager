@@ -1,6 +1,39 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.71 — HeartGold se lee en vivo: equipo, PC y entrenador
+
+`app/hgss_live.py`, con la disciplina de quinta entera: doble lectura estable,
+validación antes de publicar, y **ambigüedad = error** en lugar de elegir un
+equipo al azar.
+
+Comprobado contra melonDS con la partida del usuario: los seis del equipo con
+sus PS, 3856 de dinero, cero medallas y el Bellsprout de la caja 1. La relectura
+con la base ya cacheada tarda **5 ms**.
+
+Dos cosas que la partida real enseñó y que están puestas a prueba:
+
+- **Un hueco vacío pasa el checksum.** No son 136 ceros: el juego deja un PK4
+  cifrado con semilla cero, que al descifrarlo da ceros cuya suma cuadra. Por
+  eso la especie se comprueba aparte; si no, el equipo saldría con un miembro
+  fantasma. Se vio en el sexto hueco de su propia partida.
+- **HeartGold reparte sus dieciséis medallas en dos bytes**, Johto en `0x7E` y
+  Kanto en `0x83`. Sondeados por separado en PKHeX.
+
+El PC se sondeó escribiendo en cuatro huecos concretos: 18 cajas de 30, hueco a
+136 bytes del anterior y caja a `0x1000` de la anterior.
+
+Un miembro del equipo que no cuadre invalida la lectura entera —publicar cinco
+de seis daría un equipo que el jugador no tiene—, pero un hueco ilegible del PC
+solo se cuenta como vacío: una caja con basura no puede dejar al jugador sin ver
+el resto de sus Pokémon.
+
+- `tests/test_hgss_live.py`: 20 pruebas, con la comprobación estructural que
+  habría cazado el `self.memory` dentro de un `@staticmethod` de alpha.57.
+- Suite completa: **1616**.
+
+Todavía no está enchufado a la interfaz: falta el adaptador.
+
 # v0.2.6-alpha.70 — HeartGold: el ancla, y la regla del espejo también en cuarta
 
 El equipo de HeartGold vive en `0x0227C304`. No se supuso: se buscaron en la RAM

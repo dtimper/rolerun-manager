@@ -1,6 +1,6 @@
 {
   "format": "rolerun-hgss-read-check-v1",
-  "captured_at": "2026-08-27T22:10:48.693669+02:00",
+  "captured_at": "2026-08-27T22:17:26.589617+02:00",
   "environment": "Oro HeartGold/Plata SoulSilver - melonDS",
   "ancla": "0x0227C304",
   "derivadas": {
@@ -10,7 +10,7 @@
     "medallas": "0x0227C2EA",
     "pc": "0x0228B96C"
   },
-  "dinero": 2104,
+  "dinero": 3856,
   "medallas": 0,
   "medallas_byte": 0,
   "equipo": [
@@ -18,13 +18,13 @@
       "slot": 0,
       "especie": 158,
       "mote": "TOTODILE",
-      "nivel": 10,
-      "ps": "31/31",
+      "nivel": 14,
+      "ps": "37/40",
       "movimientos": [
-        10,
+        44,
         43,
         55,
-        99
+        10
       ],
       "iv": [
         14,
@@ -35,12 +35,12 @@
         19
       ],
       "ev": [
+        4,
+        12,
         0,
-        6,
-        0,
+        2,
         1,
-        1,
-        2
+        6
       ],
       "naturaleza": 23,
       "habilidad": 67
@@ -173,8 +173,8 @@
       "slot": 5,
       "especie": 167,
       "mote": "SPINARAK",
-      "nivel": 5,
-      "ps": "19/19",
+      "nivel": 7,
+      "ps": "23/23",
       "movimientos": [
         40,
         81,
@@ -190,7 +190,7 @@
         18
       ],
       "ev": [
-        0,
+        1,
         4,
         0,
         0,

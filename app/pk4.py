@@ -21,12 +21,14 @@ Lo que cambia:
 
 CÓMO SE DEMOSTRARON LOS DESPLAZAMIENTOS
 
-No se dieron por buenos: se comprobaron contra el guardado real del usuario.
-El recorrido de ``tools_hgss_save_probe.py`` recorre el archivo entero, se
-queda con los bloques cuyo checksum cuadra y, para cada uno, recalcula las seis
-estadísticas con las bases que declara la ROM. Si el nivel, los IV, los EV o la
-naturaleza estuvieran mal leídos, los números no coincidirían con los que el
-propio juego dejó escritos al lado.
+No se dieron por buenos. Se comprobaron dos veces:
+
+* Contra **PKHeX**, que generó veinticuatro Pokémon cifrados —uno por cada
+  disposición de bloque— con valores conocidos. Todos los campos coinciden.
+* Contra **la partida real del usuario**: sus Pokémon se leen enteros y sus seis
+  estadísticas, recalculadas desde cero con la tabla personal, salen exactamente
+  las que el juego dejó escritas al lado. Si el nivel, los IV, los EV o la
+  naturaleza —que aquí sale del PID— estuvieran mal leídos, no cuadrarían.
 
 Este módulo no escribe nunca: solo interpreta bloques que le pasan.
 """
@@ -156,6 +158,23 @@ def reshuffle_pk4(pid: int, orden: tuple[int, ...], canonico: bytearray) -> byte
     cabecera = bytearray(canonico[:8])
     struct.pack_into("<H", cabecera, 6, checksum)
     return bytes(cabecera) + _crypt(cuerpo, checksum)
+
+
+def empty_pk4_stored() -> bytes:
+    """Como se ve un hueco vacio del PC, que NO son 136 ceros.
+
+    El juego deja un PK4 cifrado con semilla cero: al descifrarlo salen 128
+    ceros, su suma es cero y el checksum -tambien cero- cuadra. Se comprobo
+    sobre la partida real: el sexto hueco del equipo, con cinco Pokemon dentro,
+    pasa el checksum y declara la especie cero. Por eso la especie hay que
+    comprobarla aparte.
+    """
+    return bytes(8) + _crypt(bytes(128), 0)
+
+
+def empty_pk4_party() -> bytes:
+    """Como se ve un hueco vacio del equipo."""
+    return empty_pk4_stored() + _crypt(bytes(PK4_PARTY_SIZE - PK4_STORED_SIZE), 0)
 
 
 def nature_from_pid(pid: int) -> int:
