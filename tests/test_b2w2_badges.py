@@ -248,7 +248,7 @@ def test_la_rama_de_b2w2_procesa_el_valor() -> None:
     from app.ui import RoleRunManager
 
     fuente = inspect.getsource(RoleRunManager._finish_oras_live_reconciliation)
-    rama = fuente[fuente.index('== "b2w2"'):]
+    rama = fuente[fuente.index("in MELONDS_REALTIME_GAME_KEYS"):]
     corte = rama.index("_process_oras_health_snapshot")
     assert "_process_oras_badge_value" in rama[:corte], (
         "la medalla se procesa después de la salud: un cambio de equipo la retrasaría"

@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.57`
+- Versión de aplicación: `v0.2.6-alpha.58`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,32 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.58 — Blanco, conectado
+
+Blanco tiene ya su adaptador vivo, registrado junto al de Negro 2 y compartiendo
+con él lector, writer y contrato. Lo único propio es el descriptor de
+direcciones, medido contra el juego.
+
+- El adaptador recibe el descriptor; `key`, `game_key` y `display_name` pasan a
+  ser por instancia para que los dos convivan en el registro.
+- La familia de datos personales deja de estar escrita a mano: Blanco consulta
+  su tabla de 668 especies y Negro 2 la suya de 709. Consultar la equivocada
+  habría dado las estadísticas de otra especie a partir del índice 668.
+- La lectura de la ROM pasa a ser por juego (`_get_gen5_rom_profile`).
+- `MELONDS_REALTIME_GAME_KEYS` sustituye a los `== "b2w2"` repartidos por la
+  interfaz: nueve listas de juegos y quince comprobaciones dejan de enumerar a
+  mano. Tres pruebas que localizaban la rama por su texto se actualizan.
+
+**Lo que Blanco declara tener**: equipo, cajas PC, mochila, dinero y medallas,
+con roles, curación, movimientos y Equipo↔PC por el mismo writer transaccional.
+
+**Lo que declara no tener**: el carril de combate y la tabla de MT. No viven en
+el bloque del guardado, así que no salen del cálculo, y el texto de ayuda del
+backend lo dice en vez de prometerlo.
+
+- `tests/test_bw_memory.py`: 20 pruebas. Suite completa: 1385.
+- **Pendiente de validación física**: abrir Blanco en RoleRun y ver el equipo.
 
 ### v0.2.6 Alpha.57 — el lector de quinta deja de estar clavado a Negro 2
 

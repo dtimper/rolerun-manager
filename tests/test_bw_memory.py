@@ -213,3 +213,85 @@ def test_negro_2_no_niega_nada_de_eso() -> None:
     assert lector._demostrada(
         lector.memory.battle_presentation, "batalla",
     ) == B2W2.battle_presentation
+
+
+# --------------------------------------------------------------------------
+# Blanco llega hasta la interfaz
+# --------------------------------------------------------------------------
+
+def test_el_adaptador_de_blanco_se_identifica_como_suyo() -> None:
+    """Dos adaptadores del mismo tipo no pueden pisarse en el registro."""
+    from app.realtime.b2w2_adapter import B2W2RealTimeAdapter
+
+    b2w2 = B2W2RealTimeAdapter(memory=GEN5_MEMORY["b2w2"])
+    bw = B2W2RealTimeAdapter(memory=GEN5_MEMORY["bw"])
+
+    assert (b2w2.game_key, bw.game_key) == ("b2w2", "bw")
+    assert b2w2.key != bw.key
+    assert "Negro 2" in b2w2.display_name and "Negro 2" not in bw.display_name
+
+
+def test_sin_descriptor_el_adaptador_sigue_siendo_negro_2() -> None:
+    from app.realtime.b2w2_adapter import B2W2RealTimeAdapter
+
+    assert B2W2RealTimeAdapter().game_key == "b2w2"
+
+
+def test_los_dos_adaptadores_conviven_en_el_registro() -> None:
+    from app.realtime.b2w2_adapter import B2W2RealTimeAdapter
+    from app.realtime.registry import RealTimeRegistry
+
+    registro = RealTimeRegistry()
+    registro.register(B2W2RealTimeAdapter(memory=GEN5_MEMORY["b2w2"]))
+    registro.register(B2W2RealTimeAdapter(memory=GEN5_MEMORY["bw"]))
+
+    assert registro.require("b2w2").adapter.game_key == "b2w2"
+    assert registro.require("bw").adapter.game_key == "bw"
+
+
+def test_cada_adaptador_consulta_la_tabla_personal_de_su_juego() -> None:
+    """Blanco tiene 668 especies y Negro 2 tiene 709.
+
+    Consultar la tabla equivocada habría dado las estadísticas de otra especie
+    a partir del índice 668.
+    """
+    from app.realtime.b2w2_adapter import B2W2RealTimeAdapter
+
+    assert B2W2RealTimeAdapter(memory=GEN5_MEMORY["bw"]).game_key == "bw"
+    from app.boxed_metadata import base_stats_for
+
+    assert base_stats_for("bw", 495) == base_stats_for("b2w2", 495), "Snivy es Snivy"
+    # 700 existe en Negro 2 y no en Blanco: la tabla es más corta de verdad.
+    base_stats_for("b2w2", 700)
+    with pytest.raises(Exception):
+        base_stats_for("bw", 700)
+
+
+def test_blanco_entra_en_las_listas_de_la_interfaz() -> None:
+    """Sin esto el juego se abriría pero sin tiempo real."""
+    from app.ui import (
+        AUTOMATIC_BADGE_GAME_KEYS,
+        INSTANT_REALTIME_UI_GAME_KEYS,
+        LIVE_PC_READ_GAME_KEYS,
+        MELONDS_REALTIME_GAME_KEYS,
+        REALTIME_READ_GAME_KEYS,
+        ROLE_EV_WRITER_GAME_KEYS,
+    )
+
+    assert MELONDS_REALTIME_GAME_KEYS == {"b2w2", "bw"}
+    for conjunto in (
+        REALTIME_READ_GAME_KEYS, LIVE_PC_READ_GAME_KEYS,
+        INSTANT_REALTIME_UI_GAME_KEYS, AUTOMATIC_BADGE_GAME_KEYS,
+        ROLE_EV_WRITER_GAME_KEYS,
+    ):
+        assert "bw" in conjunto
+
+
+def test_la_ayuda_de_blanco_no_promete_lo_que_no_tiene() -> None:
+    """El carril de combate y las MT no están demostrados en Blanco."""
+    from app.ui import RoleRunManager
+
+    texto = RoleRunManager._live_runtime_help_text("bw")
+
+    assert "no están demostrados" in texto
+    assert "medallas" in texto

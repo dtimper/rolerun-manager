@@ -47,7 +47,7 @@ def test_la_rama_b2w2_cierra_el_ciclo_de_bajas() -> None:
     import inspect
 
     fuente = inspect.getsource(RoleRunManager._finish_oras_live_reconciliation)
-    rama = fuente[fuente.index('== "b2w2"'):]
+    rama = fuente[fuente.index("in MELONDS_REALTIME_GAME_KEYS"):]
     rama = rama[:rama.index("_schedule_oras_live_reconciliation")]
     assert "_process_oras_battle_state" in rama
     assert "_reconcile_pending_faints_against_party" in rama
@@ -62,7 +62,7 @@ def test_el_estado_de_combate_se_traduce_al_vocabulario_comun(probe, esperado) -
     import inspect
 
     fuente = inspect.getsource(RoleRunManager._finish_oras_live_reconciliation)
-    rama = fuente[fuente.index('== "b2w2"'):]
+    rama = fuente[fuente.index("in MELONDS_REALTIME_GAME_KEYS"):]
     assert '"trainer" if probe_state == "battle"' in rama
     assert '"none" if probe_state == "none"' in rama
 

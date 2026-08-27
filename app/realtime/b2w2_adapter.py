@@ -12,6 +12,7 @@ from ..b2w2_live import (
     PK5_PARTY_SIZE, PK5_STORED_SIZE, _crypt,
 )
 from ..b2w2_tm_service import build_tm_profile
+from ..gen5_memory import GEN5_MEMORY, Gen5Memory
 from ..models import (
     PendingChange, PendingInventoryChange, PendingPartyHeal, PendingRoleChange,
     PendingTeamChange, PendingTMTeach,
@@ -52,6 +53,14 @@ class B2W2RealTimeWriteResult:
 
 
 class B2W2RealTimeAdapter(RealTimeGameAdapter):
+    """Adaptador de quinta generación sobre melonDS.
+
+    Sirve para Negro 2/Blanco 2 y para Negro/Blanco: comparten el formato PK5,
+    el contrato del writer y el lector. Lo único que cambia es el descriptor de
+    direcciones y qué tabla personal se consulta, y las dos cosas vienen de
+    fuera. Sin argumentos se comporta como siempre: Negro 2.
+    """
+
     key = "b2w2-melonds-v026"
     game_key = "b2w2"
     display_name = "Pokémon Negro 2 / Blanco 2"
@@ -69,8 +78,22 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
                 pokemon.role = role
                 pokemon.role_symbol = ROLE_SYMBOLS.get(role, "")
 
-    def __init__(self, reader=None, role_layout_getter=None, rom_getter=None) -> None:
-        self.reader = reader or B2W2MelonDSReader()
+    _ETIQUETAS = {
+        "b2w2": ("b2w2-melonds-v026", "Pokémon Negro 2 / Blanco 2"),
+        "bw": ("bw-melonds-v026", "Pokémon Negro / Blanco"),
+    }
+
+    def __init__(
+        self, reader=None, role_layout_getter=None, rom_getter=None,
+        memory: Gen5Memory | None = None,
+    ) -> None:
+        descriptor = memory or (
+            getattr(reader, "memory", None) or GEN5_MEMORY["b2w2"]
+        )
+        self.memory = descriptor
+        self.game_key = descriptor.key
+        self.key, self.display_name = self._ETIQUETAS[descriptor.key]
+        self.reader = reader or B2W2MelonDSReader(descriptor)
         self.role_layout_getter = role_layout_getter or (lambda: 2)
         # Datos de juego leídos de la ROM que melonDS tiene cargada. Sin ella se
         # sigue funcionando con las tablas de quinta original, que es lo correcto
@@ -129,11 +152,10 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
             stats.append(value)
         return tuple(stats)
 
-    @classmethod
-    def _party_block(cls, stored: bytes, pokemon) -> bytes:
-        base = base_stats_for("b2w2", pokemon.species_id, pokemon.form)
-        level = boxed_level("b2w2", pokemon.species_id, pokemon.form, pokemon.experience)
-        stats = cls._calculated_stats(base, pokemon.ivs, pokemon.evs, level, pokemon.nature_id)
+    def _party_block(self, stored: bytes, pokemon) -> bytes:
+        base = base_stats_for(self.game_key, pokemon.species_id, pokemon.form)
+        level = boxed_level(self.game_key, pokemon.species_id, pokemon.form, pokemon.experience)
+        stats = self._calculated_stats(base, pokemon.ivs, pokemon.evs, level, pokemon.nature_id)
         extension = bytearray(PK5_PARTY_SIZE - PK5_STORED_SIZE)
         extension[4] = level
         struct.pack_into(
@@ -216,9 +238,9 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
             species = species_name(pokemon.species_id)
             if species.startswith("Especie #") and pokemon.nickname:
                 species = pokemon.nickname
-            base_binary = base_stats_for("b2w2", pokemon.species_id, pokemon.form)
+            base_binary = base_stats_for(self.game_key, pokemon.species_id, pokemon.form)
             level = boxed_level(
-                "b2w2", pokemon.species_id, pokemon.form, pokemon.experience,
+                self.game_key, pokemon.species_id, pokemon.form, pokemon.experience,
             )
             base_visible = tuple(base_binary[index] for index in (0, 1, 2, 4, 5, 3))
             slots[(pokemon.box, pokemon.slot)] = SavePokemon(
@@ -270,7 +292,7 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
         evs = tuple(int(value) for value in (change.new_evs or member.evs))
         base = dict(zip(
             STAT_ORDER_PERSONAL,
-            base_stats_for("b2w2", int(member.species_id), int(member.form)),
+            base_stats_for(self.game_key, int(member.species_id), int(member.form)),
         ))
         return B2W2RoleWrite(
             slot=slot,
@@ -590,7 +612,7 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
             species = species_name(pokemon.species_id)
             if species.startswith("Especie #") and pokemon.nickname:
                 species = pokemon.nickname
-            base_binary = base_stats_for("b2w2", pokemon.species_id, pokemon.form)
+            base_binary = base_stats_for(self.game_key, pokemon.species_id, pokemon.form)
             base_visible = tuple(base_binary[index] for index in (0, 1, 2, 4, 5, 3))
             party.append(SavePokemon(
                 slot=pokemon.slot,

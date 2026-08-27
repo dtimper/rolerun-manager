@@ -71,6 +71,7 @@ from .oras_rom_service import (
     discover_azahar_oras_source,
     load_oras_rom_tm_profile,
 )
+from .gen5_memory import GEN5_MEMORY
 from .gen5_rom_service import (
     discover_gen5_rom,
     load_gen5_rom_profile_cached,
@@ -141,17 +142,32 @@ DEFERRED_LIVE_TM_INVENTORY_GAME_KEYS = GEN7_REALTIME_GAME_KEYS | {"bdsp"}
 # Solo estos readers publican en esta frontera una matriz completa y enriquecida.
 # SM conserva su contrato incremental de overrides; incluirlo aquí borraría la
 # diferencia viva contra el guardado y alteraría otro backend sin evidencia.
-FULL_MATRIX_LIVE_PC_GAME_KEYS = {"sm", "usum", "bdsp", "b2w2"}
-LIVE_PC_READ_GAME_KEYS = GEN6_REALTIME_GAME_KEYS | GEN7_REALTIME_GAME_KEYS | {"bdsp", "b2w2"}
+# Quinta generación sobre melonDS. Comparten formato PK5, lector, adaptador y
+# writer; lo único propio de cada uno es su descriptor de direcciones, medido
+# contra el juego. Blanco entra en alpha.58 con equipo, PC, mochila, dinero y
+# medallas: su carril de batalla y su tabla de MT todavía no están demostrados
+# y el lector los niega con su motivo en vez de leer una dirección inventada.
+MELONDS_REALTIME_GAME_KEYS = {"b2w2", "bw"}
+FULL_MATRIX_LIVE_PC_GAME_KEYS = {"sm", "usum", "bdsp"} | MELONDS_REALTIME_GAME_KEYS
+LIVE_PC_READ_GAME_KEYS = (
+    GEN6_REALTIME_GAME_KEYS | GEN7_REALTIME_GAME_KEYS | {"bdsp"}
+    | MELONDS_REALTIME_GAME_KEYS
+)
 AZAHAR_REALTIME_GAME_KEYS = {"oras", "xy", "sm", "usum"}
-REALTIME_READ_GAME_KEYS = AZAHAR_REALTIME_GAME_KEYS | {"bdsp", "b2w2"}
-INSTANT_REALTIME_UI_GAME_KEYS = AZAHAR_REALTIME_GAME_KEYS | {"bdsp", "b2w2"}
-AUTOMATIC_BADGE_GAME_KEYS = {"oras", "xy", "sm", "usum", "b2w2"}
+REALTIME_READ_GAME_KEYS = (
+    AZAHAR_REALTIME_GAME_KEYS | {"bdsp"} | MELONDS_REALTIME_GAME_KEYS
+)
+INSTANT_REALTIME_UI_GAME_KEYS = (
+    AZAHAR_REALTIME_GAME_KEYS | {"bdsp"} | MELONDS_REALTIME_GAME_KEYS
+)
+AUTOMATIC_BADGE_GAME_KEYS = {"oras", "xy", "sm", "usum"} | MELONDS_REALTIME_GAME_KEYS
 # Backends cuyo writer de rol escribe además el reparto de EV del rol. Estaba
 # repetido como literal en siete sitios, y olvidar uno bastaba para que un
 # juego escribiera la marca del rol pero no sus EV: exactamente lo que le
 # pasaba a B2/W2 antes de tener writer.
-ROLE_EV_WRITER_GAME_KEYS = {"bdsp", "oras", "xy", "sm", "usum", "b2w2"}
+ROLE_EV_WRITER_GAME_KEYS = (
+    {"bdsp", "oras", "xy", "sm", "usum"} | MELONDS_REALTIME_GAME_KEYS
+)
 # Equipo y PC son una sola pantalla desde la unificación de la vista. La barra
 # principal solo ofrece "team"; "pc" sobrevive como destino histórico y como
 # página restaurable, pero ambas renderizan exactamente lo mismo. Todo lo que
@@ -361,12 +377,20 @@ class RoleRunManager(ctk.CTk):
         # melonDS, party PK5 y PS. No expone writers, PC ni batalla.
         # Datos de juego de B2/W2 leídos de la ROM que melonDS tiene cargada.
         # Se resuelve una sola vez por Run y se conserva mientras no cambie.
-        self._b2w2_rom_profile = None
-        self._b2w2_rom_checked_for: str | None = None
-        self._b2w2_rom_last_error: str | None = None
+        self._gen5_rom_profiles: dict[str, object | None] = {}
+        self._gen5_rom_checked_for: dict[str, str] = {}
+        self._gen5_rom_last_error: dict[str, str | None] = {}
         self.b2w2_realtime_adapter = B2W2RealTimeAdapter(
             role_layout_getter=lambda: self.native_save_engine.role_marker_layout,
-            rom_getter=lambda: self._get_b2w2_rom_profile(),
+            rom_getter=lambda: self._get_gen5_rom_profile("b2w2"),
+        )
+        # Blanco/Negro comparte adaptador, lector y writer con su segunda parte.
+        # Lo único propio es el descriptor de direcciones, medido contra el
+        # juego: nada se hereda por parecido.
+        self.bw_realtime_adapter = B2W2RealTimeAdapter(
+            role_layout_getter=lambda: self.native_save_engine.role_marker_layout,
+            rom_getter=lambda: self._get_gen5_rom_profile("bw"),
+            memory=GEN5_MEMORY["bw"],
         )
 
         self.realtime_registry = RealTimeRegistry()
@@ -376,6 +400,7 @@ class RoleRunManager(ctk.CTk):
         self.usum_realtime_core = self.realtime_registry.register(self.usum_realtime_adapter)
         self.bdsp_realtime_core = self.realtime_registry.register(self.bdsp_realtime_adapter)
         self.b2w2_realtime_core = self.realtime_registry.register(self.b2w2_realtime_adapter)
+        self.bw_realtime_core = self.realtime_registry.register(self.bw_realtime_adapter)
         # Alias al Core de la Run activa. _set_selected_game_engine lo cambia
         # antes de cargar cada partida, de modo que la UI nunca elige adaptadores.
         self.realtime_core = self.oras_realtime_core
@@ -3503,9 +3528,9 @@ class RoleRunManager(ctk.CTk):
         sin lecturas. Vuelve en alpha.26 con su writer transaccional: PS al
         máximo, estado a cero y PP al tope con los Más PP aplicados.
         """
-        return self._active_azahar_realtime_key() in {
-            "bdsp", "sm", "usum", "xy", "oras", "b2w2",
-        }
+        return self._active_azahar_realtime_key() in (
+            {"bdsp", "sm", "usum", "xy", "oras"} | MELONDS_REALTIME_GAME_KEYS
+        )
 
     # ---------- WELCOME / GAME SELECTION ----------
 
@@ -6133,7 +6158,7 @@ class RoleRunManager(ctk.CTk):
                 self._flush_sm_role_transition_after_pc_proof()
 
             should_render = bool(
-                live_key not in {"bdsp", "b2w2"}
+                live_key not in ({"bdsp"} | MELONDS_REALTIME_GAME_KEYS)
                 or error
                 or live_slots is None
                 or projection_changed
@@ -6148,7 +6173,7 @@ class RoleRunManager(ctk.CTk):
             # lectura anterior ya terminó y publicó (o rechazó) su captura. Ante
             # error detenemos el bucle para no castigar el emulador ni repetir avisos;
             # volver a entrar en CAJAS PC permite rearmarlo explícitamente.
-            if live_key in {"bdsp", "b2w2"} and not error and live_slots is not None:
+            if live_key in ({"bdsp"} | MELONDS_REALTIME_GAME_KEYS) and not error and live_slots is not None:
                 scheduler = getattr(self, "_schedule_bdsp_pc_poll", None)
                 if callable(scheduler):
                     scheduler()
@@ -6205,7 +6230,7 @@ class RoleRunManager(ctk.CTk):
                         reader = getattr(self, "usum_realtime_adapter" if live_key == "usum" else "sm_realtime_adapter", None)
                     elif live_key == "bdsp":
                         reader = getattr(self, "bdsp_realtime_adapter", None)
-                    elif live_key == "b2w2":
+                    elif live_key in MELONDS_REALTIME_GAME_KEYS:
                         reader = getattr(self, "b2w2_realtime_adapter", None)
                     else:
                         reader = getattr(self, "oras_live_reader", None)
@@ -6248,7 +6273,7 @@ class RoleRunManager(ctk.CTk):
             not self.current_game
             or not self._oras_live_active
             or live_key not in LIVE_PC_READ_GAME_KEYS
-            or (live_key not in {"bdsp", "b2w2"} and not self._oras_live_auto_apply_available())
+            or (live_key not in ({"bdsp"} | MELONDS_REALTIME_GAME_KEYS) and not self._oras_live_auto_apply_available())
         ):
             return
         self._schedule_oras_external_pc_reconcile(
@@ -6269,7 +6294,7 @@ class RoleRunManager(ctk.CTk):
             getattr(self, "active_page", "") not in TEAM_PC_PAGES
             or not getattr(self, "_oras_live_active", False)
             or not getattr(self, "current_game", None)
-            or self._active_azahar_realtime_key() not in {"bdsp", "b2w2"}
+            or self._active_azahar_realtime_key() not in ({"bdsp"} | MELONDS_REALTIME_GAME_KEYS)
             or self._floating_bar_is_visible()
         ):
             return False
@@ -7320,6 +7345,7 @@ class RoleRunManager(ctk.CTk):
         return {
             "xy": "X/Y", "sm": "Sol/Luna", "usum": "UltraSol/UltraLuna",
             "bdsp": "Perla Reluciente", "b2w2": "Negro 2/Blanco 2",
+            "bw": "Negro/Blanco",
         }.get(self._active_azahar_realtime_key(), "ORAS")
 
     def _active_azahar_realtime_display_name(self) -> str:
@@ -7329,6 +7355,7 @@ class RoleRunManager(ctk.CTk):
             "usum": "Pokémon UltraSol/UltraLuna",
             "bdsp": "Pokémon Perla Reluciente",
             "b2w2": "Pokémon Negro 2/Blanco 2",
+            "bw": "Pokémon Negro/Blanco",
         }.get(self._active_azahar_realtime_key(), "Omega Rubí/Zafiro Alfa")
 
     @staticmethod
@@ -7365,11 +7392,17 @@ class RoleRunManager(ctk.CTk):
                 "con precondiciones, readback y rollback."
             ),
             "b2w2": (
-                "Negro 2/Blanco 2 lee en tiempo real equipo, cajas PC, PS y "
-                "parálisis de combate desde melonDS mediante PK5 validados. "
-                "El movimiento PC→PC usa escritura transaccional validada. "
-                "Equipo↔PC, bajas y progreso permanecen deshabilitados hasta "
-                "disponer de evidencia independiente."
+                "Negro 2/Blanco 2 lee en tiempo real equipo, cajas PC, mochila, "
+                "dinero, medallas y el carril de combate desde melonDS mediante "
+                "PK5 validados. Roles, curación, movimientos, MT y Equipo↔PC "
+                "usan escritura transaccional con readback y rollback."
+            ),
+            "bw": (
+                "Negro/Blanco comparte lector y escritura con su segunda parte, "
+                "con sus propias direcciones medidas contra el juego: equipo, "
+                "cajas PC, mochila, dinero y medallas. El carril de combate y la "
+                "tabla de MT todavía no están demostrados y permanecen "
+                "deshabilitados en lugar de leer una dirección supuesta."
             ),
         }
         return descriptions.get(str(live_key or ""), "Backend realtime no identificado.")
@@ -7395,7 +7428,9 @@ class RoleRunManager(ctk.CTk):
         """
         return bool(
             self.run.pending_changes
-            and self._active_azahar_realtime_key() not in {"sm", "usum", "bdsp", "b2w2"}
+            and self._active_azahar_realtime_key() not in (
+                {"sm", "usum", "bdsp"} | MELONDS_REALTIME_GAME_KEYS
+            )
         )
 
     def _cancel_oras_initial_auto_sync(self) -> None:
@@ -7538,7 +7573,7 @@ class RoleRunManager(ctk.CTk):
                 pass
         transport_label = (
             "Ryujinx" if live_key == "bdsp" else
-            "melonDS" if live_key == "b2w2" else
+            "melonDS" if live_key in MELONDS_REALTIME_GAME_KEYS else
             "AzaharPlus" if live_key in GEN7_REALTIME_GAME_KEYS else
             "Azahar/Citra" if live_key == "xy" else "Azahar"
         )
@@ -7718,7 +7753,10 @@ class RoleRunManager(ctk.CTk):
 
     def _discard_b2w2_ghost_team_changes(self) -> int:
         """Retira proyecciones que B2/W2 nunca pudo escribir en la partida."""
-        if self._active_azahar_realtime_key() != "b2w2" or not self.project:
+        if (
+            self._active_azahar_realtime_key() not in MELONDS_REALTIME_GAME_KEYS
+            or not self.project
+        ):
             return 0
         pending = list(self.run.pending_changes)
         ghosts = [change for change in pending if isinstance(change, PendingTeamChange)]
@@ -7787,7 +7825,7 @@ class RoleRunManager(ctk.CTk):
                     # descartaba aquí antes de llegar al writer.
                     supported_ids.add(id(change))
                 continue
-            if live_key == "b2w2":
+            if live_key in MELONDS_REALTIME_GAME_KEYS:
                 if isinstance(change, (
                     PendingRoleChange, PendingPartyHeal, PendingInventoryChange,
                     PendingTMTeach, PendingChange,
@@ -8639,7 +8677,7 @@ class RoleRunManager(ctk.CTk):
                         adapter = getattr(
                             self,
                             "bdsp_realtime_adapter" if live_key == "bdsp"
-                            else "b2w2_realtime_adapter" if live_key == "b2w2"
+                            else f"{live_key}_realtime_adapter" if live_key in MELONDS_REALTIME_GAME_KEYS
                             else "usum_realtime_adapter" if live_key == "usum"
                             else "sm_realtime_adapter",
                             None,
@@ -9623,6 +9661,7 @@ class RoleRunManager(ctk.CTk):
                 backend = {
                     "bdsp": "Ryujinx",
                     "b2w2": "melonDS",
+                    "bw": "melonDS",
                 }.get(self._active_azahar_realtime_key(), "Azahar")
                 self.sync_status = (
                     f"◌ Reconectando {self._active_azahar_realtime_label()} en {backend}…"
@@ -9635,7 +9674,7 @@ class RoleRunManager(ctk.CTk):
 
         self._oras_live_monitor_failures = 0
 
-        if self._active_azahar_realtime_key() == "b2w2":
+        if self._active_azahar_realtime_key() in MELONDS_REALTIME_GAME_KEYS:
             # B2/W2 publica party, PC y el carril de presentación de combate.
             # KO permanece cerrado: todavía no hay writer de sustitución seguro.
             before_game = self.current_game
@@ -10307,7 +10346,7 @@ class RoleRunManager(ctk.CTk):
         self._cancel_oras_initial_auto_sync()
         self._oras_live_monitor_failures = 0
 
-        if self._active_azahar_realtime_key() == "b2w2":
+        if self._active_azahar_realtime_key() in MELONDS_REALTIME_GAME_KEYS:
             discarded_ghosts = self._discard_b2w2_ghost_team_changes()
             initial_battle = getattr(snapshot, "battle", None)
             initial_state = str(getattr(initial_battle, "state", "unknown") or "unknown")
@@ -10620,7 +10659,7 @@ class RoleRunManager(ctk.CTk):
 
     def _oras_live_unsupported_changes(self, changes) -> list[str]:
         """Describe operaciones no cubiertas por el adaptador vivo activo."""
-        if self._active_azahar_realtime_key() == "b2w2":
+        if self._active_azahar_realtime_key() in MELONDS_REALTIME_GAME_KEYS:
             labels = {
                 "PendingChange": "cambios de movimientos",
                 "PendingTMTeach": "enseñanza de MT",
@@ -12192,7 +12231,7 @@ class RoleRunManager(ctk.CTk):
             localized_description = str(metadata.get("description_es") or "").strip()
             if localized_description:
                 description = localized_description
-        elif key == "b2w2":
+        elif key in MELONDS_REALTIME_GAME_KEYS:
             # Potencia, precisión y PP salen de la ROM cargada: son los valores
             # de quinta generación y, si la partida está randomizada, los de
             # esta partida. Sin ROM no se enseña un número de otra generación.
@@ -12820,9 +12859,13 @@ class RoleRunManager(ctk.CTk):
     def _inventory_money_max_for_engine(engine_key: str) -> int:
         # B2/W2 escribe RAM en una dirección demostrada, y el único tope
         # demostrado para ella es el que usa la propia utilidad de RoleRun.
-        return 999_999 if str(engine_key) in {"bdsp", "b2w2"} else 9_999_999
+        return (
+            999_999
+            if str(engine_key) in ({"bdsp"} | MELONDS_REALTIME_GAME_KEYS)
+            else 9_999_999
+        )
 
-    def _get_b2w2_rom_profile(self):
+    def _get_gen5_rom_profile(self, game_key: str):
         """Datos de juego de la ROM que melonDS tiene cargada, o ``None``.
 
         Un randomizer cambia estadísticas base y datos de movimientos. Sin esto,
@@ -12831,30 +12874,31 @@ class RoleRunManager(ctk.CTk):
         ORAS y X/Y, aquí resuelto sin preguntar: melonDS guarda la partida junto
         a la ROM y con el mismo nombre.
 
-        Se intenta una sola vez por guardado. Un fallo no bloquea nada: RoleRun
-        sigue con las tablas de quinta original, que es lo correcto en una
-        partida sin randomizar, y lo dice en la cabecera.
+        Se intenta una sola vez por guardado y por juego. Un fallo no bloquea
+        nada: RoleRun sigue con las tablas de quinta original, que es lo correcto
+        en una partida sin randomizar.
         """
-        if str(getattr(self.save_engine, "key", "") or "") != "b2w2":
+        game_key = str(game_key)
+        if str(getattr(self.save_engine, "key", "") or "") != game_key:
             return None
         save_path = str(getattr(self.current_save, "path", "") or "")
         if not save_path:
             return None
-        if self._b2w2_rom_checked_for == save_path:
-            return self._b2w2_rom_profile
-        self._b2w2_rom_checked_for = save_path
-        self._b2w2_rom_profile = None
-        self._b2w2_rom_last_error = None
+        if self._gen5_rom_checked_for.get(game_key) == save_path:
+            return self._gen5_rom_profiles.get(game_key)
+        self._gen5_rom_checked_for[game_key] = save_path
+        self._gen5_rom_profiles[game_key] = None
+        self._gen5_rom_last_error[game_key] = None
         try:
-            ruta = discover_gen5_rom(save_path, "b2w2")
+            ruta = discover_gen5_rom(save_path, game_key)
             if ruta is None:
-                self._b2w2_rom_last_error = (
-                    "No se encontró la ROM de Negro 2/Blanco 2 junto al guardado."
+                self._gen5_rom_last_error[game_key] = (
+                    "No se encontró la ROM junto al guardado."
                 )
                 return None
-            perfil = load_gen5_rom_profile_cached(ruta, "b2w2")
+            perfil = load_gen5_rom_profile_cached(ruta, game_key)
         except Exception as exc:
-            self._b2w2_rom_last_error = str(exc)
+            self._gen5_rom_last_error[game_key] = str(exc)
             return None
         try:
             set_personal_override(
@@ -12862,18 +12906,25 @@ class RoleRunManager(ctk.CTk):
             )
         except Exception as exc:
             # Una tabla que no encaja no se instala a medias.
-            clear_personal_override("b2w2")
-            self._b2w2_rom_last_error = str(exc)
+            clear_personal_override(game_key)
+            self._gen5_rom_last_error[game_key] = str(exc)
             return None
-        self._b2w2_rom_profile = perfil
+        self._gen5_rom_profiles[game_key] = perfil
         return perfil
+
+    def _get_b2w2_rom_profile(self):
+        """Compatibilidad: el resto de la interfaz sigue preguntando por juego."""
+        return self._get_gen5_rom_profile(
+            str(getattr(self.save_engine, "key", "") or ""),
+        )
 
     def _forget_b2w2_rom_profile(self) -> None:
         """Olvida la ROM al cambiar de Run: la de otra partida sería peor que nada."""
-        self._b2w2_rom_profile = None
-        self._b2w2_rom_checked_for = None
-        self._b2w2_rom_last_error = None
-        clear_personal_override("b2w2")
+        self._gen5_rom_profiles.clear()
+        self._gen5_rom_checked_for.clear()
+        self._gen5_rom_last_error.clear()
+        for familia in ("b2w2", "bw"):
+            clear_personal_override(familia)
 
     def _get_b2w2_tm_profile(self):
         """Perfil de MT de B2/W2, leído de la partida que hay delante.
@@ -12908,8 +12959,8 @@ class RoleRunManager(ctk.CTk):
                 parent=self._dialog_parent(),
             )
             return None
-        if key == "b2w2":
-            # B2/W2 no pide ninguna ROM: la tabla se lee de la RAM del juego,
+        if key in MELONDS_REALTIME_GAME_KEYS:
+            # Quinta no pide ninguna ROM: la tabla se lee de la RAM del juego,
             # que es lo único correcto jugando en randomizers.
             return self._get_b2w2_tm_profile()
         if key == "bdsp":
@@ -13560,7 +13611,7 @@ class RoleRunManager(ctk.CTk):
     ) -> bool:
         """Invoca el modelo Equipo↔PC existente desde botones o drag."""
         if (
-            self._active_azahar_realtime_key() == "b2w2"
+            self._active_azahar_realtime_key() in MELONDS_REALTIME_GAME_KEYS
             and outgoing is None
             and len(self._projected_party()) >= 6
         ):
@@ -13663,7 +13714,9 @@ class RoleRunManager(ctk.CTk):
             return
         if intent.operation == "party-to-box":
             exact_destination = None
-            if self._active_azahar_realtime_key() in (*GEN7_REALTIME_GAME_KEYS, "xy", "b2w2"):
+            if self._active_azahar_realtime_key() in (
+                *GEN7_REALTIME_GAME_KEYS, "xy", *MELONDS_REALTIME_GAME_KEYS,
+            ):
                 box = int(target.get("box") or 0)
                 slot = int(target.get("slot") or 0)
                 if box > 0 and slot > 0:
@@ -13678,7 +13731,9 @@ class RoleRunManager(ctk.CTk):
             )
             return
         if intent.operation == "move-box-slot":
-            if self._active_azahar_realtime_key() not in {"usum", "xy", "b2w2"}:
+            if self._active_azahar_realtime_key() not in (
+                {"usum", "xy"} | MELONDS_REALTIME_GAME_KEYS
+            ):
                 game_label = self._active_azahar_realtime_label()
                 self._set_operation_status(
                     "warning", "DESTINO NO HABILITADO",
@@ -14921,7 +14976,9 @@ class RoleRunManager(ctk.CTk):
         su array ``saveItem`` y Gen7 sus bloques propios; ninguno se lee al pintar.
         """
         engine_key = str(getattr(self.save_engine, "key", "") or "")
-        if engine_key not in (*GEN7_REALTIME_GAME_KEYS, "bdsp", "oras", "xy", "b2w2"):
+        if engine_key not in (
+            *GEN7_REALTIME_GAME_KEYS, "bdsp", "oras", "xy", *MELONDS_REALTIME_GAME_KEYS,
+        ):
             if on_failed is not None:
                 on_failed()
             return
@@ -15304,7 +15361,7 @@ class RoleRunManager(ctk.CTk):
         is_sm = engine_key == "sm"
         is_usum = engine_key == "usum"
         is_gen7 = engine_key in GEN7_REALTIME_GAME_KEYS
-        is_b2w2 = engine_key == "b2w2"
+        is_b2w2 = engine_key in MELONDS_REALTIME_GAME_KEYS
         if engine_key not in {"bdsp", "oras", "xy", "sm", "usum", "b2w2"}:
             messagebox.showinfo(
                 "MTs todavía no disponibles",
@@ -16311,7 +16368,7 @@ class RoleRunManager(ctk.CTk):
                     adapter = getattr(
                         self,
                         "bdsp_realtime_adapter" if live_key == "bdsp"
-                        else "b2w2_realtime_adapter" if live_key == "b2w2"
+                        else f"{live_key}_realtime_adapter" if live_key in MELONDS_REALTIME_GAME_KEYS
                         else "usum_realtime_adapter" if live_key == "usum"
                         else "sm_realtime_adapter",
                         None,
@@ -16430,10 +16487,14 @@ class RoleRunManager(ctk.CTk):
         # una caché visual. Alpha.37 deja box/slot sin fijar y el writer demuestra
         # la matriz PC actual dentro de la propia transacción, escogiendo allí el
         # primer hueco realmente libre. Esto hace ENVIAR AL PC autosuficiente.
-        if (live_key in (*GEN7_REALTIME_GAME_KEYS, "xy", "bdsp", "b2w2")) and self._oras_live_auto_apply_available():
+        if (
+            live_key in (
+                *GEN7_REALTIME_GAME_KEYS, "xy", "bdsp", *MELONDS_REALTIME_GAME_KEYS,
+            )
+        ) and self._oras_live_auto_apply_available():
             if live_key in GEN7_REALTIME_GAME_KEYS and destination is not None:
                 destination_box, destination_slot = map(int, destination)
-            elif live_key in {"xy", "b2w2"}:
+            elif live_key in ({"xy"} | MELONDS_REALTIME_GAME_KEYS):
                 if destination is None:
                     # La ocupación visible de estos backends procede de RAM.
                     # Volver al save aquí puede elegir una casilla distinta.
@@ -16495,7 +16556,9 @@ class RoleRunManager(ctk.CTk):
         self.active_page = "team"
         self._smooth_render_page(preserve_scroll=True)
         if not (
-            self._active_azahar_realtime_key() in (*GEN7_REALTIME_GAME_KEYS, "xy", "bdsp", "b2w2")
+            self._active_azahar_realtime_key() in (
+                *GEN7_REALTIME_GAME_KEYS, "xy", "bdsp", *MELONDS_REALTIME_GAME_KEYS,
+            )
             and self._oras_live_auto_apply_available()
         ):
             self._show_team_management_toast("ENVÍO AL PC PREPARADO", pokemon.nickname or pokemon.species)
@@ -18630,8 +18693,10 @@ class RoleRunManager(ctk.CTk):
                 False,
             )
             return
-        is_b2w2_live = bool(engine_key == "b2w2" and self._oras_live_active)
-        if engine_key == "b2w2" and not is_b2w2_live:
+        is_b2w2_live = bool(
+            engine_key in MELONDS_REALTIME_GAME_KEYS and self._oras_live_active
+        )
+        if engine_key in MELONDS_REALTIME_GAME_KEYS and not is_b2w2_live:
             # B2/W2 solo tiene writer vivo. Encolar sin él dejaría el cambio
             # pendiente para siempre y el monitor vivo, que exige la cola vacía,
             # se quedaría congelado: es la clase de fallo que cerró alpha.27.

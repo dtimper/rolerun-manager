@@ -110,7 +110,7 @@ def test_la_rama_b2w2_del_monitor_publica_la_salud() -> None:
     import inspect
 
     fuente = inspect.getsource(RoleRunManager._finish_oras_live_reconciliation)
-    rama = fuente[fuente.index('== "b2w2"'):]
+    rama = fuente[fuente.index("in MELONDS_REALTIME_GAME_KEYS"):]
     rama = rama[:rama.index("_schedule_oras_live_reconciliation")]
     # Desde alpha.28 entra en el camino común completo, que además de publicar
     # la salud detecta las bajas.

@@ -1,6 +1,18 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.58 — Blanco, conectado
+
+Adaptador vivo de Blanco, registrado junto al de Negro 2 y compartiendo lector,
+writer y contrato. Lo único propio es el descriptor de direcciones.
+
+- `key`, `game_key` y `display_name` pasan a ser por instancia.
+- Cada juego consulta **su** tabla personal: 668 especies frente a 709.
+- `MELONDS_REALTIME_GAME_KEYS` sustituye a los `== "b2w2"` de la interfaz.
+- Blanco declara equipo, PC, mochila, dinero y medallas; y declara **no** tener
+  carril de combate ni tabla de MT, en vez de prometerlos.
+- `tests/test_bw_memory.py`: 20 pruebas. Suite completa: 1385.
+
 # v0.2.6-alpha.57 — el lector de quinta, genérico
 
 El lector recibe el descriptor del juego: 26 direcciones incrustadas pasan a
