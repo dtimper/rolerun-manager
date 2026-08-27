@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.55`
+- Versión de aplicación: `v0.2.6-alpha.56`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,35 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.56 — el ancla de Blanco, y sus direcciones derivadas
+
+**`0x02234974`**, medido contra la partida del usuario. Dos confirmaciones
+independientes en la misma captura:
+
+1. **Por forma**: ahí arrancan cuatro bloques PK5 seguidos, separados
+   exactamente 220 bytes, y el usuario declaró un equipo de cuatro.
+2. **Por contenido**: en la dirección que predice la resta del guardado, el
+   dinero leído era **1624**, el que había apuntado antes de empezar. De los
+   diez candidatos del volcado, solo ese acertó.
+
+De ahí salen, sin más capturas: contador `0x02234970`, PC `0x0221BF6C`, mochila
+`0x02233F6C`, dinero `0x0223CD6C` y medallas `0x0223CD70`.
+
+- `app/gen5_memory.py`: un descriptor por juego. Solo el ancla se mide; el resto
+  son propiedades derivadas. Una prueba comprueba que la regla **reproduce las
+  seis direcciones de Negro 2**, cada una demostrada por separado antes de
+  conocerse la regla.
+- Lo que sigue sin demostrarse en Blanco: la tabla de MT y las copias de
+  batalla. No viven en el bloque del guardado, así que valen `None` y el backend
+  sabe que esas capacidades no están.
+
+**Corregido un fallo de la herramienta de captura**: leía el contador del equipo
+cuatro bytes antes de donde está, así que daba el byte de cabecera y ningún
+candidato «cuadraba del todo». El ancla se identificó igual por las otras dos
+comprobaciones.
+
+- `tests/test_bw_memory.py`: 9 pruebas. Suite completa: 1380.
 
 ### v0.2.6 Alpha.55 — el bloque vivo es un espejo del guardado
 

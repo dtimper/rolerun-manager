@@ -1,6 +1,18 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.56 — el ancla de Blanco
+
+**`0x02234974`**, con dos confirmaciones independientes: cuatro PK5 seguidos
+separados 220 bytes (el equipo declarado) y, en la dirección que predice la
+resta, el dinero exacto que el usuario había apuntado (1624).
+
+De ahí salen contador, PC, mochila, dinero y medallas sin más capturas.
+
+- `app/gen5_memory.py`: un descriptor por juego, solo el ancla se mide.
+- Corregido: la herramienta leía el contador cuatro bytes antes de donde está.
+- `tests/test_bw_memory.py`: 9 pruebas. Suite completa: 1380.
+
 # v0.2.6-alpha.55 — el bloque vivo es un espejo del guardado
 
 Partiendo solo del dinero de Negro 2 y del desplazamiento que PKHeX declara,

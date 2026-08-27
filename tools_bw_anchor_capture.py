@@ -185,9 +185,11 @@ def main() -> None:
             continue
         for miembro in miembros:
             offset = miembro["offset"]
-            # Si esto es el equipo, el contador esta ocho bytes antes y la
-            # base del bloque sale por resta.
-            contador = ram[offset - 8] if offset >= 8 else None
+            # Si esto es el equipo, el contador esta CUATRO bytes antes: el
+            # bloque empieza ocho antes de los datos y el contador va en +4.
+            # La primera version leia -8 y daba el byte de cabecera, que en la
+            # captura del 27-08-2026 valia 6 en un equipo de cuatro.
+            contador = ram[offset - 4] if offset >= 4 else None
             bloque = (DS_RAM_BASE + offset) - SAVE_PARTY_DATA
             prediccion = {}
             for etiqueta, desplazamiento, ancho in (
@@ -203,7 +205,7 @@ def main() -> None:
             resultados.append({
                 **miembro,
                 "region": f"0x{base:X}",
-                "contador_en_-8": contador,
+                "contador_en_-4": contador,
                 "contador_cuadra": contador == cuantos,
                 "base_del_bloque": f"0x{bloque:08X}",
                 "prediccion": prediccion,
@@ -228,7 +230,7 @@ def main() -> None:
         marca = "  <-- CUADRA TODO" if cuadra(r) else ""
         p = r.get("prediccion", {})
         print(f"  {r['direccion']}  {r['mote']:11} #{r['especie']:3} Nv.{r['nivel']:3} "
-              f"PS {r['ps']:8} contador={r['contador_en_-8']}"
+              f"PS {r['ps']:8} contador={r['contador_en_-4']}"
               f"  dinero={p.get('dinero',{}).get('valor')}"
               f" medallas={p.get('medallas',{}).get('valor')}{marca}")
     print()

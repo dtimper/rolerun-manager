@@ -1,0 +1,240 @@
+{
+  "format": "rolerun-bw-anchor-v1",
+  "captured_at": "2026-08-27T19:24:24.588719+02:00",
+  "environment": "Pokemon Blanco Espana - melonDS 1.1",
+  "metodo": "Se busca un PK5 de party valido -checksum, especie, nivel y PS posibles- y se comprueba que el contador este ocho bytes antes y que el dinero y las medallas caigan donde los predice el desplazamiento del guardado que declara PKHeX.",
+  "declarado": {
+    "equipo": 4,
+    "dinero": 1624,
+    "medallas": 0
+  },
+  "desplazamientos_pkhex": {
+    "party_block": "0x18E00",
+    "money": "0x21200",
+    "badges": "0x21204"
+  },
+  "candidatos": [
+    {
+      "offset": 2312564,
+      "direccion": "0x02234974",
+      "especie": 495,
+      "mote": "Snivy",
+      "nivel": 10,
+      "ps": "32/32",
+      "region": "0x2587EE60000",
+      "contador_en_-8": 6,
+      "contador_cuadra": false,
+      "base_del_bloque": "0x0221BB6C",
+      "prediccion": {
+        "dinero": {
+          "direccion": "0x0223CD6C",
+          "valor": 1624
+        },
+        "medallas": {
+          "direccion": "0x0223CD70",
+          "valor": 0
+        }
+      }
+    },
+    {
+      "offset": 2312784,
+      "direccion": "0x02234A50",
+      "especie": 509,
+      "mote": "Purrloin",
+      "nivel": 5,
+      "ps": "19/19",
+      "region": "0x2587EE60000",
+      "contador_en_-8": 127,
+      "contador_cuadra": false,
+      "base_del_bloque": "0x0221BC48",
+      "prediccion": {
+        "dinero": {
+          "direccion": "0x0223CE48",
+          "valor": 0
+        },
+        "medallas": {
+          "direccion": "0x0223CE4C",
+          "valor": 0
+        }
+      }
+    },
+    {
+      "offset": 2313004,
+      "direccion": "0x02234B2C",
+      "especie": 504,
+      "mote": "Patrat",
+      "nivel": 7,
+      "ps": "25/25",
+      "region": "0x2587EE60000",
+      "contador_en_-8": 167,
+      "contador_cuadra": false,
+      "base_del_bloque": "0x0221BD24",
+      "prediccion": {
+        "dinero": {
+          "direccion": "0x0223CF24",
+          "valor": 0
+        },
+        "medallas": {
+          "direccion": "0x0223CF28",
+          "valor": 0
+        }
+      }
+    },
+    {
+      "offset": 2313224,
+      "direccion": "0x02234C08",
+      "especie": 506,
+      "mote": "Lillipup",
+      "nivel": 4,
+      "ps": "18/18",
+      "region": "0x2587EE60000",
+      "contador_en_-8": 187,
+      "contador_cuadra": false,
+      "base_del_bloque": "0x0221BE00",
+      "prediccion": {
+        "dinero": {
+          "direccion": "0x0223D000",
+          "valor": 0
+        },
+        "medallas": {
+          "direccion": "0x0223D004",
+          "valor": 0
+        }
+      }
+    },
+    {
+      "offset": 2479780,
+      "direccion": "0x0225D6A4",
+      "especie": 506,
+      "mote": "Lillipup",
+      "nivel": 4,
+      "ps": "6/18",
+      "region": "0x2587EE60000",
+      "contador_en_-8": 187,
+      "contador_cuadra": false,
+      "base_del_bloque": "0x0224489C",
+      "prediccion": {
+        "dinero": {
+          "direccion": "0x02265A9C",
+          "valor": 0
+        },
+        "medallas": {
+          "direccion": "0x02265AA0",
+          "valor": 0
+        }
+      }
+    },
+    {
+      "offset": 2480496,
+      "direccion": "0x0225D970",
+      "especie": 506,
+      "mote": "Lillipup",
+      "nivel": 6,
+      "ps": "21/21",
+      "region": "0x2587EE60000",
+      "contador_en_-8": 6,
+      "contador_cuadra": false,
+      "base_del_bloque": "0x02244B68",
+      "prediccion": {
+        "dinero": {
+          "direccion": "0x02265D68",
+          "valor": 0
+        },
+        "medallas": {
+          "direccion": "0x02265D6C",
+          "valor": 0
+        }
+      }
+    },
+    {
+      "offset": 2480716,
+      "direccion": "0x0225DA4C",
+      "especie": 501,
+      "mote": "Oshawott",
+      "nivel": 7,
+      "ps": "24/24",
+      "region": "0x2587EE60000",
+      "contador_en_-8": 162,
+      "contador_cuadra": false,
+      "base_del_bloque": "0x02244C44",
+      "prediccion": {
+        "dinero": {
+          "direccion": "0x02265E44",
+          "valor": 0
+        },
+        "medallas": {
+          "direccion": "0x02265E48",
+          "valor": 0
+        }
+      }
+    },
+    {
+      "offset": 2525900,
+      "direccion": "0x02268ACC",
+      "especie": 504,
+      "mote": "Patrat",
+      "nivel": 2,
+      "ps": "14/14",
+      "region": "0x2587EE60000",
+      "contador_en_-8": 0,
+      "contador_cuadra": false,
+      "base_del_bloque": "0x0224FCC4",
+      "prediccion": {
+        "dinero": {
+          "direccion": "0x02270EC4",
+          "valor": 0
+        },
+        "medallas": {
+          "direccion": "0x02270EC8",
+          "valor": 0
+        }
+      }
+    },
+    {
+      "offset": 2526172,
+      "direccion": "0x02268BDC",
+      "especie": 504,
+      "mote": "Patrat",
+      "nivel": 2,
+      "ps": "14/14",
+      "region": "0x2587EE60000",
+      "contador_en_-8": 6,
+      "contador_cuadra": false,
+      "base_del_bloque": "0x0224FDD4",
+      "prediccion": {
+        "dinero": {
+          "direccion": "0x02270FD4",
+          "valor": 0
+        },
+        "medallas": {
+          "direccion": "0x02270FD8",
+          "valor": 0
+        }
+      }
+    },
+    {
+      "offset": 2527548,
+      "direccion": "0x0226913C",
+      "especie": 572,
+      "mote": "Minccino",
+      "nivel": 7,
+      "ps": "25/25",
+      "region": "0x2587EE60000",
+      "contador_en_-8": 6,
+      "contador_cuadra": false,
+      "base_del_bloque": "0x02250334",
+      "prediccion": {
+        "dinero": {
+          "direccion": "0x02271534",
+          "valor": 0
+        },
+        "medallas": {
+          "direccion": "0x02271538",
+          "valor": 0
+        }
+      }
+    }
+  ],
+  "cuadran_del_todo": [],
+  "note": "Diagnostico de solo lectura. Una direccion aqui no pasa a produccion mientras no sea la unica que cuadra en las tres cosas."
+}
