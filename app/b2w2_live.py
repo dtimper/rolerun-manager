@@ -120,6 +120,21 @@ class B2W2PCRead:
 
 
 @dataclass(frozen=True, slots=True)
+class B2W2RoleWrite:
+    """Petición de cambio de rol sobre un miembro concreto de la party.
+
+    ``base_stats`` lo aporta el adaptador, que es quien conoce la tabla personal
+    de la edición. El lector no consulta datos de juego por su cuenta.
+    """
+
+    slot: int
+    identity: tuple[int, int, int]
+    markings: tuple[bool, bool, bool, bool, bool, bool]
+    evs: tuple[int, int, int, int, int, int]
+    base_stats: dict
+
+
+@dataclass(frozen=True, slots=True)
 class B2W2PCMovePlan:
     source_offset: int
     destination_offset: int
@@ -166,6 +181,139 @@ def empty_pk5_stored() -> bytes:
 def empty_pk5_party() -> bytes:
     """Representación vacía observada al compactar party en Negro 2."""
     return empty_pk5_stored() + _crypt(bytes(84), 0)
+
+
+# Desplazamientos dentro del PK5 canónico (bloque descifrado y desbarajado).
+# Demostrados por el propio lector: ``parse_pk5_boxed`` lee las marcas en 0x16 y
+# los EV en 0x18-0x1D, y esa lectura ya está validada físicamente.
+PK5_MARKINGS_OFFSET = 0x16
+# Orden de la tabla personal de PKHeX y de la extensión de party de Gen 5.
+STAT_ORDER_PERSONAL = ("hp", "attack", "defense", "speed", "sp_attack", "sp_defense")
+# Orden con el que RoleRun presenta y almacena IV y EV.
+STAT_ORDER_ROLERUN = ("hp", "attack", "defense", "sp_attack", "sp_defense", "speed")
+PK5_EV_OFFSETS = {
+    "hp": 0x18, "attack": 0x19, "defense": 0x1A,
+    "speed": 0x1B, "sp_attack": 0x1C, "sp_defense": 0x1D,
+}
+# NatureAmp: fila = característica que sube, columna = la que baja.
+_NATURE_STAT_ORDER = ("attack", "defense", "speed", "sp_attack", "sp_defense")
+
+
+def gen5_final_stats(
+    *, base: dict[str, int], ivs: dict[str, int], evs: dict[str, int],
+    level: int, nature_id: int,
+) -> dict[str, int]:
+    """Estadísticas finales de tercera generación en adelante.
+
+    PS = ((2·Base + IV + EV/4) · Nivel / 100) + Nivel + 10
+    Resto = (((2·Base + IV + EV/4) · Nivel / 100) + 5) · modificador de naturaleza
+
+    Todas las divisiones son enteras y el modificador se aplica al final, que es
+    el orden que produce los valores que muestra el juego.
+    """
+    level = int(level)
+    if not 1 <= level <= 100:
+        raise B2W2LiveError("El nivel PK5 está fuera de rango para calcular estadísticas.")
+    up_index, down_index = divmod(int(nature_id), 5)
+    neutral = up_index == down_index
+    increased = None if neutral else _NATURE_STAT_ORDER[up_index]
+    decreased = None if neutral else _NATURE_STAT_ORDER[down_index]
+
+    result: dict[str, int] = {}
+    for key in STAT_ORDER_PERSONAL:
+        common = (2 * int(base[key]) + int(ivs[key]) + int(evs[key]) // 4) * level // 100
+        if key == "hp":
+            result[key] = common + level + 10
+            continue
+        value = common + 5
+        if key == increased:
+            value = value * 11 // 10
+        elif key == decreased:
+            value = value * 9 // 10
+        result[key] = value
+    return result
+
+
+def _unshuffle_pk5(block: bytes) -> tuple[int, tuple[int, ...], bytearray]:
+    """Descifra y desbaraja un PK5, devolviendo (pid, permutación, canónico)."""
+    pid = struct.unpack_from("<I", block, 0)[0]
+    checksum = struct.unpack_from("<H", block, 6)[0]
+    body = _crypt(block[8:136], checksum)
+    if sum(struct.unpack("<64H", body)) & 0xFFFF != checksum:
+        raise B2W2LiveError("Checksum PK5 inválido; RoleRun no reescribe ese bloque.")
+    shuffled = [body[index * 32:(index + 1) * 32] for index in range(4)]
+    order = _PERMUTATIONS[((pid >> 13) & 31) % 24]
+    canonical = bytearray(block[:8] + b"".join(shuffled[index] for index in order))
+    return pid, order, canonical
+
+
+def _reshuffle_pk5(pid: int, order: tuple[int, ...], canonical: bytearray) -> bytes:
+    """Recalcula el checksum, vuelve a barajar y cifra los 136 bytes almacenados."""
+    checksum = sum(struct.unpack("<64H", bytes(canonical[8:136]))) & 0xFFFF
+    canonical_blocks = [bytes(canonical[8 + index * 32:8 + (index + 1) * 32]) for index in range(4)]
+    stored_blocks: list[bytes] = [b""] * 4
+    for canonical_index, stored_index in enumerate(order):
+        stored_blocks[stored_index] = canonical_blocks[canonical_index]
+    header = bytes(canonical[:6]) + struct.pack("<H", checksum)
+    return header + _crypt(b"".join(stored_blocks), checksum)
+
+
+def pk5_party_with_role(
+    block: bytes, *, markings, evs, base_stats: dict[str, int],
+) -> bytes:
+    """Devuelve el PK5 de party con marcas, EV y estadísticas recalculadas.
+
+    Cambiar EV sin recalcular las estadísticas dejaría al Pokémon con los valores
+    antiguos hasta que el juego los recalculara por su cuenta, y el PS máximo
+    podría no cuadrar con el actual. Se recalculan aquí con la misma tabla
+    personal que ya usa el resto de RoleRun.
+
+    El daño recibido se conserva: si sube el PS máximo, el actual sube lo mismo.
+    Un Pokémon debilitado sigue debilitado.
+    """
+    if len(block) != PK5_PARTY_SIZE:
+        raise B2W2LiveError("El bloque PK5 de party no mide 220 bytes.")
+    marks = tuple(bool(value) for value in markings)
+    if len(marks) != 6:
+        raise B2W2LiveError("Las marcas PK5 deben ser exactamente seis.")
+    ev_values = tuple(int(value) for value in evs)
+    if len(ev_values) != 6 or any(not 0 <= value <= 255 for value in ev_values):
+        raise B2W2LiveError("Los EV PK5 deben ser seis valores entre 0 y 255.")
+    if sum(ev_values) > 510:
+        raise B2W2LiveError("Los EV PK5 no pueden sumar más de 510.")
+
+    pid, order, canonical = _unshuffle_pk5(block)
+    canonical[PK5_MARKINGS_OFFSET] = sum(
+        1 << index for index, marked in enumerate(marks) if marked
+    )
+    ev_by_key = dict(zip(STAT_ORDER_ROLERUN, ev_values))
+    for key, offset in PK5_EV_OFFSETS.items():
+        canonical[offset] = ev_by_key[key]
+
+    iv32 = struct.unpack_from("<I", canonical, 0x38)[0]
+    iv_by_key = dict(zip(
+        STAT_ORDER_ROLERUN,
+        tuple((iv32 >> shift) & 0x1F for shift in (0, 5, 10, 20, 25, 15)),
+    ))
+    extension = bytearray(_crypt(block[136:], pid))
+    level = extension[0x8C - 0x88]
+    old_current, old_max = struct.unpack_from("<2H", extension, 0x8E - 0x88)
+    finals = gen5_final_stats(
+        base=base_stats, ivs=iv_by_key, evs=ev_by_key,
+        level=level, nature_id=int(canonical[0x41]),
+    )
+    new_max = int(finals["hp"])
+    if old_current <= 0:
+        new_current = 0
+    else:
+        new_current = max(1, min(new_max, int(old_current) + (new_max - int(old_max))))
+    struct.pack_into(
+        "<7H", extension, 0x8E - 0x88,
+        new_current, new_max,
+        finals["attack"], finals["defense"], finals["speed"],
+        finals["sp_attack"], finals["sp_defense"],
+    )
+    return _reshuffle_pk5(pid, order, canonical) + _crypt(bytes(extension), pid)
 
 
 _PERMUTATIONS = (
@@ -633,6 +781,72 @@ class B2W2MelonDSReader:
             ):
                 raise B2W2LiveError("El readback Equipo↔PC B2/W2 no coincide.")
             return after_party, after_pc
+        except Exception:
+            restore()
+            raise
+
+    def write_party_roles(
+        self, party_read: B2W2PartyRead, writes,
+    ) -> B2W2PartyRead:
+        """Escribe marcas y EV de uno o varios miembros como una transacción.
+
+        Mismo contrato que el resto de writers B2/W2: relectura fresca de la
+        party inmediatamente antes de escribir, verificación de identidad fuerte
+        por slot, readback con el parser de producción y rollback completo ante
+        cualquier divergencia.
+
+        No toca el contador de party ni el orden: solo reescribe el bloque PK5 de
+        los miembros indicados.
+        """
+        peticiones = list(writes)
+        if not peticiones:
+            raise B2W2LiveError("No hay ningún cambio de rol B2/W2 que escribir.")
+        before = self.read_party()
+        if before.process_id != party_read.process_id:
+            raise B2W2LiveError("melonDS cambió antes de escribir los roles B2/W2.")
+        old_raw = before.raw
+        new_raw = bytearray(old_raw)
+        esperado: dict[int, B2W2RoleWrite] = {}
+        for peticion in peticiones:
+            slot = int(peticion.slot)
+            if not 0 <= slot < before.count:
+                raise B2W2LiveError("El slot de party B2/W2 está fuera de rango.")
+            if slot in esperado:
+                raise B2W2LiveError("Dos cambios de rol B2/W2 sobre el mismo slot.")
+            member = before.pokemon[slot]
+            if (member.pid, member.tid, member.sid) != tuple(peticion.identity):
+                raise B2W2LiveError("La identidad del rol B2/W2 cambió antes de escribir.")
+            offset = slot * PK5_PARTY_SIZE
+            new_raw[offset:offset + PK5_PARTY_SIZE] = pk5_party_with_role(
+                bytes(old_raw[offset:offset + PK5_PARTY_SIZE]),
+                markings=peticion.markings,
+                evs=peticion.evs,
+                base_stats=peticion.base_stats,
+            )
+            esperado[slot] = peticion
+
+        party_host = before.allocation_base + (PARTY_BASE - DS_RAM_BASE)
+
+        def restore() -> None:
+            self._write_process_bytes(before.process_id, party_host, old_raw)
+            restored = self.read_party()
+            if restored.raw != old_raw:
+                raise B2W2LiveError("Rollback de roles B2/W2 no confirmado; no guardes.")
+
+        try:
+            self._write_process_bytes(before.process_id, party_host, bytes(new_raw))
+            after = self.read_party()
+            if after.count != before.count or after.raw != bytes(new_raw):
+                raise B2W2LiveError("El readback de roles B2/W2 no coincide.")
+            for slot, peticion in esperado.items():
+                verificado = after.pokemon[slot]
+                if (verificado.pid, verificado.tid, verificado.sid) != tuple(peticion.identity):
+                    raise B2W2LiveError("La identidad B2/W2 verificada no coincide.")
+                if tuple(verificado.markings) != tuple(peticion.markings):
+                    raise B2W2LiveError("La verificación semántica de las marcas B2/W2 falló.")
+                if tuple(verificado.evs) != tuple(peticion.evs):
+                    raise B2W2LiveError("La verificación semántica de EV B2/W2 falló.")
+            return after
         except Exception:
             restore()
             raise

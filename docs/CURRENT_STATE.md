@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.23`
+- Versión de aplicación: `v0.2.6-alpha.24`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,25 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.24 — writer de roles y EV en B2/W2
+
+B2/W2 no tenía writer de roles, así que asignar uno no producía ningún efecto: el
+`PendingRoleChange` se quedaba en la cola para siempre. Y como el monitor exige la
+cola vacía para leer, ese cambio atascado congelaba también la actualización de
+la salud. Un mismo defecto explicaba «los roles no funcionan», «los EV siguen a
+cero» y «la vida no se actualiza».
+
+El rol vive en las seis marcas del PK5 y, cuando el rol define un reparto de
+esfuerzo, también en los EV. `pk5_party_with_role()` reescribe ambos y recalcula
+las estadísticas finales con la tabla personal de la edición; conserva el daño
+recibido y nunca revive a un debilitado. `write_party_roles()` lo envuelve en el
+contrato transaccional habitual: relectura fresca, identidad fuerte por slot,
+readback con el parser de producción, verificación semántica y rollback.
+
+La curación de B2/W2 sigue cerrada por no tener writer propio.
+
+Baseline completa: **1027 passed**. Validación física pendiente.
 
 ### v0.2.6 Alpha.23 — salud viva durante el combate en B2/W2
 

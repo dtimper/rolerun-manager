@@ -1,6 +1,33 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.24 — writer de roles de B2/W2
+
+Asignar un rol en Negro 2 no hacía absolutamente nada: los seis seguían en
+"SIN ROL" y los EV a cero. Y como el cambio se quedaba atascado en la cola, y
+`_oras_live_reconciliation_can_read` exige la cola vacía, **congelaba además el
+monitor en vivo**. De ahí que la vida tampoco se actualizara.
+
+No existía writer de roles para B2/W2. Ahora sí.
+
+- Nuevo `pk5_party_with_role()`: descifra el PK5, lo desbaraja, escribe las seis
+  marcas y los EV, **recalcula las estadísticas** con la tabla personal de la
+  edición, recompone el checksum, vuelve a barajar y cifra.
+- Cambiar EV sin recalcular dejaría las estadísticas antiguas y un PS máximo que
+  no cuadra con el actual. El daño recibido se conserva: si sube el máximo, sube
+  igual el actual. Un debilitado sigue debilitado.
+- Nuevo `write_party_roles()` con el mismo contrato que los demás writers B2/W2:
+  relectura fresca antes de escribir, identidad fuerte por slot, readback con el
+  parser de producción, verificación semántica de marcas y EV, y rollback
+  completo ante cualquier divergencia. No toca el contador ni el orden.
+- El adaptador traduce `PendingRoleChange` a la escritura concreta usando la
+  **misma** identidad que `RunProjectService.pokemon_identity_key`; con otra, un
+  cambio de rol no encontraría nunca a su Pokémon.
+- `SIN ROL` borra las seis marcas, que es el contrato que ya usaba la lectura.
+- Se abren las dos compuertas de la interfaz. La curación de B2/W2 **sigue
+  cerrada**: abrir roles no puede abrir de rebote lo que no tiene writer.
+- Baseline completa: **1027 passed**. Validación física pendiente.
+
 # v0.2.6-alpha.23 — la vida se actualiza también DURANTE el combate
 
 La captura del usuario lo dejó claro: con Mareep debilitado (0/22) y Azurill a

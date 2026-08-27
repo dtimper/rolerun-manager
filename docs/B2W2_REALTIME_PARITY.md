@@ -14,7 +14,7 @@ revisión, región y melonDS concretos.
 | Equipo | Conteo, identidad, orden, especie, forma, apodo y huevo | Conteo, identidad, orden y seis miembros **VALIDADOS FÍSICAMENTE**; forma/apodo/huevo **IMPLEMENTADOS** | Equipo controlado con forma/apodo/huevo |
 | Ficha | Nivel, PS, estado, stats, naturaleza, IV y EV | IV/EV/nivel/PS **VALIDADOS FÍSICAMENTE**; resto **IMPLEMENTADO · TEST** | Cambiar estado/naturaleza y observar UI |
 | Ataques | IDs, orden, PP, PP Up, habilidad y objeto | Movimientos/habilidad/objeto **VALIDADOS FÍSICAMENTE**; PP interno sin presentación visual | Gastar PP para contrastar reader mediante diagnóstico, no UI |
-| Roles | Leer seis marcas y actualizar ficha/barra/OBS | **IMPLEMENTADO · TEST** | Cambiar una marca dentro del juego |
+| Roles | Leer seis marcas y actualizar ficha/barra/OBS · **escribir rol y EV** | Lectura **IMPLEMENTADA · TEST**; writer de rol+EV con recálculo de estadísticas **IMPLEMENTADO · TEST** desde alpha.24, validación física pendiente | Asignar un rol desde RoleRun y comprobar marca, EV y estadísticas en el juego |
 | Roles | Escribir rol, swap atómico y EV asociados | **PENDIENTE; WRITER CERRADO** | Stored+party, checksum, readback y rollback |
 | Combate | Entrada/salida, filas, identidad, PS, cambio y animación | PS/animación sin spoiler y PAR durante combate: **IMPLEMENTADO · TEST · VALIDADO FÍSICAMENTE** | Probar cambio con varios miembros y otros estados |
 | Muertes | Baseline, >0→0, varios KO, selector, sustituto y evento único | Core común listo; lane B2/W2 **PENDIENTE** | Cerrar primero combate |

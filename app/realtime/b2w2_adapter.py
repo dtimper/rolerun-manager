@@ -6,13 +6,18 @@ from dataclasses import dataclass
 from dataclasses import replace
 from pathlib import Path
 
-from ..b2w2_live import B2W2LiveError, B2W2MelonDSReader, PK5_PARTY_SIZE, PK5_STORED_SIZE, _crypt
-from ..models import PendingTeamChange
+from ..b2w2_live import (
+    STAT_ORDER_PERSONAL, B2W2LiveError, B2W2MelonDSReader, B2W2RoleWrite,
+    PK5_PARTY_SIZE, PK5_STORED_SIZE, _crypt,
+)
+from ..models import PendingRoleChange, PendingTeamChange
 from ..boxed_metadata import (
     ability_name, base_stats_for, boxed_level, item_name, species_name,
 )
 from ..pokemon_stats import nature_presentation, stat_dict
-from ..role_rules import ROLE_SYMBOLS, ROLE_TO_KEY, role_from_markings
+from ..role_rules import (
+    ROLE_SYMBOLS, ROLE_TO_KEY, ROLE_TO_MARKING, canonical_role, role_from_markings,
+)
 from ..save_engine_client import SaveGameData, SavePokemon
 from .adapter import RealTimeGameAdapter
 from .models import (
@@ -157,8 +162,55 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
             )
         return party_read, raw.guest_base, slots
 
+    def _role_write_for(self, party_read, change: PendingRoleChange) -> B2W2RoleWrite:
+        """Traduce un cambio de rol de RoleRun a una escritura PK5 concreta."""
+        identity = str(getattr(change, "pokemon_identity", "") or "")
+        candidatos = [
+            (index, member) for index, member in enumerate(party_read.pokemon)
+            if self._strong_identity(member) == identity
+        ]
+        if len(candidatos) != 1:
+            raise B2W2LiveError(
+                "El Pokémon del cambio de rol B2/W2 no está de forma única en la party."
+            )
+        slot, member = candidatos[0]
+        role = canonical_role(change.new_role)
+        marca = ROLE_TO_MARKING.get(role)
+        if marca is None:
+            raise B2W2LiveError(f"Rol B2/W2 no reconocido: {change.new_role!r}.")
+        # Una sola marca gobierna el rol; "SIN ROL" las deja todas a cero. Es el
+        # mismo contrato que ``role_from_markings`` usa al leer.
+        markings = tuple(index == marca for index in range(6))
+        evs = tuple(int(value) for value in (change.new_evs or member.evs))
+        base = dict(zip(
+            STAT_ORDER_PERSONAL,
+            base_stats_for("b2w2", int(member.species_id), int(member.form)),
+        ))
+        return B2W2RoleWrite(
+            slot=slot,
+            identity=(int(member.pid), int(member.tid), int(member.sid)),
+            markings=markings, evs=evs, base_stats=base,
+        )
+
+    @staticmethod
+    def _strong_identity(member) -> str:
+        """Misma identidad que ``RunProjectService.pokemon_identity_key``.
+
+        No se reinventa el formato: si el adaptador usara otro, un cambio de rol
+        no encontraría nunca a su Pokémon.
+        """
+        return f"{int(member.species_id)}:{int(member.pid)}:{int(member.tid)}:{int(member.sid)}"
+
     def apply_changes(self, current: SaveGameData, changes):
         changes = list(changes)
+        if changes and all(isinstance(item, PendingRoleChange) for item in changes):
+            party_read = self.reader.read_party()
+            escrituras = [self._role_write_for(party_read, item) for item in changes]
+            self.reader.write_party_roles(party_read, escrituras)
+            live = self._capture(current, 0)
+            live.game.raw["writes_enabled"] = True
+            live.game.raw["live_write"] = True
+            return B2W2RealTimeWriteResult(live.game, live.process, 2, len(escrituras))
         if len(changes) != 1 or not isinstance(changes[0], PendingTeamChange):
             raise B2W2LiveError("B2/W2 solo admite un movimiento PC→PC por transacción.")
         change = changes[0]

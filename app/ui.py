@@ -7747,7 +7747,12 @@ class RoleRunManager(ctk.CTk):
                     supported_ids.add(id(change))
                 continue
             if live_key == "b2w2":
-                if (
+                if isinstance(change, PendingRoleChange):
+                    # alpha.24: el writer de roles B2/W2 escribe marcas y EV en el
+                    # PK5 vivo, recalcula las estadísticas con la tabla personal y
+                    # verifica el resultado con el parser de producción.
+                    supported_ids.add(id(change))
+                elif (
                     isinstance(change, PendingTeamChange)
                     and change.operation in {
                         "move-box-slot", "swap-party-box", "party-to-box", "box-to-party",
@@ -10478,6 +10483,8 @@ class RoleRunManager(ctk.CTk):
             }
             result: list[str] = []
             for change in changes:
+                if isinstance(change, PendingRoleChange):
+                    continue
                 if (
                     isinstance(change, PendingTeamChange)
                     and change.operation in {
