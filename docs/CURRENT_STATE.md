@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.63`
+- Versión de aplicación: `v0.2.6-alpha.64`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,29 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.64 — el combate de Blanco, por dos estados
+
+La búsqueda por firma falló **dos veces**, y por el mismo motivo: suponía que
+Blanco coloca los campos de la fila igual que Negro 2.
+
+1. Encontró un Pansear a nivel 3342, que había coincidido por azar.
+2. Con el Purrloin debilitado y el Serperior luchando, solo encontró las dos
+   copias viejas del Purrloin a 0/27. La fila del que estaba peleando **no
+   apareció**: la suposición sobre el formato no se cumple.
+
+Se cambia al método que este proyecto sí se cree y que el documento de paridad
+exige: **dos estados**. Si un Pokémon pasa de X a Y puntos de salud, en la
+memoria hay posiciones que contenían X y ahora contienen Y. No supone nada del
+formato de la fila, que es justo donde fallaba lo anterior.
+
+Es el mismo procedimiento con el que se demostraron la mochila y el dinero de
+Negro 2.
+
+Encontradas las posiciones, un tercer paso las vigila durante otro golpe: la que
+baje antes es la lógica y la que lo haga después, la de presentación.
+
+- Suite completa: 1398.
 
 ### v0.2.6 Alpha.63 — la segunda fila de Blanco era del rival
 

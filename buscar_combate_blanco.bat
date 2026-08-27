@@ -10,18 +10,17 @@ echo.
 echo   Esta herramienta SOLO LEE la memoria de melonDS.
 echo   No escribe nada en tu partida y no activa ninguna funcion.
 echo.
-echo   El intento anterior encontro dos filas, pero una era del
-echo   Pokemon rival. Esta busca TODAS las que describen al TUYO
-echo   y luego mira cual baja la vida antes.
+echo   Va en tres pasos y necesita DOS golpes recibidos.
+echo   Usa el Pokemon que tengas en el campo, sea cual sea.
 echo.
-echo   QUE TIENES QUE HACER:
-echo     1. Entra en un combate. Mejor si tu Pokemon ya ha
-echo        recibido algun golpe: con la vida llena hay mas
-echo        coincidencias por casualidad.
-echo     2. Pulsa INTRO aqui. Buscara las filas y te las dira.
-echo     3. Prepara un turno en el que TU Pokemon reciba dano,
-echo        SIN ejecutarlo. Vuelve aqui y pulsa INTRO.
-echo     4. Ejecuta el turno en el juego. Se para sola despues.
+echo     1. En combate, te preguntara cuantos PS le quedan.
+echo     2. Recibes un golpe y le dices cuantos le quedan ahora.
+echo        Espera a que la barra se pare del todo.
+echo     3. Recibes OTRO golpe mientras ella mira. Con eso ve
+echo        cual de las copias baja la vida antes.
+echo.
+echo   Si el Pokemon se debilita, sirve igual: 0 es un numero
+echo   valido. Lo unico que no vale es que los PS no cambien.
 echo.
 echo   Antes de continuar:
 echo     - melonDS abierto con tu partida de BLANCO.

@@ -1,6 +1,18 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.64 — el combate de Blanco, por dos estados
+
+La búsqueda por firma falló dos veces por suponer que Blanco coloca los campos
+como Negro 2: la última encontró las copias viejas de un Purrloin debilitado y
+no la del Serperior que estaba luchando.
+
+Se cambia a **dos estados**, que no supone nada del formato: las posiciones que
+contenían los PS viejos y ahora contienen los nuevos. Es el método con el que se
+demostraron la mochila y el dinero. Un tercer paso las ordena por tiempo.
+
+Suite completa: 1398.
+
 # v0.2.6-alpha.63 — la segunda fila de Blanco era del rival
 
 `0x0226D670` sí es del Pokémon del jugador (24 → 9 PS). `0x0226E348` tenía un

@@ -1,29 +1,30 @@
 from __future__ import annotations
 
-"""Descubre y ordena las copias de combate de Blanco/Negro, en una sola pasada.
+"""Localiza y ordena las copias de combate de Blanco/Negro por DOS ESTADOS.
 
-QUE SE APRENDIO DEL INTENTO ANTERIOR
+POR QUE SE CAMBIO DE METODO
 
-La busqueda por firma del 27-08-2026 dio dos filas, pero la segunda no era una
-copia del Pokemon del jugador: al volver a mirarla tenia un Pansear a nivel
-3342. Coincidio una vez por azar y ya no.
+El primer intento buscaba filas que encajaran con una firma de cuatro campos
+-especie, PS maximos, habilidad y nivel- suponiendo que Blanco coloca esos
+campos igual que Negro 2. Fallo dos veces:
 
-La traza de Negro 2 muestra como son de verdad las dos copias buenas: LAS DOS
-describen al mismo Pokemon, y la logica baja los PS unos SEGUNDOS antes que la
-de presentacion. En aquella captura fueron 3,4 s de diferencia.
+  1. Encontro una fila con un Pansear a nivel 3342: coincidio por azar.
+  2. Con el Purrloin debilitado y el Serperior luchando, solo encontro las dos
+     copias viejas del Purrloin a 0/27. La fila del que estaba peleando no
+     aparecio, porque la suposicion sobre el formato no se cumple.
 
-QUE HACE ESTA HERRAMIENTA
+Este metodo no supone nada del formato. Se apoya en lo unico que es seguro: si
+un Pokemon pasa de X a Y puntos de salud, en la memoria hay posiciones que
+contenian X y ahora contienen Y. Es el mismo procedimiento con el que se
+demostraron la mochila y el dinero, y el que el documento de paridad exige.
 
-Las dos cosas de golpe, sin suponer ninguna distancia entre ellas:
+COMO SE ORDENAN DESPUES
 
-1. Busca en la RAM TODAS las filas que describen al Pokemon que esta luchando
-   -misma especie, mismos PS maximos, misma habilidad y mismo nivel-.
-2. Las vigila todas a la vez cada 10 ms durante un turno y apunta cuando cambia
-   cada una.
-
-La que baje los PS antes es la logica; la que lo haga despues, al ritmo de la
-barra, es la de presentacion. Importa cual es cual: con la logica como
-autoridad, RoleRun cantaria una baja que el jugador todavia no ha visto.
+Encontradas las posiciones, la tercera parte las vigila durante otro golpe. En
+Negro 2 la copia logica baja los PS unos segundos antes que la de presentacion
+-3,4 s en su traza-, y esa diferencia es lo que dice cual manda en pantalla.
+Importa: con la logica como autoridad, RoleRun cantaria una baja que el jugador
+todavia no ha visto.
 
 No escribe un solo byte en la partida ni activa ninguna capacidad.
 """
@@ -36,8 +37,6 @@ from datetime import datetime
 from pathlib import Path
 
 from app.b2w2_live import (
-    BATTLE_ROW_SIZE,
-    BATTLE_STATUS_OFFSET,
     DS_RAM_BASE,
     PK5_PARTY_SIZE,
     B2W2LiveError,
@@ -49,6 +48,7 @@ from app.gen5_memory import GEN5_MEMORY
 TAMANO_RAM = 0x00400000
 ESPERA_MAXIMA = 90.0
 COLA = 6.0
+CONTEXTO = 16          # bytes a cada lado que se guardan de cada candidata
 SALIDA = Path("diagnostics/manual/bw_battle_lanes_latest.json")
 
 
@@ -70,38 +70,36 @@ def _leer(handle, direccion: int, tamano: int) -> bytes:
     return buffer.raw
 
 
-def _buscar_filas(ram: bytes, equipo, memoria) -> list[dict]:
-    """Todas las posiciones que describen a un miembro del equipo."""
-    por_firma = {
-        (int(p.species_id), int(p.max_hp), int(p.ability_id), int(p.level)): p
-        for p in equipo
-    }
-    inicio_party = memoria.party_data - DS_RAM_BASE
-    fin_party = inicio_party + len(equipo) * PK5_PARTY_SIZE
+def _numero(mensaje: str) -> int | None:
+    respuesta = input(mensaje).strip()
+    if not respuesta:
+        return None
+    try:
+        return max(0, int(respuesta))
+    except ValueError:
+        print("  No era un numero.")
+        return None
 
-    salida: list[dict] = []
-    palabras = len(ram) // 2
-    valores = struct.unpack_from(f"<{palabras}H", ram, 0)
-    for indice in range(palabras - 7):
-        miembro = por_firma.get((
-            valores[indice], valores[indice + 1],
-            valores[indice + 5], valores[indice + 6],
-        ))
-        if miembro is None:
+
+def _cambiaron(antes: bytes, despues: bytes, viejo: int, nuevo: int) -> list[int]:
+    """Posiciones que contenian el valor viejo y ahora contienen el nuevo.
+
+    Un numero suelto aparece muchas veces en 4 MiB; lo que no aparece por azar
+    es que en la MISMA posicion cambie exactamente de uno al otro.
+    """
+    patron_viejo = struct.pack("<H", viejo)
+    patron_nuevo = struct.pack("<H", nuevo)
+    salida: list[int] = []
+    desde = 0
+    while True:
+        indice = antes.find(patron_viejo, desde)
+        if indice < 0:
+            return salida
+        desde = indice + 1
+        if indice % 2:
             continue
-        offset = indice * 2
-        if inicio_party <= offset < fin_party:
-            continue        # el bloque de equipo no es el carril de combate
-        if valores[indice + 2] > miembro.max_hp:
-            continue
-        salida.append({
-            "direccion": f"0x{DS_RAM_BASE + offset:08X}",
-            "offset": offset,
-            "mote": miembro.nickname,
-            "ps_inicial": int(valores[indice + 2]),
-            "max_hp": int(miembro.max_hp),
-        })
-    return salida
+        if despues[indice:indice + 2] == patron_nuevo:
+            salida.append(indice)
 
 
 def main() -> None:
@@ -109,110 +107,140 @@ def main() -> None:
     lector = B2W2MelonDSReader(memoria)
     party = lector.read_party()
     print(f"melonDS PID {party.process_id} - {memoria.label}")
-    for p in party.pokemon:
-        print(f"   {p.nickname:12} Nv.{p.level:3}  PS {p.current_hp}/{p.max_hp}")
+    for indice, p in enumerate(party.pokemon):
+        print(f"   {indice + 1}. {p.nickname:12} Nv.{p.level:3}  PS {p.current_hp}/{p.max_hp}")
     print()
-    print("=== PASO 1: entra en combate ===")
-    print("Mejor si tu Pokemon ya ha recibido algun golpe: con la vida llena")
-    print("hay mas filas que coinciden por casualidad.")
+    print("=== PASO 1 de 3: quien esta luchando ===")
+    print("Entra en combate y mira los PS del Pokemon que tienes en el campo.")
     print()
-    input("Cuando estes en combate, pulsa INTRO...")
+    antes_ps = _numero("  Cuantos PS le quedan AHORA? ")
+    if antes_ps is None:
+        print("\nSin ese dato no se puede buscar nada.")
+        input()
+        return
 
     handle = _abrir(party.process_id)
     try:
-        print("Buscando las copias... no toques el juego.")
-        ram = _leer(handle, party.allocation_base, TAMANO_RAM)
-        filas = _buscar_filas(ram, party.pokemon, memoria)
+        print("Leyendo... no toques el juego.")
+        antes = _leer(handle, party.allocation_base, TAMANO_RAM)
+
         print()
-        print(f"Filas encontradas: {len(filas)}")
-        for f in filas:
-            print(f"   {f['direccion']}  {f['mote']:11} PS {f['ps_inicial']}/{f['max_hp']}")
-        if not filas:
-            print()
-            print("Ninguna. Puede que el combate no haya empezado del todo.")
+        print("=== PASO 2 de 3: recibe un golpe ===")
+        print("Ejecuta un turno en el que TU Pokemon reciba dano y espera a que")
+        print("la barra termine de bajar del todo.")
+        print()
+        input("Cuando la barra se haya quedado quieta, pulsa INTRO...")
+        despues_ps = _numero("  Cuantos PS le quedan AHORA? ")
+        if despues_ps is None or despues_ps == antes_ps:
+            print("\nHace falta que los PS hayan cambiado.")
             input()
             return
+        print("Leyendo otra vez... no toques el juego.")
+        despues = _leer(handle, party.allocation_base, TAMANO_RAM)
+
+        candidatas = _cambiaron(antes, despues, antes_ps, despues_ps)
+        inicio_party = memoria.party_data - DS_RAM_BASE
+        fin_party = inicio_party + len(party.pokemon) * PK5_PARTY_SIZE
+        fuera = [c for c in candidatas if not inicio_party <= c < fin_party]
+
+        detalle = []
+        for offset in fuera:
+            desde = max(0, offset - CONTEXTO)
+            detalle.append({
+                "direccion": f"0x{DS_RAM_BASE + offset:08X}",
+                "offset": offset,
+                "contexto_antes": antes[desde:offset + CONTEXTO].hex(),
+                "contexto_despues": despues[desde:offset + CONTEXTO].hex(),
+            })
 
         print()
-        print("=== PASO 2: recibe un golpe ===")
-        print("Prepara un turno en el que TU Pokemon vaya a recibir dano.")
-        print("No lo ejecutes todavia.")
-        print()
-        input("Pulsa INTRO y ejecuta el turno...")
-        print("Vigilando las filas...")
+        print(f"Posiciones que pasaron de {antes_ps} a {despues_ps}: {len(candidatas)}")
+        print(f"  fuera del bloque de equipo: {len(fuera)}")
+        for d in detalle[:16]:
+            print(f"   {d['direccion']}")
+        if not fuera:
+            print()
+            print("Ninguna fuera del equipo. Eso querria decir que Blanco no")
+            print("mantiene una copia aparte, cosa que Negro 2 si hace.")
+            payload_vacio = True
+        else:
+            payload_vacio = False
 
-        direcciones = [party.allocation_base + f["offset"] for f in filas]
-        inicio = time.perf_counter()
-        anterior = None
-        primer_cambio = None
+        primeros: dict[int, float] = {}
         transiciones = []
         muestras = 0
-        while time.perf_counter() - inicio < ESPERA_MAXIMA:
-            ms = round((time.perf_counter() - inicio) * 1000, 1)
-            actual = tuple(
-                struct.unpack_from("<7H", _leer(handle, d, BATTLE_ROW_SIZE))
-                for d in direcciones
-            )
-            muestras += 1
-            if actual != anterior:
-                transiciones.append({
-                    "ms": ms,
-                    "ps": [int(v[2]) for v in actual],
-                    "filas": [list(v) for v in actual],
-                })
-                if anterior is not None and primer_cambio is None:
-                    primer_cambio = time.perf_counter()
-                    print(f"  cambio a los {ms:.0f} ms: PS {[int(v[2]) for v in actual]}")
-                anterior = actual
-            if primer_cambio is not None and time.perf_counter() - primer_cambio >= COLA:
-                break
-            time.sleep(0.01)
+        if fuera:
+            print()
+            print("=== PASO 3 de 3: otro golpe, para ver cual va primero ===")
+            print("Prepara otro turno en el que recibas dano. No lo ejecutes.")
+            print()
+            input("Pulsa INTRO y ejecuta el turno...")
+            print("Vigilando...")
+            direcciones = [party.allocation_base + o for o in fuera]
+            base = [
+                struct.unpack("<H", _leer(handle, d, 2))[0] for d in direcciones
+            ]
+            arranque = time.perf_counter()
+            primer_cambio = None
+            while time.perf_counter() - arranque < ESPERA_MAXIMA:
+                ms = round((time.perf_counter() - arranque) * 1000, 1)
+                actual = [
+                    struct.unpack("<H", _leer(handle, d, 2))[0] for d in direcciones
+                ]
+                muestras += 1
+                for i, valor in enumerate(actual):
+                    if i not in primeros and valor != base[i]:
+                        primeros[i] = ms
+                        if primer_cambio is None:
+                            primer_cambio = time.perf_counter()
+                        print(f"   {detalle[i]['direccion']} cambio a los {ms:.0f} ms "
+                              f"({base[i]} -> {valor})")
+                if actual != (transiciones[-1]["ps"] if transiciones else None):
+                    transiciones.append({"ms": ms, "ps": actual})
+                if primer_cambio is not None and time.perf_counter() - primer_cambio >= COLA:
+                    break
+                time.sleep(0.01)
     finally:
         _KERNEL32.CloseHandle(handle)
 
-    # Cuando cambio por primera vez cada fila.
-    primeros: dict[int, float] = {}
-    base = transiciones[0]["ps"] if transiciones else []
-    for tr in transiciones[1:]:
-        for i, ps in enumerate(tr["ps"]):
-            if i not in primeros and i < len(base) and ps != base[i]:
-                primeros[i] = tr["ms"]
-
     print()
-    print("Orden en que bajaron los PS:")
-    for i in sorted(primeros, key=lambda k: primeros[k]):
-        print(f"   {filas[i]['direccion']}  a los {primeros[i]:.0f} ms")
     if len(primeros) >= 2:
         orden = sorted(primeros, key=lambda k: primeros[k])
-        print()
-        print(f"   LOGICA (se adelanta):      {filas[orden[0]]['direccion']}")
-        print(f"   PRESENTACION (la barra):   {filas[orden[-1]]['direccion']}")
+        print(f"   LOGICA (se adelanta):    {detalle[orden[0]]['direccion']}")
+        print(f"   PRESENTACION (la barra): {detalle[orden[-1]]['direccion']}")
+        print(f"   diferencia: {primeros[orden[-1]] - primeros[orden[0]]:.0f} ms")
     elif len(primeros) == 1:
-        print()
-        print("Solo cambio una. Puede que solo haya una copia, o que la otra")
-        print("no estuviera entre las encontradas.")
+        print("Solo cambio una. Puede que Blanco tenga una sola copia aparte.")
+    elif not payload_vacio:
+        print("Ninguna cambio en el segundo golpe. Puede que el turno no llegara")
+        print("a resolverse dentro del tiempo de espera.")
 
     payload = {
-        "format": "rolerun-bw-battle-lanes-v1",
+        "format": "rolerun-bw-battle-lanes-v2",
         "captured_at": datetime.now().astimezone().isoformat(),
         "environment": f"{memoria.label} Espana - melonDS 1.1",
         "metodo": (
-            "Se buscan todas las filas que describen al Pokemon en combate y se "
-            "vigilan a la vez cada 10 ms. La que baja los PS antes es la logica; "
-            "la que lo hace despues, al ritmo de la barra, la de presentacion."
+            "Dos estados: se guardan las posiciones que contenian los PS viejos "
+            "y se conservan solo las que, en esa misma posicion, pasan a "
+            "contener los nuevos. No supone nada sobre el formato de la fila. "
+            "Despues se vigilan durante otro golpe para ver cual cambia antes."
         ),
+        "ps_antes": antes_ps,
+        "ps_despues": despues_ps,
         "equipo": [
             {"mote": p.nickname, "especie": int(p.species_id), "nivel": int(p.level),
              "ps": f"{p.current_hp}/{p.max_hp}", "habilidad": int(p.ability_id)}
             for p in party.pokemon
         ],
-        "filas": filas,
+        "candidatas": detalle,
         "muestras": muestras,
         "transiciones": transiciones,
-        "primer_cambio_ms": {filas[i]["direccion"]: primeros[i] for i in primeros},
+        "primer_cambio_ms": {
+            detalle[i]["direccion"]: primeros[i] for i in primeros
+        },
         "note": (
-            "Diagnostico de solo lectura. Sin dos filas que cambien no se puede "
-            "decidir cual manda en pantalla."
+            "Diagnostico de solo lectura. Una direccion aqui no pasa a "
+            "produccion mientras no se sepa cual manda en pantalla."
         ),
     }
     SALIDA.parent.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,91 @@
+{
+  "format": "rolerun-bw-battle-lanes-v1",
+  "captured_at": "2026-08-27T20:38:34.254190+02:00",
+  "environment": "Negro/Blanco Espana - melonDS 1.1",
+  "metodo": "Se buscan todas las filas que describen al Pokemon en combate y se vigilan a la vez cada 10 ms. La que baja los PS antes es la logica; la que lo hace despues, al ritmo de la barra, la de presentacion.",
+  "equipo": [
+    {
+      "mote": "Purrloin",
+      "especie": 509,
+      "nivel": 9,
+      "ps": "24/27",
+      "habilidad": 84
+    },
+    {
+      "mote": "Serperior",
+      "especie": 497,
+      "nivel": 50,
+      "ps": "144/150",
+      "habilidad": 65
+    },
+    {
+      "mote": "Patrat",
+      "especie": 504,
+      "nivel": 7,
+      "ps": "25/25",
+      "habilidad": 51
+    },
+    {
+      "mote": "Lillipup",
+      "especie": 506,
+      "nivel": 4,
+      "ps": "20/20",
+      "habilidad": 53
+    },
+    {
+      "mote": "Panpour",
+      "especie": 515,
+      "nivel": 10,
+      "ps": "30/30",
+      "habilidad": 82
+    }
+  ],
+  "filas": [
+    {
+      "direccion": "0x0226D670",
+      "offset": 2545264,
+      "mote": "Purrloin",
+      "ps_inicial": 0,
+      "max_hp": 27
+    },
+    {
+      "direccion": "0x0226E56C",
+      "offset": 2549100,
+      "mote": "Purrloin",
+      "ps_inicial": 0,
+      "max_hp": 27
+    }
+  ],
+  "muestras": 8298,
+  "transiciones": [
+    {
+      "ms": 0.0,
+      "ps": [
+        0,
+        0
+      ],
+      "filas": [
+        [
+          509,
+          27,
+          0,
+          0,
+          0,
+          84,
+          9
+        ],
+        [
+          509,
+          27,
+          0,
+          0,
+          0,
+          84,
+          9
+        ]
+      ]
+    }
+  ],
+  "primer_cambio_ms": {},
+  "note": "Diagnostico de solo lectura. Sin dos filas que cambien no se puede decidir cual manda en pantalla."
+}
