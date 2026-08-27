@@ -28,7 +28,7 @@ from ..hgss_live import (
     PC_BOX_SLOT_COUNT, HgssLiveError, HgssMelonDSReader,
 )
 from ..hgss_write import HgssMelonDSWriter, HgssRoleWrite
-from ..models import PendingPartyHeal, PendingRoleChange
+from ..models import PendingChange, PendingPartyHeal, PendingRoleChange
 from ..pk4 import STAT_ORDER_PERSONAL
 from ..pokemon_stats import nature_presentation, stat_dict
 from ..role_rules import ROLE_TO_MARKING, canonical_role, role_from_markings
@@ -398,6 +398,29 @@ class HgssRealTimeAdapter(RealTimeGameAdapter):
             markings=marcas, evs=evs, base_stats=base,
         )
 
+    def _move_target_for(self, party_read, change):
+        """Resuelve (miembro, identidad, hueco, movimiento) sin fiarse del slot.
+
+        Sirve igual para un drafteo que para una MT: el índice de equipo que
+        traía el cambio puede haber quedado obsoleto, así que se localiza al
+        Pokémon por su identidad, como en roles y curación.
+
+        Un movimiento cero significa borrar ese hueco; es lo que necesita un
+        Support al perder los ataques de daño que le sobran.
+        """
+        hueco_equipo, miembro = self._localizar(
+            party_read, change, "el cambio de movimiento",
+        )
+        hueco = int(change.move_slot)
+        if not 1 <= hueco <= 4:
+            raise HgssLiveError(
+                "El hueco de movimiento tiene que estar entre 1 y 4."
+            )
+        return (
+            hueco_equipo, (int(miembro.pid), int(miembro.tid), int(miembro.sid)),
+            hueco, int(change.new_move_id),
+        )
+
     def _heal_target_for(self, party_read, change: PendingPartyHeal):
         hueco, miembro = self._localizar(party_read, change, "la curación")
         return hueco, (int(miembro.pid), int(miembro.tid), int(miembro.sid))
@@ -419,6 +442,19 @@ class HgssRealTimeAdapter(RealTimeGameAdapter):
             escrituras = [self._role_write_for(party_read, item) for item in cambios]
             self.writer.write_party_roles(party_read, escrituras)
             return self._resultado(current, len(escrituras))
+
+        # Solo `PendingChange`, que es el drafteo y el borrado. Las MT quedan
+        # fuera a propósito: **en cuarta generación se gastan al enseñarlas**,
+        # al contrario que en quinta. Escribir el movimiento sin descontar el
+        # objeto le regalaría la MT al jugador, y la mochila de HeartGold
+        # todavía no está mapeada.
+        if all(isinstance(item, PendingChange) for item in cambios):
+            party_read = self.reader.read_party()
+            ensenanzas = [self._move_target_for(party_read, item) for item in cambios]
+            self.writer.write_party_moves(
+                party_read, ensenanzas, base_pp_for=self.base_pp_for,
+            )
+            return self._resultado(current, len(ensenanzas))
 
         if all(isinstance(item, PendingPartyHeal) for item in cambios):
             party_read = self.reader.read_party()

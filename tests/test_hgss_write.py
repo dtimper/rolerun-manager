@@ -472,3 +472,139 @@ def test_con_la_rom_delante_manda_la_rom() -> None:
     assert adaptador.base_pp_for(44) == 7
     # Y donde la ROM no dice nada, la tabla de PKHeX sigue estando.
     assert adaptador.base_pp_for(1) == 35
+
+
+# --------------------------------------------------------------------------
+# Movimientos
+# --------------------------------------------------------------------------
+
+def test_ensenar_un_movimiento_deja_los_pp_al_maximo_y_los_mas_pp_a_cero() -> None:
+    from app.pk4 import pk4_party_with_move
+
+    original = parse_pk4_party(_bloque(), 0)
+    nuevo = parse_pk4_party(
+        pk4_party_with_move(_bloque(), 2, 100, base_pp_for=lambda _m: 20), 0,
+    )
+    assert nuevo.move_ids[1] == 100
+    assert nuevo.move_pp[1] == 20
+    # Los Más PP se aplicaron al movimiento anterior y no se heredan.
+    assert nuevo.move_pp_ups[1] == 0
+    # Los otros huecos no se tocan.
+    assert nuevo.move_ids[0] == original.move_ids[0]
+    assert nuevo.move_pp_ups[2] == original.move_pp_ups[2]
+    # Ni los PS: enseñar no cura.
+    assert nuevo.current_hp == original.current_hp
+
+
+def test_no_se_ensena_un_movimiento_que_ya_conoce() -> None:
+    # Reescribirlo encima le borraría los Más PP que tuviera puestos.
+    from app.pk4 import pk4_party_with_move
+
+    conocido = parse_pk4_party(_bloque(), 0).move_ids[0]
+    with pytest.raises(Pk4Error, match="ya conoce"):
+        pk4_party_with_move(_bloque(), 3, conocido, base_pp_for=lambda _m: 20)
+
+
+def test_no_se_ensena_sin_saber_los_pp() -> None:
+    from app.pk4 import pk4_party_with_move
+
+    with pytest.raises(Pk4Error, match="PP"):
+        pk4_party_with_move(_bloque(), 2, 100, base_pp_for=lambda _m: 0)
+
+
+def test_un_movimiento_que_no_existe_en_cuarta_se_rechaza() -> None:
+    from app.pk4 import MOVE_ID_MAX, pk4_party_with_move
+
+    assert MOVE_ID_MAX == 467
+    with pytest.raises(Pk4Error, match="no existe en cuarta"):
+        pk4_party_with_move(_bloque(), 2, 500, base_pp_for=lambda _m: 20)
+
+
+def test_borrar_un_movimiento_sube_los_de_detras() -> None:
+    # Un hueco vacío delante de uno lleno no es un moveset válido.
+    from app.pk4 import pk4_party_without_moves
+
+    original = parse_pk4_party(_bloque(), 0)
+    assert all(original.move_ids), "el caso necesita los cuatro huecos llenos"
+
+    nuevo = parse_pk4_party(pk4_party_without_moves(_bloque(), [1]), 0)
+    assert nuevo.move_ids == (*original.move_ids[1:], 0)
+    assert nuevo.move_pp == (*original.move_pp[1:], 0)
+    assert nuevo.move_pp_ups == (*original.move_pp_ups[1:], 0)
+
+
+def test_borrar_varios_huecos_a_la_vez_no_se_pisa() -> None:
+    from app.pk4 import pk4_party_without_moves
+
+    original = parse_pk4_party(_bloque(), 0)
+    nuevo = parse_pk4_party(pk4_party_without_moves(_bloque(), [1, 3]), 0)
+    assert nuevo.move_ids == (original.move_ids[1], original.move_ids[3], 0, 0)
+
+
+def test_no_se_borra_un_hueco_que_ya_estaba_vacio() -> None:
+    from app.pk4 import pk4_party_without_moves
+
+    vacio = pk4_party_without_moves(_bloque(), [4])
+    with pytest.raises(Pk4Error, match="ya estaba vacío"):
+        pk4_party_without_moves(vacio, [4])
+
+
+def test_el_writer_de_movimientos_escribe_y_verifica() -> None:
+    emulador = _MelonDSFalso()
+    writer = _WriterDePrueba(emulador)
+    lectura = emulador.read_party()
+    objetivo = lectura.pokemon[1]
+
+    despues = writer.write_party_moves(
+        lectura,
+        [(1, (objetivo.pid, objetivo.tid, objetivo.sid), 2, 100)],
+        base_pp_for=_pp_fijo,
+    )
+    assert despues.pokemon[1].move_ids[1] == 100
+    assert despues.pokemon[0].move_ids == lectura.pokemon[0].move_ids
+
+
+def test_el_writer_de_movimientos_borra_y_compacta() -> None:
+    emulador = _MelonDSFalso()
+    writer = _WriterDePrueba(emulador)
+    lectura = emulador.read_party()
+    objetivo = lectura.pokemon[0]
+    antes = objetivo.move_ids
+
+    despues = writer.write_party_moves(
+        lectura,
+        [(0, (objetivo.pid, objetivo.tid, objetivo.sid), 1, 0)],
+        base_pp_for=_pp_fijo,
+    )
+    assert despues.pokemon[0].move_ids == (*antes[1:], 0)
+
+
+def test_dos_cambios_de_movimiento_sobre_el_mismo_hueco_se_rechazan() -> None:
+    emulador = _MelonDSFalso()
+    writer = _WriterDePrueba(emulador)
+    lectura = emulador.read_party()
+    objetivo = lectura.pokemon[0]
+    identidad = (objetivo.pid, objetivo.tid, objetivo.sid)
+
+    with pytest.raises(HgssLiveError, match="mismo hueco"):
+        writer.write_party_moves(
+            lectura,
+            [(0, identidad, 2, 100), (0, identidad, 2, 101)],
+            base_pp_for=_pp_fijo,
+        )
+    assert emulador.escrituras == []
+
+
+def test_las_mt_no_entran_todavia_porque_en_cuarta_se_gastan() -> None:
+    """En quinta las MT son reutilizables; en cuarta **se consumen**.
+
+    Escribir el movimiento sin descontar el objeto le regalaría la MT al
+    jugador, y la mochila de HeartGold todavía no está mapeada.
+    """
+    import inspect
+
+    from app.realtime.hgss_adapter import HgssRealTimeAdapter
+
+    fuente = inspect.getsource(HgssRealTimeAdapter.apply_changes)
+    assert "PendingTMTeach" not in fuente
+    assert "PendingChange" in fuente

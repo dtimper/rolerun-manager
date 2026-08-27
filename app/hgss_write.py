@@ -35,7 +35,10 @@ from dataclasses import dataclass
 from .hgss_live import (
     _KERNEL32, DS_RAM_BASE, HgssLiveError, HgssMelonDSReader, HgssPartyRead,
 )
-from .pk4 import PK4_PARTY_SIZE, Pk4Error, pk4_party_healed, pk4_party_with_role
+from .pk4 import (
+    PK4_PARTY_SIZE, Pk4Error, pk4_party_healed, pk4_party_with_move,
+    pk4_party_with_role, pk4_party_without_moves,
+)
 
 _PROCESS_VM_READ = 0x0010
 _PROCESS_VM_WRITE = 0x0020
@@ -271,4 +274,93 @@ class HgssMelonDSWriter:
 
         return self._transaccion_de_equipo(
             party_read, heals, mutar, verificar, que="curación",
+        )
+
+    def write_party_moves(
+        self, party_read: HgssPartyRead, ensenanzas, *, base_pp_for,
+    ) -> HgssPartyRead:
+        """Cambia uno o varios movimientos como una única transacción.
+
+        ``ensenanzas`` son tuplas ``(hueco_equipo, identidad, hueco, move_id)``.
+        Un ``move_id`` de cero **borra** ese movimiento y compacta los huecos,
+        que es lo que necesita un Support al perder los ataques que le sobran.
+
+        Dentro de un mismo Pokémon se escriben primero los movimientos nuevos y
+        después los borrados, de atrás hacia delante: así cada hueco significa
+        lo mismo que cuando el usuario lo eligió y las compactaciones no se
+        pisan entre sí.
+        """
+        peticiones = list(ensenanzas)
+        if not peticiones:
+            raise HgssLiveError("No hay ningún movimiento de HeartGold que cambiar.")
+
+        por_miembro: dict[int, list[tuple[int, int]]] = {}
+        identidades: dict[int, tuple[int, int, int]] = {}
+        vistos: set[tuple[int, int]] = set()
+        for miembro, identidad, hueco, move_id in peticiones:
+            miembro, hueco, move_id = int(miembro), int(hueco), int(move_id)
+            if (miembro, hueco) in vistos:
+                raise HgssLiveError("Dos cambios de movimiento sobre el mismo hueco.")
+            vistos.add((miembro, hueco))
+            identidades[miembro] = tuple(identidad)
+            por_miembro.setdefault(miembro, []).append((hueco, move_id))
+
+        # Qué se espera ver después: los movimientos que tienen que estar, los
+        # que ya no, y en qué hueco exacto cuando ningún borrado mueve nada.
+        esperados: dict[int, tuple[set[int], set[int], dict[int, int]]] = {}
+
+        def mutar(hueco_equipo: int, bloque: bytes) -> bytes:
+            cambios = por_miembro[hueco_equipo]
+            original = party_read.pokemon[hueco_equipo]
+            borrados = [hueco for hueco, move_id in cambios if move_id <= 0]
+            presentes: set[int] = set()
+            ausentes = {int(original.move_ids[hueco - 1]) for hueco in borrados}
+            posiciones: dict[int, int] = {}
+            for hueco, move_id in cambios:
+                if move_id <= 0:
+                    continue
+                bloque = pk4_party_with_move(
+                    bloque, hueco, move_id, base_pp_for=base_pp_for,
+                )
+                presentes.add(move_id)
+                if not borrados:
+                    posiciones[hueco] = move_id
+            if borrados:
+                bloque = pk4_party_without_moves(bloque, borrados)
+            esperados[hueco_equipo] = (presentes, ausentes - presentes, posiciones)
+            return bloque
+
+        def verificar(miembro, hueco_equipo: int) -> None:
+            presentes, ausentes, posiciones = esperados[hueco_equipo]
+            actuales = [int(valor) for valor in miembro.move_ids]
+            for move_id in presentes:
+                if move_id not in actuales:
+                    raise HgssLiveError(
+                        "La verificación semántica del movimiento escrito falló."
+                    )
+                posicion = actuales.index(move_id)
+                if int(miembro.move_pp[posicion]) != int(base_pp_for(move_id) or 0):
+                    raise HgssLiveError("La verificación semántica de los PP falló.")
+            for move_id in ausentes:
+                if move_id in actuales:
+                    raise HgssLiveError("El movimiento que había que borrar sigue ahí.")
+            for hueco, move_id in posiciones.items():
+                if actuales[hueco - 1] != move_id:
+                    raise HgssLiveError(
+                        "El movimiento escrito no quedó en el hueco elegido."
+                    )
+            # Un hueco vacío delante de uno lleno no es un moveset válido.
+            vacio = False
+            for move_id in actuales:
+                if move_id == 0:
+                    vacio = True
+                elif vacio:
+                    raise HgssLiveError(
+                        "El Pokémon quedó con un hueco vacío delante de un movimiento."
+                    )
+
+        return self._transaccion_de_equipo(
+            party_read,
+            [(miembro, identidades[miembro]) for miembro in por_miembro],
+            mutar, verificar, que="movimiento",
         )

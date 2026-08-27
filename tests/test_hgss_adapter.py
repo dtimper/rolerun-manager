@@ -506,3 +506,58 @@ def test_cada_intento_de_escritura_viva_queda_registrado() -> None:
         assert f'"{etapa}"' in fuente, f"falta la etapa {etapa}"
     # Y no puede tumbar nada por no existir el método.
     _anotar_intento_vivo(object(), "prueba", dato=1)
+
+
+def test_un_drafteo_se_traduce_a_hueco_identidad_y_movimiento(adaptador) -> None:
+    from app.models import PendingChange
+
+    adapter, lector = adaptador
+    espia = _WriterEspia()
+    espia.movimientos = None
+
+    def anotar(party_read, ensenanzas, *, base_pp_for):
+        espia.movimientos = list(ensenanzas)
+        return party_read
+
+    espia.write_party_moves = anotar
+    adapter.writer = espia
+    _crudo, equipo = _party(lector.cuantos)
+    objetivo = equipo[2]
+
+    adapter.apply_changes(_guardado(equipo), [PendingChange(
+        pokemon_slot=objetivo.slot, pokemon=objetivo.nickname, species="",
+        role="Mago", move_slot=3, old_move="—", old_move_id=0,
+        new_move="Rayo", new_move_id=85,
+        pokemon_identity=_identidad_de_run(objetivo),
+    )])
+
+    assert espia.movimientos == [
+        (2, (objetivo.pid, objetivo.tid, objetivo.sid), 3, 85),
+    ]
+
+
+def test_un_hueco_de_movimiento_imposible_se_rechaza(adaptador) -> None:
+    from app.models import PendingChange
+
+    adapter, lector = adaptador
+    adapter.writer = _WriterEspia()
+    _crudo, equipo = _party(lector.cuantos)
+    objetivo = equipo[0]
+
+    with pytest.raises(HgssLiveError, match="entre 1 y 4"):
+        adapter.apply_changes(_guardado(equipo), [PendingChange(
+            pokemon_slot=0, pokemon=objetivo.nickname, species="", role="Mago",
+            move_slot=7, old_move="—", old_move_id=0, new_move="Rayo",
+            new_move_id=85, pokemon_identity=_identidad_de_run(objetivo),
+        )])
+
+
+def test_el_selector_de_mt_ya_no_deja_fuera_a_blanco() -> None:
+    """Su tabla está demostrada y su adaptador la lee; la lista estaba a mano."""
+    import inspect
+
+    from app.ui import RoleRunManager
+
+    fuente = inspect.getsource(RoleRunManager._open_tm_selector)
+    assert 'MTs todavía no disponibles' in fuente
+    assert '{"bdsp", "oras", "xy", "sm", "usum"} | MELONDS_GEN5_REALTIME_GAME_KEYS' in fuente

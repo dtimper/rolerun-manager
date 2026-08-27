@@ -15519,7 +15519,11 @@ class RoleRunManager(ctk.CTk):
         is_usum = engine_key == "usum"
         is_gen7 = engine_key in GEN7_REALTIME_GAME_KEYS
         is_b2w2 = engine_key in MELONDS_GEN5_REALTIME_GAME_KEYS
-        if engine_key not in {"bdsp", "oras", "xy", "sm", "usum", "b2w2"}:
+        # Con la lista escrita a mano, a Blanco le faltaba su entrada desde que
+        # entró: su tabla de MT está demostrada y su adaptador la lee, pero este
+        # selector le contestaba que las MT no estaban disponibles. Se usa el
+        # conjunto, que es lo que se actualiza al añadir un juego.
+        if engine_key not in ({"bdsp", "oras", "xy", "sm", "usum"} | MELONDS_GEN5_REALTIME_GAME_KEYS):
             messagebox.showinfo(
                 "MTs todavía no disponibles",
                 "El selector automático de MTs todavía no está conectado a este adaptador de juego.",

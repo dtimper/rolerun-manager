@@ -1,6 +1,32 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.78 — HeartGold ya cambia movimientos
+
+Drafteo y borrado, con el mismo contrato transaccional. Dentro de un Pokémon se
+escriben primero los movimientos nuevos y después los borrados, de atrás hacia
+delante: así cada hueco significa lo mismo que cuando el usuario lo eligió.
+
+- Al enseñar, los PP quedan al máximo y **los Más PP de ese hueco vuelven a
+  cero**: se aplicaron al movimiento anterior y no se heredan.
+- Al borrar, los de detrás suben. Un hueco vacío delante de uno lleno no es un
+  moveset válido, y la verificación lo comprueba.
+- No se enseña un movimiento que el Pokémon ya conoce: reescribirlo encima le
+  borraría sus Más PP.
+
+**Las MT quedan fuera a propósito.** En cuarta generación **se gastan al
+enseñarlas**, al contrario que en quinta. Escribir el movimiento sin descontar
+el objeto le regalaría la MT al jugador, y la mochila de HeartGold todavía no
+está mapeada. El selector ya dice que no están disponibles.
+
+**Y de paso, un fallo de Blanco.** El selector de MT llevaba la lista de juegos
+escrita a mano y a Blanco le faltaba su entrada desde que entró: su tabla está
+demostrada y su adaptador la lee, pero el selector le contestaba que las MT no
+estaban disponibles. Ahora usa el conjunto, que es lo que se actualiza al añadir
+un juego. Es el segundo fallo de este tipo en dos días.
+
+Suite completa: **1686**.
+
 # v0.2.6-alpha.77 — la curación fallaba por unos PP que nadie tenía
 
 El registro de escrituras vivas que entró en la versión anterior lo dijo con

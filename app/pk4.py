@@ -454,3 +454,90 @@ def pk4_party_healed(block: bytes, *, base_pp_for) -> bytes:
         canonico[PK4_MOVE_PP + indice] = min(255, base * (5 + mas_pp) // 5)
 
     return reshuffle_pk4(pid, orden, canonico) + _crypt(bytes(extension), pid)
+
+
+# Cuarta generación llega hasta Ataque Aéreo (#467). Un identificador mayor no
+# es un movimiento que este juego pueda enseñar.
+MOVE_ID_MAX = 467
+
+
+def pk4_party_with_move(
+    block: bytes, move_slot: int, move_id: int, *, base_pp_for,
+) -> bytes:
+    """El PK4 de combate con un movimiento nuevo en el hueco indicado.
+
+    ``move_slot`` es 1..4, como lo cuenta la interfaz. Los PP quedan al máximo
+    del movimiento nuevo y los Más PP de ese hueco vuelven a cero: se aplicaron
+    al movimiento anterior y no se heredan.
+
+    No toca la extensión de combate: enseñar un movimiento no cambia PS, estado
+    ni estadísticas.
+    """
+    if len(block) != PK4_PARTY_SIZE:
+        raise Pk4Error(f"El bloque PK4 de combate no mide {PK4_PARTY_SIZE} bytes.")
+    move_slot = int(move_slot)
+    if not 1 <= move_slot <= 4:
+        raise Pk4Error("El hueco de movimiento tiene que estar entre 1 y 4.")
+    move_id = int(move_id)
+    if not 1 <= move_id <= MOVE_ID_MAX:
+        raise Pk4Error(f"El movimiento #{move_id} no existe en cuarta generación.")
+
+    pid, orden, canonico = unshuffle_pk4(block[:PK4_STORED_SIZE])
+    indice = move_slot - 1
+    actuales = struct.unpack_from("<4H", canonico, PK4_MOVES)
+    # Incluido el propio hueco: el juego tampoco deja enseñar un movimiento que
+    # el Pokémon ya conoce, y reescribirlo encima le borraría sus Más PP.
+    repetido = next(
+        (posicion for posicion, valor in enumerate(actuales) if valor == move_id), None,
+    )
+    if repetido is not None:
+        raise Pk4Error(
+            f"Ese Pokémon ya conoce el movimiento #{move_id} en el hueco {repetido + 1}."
+        )
+
+    base = int(base_pp_for(move_id) or 0)
+    if base <= 0:
+        raise Pk4Error(
+            f"No se pudo demostrar el PP del movimiento #{move_id}; no se enseñó nada."
+        )
+    if base > 0xFF:
+        raise Pk4Error(f"El PP del movimiento #{move_id} no cabe en un PK4.")
+
+    struct.pack_into("<H", canonico, PK4_MOVES + indice * 2, move_id)
+    canonico[PK4_MOVE_PP + indice] = base
+    canonico[PK4_MOVE_PP_UPS + indice] = 0
+    return reshuffle_pk4(pid, orden, canonico) + block[PK4_STORED_SIZE:]
+
+
+def pk4_party_without_moves(block: bytes, huecos) -> bytes:
+    """El PK4 sin los movimientos indicados, compactando los huecos.
+
+    ``huecos`` son posiciones 1..4. Se borran de atrás hacia delante y el resto
+    sube: un Pokémon no puede tener un hueco vacío delante de uno lleno.
+    """
+    if len(block) != PK4_PARTY_SIZE:
+        raise Pk4Error(f"El bloque PK4 de combate no mide {PK4_PARTY_SIZE} bytes.")
+    posiciones = sorted({int(valor) for valor in huecos}, reverse=True)
+    if not posiciones:
+        raise Pk4Error("No hay ningún movimiento que borrar.")
+    for posicion in posiciones:
+        if not 1 <= posicion <= 4:
+            raise Pk4Error("El hueco de movimiento tiene que estar entre 1 y 4.")
+
+    pid, orden, canonico = unshuffle_pk4(block[:PK4_STORED_SIZE])
+    for posicion in posiciones:
+        indice = posicion - 1
+        if struct.unpack_from("<H", canonico, PK4_MOVES + indice * 2)[0] == 0:
+            raise Pk4Error(f"El hueco {posicion} de ese Pokémon ya estaba vacío.")
+        for actual in range(indice, 3):
+            siguiente = actual + 1
+            struct.pack_into(
+                "<H", canonico, PK4_MOVES + actual * 2,
+                struct.unpack_from("<H", canonico, PK4_MOVES + siguiente * 2)[0],
+            )
+            canonico[PK4_MOVE_PP + actual] = canonico[PK4_MOVE_PP + siguiente]
+            canonico[PK4_MOVE_PP_UPS + actual] = canonico[PK4_MOVE_PP_UPS + siguiente]
+        struct.pack_into("<H", canonico, PK4_MOVES + 3 * 2, 0)
+        canonico[PK4_MOVE_PP + 3] = 0
+        canonico[PK4_MOVE_PP_UPS + 3] = 0
+    return reshuffle_pk4(pid, orden, canonico) + block[PK4_STORED_SIZE:]

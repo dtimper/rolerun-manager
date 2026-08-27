@@ -49,7 +49,7 @@ class _Host:
 
 
 def test_alpha23_version_after_diagnostic_fix() -> None:
-    assert APP_VERSION == "0.2.6-alpha.77"
+    assert APP_VERSION == "0.2.6-alpha.78"
 
 
 def test_alpha22_read_pc_preserves_resolver_rejection_evidence_in_diagnostic(tmp_path: Path) -> None:
