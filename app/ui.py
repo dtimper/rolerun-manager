@@ -19288,8 +19288,23 @@ class RoleRunManager(ctk.CTk):
         else:
             old_evs = tuple(int(pokemon.evs.get(key, 0)) for key in STAT_KEYS)
             new_evs = None
-            if self._active_azahar_realtime_key() in ROLE_EV_WRITER_GAME_KEYS and pokemon.evs:
+            escribe_ev = self._active_azahar_realtime_key() in ROLE_EV_WRITER_GAME_KEYS
+            if escribe_ev and pokemon.evs:
                 new_evs = self._bdsp_role_evs(role, libero_stats)
+            if escribe_ev and role == "Líbero" and len(set(libero_stats)) != 2:
+                # El Líbero es el único rol cuyo reparto de EV no se deduce: hay
+                # que elegir dos estadísticas. Todos los caminos normales lo
+                # preguntan antes de llegar aquí, pero si alguno no lo hiciera,
+                # el rol se asignaría y los EV se quedarían como estaban **sin
+                # decir nada**. Un silencio así es indistinguible de que RoleRun
+                # no funcione, que es justo lo que hay que evitar.
+                self._set_operation_status(
+                    "warning", "FALTAN LOS EV DEL LÍBERO",
+                    f"{pokemon.nickname or pokemon.species} pasa a Líbero, pero nadie "
+                    "eligió sus dos estadísticas: se le deja el rol y los EV que ya "
+                    "tenía. Usa CAMBIAR ROL sobre él para repartirlos.",
+                    persistent=True,
+                )
             reconcile_gen7_stats = self._active_azahar_realtime_key() in {"sm", "usum"} and new_evs is not None
             if role != base_role or (new_evs is not None and new_evs != old_evs) or reconcile_gen7_stats:
                 old_role = visible_old_role if visible_old_role in {*ROLE_TO_KEY, "SIN ROL"} else base_role

@@ -214,3 +214,62 @@ def test_el_boton_solo_aparece_si_hay_algo_que_fijar() -> None:
 
     fuente_ui = inspect.getsource(RoleRunManager)
     assert "if faint_mode is None and self._roles_pendientes_de_fijar()" in fuente_ui
+
+
+# --------------------------------------------------------------------------
+# El Líbero sin sus dos estadísticas
+# --------------------------------------------------------------------------
+
+def test_el_intercambio_de_roles_pide_los_ev_del_nuevo_libero() -> None:
+    """Da igual en qué dirección se arrastre: quien acaba de Líbero decide.
+
+    Es el único rol cuyo reparto no se deduce del propio rol.
+    """
+    import types
+
+    from app.save_engine_client import SavePokemon
+    from app.ui import RoleRunManager
+
+    def mono(slot, nombre, rol):
+        return SavePokemon(
+            slot=slot, species_id=100 + slot, species=nombre, nickname=nombre,
+            level=10, held_item="", ability="", moves=[], move_ids=[],
+            is_egg=False, markings=[False] * 6, role=rol, role_symbol="",
+            pid=1000 + slot, tid=1, sid=2,
+        )
+
+    def arrastrar(rol_arrastrado: str, rol_destino: str) -> list[str]:
+        equipo = [mono(0, "LIBERO", "Líbero"), mono(1, "ASESINO", "Asesino")]
+        pedidos: list[str] = []
+        yo = types.SimpleNamespace(
+            run=types.SimpleNamespace(pending_changes=[]),
+            _effective_role=lambda p: (p.role, ""),
+            _projected_party=lambda: equipo,
+            _pokemon_identity=lambda p: f"{p.species_id}:{p.pid}:{p.tid}:{p.sid}",
+            _prompt_libero_ev_stats=(
+                lambda p, cb, context="main": pedidos.append(p.nickname)
+            ),
+            _set_projected_member_role=lambda *a, **k: None,
+        )
+        fuente = next(p for p in equipo if p.role == rol_arrastrado)
+        RoleRunManager._move_pokemon_to_role_by_drag(yo, fuente, rol_destino)
+        return pedidos
+
+    # El que se queda de Líbero es siempre el otro, se arrastre quien se arrastre.
+    assert arrastrar("Asesino", "Líbero") == ["ASESINO"]
+    assert arrastrar("Líbero", "Asesino") == ["ASESINO"]
+
+
+def test_asignar_libero_sin_estadisticas_avisa_en_vez_de_callarse() -> None:
+    """Un silencio ahí es indistinguible de que RoleRun no funcione.
+
+    Todos los caminos normales preguntan antes, pero si alguno no lo hiciera el
+    rol se asignaría y los EV se quedarían como estaban sin decir nada.
+    """
+    import inspect
+
+    from app.ui import RoleRunManager
+
+    fuente = inspect.getsource(RoleRunManager._apply_role_assignment)
+    assert 'role == "Líbero" and len(set(libero_stats)) != 2' in fuente
+    assert "FALTAN LOS EV DEL LÍBERO" in fuente

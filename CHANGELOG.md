@@ -1,6 +1,24 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.76 — un Líbero sin sus EV ya no se queda callado
+
+El intercambio de roles **sí** pide las dos estadísticas del nuevo Líbero: se ha
+comprobado en las dos direcciones —arrastrando el Asesino a la casilla del Líbero
+y al revés— y en ambas pregunta por el que acaba de Líbero. Esa comprobación
+queda como prueba.
+
+Lo que faltaba es qué pasa si algún camino **no** lo pregunta. Hasta ahora, el
+rol se asignaba y los EV se quedaban como estaban **sin decir nada**, porque el
+reparto del Líbero es el único que no se deduce del rol: `_bdsp_role_evs`
+devuelve `None` sin dos estadísticas elegidas. Un silencio así es
+indistinguible de que RoleRun no funcione.
+
+Ahora avisa, y dice qué hacer: usar CAMBIAR ROL sobre ese Pokémon para
+repartirlos.
+
+Suite completa: **1670**.
+
 # v0.2.6-alpha.75 — la prueba de una lectura buena es el checksum, no repetirla
 
 Alpha.74 se quedó corta. Reintentar la doble lectura no bastaba, y la medida lo
