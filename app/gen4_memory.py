@@ -57,6 +57,28 @@ SAVE_PC = 0x00F700
 # Reparto del PC, sondeado escribiendo en cuatro huecos concretos y mirando
 # donde caian: caja 1 hueco 1 en 0xF700, hueco 2 a 136 bytes, caja 2 a 0x1000 y
 # la ultima -caja 18 hueco 30- exactamente donde predice la cuenta.
+# La mochila, sondeada en PKHeX el 28-08-2026 tocando un hueco de cada bolsillo
+# y mirando qué bytes se movían. Cada hueco son cuatro bytes: identificador y
+# cantidad, los dos de 16 bits.
+#
+# El reparto de objetos también viene de PKHeX, no de la analogía con quinta:
+# el **Repelente Máximo (#77) vive en OBJETOS** y el **Caramelo Raro (#50) en
+# MEDICINAS**, que es además donde el propio juego tenía las Pociones del
+# usuario. Meterlos en el bolsillo equivocado los dejaría invisibles.
+SAVE_BAG_POUCHES: dict[str, tuple[int, int]] = {
+    "items": (0x000644, 162),
+    "key": (0x0008D8, 38),
+    "tmhm": (0x0009A0, 100),
+    "mail": (0x000B34, 12),
+    "medicine": (0x000B64, 38),
+    "berries": (0x000C04, 64),
+    "balls": (0x000D04, 24),
+    "battle": (0x000D64, 13),
+}
+BAG_SLOT_SIZE = 4
+# Topes que declara el propio juego.
+BAG_MAX_COUNT = 999
+MONEY_MAX = 999999
 PC_BOX_COUNT = 18
 PC_BOX_SLOT_COUNT = 30
 PC_BOX_STRIDE = 0x1000
@@ -85,6 +107,16 @@ class Gen4Memory:
     save_party_count: int = SAVE_PARTY_COUNT
     save_party_data: int = SAVE_PARTY_DATA
     save_pc: int = SAVE_PC
+    save_bag_pouches: dict[str, tuple[int, int]] | None = None
+
+    @property
+    def bag_pouches(self) -> dict[str, tuple[int, int]]:
+        """Dirección invitada y número de huecos de cada bolsillo."""
+        reparto = self.save_bag_pouches or SAVE_BAG_POUCHES
+        return {
+            nombre: (self.block_base + desplazamiento, huecos)
+            for nombre, (desplazamiento, huecos) in reparto.items()
+        }
 
     @property
     def block_base(self) -> int:

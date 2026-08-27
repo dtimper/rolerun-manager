@@ -32,8 +32,10 @@ import ctypes
 from ctypes import wintypes
 from dataclasses import dataclass
 
+from .gen4_memory import MONEY_MAX, SAVE_MONEY_SIZE
 from .hgss_live import (
-    _KERNEL32, DS_RAM_BASE, HgssLiveError, HgssMelonDSReader, HgssPartyRead,
+    _KERNEL32, DS_RAM_BASE, HgssBagRead, HgssLiveError, HgssMelonDSReader,
+    HgssPartyRead, bag_pocket_for, parse_bag_pocket, set_bag_quantity,
 )
 from .pk4 import (
     PK4_PARTY_SIZE, Pk4Error, pk4_party_healed, pk4_party_with_move,
@@ -364,3 +366,118 @@ class HgssMelonDSWriter:
             [(miembro, identidades[miembro]) for miembro in por_miembro],
             mutar, verificar, que="movimiento",
         )
+
+    # ------------------------------------------------------------------
+    # Mochila y dinero
+    # ------------------------------------------------------------------
+
+    def write_bag_items(self, party_read: HgssPartyRead, peticiones) -> HgssBagRead:
+        """Fija la cantidad de uno o varios objetos como una transacción.
+
+        ``peticiones`` son pares ``(item_id, cantidad)``. Mismo contrato que el
+        resto: relectura fresca, readback con el parser de producción,
+        verificación semántica y rollback completo por bolsillo.
+        """
+        entrada = [(int(a), int(b)) for a, b in peticiones]
+        if not entrada:
+            raise HgssLiveError("No hay ningún objeto de HeartGold que escribir.")
+        vistos: set[int] = set()
+        for item_id, _cantidad in entrada:
+            if item_id in vistos:
+                raise HgssLiveError(f"Dos cambios sobre el objeto #{item_id}.")
+            vistos.add(item_id)
+
+        antes = self.reader.read_bag(party_read)
+        nuevos = dict(antes.raw)
+        esperado: dict[int, int] = {}
+        for item_id, cantidad in entrada:
+            bolsillo = bag_pocket_for(self.memory, item_id)
+            nuevos[bolsillo.key] = set_bag_quantity(
+                nuevos[bolsillo.key], bolsillo, item_id, cantidad,
+            )
+            esperado[item_id] = cantidad
+
+        tocados = [
+            bolsillo for bolsillo in antes.pockets
+            if nuevos[bolsillo.key] != antes.raw[bolsillo.key]
+        ]
+        if not tocados:
+            # Ya estaba así: no se escribe un solo byte.
+            return antes
+
+        def escribir(origen: dict[str, bytes]) -> None:
+            for bolsillo in tocados:
+                self._write_process_bytes(
+                    party_read.process_id,
+                    party_read.allocation_base + (bolsillo.address - DS_RAM_BASE),
+                    origen[bolsillo.key],
+                )
+
+        def deshacer() -> None:
+            escribir(antes.raw)
+            if self.reader.read_bag(party_read).raw != antes.raw:
+                raise HgssLiveError(
+                    "El rollback de la mochila de HeartGold no se pudo confirmar; "
+                    "no guardes."
+                )
+
+        try:
+            escribir(nuevos)
+            despues = self.reader.read_bag(party_read)
+            for bolsillo in tocados:
+                if despues.raw[bolsillo.key] != nuevos[bolsillo.key]:
+                    raise HgssLiveError(
+                        f"El readback del bolsillo {bolsillo.key} no coincide."
+                    )
+                # Verificación semántica: el bolsillo sigue siendo una lista
+                # compacta y sin repetidos, leída por el parser de producción.
+                parse_bag_pocket(despues.raw[bolsillo.key], bolsillo)
+            for item_id, cantidad in esperado.items():
+                if int(despues.items.get(item_id, 0)) != cantidad:
+                    raise HgssLiveError(
+                        f"La verificación semántica del objeto #{item_id} falló."
+                    )
+            return despues
+        except Exception:
+            deshacer()
+            raise
+
+    def write_money(self, party_read: HgssPartyRead, cantidad: int) -> int:
+        """Fija el dinero del jugador. Son **tres** bytes, no cuatro."""
+        cantidad = int(cantidad)
+        if not 0 <= cantidad <= MONEY_MAX:
+            raise HgssLiveError(f"HeartGold admite como máximo {MONEY_MAX} ₽.")
+        antes = self.reader.read_trainer(party_read)
+        if antes.money == cantidad:
+            return antes.money
+        destino = (
+            party_read.allocation_base + (self.memory.money - DS_RAM_BASE)
+        )
+        viejo = int(antes.money).to_bytes(SAVE_MONEY_SIZE, "little")
+        nuevo = cantidad.to_bytes(SAVE_MONEY_SIZE, "little")
+
+        def deshacer() -> None:
+            self._write_process_bytes(party_read.process_id, destino, viejo)
+            if self.reader.read_trainer(party_read).money != antes.money:
+                raise HgssLiveError(
+                    "El rollback del dinero de HeartGold no se pudo confirmar; "
+                    "no guardes."
+                )
+
+        try:
+            self._write_process_bytes(party_read.process_id, destino, nuevo)
+            despues = self.reader.read_trainer(party_read)
+            if despues.money != cantidad:
+                raise HgssLiveError("El readback del dinero de HeartGold no coincide.")
+            # Las medallas viven cinco bytes más allá: si se hubiera escrito un
+            # byte de más, se notaría aquí.
+            if (despues.badges_johto, despues.badges_kanto) != (
+                antes.badges_johto, antes.badges_kanto
+            ):
+                raise HgssLiveError(
+                    "Escribir el dinero movió las medallas; se deshace el cambio."
+                )
+            return despues.money
+        except Exception:
+            deshacer()
+            raise

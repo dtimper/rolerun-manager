@@ -1,6 +1,34 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.79 — las tres utilidades de la cabecera, en HeartGold
+
+Caramelos Raros ×999, Repelentes Máximos ×999 y dinero al tope. Probado contra
+el juego vivo: los tres quedaron escritos y el parser de producción los volvió a
+leer donde tenían que estar.
+
+**La mochila, medida.** Los ocho bolsillos se sondearon en PKHeX tocando un
+hueco de cada uno y mirando qué bytes se movían, y después se comprobaron contra
+la RAM del juego: las Pociones, las Poké Balls y las dos MT del usuario
+aparecieron exactamente en el bolsillo que les toca. Cada hueco son cuatro
+bytes: identificador y cantidad.
+
+**El bolsillo no se hereda de quinta.** Lo dice PKHeX: el Repelente Máximo vive
+en OBJETOS y el Caramelo Raro en MEDICINAS. Meterlos en el equivocado los dejaría
+invisibles dentro del juego. Y el nombre de la utilidad se contrasta con la tabla
+de PKHeX antes de escribir: en BDSP una rotulada «Repelente Máximo» acabó tocando
+el Repelente normal.
+
+**El dinero son tres bytes**, y las medallas viven cinco más allá: la escritura
+comprueba que no se han movido antes de dar el cambio por bueno.
+
+Un bolsillo se mantiene compacto: poner cero borra el objeto y los de detrás
+suben. Un hueco vacío por medio invalida la lectura entera, porque significa que
+lo leído no es una mochila.
+
+`data/gen4_bag_layout.json`, `tools_extract_gen4_move_pp/` y
+`tests/test_hgss_bag.py` (17). Suite completa: **1705**.
+
 # v0.2.6-alpha.78 — HeartGold ya cambia movimientos
 
 Drafteo y borrado, con el mismo contrato transaccional. Dentro de un Pokémon se

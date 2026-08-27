@@ -33,13 +33,18 @@ ninguna capacidad.
 import ctypes
 import functools
 import os
+import struct
 import threading
 import time
 from ctypes import wintypes
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 
 from . import perf
 from .gen4_memory import (
+    BAG_MAX_COUNT,
+    BAG_SLOT_SIZE,
     GEN4_MEMORY,
     PC_BOX_COUNT,
     PC_BOX_SLOT_COUNT,
@@ -47,6 +52,8 @@ from .gen4_memory import (
     SAVE_MONEY_SIZE,
     Gen4Memory,
 )
+import json  # noqa: E402  (se usa para el reparto de la mochila)
+
 from .pk4 import (
     PK4_PARTY_SIZE,
     PK4_STORED_SIZE,
@@ -115,6 +122,25 @@ class HgssPCRead:
     raw: bytes
     empty_slots: int
     pokemon: tuple[Pk4Pokemon, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class HgssBagPocket:
+    """Un bolsillo de la mochila: dónde vive y qué objetos admite."""
+
+    key: str
+    label: str
+    address: int
+    slots: int
+    max_count: int
+    legal: frozenset[int]
+
+
+@dataclass(frozen=True, slots=True)
+class HgssBagRead:
+    pockets: tuple[HgssBagPocket, ...]
+    raw: dict[str, bytes]
+    items: dict[int, int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +214,122 @@ def _serialized(metodo):
             return metodo(self, *args, **kwargs)
 
     return envoltorio
+
+
+_BOLSILLOS_POR_TIPO = {
+    "Items": ("items", "Objetos"),
+    "KeyItems": ("key", "Objetos clave"),
+    "TMHMs": ("tmhm", "MT y MO"),
+    "MailItems": ("mail", "Cartas"),
+    "Medicine": ("medicine", "Medicinas"),
+    "Berries": ("berries", "Bayas"),
+    "Balls": ("balls", "Poké Balls"),
+    "BattleItems": ("battle", "Objetos de combate"),
+}
+
+
+@lru_cache(maxsize=1)
+def _reparto_de_la_mochila() -> dict[str, tuple[int, int, frozenset[int]]]:
+    """Qué objetos admite cada bolsillo, según PKHeX.
+
+    El reparto no se supone por analogía con quinta: el Repelente Máximo vive
+    en OBJETOS y el Caramelo Raro en MEDICINAS, y meterlos en el bolsillo
+    equivocado los dejaría invisibles dentro del juego.
+    """
+    ruta = Path(__file__).resolve().parent.parent / "data" / "gen4_bag_layout.json"
+    datos = json.loads(ruta.read_text(encoding="utf-8-sig"))
+    salida: dict[str, tuple[int, int, frozenset[int]]] = {}
+    for bolsillo in datos["bolsillos"]:
+        clave, _etiqueta = _BOLSILLOS_POR_TIPO[str(bolsillo["tipo"])]
+        salida[clave] = (
+            int(bolsillo["huecos"]), int(bolsillo["tope"]),
+            frozenset(int(valor) for valor in bolsillo["legales"]),
+        )
+    return salida
+
+
+def bag_pockets(memory: Gen4Memory) -> tuple[HgssBagPocket, ...]:
+    """Los ocho bolsillos con su dirección viva y su lista de objetos."""
+    reparto = _reparto_de_la_mochila()
+    salida = []
+    for clave, (direccion, huecos) in memory.bag_pouches.items():
+        declarados, tope, legales = reparto[clave]
+        if declarados != huecos:
+            raise HgssLiveError(
+                f"El bolsillo {clave} declara {huecos} huecos y el reparto {declarados}."
+            )
+        etiqueta = next(
+            nombre for _tipo, (c, nombre) in _BOLSILLOS_POR_TIPO.items() if c == clave
+        )
+        salida.append(HgssBagPocket(clave, etiqueta, direccion, huecos, tope, legales))
+    return tuple(salida)
+
+
+def bag_pocket_for(memory: Gen4Memory, item_id: int) -> HgssBagPocket:
+    """A qué bolsillo pertenece un objeto."""
+    for bolsillo in bag_pockets(memory):
+        if int(item_id) in bolsillo.legal:
+            return bolsillo
+    raise HgssLiveError(
+        f"El objeto #{int(item_id)} no pertenece a ningún bolsillo de HeartGold."
+    )
+
+
+def parse_bag_pocket(crudo: bytes, bolsillo: HgssBagPocket) -> dict[int, int]:
+    """Los objetos de un bolsillo, en orden y sin huecos por medio."""
+    if len(crudo) != bolsillo.slots * BAG_SLOT_SIZE:
+        raise HgssLiveError(f"El bolsillo {bolsillo.key} llegó con otro tamaño.")
+    dentro: dict[int, int] = {}
+    visto_vacio = False
+    for indice in range(bolsillo.slots):
+        item_id, cantidad = struct.unpack_from("<2H", crudo, indice * BAG_SLOT_SIZE)
+        if item_id == 0:
+            visto_vacio = True
+            continue
+        if visto_vacio:
+            # Un hueco vacío delante de uno lleno no es una mochila válida: el
+            # juego las mantiene compactadas.
+            raise HgssLiveError(
+                f"El bolsillo {bolsillo.key} tiene un hueco vacío antes del final."
+            )
+        if item_id in dentro:
+            raise HgssLiveError(
+                f"El bolsillo {bolsillo.key} repite el objeto #{item_id}."
+            )
+        if cantidad > BAG_MAX_COUNT:
+            raise HgssLiveError(
+                f"El objeto #{item_id} declara {cantidad} unidades, más del tope."
+            )
+        dentro[item_id] = cantidad
+    return dentro
+
+
+def set_bag_quantity(crudo: bytes, bolsillo: HgssBagPocket, item_id: int, cantidad: int) -> bytes:
+    """Fija la cantidad de un objeto conservando el compactado del bolsillo.
+
+    Con cantidad cero el objeto desaparece y los de detrás suben. Si el objeto
+    no estaba, se añade al final.
+    """
+    item_id, cantidad = int(item_id), int(cantidad)
+    if item_id not in bolsillo.legal:
+        raise HgssLiveError(
+            f"El objeto #{item_id} no cabe en el bolsillo {bolsillo.key}."
+        )
+    if not 0 <= cantidad <= bolsillo.max_count:
+        raise HgssLiveError(
+            f"{bolsillo.label} admite como máximo {bolsillo.max_count} unidades."
+        )
+    dentro = parse_bag_pocket(crudo, bolsillo)
+    if cantidad:
+        dentro[item_id] = cantidad
+    else:
+        dentro.pop(item_id, None)
+    if len(dentro) > bolsillo.slots:
+        raise HgssLiveError(f"El bolsillo {bolsillo.key} se quedó sin huecos.")
+    nuevo = bytearray(len(crudo))
+    for indice, (identificador, unidades) in enumerate(dentro.items()):
+        struct.pack_into("<2H", nuevo, indice * BAG_SLOT_SIZE, identificador, unidades)
+    return bytes(nuevo)
 
 
 def parse_party_block(crudo: bytes, cuantos: int) -> tuple[Pk4Pokemon, ...]:
@@ -493,6 +635,47 @@ class HgssMelonDSReader:
                 lectura.process_id, lectura.process_name, lectura.allocation_base,
                 self.memory.pc, primera, vacios, dentro,
             )
+        finally:
+            _KERNEL32.CloseHandle(handle)
+
+    @_serialized
+    @perf.timed("hgss.read_bag")
+    def read_bag(self, party_read: HgssPartyRead | None = None) -> HgssBagRead:
+        """Lee los ocho bolsillos, con la misma paciencia que el resto."""
+        lectura = party_read or self.read_party()
+        handle = self._abrir(lectura, "la mochila")
+        bolsillos = bag_pockets(self.memory)
+
+        def leer(invitado: int, tamano: int) -> bytes:
+            direccion = lectura.allocation_base + (invitado - DS_RAM_BASE)
+            buffer = ctypes.create_string_buffer(tamano)
+            recibido = ctypes.c_size_t()
+            if not _KERNEL32.ReadProcessMemory(
+                handle, ctypes.c_void_p(direccion), buffer, tamano,
+                ctypes.byref(recibido),
+            ) or recibido.value != tamano:
+                raise HgssLiveError("Lectura incompleta de la mochila de HeartGold.")
+            return buffer.raw
+
+        def capturar() -> dict[str, bytes]:
+            return {
+                bolsillo.key: leer(bolsillo.address, bolsillo.slots * BAG_SLOT_SIZE)
+                for bolsillo in bolsillos
+            }
+
+        try:
+            crudo = None
+            for _intento in range(INTENTOS_EN_LA_BASE_CONOCIDA):
+                primera, segunda = capturar(), capturar()
+                if primera == segunda:
+                    crudo = primera
+                    break
+            if crudo is None:
+                raise HgssLiveError("La mochila de HeartGold no se quedó quieta.")
+            objetos: dict[int, int] = {}
+            for bolsillo in bolsillos:
+                objetos.update(parse_bag_pocket(crudo[bolsillo.key], bolsillo))
+            return HgssBagRead(bolsillos, crudo, objetos)
         finally:
             _KERNEL32.CloseHandle(handle)
 

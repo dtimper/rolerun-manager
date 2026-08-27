@@ -23,12 +23,15 @@ from pathlib import Path
 from ..boxed_metadata import (
     ability_name, base_stats_for, boxed_level, item_name, species_name,
 )
+from ..gen4_memory import MONEY_MAX
 from ..gen4_memory import GEN4_MEMORY, Gen4Memory
 from ..hgss_live import (
     PC_BOX_SLOT_COUNT, HgssLiveError, HgssMelonDSReader,
 )
 from ..hgss_write import HgssMelonDSWriter, HgssRoleWrite
-from ..models import PendingChange, PendingPartyHeal, PendingRoleChange
+from ..models import (
+    PendingChange, PendingInventoryChange, PendingPartyHeal, PendingRoleChange,
+)
 from ..pk4 import STAT_ORDER_PERSONAL
 from ..pokemon_stats import nature_presentation, stat_dict
 from ..role_rules import ROLE_TO_MARKING, canonical_role, role_from_markings
@@ -39,6 +42,14 @@ from .models import (
 )
 
 PC_BOX_COUNT_HGSS = 18
+
+# Las tres utilidades de la cabecera. El bolsillo no se supone por analogía con
+# quinta: PKHeX dice que el Repelente Máximo vive en OBJETOS y el Caramelo Raro
+# en MEDICINAS, y meterlos en el equivocado los dejaría invisibles.
+HGSS_UTILITY_ITEMS = {
+    "rare-candy": 50,
+    "max-repel": 77,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -425,6 +436,46 @@ class HgssRealTimeAdapter(RealTimeGameAdapter):
         hueco, miembro = self._localizar(party_read, change, "la curación")
         return hueco, (int(miembro.pid), int(miembro.tid), int(miembro.sid))
 
+    @staticmethod
+    def _utility_item_for(change: PendingInventoryChange) -> int:
+        """Traduce una utilidad de la cabecera a un objeto demostrado.
+
+        El nombre se contrasta con la tabla de PKHeX antes de escribir: en BDSP
+        una utilidad rotulada «Repelente Máximo» acabó modificando el Repelente
+        normal, y esta comprobación es lo que impide repetirlo.
+        """
+        item_id = HGSS_UTILITY_ITEMS.get(str(change.item_key))
+        if item_id is None:
+            raise HgssLiveError(
+                f"La utilidad «{change.item_key}» no tiene objeto demostrado "
+                "en HeartGold."
+            )
+        if str(change.item_name).strip() != item_name(item_id):
+            raise HgssLiveError(
+                f"La utilidad «{change.item_key}» dice ser «{change.item_name}» "
+                f"pero el objeto #{item_id} es «{item_name(item_id)}»."
+            )
+        return item_id
+
+    def _apply_inventory(self, current: SaveGameData, changes):
+        party_read = self.reader.read_party()
+        dinero = [item for item in changes if str(item.item_key) == "money-max"]
+        objetos = [item for item in changes if str(item.item_key) != "money-max"]
+        if len(dinero) > 1:
+            raise HgssLiveError(
+                "Dos utilidades de dinero de HeartGold en la misma transacción."
+            )
+        if objetos:
+            self.writer.write_bag_items(party_read, [
+                (self._utility_item_for(item), int(item.quantity)) for item in objetos
+            ])
+        if dinero:
+            cantidad = int(dinero[0].quantity)
+            if not 0 <= cantidad <= MONEY_MAX:
+                raise HgssLiveError(f"HeartGold admite como máximo {MONEY_MAX} ₽.")
+            self.writer.write_money(party_read, cantidad)
+        return self._resultado(current, len(list(changes)))
+
     def _resultado(self, current: SaveGameData, aplicados: int):
         vivo = self._capture(current, 0)
         vivo.game.raw["writes_enabled"] = True
@@ -436,6 +487,9 @@ class HgssRealTimeAdapter(RealTimeGameAdapter):
         cambios = list(changes)
         if not cambios:
             raise HgssLiveError("No hay ningún cambio de HeartGold que aplicar.")
+
+        if all(isinstance(item, PendingInventoryChange) for item in cambios):
+            return self._apply_inventory(current, cambios)
 
         if all(isinstance(item, PendingRoleChange) for item in cambios):
             party_read = self.reader.read_party()
