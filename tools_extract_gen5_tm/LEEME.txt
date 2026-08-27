@@ -1,0 +1,33 @@
+Extractor de la tabla de MT/MO de Negro 2 y Blanco 2.
+
+QUE HACE
+
+Genera data/b2w2_tm_table.json: los 101 objetos MT/MO de quinta generacion y el
+movimiento que ensena cada uno.
+
+POR QUE NO HACE FALTA LA ROM DEL USUARIO
+
+Quinta generacion no admite la randomizacion de MT que si obliga a leer la ROM
+en ORAS, X/Y o Perla Reluciente. La correspondencia es la misma en toda partida
+de B2/W2, asi que se extrae una sola vez y se guarda en el repositorio.
+
+COMO LO AVERIGUA
+
+No copia ninguna lista a mano. Para cada indice de MT enciende SOLO ese bit en
+una ficha personal en blanco y le pregunta a PKHeX (LearnSource5B2W2.GetIsTM)
+que movimiento pasa a ser ensenable. Si dos movimientos se encendieran, o
+ninguno, la extraccion falla en lugar de publicar una tabla dudosa.
+
+CUANDO VOLVER A EJECUTARLO
+
+Solo si se actualiza engine/publish/PKHeX.Core.dll.
+
+    dotnet run --project tools_extract_gen5_tm -- data/b2w2_tm_table.json
+
+QUE NO EXTRAE
+
+La compatibilidad por especie. RoleRun la ignora a proposito (ver el comentario
+de _build_tm_candidates en app/ui.py): una MT disponible se puede ensenar a
+cualquier Pokemon si el movimiento existe y el rol lo permite. Volcar 731 fichas
+personales seria dato muerto. PersonalInfo5B2W2.GetIsLearnTM la tiene si algun
+dia hiciera falta.

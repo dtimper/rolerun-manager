@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <AssemblyName>RoleRun.ExtractGen5TM</AssemblyName>
+    <RootNamespace>RoleRun.ExtractGen5TM</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="PKHeX.Core">
+      <HintPath>..\engine\publish\PKHeX.Core.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+</Project>
