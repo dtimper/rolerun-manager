@@ -1,6 +1,21 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.18 — el bucle de mando deja de robar CPU a la interfaz
+
+- Mientras no hubiera un mando resuelto, el bucle de mando buscaba Ryujinx en
+  **cada tick de 16 ms**, y esa búsqueda enumera la tabla completa de procesos
+  de Windows. Sin Ryujinx abierto —todos los juegos salvo BDSP— eso costaba
+  2,36 ms por intento: **142 ms de CPU por segundo, el 14 % de un núcleo**,
+  robados al hilo que dibuja la interfaz desde el splash y durante toda la
+  sesión.
+- La búsqueda pasa a intentarse como mucho cada 2 s. Conectar Ryujinx a mitad de
+  sesión se sigue detectando; solo tarda unos segundos, imperceptible.
+- No se restringe la búsqueda a BDSP: no está demostrado que el mando no se use
+  en otros juegos con Ryujinx instalado, y el intervalo ya elimina el coste.
+- Medición hecha con la instrumentación de alpha.15 en esta máquina.
+- Baseline completa: **940 passed**.
+
 # v0.2.6-alpha.17 — monitor que no se queda huérfano y sprites que no bloquean
 
 - **R1 corregido.** Si el usuario guardaba dentro del juego mientras una lectura

@@ -146,6 +146,10 @@ AUTOMATIC_BADGE_GAME_KEYS = {"oras", "xy", "sm", "usum"}
 # colgada indefinidamente. La barrera inicial espera a los sprites, así que ese
 # cuelgue dejaba RoleRun en la pantalla de carga para siempre.
 SPRITE_DOWNLOAD_TIMEOUT_SECONDS = 8.0
+# Buscar Ryujinx enumera la tabla completa de procesos de Windows (2,4 ms
+# medidos). El bucle de mando corre a 60 Hz en el hilo Tk, asi que hacerlo
+# en cada tick consumia el 14 % de un nucleo sin encontrar nada.
+GAMEPAD_DISCOVERY_INTERVAL_SECONDS = 2.0
 
 
 class RoleRunManager(ctk.CTk):
@@ -2860,6 +2864,26 @@ class RoleRunManager(ctk.CTk):
             self._floating_menu_control_bindings.append(sequence)
         launcher.focus_force()
 
+    def _gamepad_discovery_is_due(self, now: float | None = None) -> bool:
+        """Limita la búsqueda de Ryujinx a un intento cada pocos segundos.
+
+        ``SDLGamepad.from_ryujinx_process`` enumera la tabla completa de procesos
+        de Windows. Sin Ryujinx abierto —es decir, en todos los juegos salvo
+        BDSP— eso ocurría en cada tick del bucle de mando, a 60 Hz y en el hilo
+        de la interfaz. Medido en esta máquina: 2,36 ms por intento, o **142 ms
+        de CPU por segundo (14 % de un núcleo)** dedicados exclusivamente a no
+        encontrar nada, desde el splash y durante toda la sesión.
+
+        Con el intervalo, conectar Ryujinx a mitad de sesión sigue detectándose;
+        solo tarda unos segundos, que es imperceptible para el usuario.
+        """
+        moment = time.monotonic() if now is None else float(now)
+        last = getattr(self, "_gamepad_discovery_last_attempt", None)
+        if last is not None and moment - last < GAMEPAD_DISCOVERY_INTERVAL_SECONDS:
+            return False
+        self._gamepad_discovery_last_attempt = moment
+        return True
+
     @perf.timed_aggregate("ui.poll_gamepad")
     def _poll_gamepad(self) -> None:
         """Publica flancos SDL2 y reserva automáticamente cada atajo.
@@ -2874,7 +2898,7 @@ class RoleRunManager(ctk.CTk):
             # navega RoleRun nunca alcanza también a Ryujinx en segundo plano.
             role_run_foreground = self._foreground_belongs_to_this_process()
             self._sync_role_run_foreground_input_gate()
-            if self._gamepad is None:
+            if self._gamepad is None and self._gamepad_discovery_is_due():
                 self._gamepad = SDLGamepad.from_ryujinx_process()
             sample = self._gamepad.sample() if self._gamepad is not None else None
             current = sample.pressed if sample and sample.connected else frozenset()

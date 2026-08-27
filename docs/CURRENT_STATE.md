@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.17`
+- Versión de aplicación: `v0.2.6-alpha.18`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,21 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.18 — el bucle de mando deja de robar CPU al hilo Tk
+
+Primera optimización de la fase de rendimiento apoyada en medición, no en
+sospecha. `_poll_gamepad` corre a 60 Hz en el hilo de la interfaz y, mientras no
+hubiera mando resuelto, buscaba Ryujinx en cada tick enumerando la tabla completa
+de procesos de Windows. Medido en esta máquina: 2,36 ms por intento, **142 ms de
+CPU por segundo (14 % de un núcleo)** gastados exclusivamente en no encontrar
+nada, en todos los juegos salvo BDSP y desde el propio splash.
+
+La búsqueda se limita a un intento cada 2 s. No se restringe a BDSP porque no
+está demostrado que el mando no se use en otros juegos con Ryujinx instalado, y
+el intervalo ya elimina prácticamente todo el coste.
+
+Baseline completa: **940 passed**.
 
 ### v0.2.6 Alpha.17 — monitor huérfano, error≠dato y sprites no bloqueantes
 
