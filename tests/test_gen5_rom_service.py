@@ -37,17 +37,24 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.b2w2_rom_service import (  # noqa: E402
+from app.gen5_rom_service import (  # noqa: E402
+    GEN5_GAMES,
     MOVE_COUNT,
     MOVE_PATH,
     MOVE_RECORD_SIZE,
-    PERSONAL_COUNT,
-    PERSONAL_PATH,
-    PERSONAL_RECORD_SIZE,
-    B2W2RomError,
-    discover_b2w2_rom,
-    load_b2w2_rom_profile,
+    Gen5RomError,
+    discover_gen5_rom,
+    load_gen5_rom_profile,
 )
+
+# El juego que estas pruebas usan como base. Blanco tiene su propia sección.
+_B2W2 = GEN5_GAMES["b2w2"]
+PERSONAL_PATH = _B2W2.personal_path
+PERSONAL_RECORD_SIZE = _B2W2.personal_record_size
+PERSONAL_COUNT = _B2W2.personal_count
+B2W2RomError = Gen5RomError
+discover_b2w2_rom = lambda ruta: discover_gen5_rom(ruta, "b2w2")  # noqa: E731
+load_b2w2_rom_profile = load_gen5_rom_profile
 from app.boxed_metadata import (  # noqa: E402
     base_stats_for,
     clear_personal_override,
@@ -156,6 +163,7 @@ def test_se_lee_una_rom_bien_formada(rom_sintetica) -> None:
     perfil = load_b2w2_rom_profile(rom_sintetica)
 
     assert perfil.title == "POKEMON B2"
+    assert perfil.game.key == "b2w2"
     assert len(perfil.personal) == PERSONAL_COUNT * PERSONAL_RECORD_SIZE
     assert len(perfil.moves) == MOVE_COUNT
 
@@ -164,7 +172,7 @@ def test_un_archivo_que_no_es_negro_2_se_rechaza(tmp_path) -> None:
     ruta = tmp_path / "otro.nds"
     ruta.write_bytes(_rom(titulo=b"POKEMON HG\x00\x00"))
 
-    with pytest.raises(B2W2RomError, match="no es una ROM de Negro 2"):
+    with pytest.raises(B2W2RomError, match="no es una ROM de quinta"):
         load_b2w2_rom_profile(ruta)
 
 
@@ -303,13 +311,15 @@ def test_olvidar_la_tabla_no_falla_aunque_no_hubiera_ninguna() -> None:
 # Contra la ROM real del usuario, si está en este equipo
 # --------------------------------------------------------------------------
 
-def _rom_real() -> Path | None:
+
+def _rom_real(clave: str) -> Path | None:
     base = Path("D:/Users/diego/Diego/Juegos/POKEMON ROLERUN")
     if not base.exists():
         return None
+    juego = GEN5_GAMES[clave]
     for candidata in sorted(base.glob("*/*.nds")):
         try:
-            if candidata.open("rb").read(12) in (b"POKEMON B2\x00\x00", b"POKEMON W2\x00\x00"):
+            if candidata.open("rb").read(12) in juego.titles:
                 return candidata
         except OSError:
             continue
@@ -318,7 +328,7 @@ def _rom_real() -> Path | None:
 
 @pytest.fixture(scope="module")
 def perfil_real():
-    ruta = _rom_real()
+    ruta = _rom_real("b2w2")
     if ruta is None:
         pytest.skip("La ROM de Negro 2/Blanco 2 no está en este equipo.")
     return load_b2w2_rom_profile(ruta)
@@ -516,3 +526,99 @@ def test_no_se_lee_la_rom_entera(tmp_path, monkeypatch) -> None:
 
     assert len(perfil.moves) == MOVE_COUNT
     assert leidos < len(crudo) // 4, f"se leyeron {leidos} de {len(crudo)} bytes"
+
+
+# --------------------------------------------------------------------------
+# Blanco/Negro: mismo lector, descriptor distinto
+# --------------------------------------------------------------------------
+
+_BW = GEN5_GAMES["bw"]
+
+
+def test_blanco_y_negro_2_no_comparten_tabla_personal() -> None:
+    """No es una copia con otro nombre: los registros son de otro tamaño.
+
+    Comprobado contra las dos ROM reales: B2/W2 usa 709 especies de 0x4C y
+    B/W 668 de 0x3C. Asumirlo igual habría dado estadísticas de otra especie.
+    """
+    assert _BW.personal_record_size == 0x3C
+    assert _B2W2.personal_record_size == 0x4C
+    assert _BW.personal_count == 668
+    assert _B2W2.personal_count == 709
+
+
+def test_la_tabla_de_movimientos_si_es_la_misma() -> None:
+    """560 registros de 36 bytes en ambos, en la misma ruta."""
+    assert MOVE_PATH == "a/0/2/1"
+    assert (MOVE_COUNT, MOVE_RECORD_SIZE) == (560, 0x24)
+
+
+def test_cada_juego_declara_sus_dos_titulos() -> None:
+    """Un cartucho se identifica por su título, que no depende del idioma."""
+    assert b"POKEMON B2\x00\x00" in _B2W2.titles
+    assert b"POKEMON W2\x00\x00" in _B2W2.titles
+    assert b"POKEMON B\x00\x00\x00" in _BW.titles
+    assert b"POKEMON W\x00\x00\x00" in _BW.titles
+    assert not (_BW.titles & _B2W2.titles), "ningún título puede valer para los dos"
+
+
+@pytest.fixture(scope="module")
+def perfil_bw():
+    ruta = _rom_real("bw")
+    if ruta is None:
+        pytest.skip("La ROM de Blanco/Negro no está en este equipo.")
+    return load_gen5_rom_profile(ruta, "bw")
+
+
+def test_la_tabla_personal_de_blanco_coincide_con_pkhex(perfil_bw) -> None:
+    """Salvo las habilidades, que PKHeX normaliza rellenando los ceros."""
+    referencia = (RAIZ / "data" / "pkhex_personal_bw.bin").read_bytes()
+    assert len(perfil_bw.personal) == len(referencia)
+
+    tamano = _BW.personal_record_size
+    distintas = {
+        offset % tamano
+        for offset in range(len(referencia))
+        if perfil_bw.personal[offset] != referencia[offset]
+        # El registro cero es un hueco que la ROM graba más corto.
+        and offset >= tamano
+    }
+    assert distintas <= {0x19, 0x1A}, "solo pueden diferir habilidad 2 y oculta"
+
+
+def test_las_estadisticas_base_de_blanco_coinciden_en_las_668(perfil_bw) -> None:
+    referencia = (RAIZ / "data" / "pkhex_personal_bw.bin").read_bytes()
+    tamano = _BW.personal_record_size
+    for indice in range(_BW.personal_count):
+        inicio = indice * tamano
+        assert perfil_bw.personal[inicio:inicio + 6] == referencia[inicio:inicio + 6]
+
+
+def test_los_movimientos_de_blanco_son_los_mismos_que_los_de_negro_2(perfil_bw) -> None:
+    """Comprobado byte a byte: la tabla de movimientos no cambió entre ambos."""
+    ruta = _rom_real("b2w2")
+    if ruta is None:
+        pytest.skip("La ROM de Negro 2 no está en este equipo.")
+    perfil_b2w2 = load_gen5_rom_profile(ruta, "b2w2")
+
+    assert perfil_bw.moves == perfil_b2w2.moves
+
+
+def test_una_rom_del_juego_equivocado_se_rechaza() -> None:
+    """Cargar Blanco donde toca Negro 2 daría estadísticas de otra tabla."""
+    ruta = _rom_real("bw")
+    if ruta is None:
+        pytest.skip("La ROM de Blanco/Negro no está en este equipo.")
+
+    with pytest.raises(Gen5RomError, match="hace falta"):
+        load_gen5_rom_profile(ruta, "b2w2")
+
+
+def test_el_descubrimiento_distingue_los_dos_juegos(tmp_path) -> None:
+    (tmp_path / "partida.nds").write_bytes(_rom(titulo=b"POKEMON B2\x00\x00"))
+    guardado = tmp_path / "partida.sav"
+    guardado.write_bytes(b"\x00" * 16)
+
+    assert discover_gen5_rom(guardado, "b2w2") == tmp_path / "partida.nds"
+    assert discover_gen5_rom(guardado, "bw") is None
+    assert discover_gen5_rom(guardado) == tmp_path / "partida.nds"

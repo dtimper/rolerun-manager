@@ -6,7 +6,10 @@ $ErrorActionPreference = "Stop"
 $dllPath = Join-Path $RepositoryRoot "engine\publish\PKHeX.Core.dll"
 $targets = @(
     @{ Output = "data\pkhex_personal_uu.bin"; Resource = "PKHeX.Core.Resources.byte.personal.personal_uu"; RecordSize = 0x54 },
-    @{ Output = "data\pkhex_personal_b2w2.bin"; Resource = "PKHeX.Core.Resources.byte.personal.personal_b2w2"; RecordSize = 0x4C }
+    @{ Output = "data\pkhex_personal_b2w2.bin"; Resource = "PKHeX.Core.Resources.byte.personal.personal_b2w2"; RecordSize = 0x4C },
+    # Blanco/Negro usan un registro MAS CORTO que Blanco 2/Negro 2: 0x3C
+    # frente a 0x4C. Comprobado contra la ROM real del usuario.
+    @{ Output = "data\pkhex_personal_bw.bin"; Resource = "PKHeX.Core.Resources.byte.personal.personal_bw"; RecordSize = 0x3C }
 )
 
 if (-not (Test-Path -LiteralPath $dllPath)) {

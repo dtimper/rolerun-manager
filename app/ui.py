@@ -71,10 +71,9 @@ from .oras_rom_service import (
     discover_azahar_oras_source,
     load_oras_rom_tm_profile,
 )
-from .b2w2_rom_service import (
-    PERSONAL_RECORD_SIZE as B2W2_PERSONAL_RECORD_SIZE,
-    discover_b2w2_rom,
-    load_b2w2_rom_profile_cached,
+from .gen5_rom_service import (
+    discover_gen5_rom,
+    load_gen5_rom_profile_cached,
 )
 from .boxed_metadata import clear_personal_override, set_personal_override
 from .xy_rom_service import XYRomProfileError, load_xy_rom_tm_profile
@@ -12847,19 +12846,19 @@ class RoleRunManager(ctk.CTk):
         self._b2w2_rom_profile = None
         self._b2w2_rom_last_error = None
         try:
-            ruta = discover_b2w2_rom(save_path)
+            ruta = discover_gen5_rom(save_path, "b2w2")
             if ruta is None:
                 self._b2w2_rom_last_error = (
                     "No se encontró la ROM de Negro 2/Blanco 2 junto al guardado."
                 )
                 return None
-            perfil = load_b2w2_rom_profile_cached(ruta)
+            perfil = load_gen5_rom_profile_cached(ruta, "b2w2")
         except Exception as exc:
             self._b2w2_rom_last_error = str(exc)
             return None
         try:
             set_personal_override(
-                "b2w2", perfil.personal, B2W2_PERSONAL_RECORD_SIZE,
+                perfil.game.key, perfil.personal, perfil.game.personal_record_size,
             )
         except Exception as exc:
             # Una tabla que no encaja no se instala a medias.

@@ -1,6 +1,20 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.54 — Blanco: la base común de ROM de DS
+
+Primer paso del segundo juego de DS, hecho sin pedir nada al usuario: sus cinco
+ROM están en el disco.
+
+- La tabla de **movimientos** es idéntica byte a byte entre Blanco y Negro 2.
+  La **personal no**: 668 especies de `0x3C` frente a 709 de `0x4C`.
+- `app/nds_rom.py` (FNT/FAT/NARC, común a los cinco juegos) y
+  `app/gen5_rom_service.py` con un descriptor por juego. `b2w2_rom_service`
+  desaparece.
+- `boxed_metadata` gana la familia `bw`.
+- Falta lo que no se puede deducir: las direcciones de RAM de Blanco.
+- `tests/test_gen5_rom_service.py`: 37 pruebas. Suite completa: 1367.
+
 # v0.2.6-alpha.53 — medallas VALIDADAS FÍSICAMENTE
 
 El contador marca 1 tras la Medalla Base y los botones manuales ya no aparecen.

@@ -28,6 +28,10 @@ class _PersonalTableSpec:
 
 _SPECS = {
     "b2w2": _PersonalTableSpec("pkhex_personal_b2w2.bin", 0x4C),
+    # Blanco/Negro usa un registro MAS CORTO que su segunda parte:
+    # 0x3C frente a 0x4C, y 668 especies frente a 709. Comprobado
+    # contra las dos ROM reales, no supuesto por analogia.
+    "bw": _PersonalTableSpec("pkhex_personal_bw.bin", 0x3C),
     "xy": _PersonalTableSpec("pkhex_personal_xy.bin", 0x40),
     "oras": _PersonalTableSpec("pkhex_personal_ao.bin", 0x50),
     "sm": _PersonalTableSpec("pkhex_personal_sm.bin", 0x54),

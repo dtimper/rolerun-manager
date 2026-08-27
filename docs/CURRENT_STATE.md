@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.53`
+- Versión de aplicación: `v0.2.6-alpha.54`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,39 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.54 — Blanco: la base común, y qué comparte de verdad con Negro 2
+
+Primer paso del segundo juego de DS. Todo lo de esta versión se hizo **sin pedir
+nada al usuario**: sus cinco ROM están en el disco.
+
+**Qué comparten Blanco y Negro 2, comprobado y no supuesto:**
+
+- La **tabla de movimientos** (`a/0/2/1`) es **idéntica byte a byte**: 560
+  registros de 36. Los PP de Blanco coinciden 559/559 con PKHeX.
+- La **tabla personal** (`a/0/1/6`) **no**: Blanco usa 668 especies de `0x3C` y
+  Negro 2, 709 de `0x4C`. Darlas por iguales habría leído las estadísticas de
+  otra especie. Es justo el tipo de analogía que este proyecto no admite.
+- En los dos, la tabla coincide con la copia de PKHeX salvo las habilidades 2 y
+  oculta, que PKHeX normaliza. Las **estadísticas base coinciden en todas**.
+
+**La arquitectura que pedía el usuario: plantilla, no copia.**
+
+- `app/nds_rom.py`: sistema de archivos de una ROM de DS —cabecera, FNT, FAT y
+  contenedores NARC—. No sabe de Pokémon, y sirve para los cinco juegos.
+- `app/gen5_rom_service.py`: quinta generación con **un descriptor por juego**.
+  Lo que cambia son cuatro datos, no un módulo entero.
+- `app/b2w2_rom_service.py` desaparece; su contenido específico es ahora el
+  descriptor `GEN5_GAMES["b2w2"]`.
+- `boxed_metadata` gana la familia `bw` con su propia tabla, y
+  `tools_extract_pkhex_personal.ps1` la extrae.
+
+**Lo que falta para Blanco** son las direcciones de RAM: equipo, PC, batalla,
+mochila, dinero y medallas. Ninguna se puede deducir de Negro 2 y todas
+necesitan el juego en marcha.
+
+- `tests/test_gen5_rom_service.py`: 37 pruebas, ahora sobre los dos juegos.
+- Suite completa: 1367.
 
 ### v0.2.6 Alpha.53 — medallas VALIDADAS FÍSICAMENTE
 
