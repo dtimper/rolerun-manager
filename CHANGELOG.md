@@ -1,6 +1,37 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.75 — la prueba de una lectura buena es el checksum, no repetirla
+
+Alpha.74 se quedó corta. Reintentar la doble lectura no bastaba, y la medida lo
+explica: **con el juego en marcha**, de 400 intentos seguidos sobre el bloque de
+equipo, **304 tuvieron las dos lecturas distintas**. Con el juego parado, 300 de
+300 coincidieron. Mientras se juega, ese bloque no para quieto.
+
+Esperar a que dos lecturas coincidan es una prueba **más débil** que la que ya
+trae el formato: **cada PK4 lleva su checksum de 16 bits, y son seis**. Una
+lectura pillada a mitad de una escritura del juego no los pasa —comprobado: de
+las lecturas que no coincidían, una parte no pasaba el checksum del primer
+miembro—.
+
+Así que ahora una lectura se acepta cuando **el contador no se ha movido
+alrededor de ella y los seis PK4 pasan su checksum**, y se reintenta cuando no.
+El contador sí se sigue leyendo dos veces: es un byte suelto y no tiene checksum
+que lo respalde.
+
+- La búsqueda por las 365 reservas del proceso es impaciente (3 intentos); la
+  reserva ya demostrada tiene toda la paciencia (25). Y el recorrido entero se
+  repite hasta tres veces antes de rendirse.
+- El PC son 72 KiB sin checksum propio, así que se le exige que **dos lecturas
+  digan lo mismo**: los mismos Pokémon en los mismos huecos, aunque los bytes de
+  alrededor se muevan. Eso descarta publicar un estado mezclado sin depender de
+  que 72 KiB se queden quietos.
+
+Medido después: 80 de 80 lecturas de equipo, PC y entrenador seguidas, y 60 de
+60 con el PC incluido, sin un solo fallo.
+
+Suite completa: **1669**.
+
 # v0.2.6-alpha.74 — HeartGold: curar, fijar roles y el PC fallaban por impaciencia
 
 Con el juego en marcha, RoleRun no curaba, no fijaba roles, no aceptaba un

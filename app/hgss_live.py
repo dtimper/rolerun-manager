@@ -64,24 +64,29 @@ PC_MATRIX_SIZE = PC_BOX_COUNT * PC_BOX_STRIDE
 # Misma política que en quinta: la base se recuerda, pero el descubrimiento
 # completo -el único que detecta ambigüedad- se rehace cada minuto.
 BASE_REDISCOVERY_SECONDS = 60.0
-# Cuántas veces se reintenta la doble lectura antes de darla por imposible.
+# QUÉ DEMUESTRA QUE UNA LECTURA ES BUENA
 #
-# En quinta bastaba con una: su bloque de equipo está quieto. El de HeartGold
-# **no**. Medido el 27-08-2026 sobre la partida del usuario, con el juego
-# corriendo: de 3000 tripletes de lecturas seguidas, 129 no coincidieron, y en
-# 121 de esos las tres salieron distintas —o sea, no es un cambio que se asiente,
-# es trasiego continuo—. En una parte de esas lecturas el checksum del primer
-# miembro ni siquiera cuadraba, así que lo que se lee a veces es un estado roto.
+# En quinta se exigía que dos lecturas seguidas coincidieran byte a byte. Con
+# HeartGold eso no vale: medido el 27-08-2026 sobre la partida del usuario **con
+# el juego en marcha**, de 400 intentos seguidos 304 tuvieron las dos lecturas
+# distintas. Con el juego parado, 300 de 300 coincidieron. O sea: mientras se
+# juega, ese bloque no para quieto, y esperar a que dos lecturas coincidan
+# dejaba a RoleRun sin curar, sin PC y sin poder escribir.
 #
-# El checksum lo caza y nunca se publica; el problema era rendirse al primer
-# intento. Con la reserva ya localizada, la captura se rechazaba en 41 de 161
-# intentos —una de cada cuatro—, y la lectura entera fallaba más de la mitad de
-# las veces con el juego en marcha. Eso dejaba a RoleRun sin curar, sin fijar
-# roles y sin PC.
+# La prueba buena la trae el propio formato: **cada PK4 lleva su checksum de 16
+# bits**, y son seis. Una lectura pillada a medias de una escritura del juego no
+# los pasa —se comprobó: de las lecturas que no coincidían, una parte no pasaba
+# el checksum del primer miembro—. Repetir la lectura es una prueba más débil
+# que eso, no más fuerte.
 #
-# Reintentar NO afloja la garantía: se sigue exigiendo que dos lecturas seguidas
-# coincidan byte a byte y que cada PK4 pase su checksum. Solo se es paciente.
-LECTURAS_ESTABLES_MAXIMAS = 8
+# Así que se acepta una lectura cuando **el contador no ha cambiado alrededor de
+# ella y los seis PK4 pasan su checksum**, y se reintenta cuando no. El contador
+# sí se lee dos veces porque es un byte suelto, sin checksum que lo respalde.
+INTENTOS_EN_LA_BUSQUEDA = 3
+INTENTOS_EN_LA_BASE_CONOCIDA = 25
+# Y si el recorrido entero no encuentra nada, se repite: puede haber caído justo
+# en una racha mala.
+INTENTOS_DE_RECORRIDO = 3
 # Un dieciseisavo de la RAM del DS. Es lo mínimo que puede medir la reserva que
 # contiene el mapeo del juego; por debajo de eso no vale la pena ni mirar.
 TAMANO_RAM_DS = 0x00400000
@@ -283,31 +288,35 @@ class HgssMelonDSReader:
         self._resolved_processes = ()
         self._resolved_at = 0.0
 
-    def _capture_nominal_candidate(self, leer, allocation: int):
-        """Doble lectura estable de contador + equipo en una reserva concreta.
+    def _capture_nominal_candidate(self, leer, allocation: int, *, intentos: int = 1):
+        """Captura el equipo de una reserva, o ``None`` si no lo hay.
 
-        Se reintenta **solo** cuando las dos lecturas no coinciden, que es lo
-        único que significa «el juego estaba escribiendo justo ahora». Los dos
-        veredictos de «esto no es un equipo» —contador imposible o PK4 que no
-        pasa su checksum— no se reintentan nunca: repetirlos sobre las 365
-        reservas del proceso costaría tiempo para llegar a la misma conclusión.
+        Se reintenta ``intentos`` veces todo lo que puede ser transitorio —el
+        contador moviéndose, o un PK4 que no pasa su checksum porque la lectura
+        pilló al juego escribiendo—. Lo único que se rechaza a la primera es un
+        contador imposible, porque eso no cambia por esperar y hay 365 reservas
+        que recorrer.
         """
         direccion_contador = int(allocation) + (self.memory.party_count - DS_RAM_BASE)
         direccion_datos = int(allocation) + (self.memory.party_data - DS_RAM_BASE)
-        for _intento in range(LECTURAS_ESTABLES_MAXIMAS):
-            contador_1 = leer(direccion_contador, 1)[0]
-            if not 1 <= contador_1 <= MAX_PARTY:
-                return None
-            extension = contador_1 * PK4_PARTY_SIZE
-            crudo_1 = leer(direccion_datos, extension)
-            contador_2 = leer(direccion_contador, 1)[0]
-            crudo_2 = leer(direccion_datos, extension)
-            if contador_1 != contador_2 or crudo_1 != crudo_2:
+        contador = leer(direccion_contador, 1)[0]
+        if not 1 <= contador <= MAX_PARTY:
+            return None
+        for _intento in range(max(1, int(intentos))):
+            crudo = leer(direccion_datos, contador * PK4_PARTY_SIZE)
+            despues = leer(direccion_contador, 1)[0]
+            if despues != contador:
+                # El equipo cambió de tamaño a mitad de lectura. El contador es
+                # un byte suelto y no tiene checksum que lo respalde, así que
+                # aquí sí hace falta mirarlo dos veces.
+                contador = despues
+                if not 1 <= contador <= MAX_PARTY:
+                    return None
                 continue
             try:
-                return contador_1, crudo_1, parse_party_block(crudo_1, contador_1)
+                return contador, crudo, parse_party_block(crudo, contador)
             except HgssLiveError:
-                return None
+                continue
         return None
 
     def _read_process(
@@ -334,7 +343,9 @@ class HgssMelonDSReader:
 
         try:
             if known_allocation is not None:
-                candidato = self._capture_nominal_candidate(leer, int(known_allocation))
+                candidato = self._capture_nominal_candidate(
+                    leer, int(known_allocation), intentos=INTENTOS_EN_LA_BASE_CONOCIDA,
+                )
                 if candidato is None:
                     return None
                 contador, crudo, equipo = candidato
@@ -358,7 +369,9 @@ class HgssMelonDSReader:
                 if mbi.State == 0x1000 and allocation and allocation not in vistas:
                     vistas.add(allocation)
                     try:
-                        candidato = self._capture_nominal_candidate(leer, allocation)
+                        candidato = self._capture_nominal_candidate(
+                            leer, allocation, intentos=INTENTOS_EN_LA_BUSQUEDA,
+                        )
                         if candidato is not None:
                             candidatos.append((allocation, *candidato))
                     except (OSError, HgssLiveError, IndexError):
@@ -408,18 +421,20 @@ class HgssMelonDSReader:
                 return lectura
 
         ultimo = "No se localizó la RAM DS validada de HeartGold."
-        for pid, nombre in sorted(candidatos, reverse=True):
-            try:
-                lectura = self._read_process(pid, nombre)
-                if lectura is not None:
-                    self._resolved = (
-                        lectura.process_id, lectura.process_name, lectura.allocation_base,
-                    )
-                    self._resolved_processes = firma
-                    self._resolved_at = ahora
-                    return lectura
-            except (OSError, HgssLiveError) as exc:
-                ultimo = str(exc)
+        for _vuelta in range(INTENTOS_DE_RECORRIDO):
+            for pid, nombre in sorted(candidatos, reverse=True):
+                try:
+                    lectura = self._read_process(pid, nombre)
+                    if lectura is not None:
+                        self._resolved = (
+                            lectura.process_id, lectura.process_name,
+                            lectura.allocation_base,
+                        )
+                        self._resolved_processes = firma
+                        self._resolved_at = ahora
+                        return lectura
+                except (OSError, HgssLiveError) as exc:
+                    ultimo = str(exc)
         self.forget_resolved_base()
         raise HgssLiveError(ultimo)
 
@@ -449,15 +464,25 @@ class HgssMelonDSReader:
             return buffer.raw
 
         try:
-            # Misma paciencia que con el equipo, y por el mismo motivo: la
-            # matriz mide 72 KiB, así que es aún más fácil pillarla a mitad de
-            # una escritura del juego. Fallar aquí dejaba a RoleRun sin PC.
-            primera = None
-            for _intento in range(LECTURAS_ESTABLES_MAXIMAS):
-                primera, segunda = leer_matriz(), leer_matriz()
-                if primera == segunda:
+            # La matriz mide 72 KiB, así que es todavía más fácil pillarla a
+            # mitad de una escritura del juego. Se exige que dos lecturas
+            # coincidan; si no lo consiguen, basta con que **digan lo mismo**:
+            # los mismos Pokémon en los mismos huecos. Eso descarta publicar un
+            # estado mezclado sin depender de que 72 KiB no se muevan.
+            primera = anterior = None
+            contenido_anterior = None
+            for _intento in range(INTENTOS_EN_LA_BASE_CONOCIDA):
+                actual = leer_matriz()
+                vacios, dentro = parse_pc_matrix(actual)
+                contenido = tuple(
+                    (p.slot, p.pid, p.tid, p.sid, p.species_id) for p in dentro
+                )
+                if anterior is not None and (
+                    actual == anterior or contenido == contenido_anterior
+                ):
+                    primera = actual
                     break
-                primera = None
+                anterior, contenido_anterior = actual, contenido
             if primera is None:
                 raise HgssLiveError(
                     "La matriz PC de HeartGold no se quedó quieta el tiempo "
@@ -498,7 +523,7 @@ class HgssMelonDSReader:
 
         try:
             primera = None
-            for _intento in range(LECTURAS_ESTABLES_MAXIMAS):
+            for _intento in range(INTENTOS_EN_LA_BASE_CONOCIDA):
                 primera, segunda = capturar(), capturar()
                 if primera == segunda:
                     break

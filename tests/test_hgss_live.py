@@ -241,36 +241,33 @@ def test_el_lector_no_escribe_en_la_memoria_del_emulador() -> None:
 # La paciencia con una RAM que no se está quieta
 # --------------------------------------------------------------------------
 
-def test_la_captura_reintenta_cuando_las_dos_lecturas_no_cuadran() -> None:
-    """El bloque de equipo de HeartGold se lee roto de vez en cuando.
+def test_una_lectura_con_los_checksums_buenos_se_acepta_aunque_la_anterior_fallara():
+    """Lo que demuestra una lectura buena es el checksum, no repetirla.
 
-    Medido el 27-08-2026 sobre la partida del usuario con el juego corriendo: de
-    3000 tripletes de lecturas seguidas, 121 salieron **los tres distintos**, y
-    en parte de ellos ni el checksum del primer miembro cuadraba. Rendirse al
-    primer intento hacía fallar la lectura más de la mitad de las veces, y eso
-    dejaba a RoleRun sin curar, sin fijar roles y sin PC.
+    Medido el 27-08-2026 sobre la partida del usuario **con el juego en marcha**:
+    de 400 intentos, 304 tuvieron las dos lecturas distintas. Con el juego
+    parado, 300 de 300 coincidieron. Exigir que dos lecturas seguidas fueran
+    idénticas dejaba a RoleRun sin curar, sin PC y sin poder escribir mientras se
+    jugaba. Cada PK4 lleva su checksum de 16 bits y son seis: una lectura pillada
+    a medias no los pasa.
     """
-    from app.hgss_live import LECTURAS_ESTABLES_MAXIMAS, HgssMelonDSReader
+    from app.hgss_live import HgssMelonDSReader
 
     crudo = _equipo(2)
-    lector = HgssMelonDSReader()
-    llamadas = {"n": 0}
     basura = bytes(len(crudo))
+    lector = HgssMelonDSReader()
+    llamadas = {"datos": 0}
 
     def leer(direccion: int, tamano: int) -> bytes:
-        # El contador siempre sale bien; los datos, las dos primeras veces no.
         if tamano == 1:
             return bytes([2])
-        llamadas["n"] += 1
-        if llamadas["n"] <= 4:
-            return basura if llamadas["n"] % 2 else crudo
-        return crudo
+        llamadas["datos"] += 1
+        return basura if llamadas["datos"] <= 3 else crudo
 
-    resultado = lector._capture_nominal_candidate(leer, 0x1000)
-    assert resultado is not None, "se rindió antes de tiempo"
+    resultado = lector._capture_nominal_candidate(leer, 0x1000, intentos=8)
+    assert resultado is not None, "se rindió con una lectura buena disponible"
     contador, publicado, equipo = resultado
     assert contador == 2 and publicado == crudo and len(equipo) == 2
-    assert LECTURAS_ESTABLES_MAXIMAS >= 4
 
 
 def test_un_contador_imposible_no_se_reintenta() -> None:
@@ -284,23 +281,38 @@ def test_un_contador_imposible_no_se_reintenta() -> None:
         llamadas["n"] += 1
         return bytes([99])
 
-    assert lector._capture_nominal_candidate(leer, 0x1000) is None
+    assert lector._capture_nominal_candidate(leer, 0x1000, intentos=25) is None
     assert llamadas["n"] == 1
 
 
-def test_un_bloque_que_no_es_un_equipo_no_se_reintenta() -> None:
+def test_si_el_equipo_cambia_de_tamano_a_media_lectura_se_reintenta() -> None:
+    # El contador es un byte suelto, sin checksum que lo respalde: ahí sí hace
+    # falta mirarlo dos veces.
     from app.hgss_live import HgssMelonDSReader
 
     lector = HgssMelonDSReader()
-    llamadas = {"datos": 0}
-    basura = bytes(PK4_PARTY_SIZE)
+    crudo = _equipo(2)
+    estado = {"vuelta": 0}
 
     def leer(direccion: int, tamano: int) -> bytes:
         if tamano == 1:
-            return bytes([1])
-        llamadas["datos"] += 1
-        return basura
+            estado["vuelta"] += 1
+            # 2, luego 3 -el equipo crecio-, y a partir de ahi 2 otra vez.
+            return bytes([2]) if estado["vuelta"] != 2 else bytes([3])
+        return crudo if tamano == len(crudo) else _equipo(3)
 
-    assert lector._capture_nominal_candidate(leer, 0x1000) is None
-    # Dos lecturas -la doble- y ni una más: el checksum ya dijo que no.
-    assert llamadas["datos"] == 2
+    resultado = lector._capture_nominal_candidate(leer, 0x1000, intentos=8)
+    assert resultado is not None
+    assert resultado[0] in (2, 3)
+
+
+def test_la_busqueda_es_impaciente_y_la_base_conocida_no() -> None:
+    from app.hgss_live import (
+        INTENTOS_DE_RECORRIDO, INTENTOS_EN_LA_BASE_CONOCIDA, INTENTOS_EN_LA_BUSQUEDA,
+    )
+
+    # Recorrer 365 reservas con mucha paciencia costaría tiempo para nada; la
+    # reserva ya demostrada merece toda la del mundo.
+    assert INTENTOS_EN_LA_BUSQUEDA < INTENTOS_EN_LA_BASE_CONOCIDA
+    assert INTENTOS_EN_LA_BASE_CONOCIDA >= 20
+    assert INTENTOS_DE_RECORRIDO >= 2
