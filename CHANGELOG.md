@@ -1,6 +1,16 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.67 — el paso entre filas era 0x224, no 0x228
+
+Alpha.65 restó el **inicio** de una fila menos el **campo de PS** de otra, que va
+cuatro bytes más allá. Con el paso mal, la fila del segundo miembro salía
+desplazada, la validación la rechazaba y RoleRun caía al bloque de equipo, que
+en quinta no se actualiza en combate: por eso el equipo salía intacto.
+
+La validación por miembro hizo su trabajo — falló hacia el lado seguro.
+`0x224` sale dos veces por caminos independientes. Suite completa: 1403.
+
 # v0.2.6-alpha.66 — el combate de Blanco, conectado y por equipo entero
 
 Con el paso medido, Blanco lee **las seis filas**, una por miembro, y publica los

@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.66`
+- Versión de aplicación: `v0.2.6-alpha.67`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,30 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.67 — el paso entre filas era 0x224, no 0x228
+
+Primera prueba física del combate de Blanco: el equipo salía con vida teniendo
+dos Pokémon debilitados en el juego. El diagnóstico lo explicó en una lectura.
+
+**Alpha.65 restó dos cosas distintas.** La búsqueda por forma devuelve el
+**inicio** de la fila; la traza de dos estados devuelve el **campo de PS**, que
+va cuatro bytes más allá. Restar uno de otro daba `0x228` en vez de `0x224`.
+
+Con el paso mal, la fila del segundo miembro salía desplazada cuatro bytes: el
+nivel caía donde va la habilidad, la validación la rechazaba —correctamente— y
+al no quedar ninguna fila buena RoleRun se caía al bloque de equipo, que en
+quinta **no se actualiza durante el combate**. De ahí el equipo intacto.
+
+**La validación por miembro hizo su trabajo**: rechazó filas que no describían a
+su Pokémon en vez de publicar datos de otro. El fallo se vio como «no se
+actualiza», que es el modo seguro, y no como «vida equivocada».
+
+`0x224` sale **dos veces por caminos independientes**, uno por cada tabla, y
+coloca la habilidad del Serperior donde le toca.
+
+- Suite completa: 1403.
+- **Pendiente de validación física** otra vez: ver bajar la vida en combate.
 
 ### v0.2.6 Alpha.66 — el combate de Blanco, conectado y por equipo entero
 

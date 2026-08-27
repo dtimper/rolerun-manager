@@ -130,10 +130,17 @@ GEN5_MEMORY: dict[str, Gen5Memory] = {
     # animación, medido en dos juegos distintos.
     #
     # Y la traza reveló la estructura: hay DOS TABLAS de filas, una por miembro
-    # del equipo, separadas 0x228 entre sí. Las direcciones de arriba son las
-    # del Serperior, que es el SEGUNDO del equipo; las del Purrloin, primero,
-    # eran 0x228 menos en ambas tablas. Lo que se guarda aquí es la fila del
-    # primero, que es de donde arranca cada tabla.
+    # del equipo. Lo que se guarda aquí es la fila del primero, que es de donde
+    # arranca cada tabla.
+    #
+    # El paso es 0x224, no 0x228. Alpha.65 restó mal: comparó el INICIO de la
+    # fila del Purrloin —que dio la búsqueda por forma— con el CAMPO DE PS del
+    # Serperior —que dio la traza de dos estados—, y los PS van cuatro bytes
+    # más allá del inicio. El diagnóstico del combate lo destapó: con 0x228 la
+    # fila del segundo salía desplazada y se rechazaba entera.
+    #
+    # 0x224 sale dos veces por caminos independientes, uno por tabla, y coloca
+    # la habilidad del Serperior (65) exactamente donde le toca.
     "bw": Gen5Memory(
         key="bw",
         label="Negro/Blanco",
@@ -143,6 +150,6 @@ GEN5_MEMORY: dict[str, Gen5Memory] = {
         tm_table=0x0209EA88,
         battle_presentation=0x0226D670,
         battle_logical=0x0226E56C,
-        battle_stride=0x228,
+        battle_stride=0x224,
     ),
 }

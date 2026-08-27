@@ -443,15 +443,29 @@ def test_la_batalla_de_blanco_quedo_ordenada_por_tiempo() -> None:
     assert BW.battle_logical > BW.battle_presentation
 
 
-def test_las_filas_de_combate_van_una_por_miembro_del_equipo() -> None:
-    """Medido sobre dos miembros y las dos tablas, no supuesto.
+def test_el_paso_entre_filas_se_mide_de_inicio_a_inicio() -> None:
+    """0x224, no 0x228. Alpha.65 restó un inicio de fila menos un campo de PS.
 
-    Purrloin, primero del equipo, tenía sus filas en 0x0226D670 y 0x0226E56C.
-    Serperior, segundo, exactamente 0x228 más allá en las dos.
+    La búsqueda por forma devuelve el INICIO de la fila; la traza de dos
+    estados devuelve el CAMPO DE PS, que va cuatro bytes más allá. Restar uno
+    de otro daba 0x228 y dejaba la fila del segundo miembro desplazada, así que
+    se rechazaba entera y el equipo salía con vida en pleno combate.
+
+    El valor bueno sale dos veces por caminos independientes, uno por tabla.
     """
-    assert BW.battle_stride == 0x228
-    assert BW.battle_presentation + BW.battle_stride == 0x0226D898
-    assert BW.battle_logical + BW.battle_stride == 0x0226E794
+    PS_DENTRO_DE_LA_FILA = 4
+    ps_serperior_presentacion = 0x0226D898
+    ps_serperior_logica = 0x0226E794
+
+    assert BW.battle_stride == 0x224
+    assert (
+        BW.battle_presentation + BW.battle_stride
+        == ps_serperior_presentacion - PS_DENTRO_DE_LA_FILA
+    )
+    assert (
+        BW.battle_logical + BW.battle_stride
+        == ps_serperior_logica - PS_DENTRO_DE_LA_FILA
+    )
 
 
 def test_negro_2_no_tiene_medido_ese_paso() -> None:
