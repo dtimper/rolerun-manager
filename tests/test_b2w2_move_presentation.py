@@ -189,3 +189,71 @@ def test_la_vista_acepta_los_dos_parametros() -> None:
     firma = inspect.signature(UnifiedTeamPCView.__init__).parameters
     assert "support_damage_for" in firma
     assert "on_support_damage" in firma
+
+
+# --------------------------------------------------------------------------
+# Las acciones sobre un ataque que sobra
+# --------------------------------------------------------------------------
+
+def test_eliminar_atiende_tambien_al_exceso_de_support() -> None:
+    """`delete_move` solo miraba las incompatibilidades y no hacía nada.
+
+    Un ataque que sobra en un Support no es «incompatible» —el límite de dos es
+    de conjunto, así que ninguno lo incumple por sí solo—, pero el usuario
+    tiene que poder quitarlo por la misma vía que cualquier otro.
+    """
+    candidato = {"pokemon": object(), "role": "Support", "move_slot": 3,
+                 "move_name": "Ascuas", "move_id": LANZALLAMAS}
+    encolados: list[list[dict]] = []
+    manager = SimpleNamespace(
+        _effective_role=lambda p: ("Support", "◆"),
+        _collect_pokemon_move_issues=lambda p, r: [],
+        _support_damage_excess=lambda p, r: (2, [candidato]),
+        _queue_invalid_move_removals=lambda issues: encolados.append(issues),
+    )
+
+    RoleRunManager._team_pc_action(manager, "delete_move:3", object())
+
+    assert encolados == [[candidato]]
+
+
+def test_una_incompatibilidad_real_sigue_teniendo_prioridad() -> None:
+    """Si el movimiento es incompatible, manda esa razón y no la del Support."""
+    incompatible = {"pokemon": object(), "role": "Mago", "move_slot": 3,
+                    "move_name": "Ascuas", "move_id": LANZALLAMAS}
+    encolados: list[list[dict]] = []
+    manager = SimpleNamespace(
+        _effective_role=lambda p: ("Mago", "♥"),
+        _collect_pokemon_move_issues=lambda p, r: [incompatible],
+        _support_damage_excess=lambda p, r: pytest.fail("no debe consultarse"),
+        _queue_invalid_move_removals=lambda issues: encolados.append(issues),
+    )
+
+    RoleRunManager._team_pc_action(manager, "delete_move:3", object())
+
+    assert encolados == [[incompatible]]
+
+
+def test_un_hueco_sin_motivo_no_encola_nada() -> None:
+    encolados: list[list[dict]] = []
+    manager = SimpleNamespace(
+        _effective_role=lambda p: ("Support", "◆"),
+        _collect_pokemon_move_issues=lambda p, r: [],
+        _support_damage_excess=lambda p, r: (0, []),
+        _queue_invalid_move_removals=lambda issues: encolados.append(issues),
+    )
+
+    RoleRunManager._team_pc_action(manager, "delete_move:1", object())
+
+    assert encolados == []
+
+
+def test_la_celda_con_botones_no_lleva_altura_fija() -> None:
+    """Fijarle 54 píxeles recortaba el marco de abajo: es el fallo reportado."""
+    import inspect
+
+    from app.ui_views import team_pc_view
+
+    fuente = inspect.getsource(team_pc_view)
+    assert "cell.grid_propagate(not accionable)" in fuente
+    assert "height=54 if" not in fuente

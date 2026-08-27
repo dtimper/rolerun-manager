@@ -13400,6 +13400,15 @@ class RoleRunManager(ctk.CTk):
                 item for item in self._collect_pokemon_move_issues(pokemon, role)
                 if int(item["move_slot"]) == slot
             ), None)
+            if issue is None:
+                # Un ataque que sobra en un Support no es «incompatible»: el
+                # límite de dos es de conjunto, así que ninguno lo incumple por
+                # sí solo. Aun así el usuario tiene que poder quitarlo, y por la
+                # misma vía que cualquier otro borrado.
+                _excess, candidates = self._support_damage_excess(pokemon, role)
+                issue = next((
+                    item for item in candidates if int(item["move_slot"]) == slot
+                ), None)
             if issue is not None:
                 self._queue_invalid_move_removals([issue])
             return

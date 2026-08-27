@@ -709,20 +709,24 @@ class UnifiedTeamPCView:
                 pokemon, slot_role, self.support_damage_for, context="team",
             )
             move_grid = ctk.CTkFrame(content, fg_color="transparent", corner_radius=0)
-            move_grid.grid(row=3, column=1, columnspan=2, sticky="ew", pady=(2, 0))
+            move_grid.grid(row=3, column=1, columnspan=2, sticky="ew", pady=(2, 2))
             move_grid.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="team_card_moves")
             for index, move in enumerate(moves):
                 issue = issue_by_slot.get(index + 1)
                 # El dorado no dice «ilegal», dice «elige cuál sobra». Una
                 # incompatibilidad real manda sobre él.
                 elegible = (index + 1) in support_slots and not issue
+                marcado = bool(issue) or elegible
                 move_cell = ctk.CTkFrame(
-                    move_grid, height=16, corner_radius=6,
+                    # Con marco hace falta un pixel más de alto por lado: con 16
+                    # el borde de abajo quedaba cortado, que es lo que se veía en
+                    # todos los juegos.
+                    move_grid, height=18 if marcado else 16, corner_radius=6,
                     fg_color="#341A1A" if issue else ("#292315" if elegible else "#292929"),
-                    border_width=1 if (issue or elegible) else 0,
+                    border_width=1 if marcado else 0,
                     border_color=DANGER if issue else (GOLD if elegible else "#292929"),
                 )
-                move_cell.grid(row=0, column=index, sticky="ew", padx=2, pady=1)
+                move_cell.grid(row=0, column=index, sticky="ew", padx=2, pady=(1, 2))
                 move_cell.grid_propagate(False)
                 ctk.CTkLabel(
                     move_cell, text=str(move), height=14,
@@ -733,18 +737,9 @@ class UnifiedTeamPCView:
                     ),
                     font=ctk.CTkFont("Segoe UI", 9, "bold"),
                 ).place(relx=0.5, rely=0.5, anchor="center")
-            if support_excess and self.on_support_damage is not None:
-                ctk.CTkButton(
-                    content,
-                    text=f"ELEGIR {support_excess} ATAQUE(S) A ELIMINAR",
-                    command=lambda p=pokemon: self.on_support_damage(p),
-                    height=22, corner_radius=6, fg_color="transparent",
-                    border_width=1, border_color=GOLD, hover_color="#332B1D",
-                    text_color=GOLD, font=ctk.CTkFont("Segoe UI", 9, "bold"),
-                ).grid(row=4, column=1, columnspan=2, sticky="ew", pady=(3, 0))
-                info_rowspan = 5
-            else:
-                info_rowspan = 4
+            # La tarjeta solo marca; las acciones viven en la ficha, que es
+            # donde ya estaban las de un movimiento incompatible.
+            info_rowspan = 4
 
         role_icon = self.role_icon_for(slot_role, 27)
         if role_icon is not None:
@@ -1133,26 +1128,48 @@ class UnifiedTeamPCView:
         issue_by_slot = _move_issue_map(
             pokemon, role, self.move_issues_for, context=context,
         )
+        support_excess, support_slots = _support_damage_map(
+            pokemon, role, self.support_damage_for, context=context,
+        )
+        if support_excess:
+            ctk.CTkLabel(
+                details,
+                text=(
+                    f"Support conserva 2 ataques de daño: elige {support_excess} "
+                    "para quitar o sustituir."
+                ),
+                text_color=GOLD, wraplength=260, justify="center",
+                font=ctk.CTkFont("Segoe UI", 10, "bold"),
+            ).pack(padx=8, pady=(0, 3))
         for index, move in enumerate(moves):
             issue = issue_by_slot.get(index + 1)
+            # El dorado no dice «ilegal», dice «elige cuál sobra». Las acciones
+            # son las mismas que para una incompatibilidad: el usuario decide.
+            elegible = (index + 1) in support_slots and not issue
+            accionable = bool(issue) or elegible
+            color = DANGER if issue else GOLD
             cell = ctk.CTkFrame(
                 move_grid,
-                height=54 if issue else 32,
+                height=32,
                 corner_radius=8,
-                fg_color="#341A1A" if issue else PANEL_ALT,
-                border_width=1 if issue else 0,
-                border_color=DANGER if issue else PANEL_ALT,
+                fg_color="#341A1A" if issue else ("#292315" if elegible else PANEL_ALT),
+                border_width=1 if accionable else 0,
+                border_color=color if accionable else PANEL_ALT,
             )
             cell.grid(
                 row=index // 2, column=index % 2,
                 sticky="ew", padx=2, pady=2,
             )
-            cell.grid_propagate(False)
+            # Una celda con botones se ajusta a lo que lleva dentro. Fijarle 54
+            # píxeles recortaba el marco de abajo en cuanto el texto ocupaba dos
+            # líneas o el tema cambiaba de fuente.
+            cell.grid_propagate(not accionable)
             ctk.CTkLabel(
-                cell, text=str(move), text_color=DANGER if issue else (TEXT if move != "—" else MUTED),
+                cell, text=str(move),
+                text_color=color if accionable else (TEXT if move != "—" else MUTED),
                 font=ctk.CTkFont("Segoe UI", 12, "bold"),
-            ).pack(fill="x", padx=4, pady=(4, 1) if issue else 6)
-            if issue:
+            ).pack(fill="x", padx=4, pady=(4, 1) if accionable else 6)
+            if accionable:
                 row = ctk.CTkFrame(cell, fg_color="transparent")
                 row.pack(fill="x", padx=4, pady=(0, 4))
                 ctk.CTkButton(
@@ -1164,8 +1181,9 @@ class UnifiedTeamPCView:
                 ctk.CTkButton(
                     row, text="ELIMINAR", height=21,
                     command=lambda p=pokemon, s=index + 1: self.on_action(f"delete_move:{s}", p),
-                    fg_color="transparent", hover_color="#4A2020", border_width=1,
-                    border_color=DANGER, text_color=DANGER,
+                    fg_color="transparent",
+                    hover_color="#4A2020" if issue else "#332B1D",
+                    border_width=1, border_color=color, text_color=color,
                     font=ctk.CTkFont("Segoe UI", 9, "bold"),
                 ).pack(side="left", fill="x", expand=True, padx=(2, 0))
 

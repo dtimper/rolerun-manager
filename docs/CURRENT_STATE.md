@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.47`
+- Versión de aplicación: `v0.2.6-alpha.48`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,33 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.48 — el Support ya se puede resolver, y el marco cortado
+
+**Las acciones del Support, donde ya estaban las demás.** Alpha.47 pintó de
+dorado los ataques que sobran, pero al abrir la ficha no aparecía nada que
+hacer. Ahora una celda dorada lleva los mismos **SUSTITUIR** y **ELIMINAR** que
+lleva una incompatibilidad roja: es el patrón que la ficha ya usaba en todos los
+juegos, no uno nuevo.
+
+- `delete_move` solo miraba las incompatibilidades. Un ataque que sobra en un
+  Support **no** es incompatible —el límite de dos es de conjunto, ninguno lo
+  incumple por sí solo—, así que la acción no encontraba nada y no hacía nada.
+  Ahora, si no hay incompatibilidad, se busca entre los candidatos del Support.
+- Una incompatibilidad real sigue teniendo prioridad sobre el dorado.
+- El botón que alpha.47 puso en la tarjeta se retira: no llegaba a pintarse y su
+  sitio es la ficha.
+
+**El marco cortado (todos los juegos).** Las celdas de movimiento tenían altura
+fija y el borde inferior quedaba fuera:
+
+- En la tarjeta, una celda marcada pasa de 16 a 18 píxeles y gana un píxel de
+  margen abajo.
+- En la ficha, una celda con botones deja de tener altura fija y se ajusta a su
+  contenido. Los 54 píxeles se quedaban cortos en cuanto el texto ocupaba dos
+  líneas.
+
+- `tests/test_b2w2_move_presentation.py`: 17 pruebas. Suite completa: 1329.
 
 ### v0.2.6 Alpha.47 — dos fallos de la interfaz reportados con captura
 

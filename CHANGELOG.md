@@ -1,6 +1,16 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.48 — el Support resoluble, y el marco cortado
+
+- Una celda dorada lleva ya los mismos SUSTITUIR y ELIMINAR que una roja.
+  `delete_move` solo miraba las incompatibilidades, y un ataque que sobra en un
+  Support no lo es: el límite de dos es de conjunto.
+- **Marco cortado en todos los juegos**: las celdas de movimiento tenían altura
+  fija y el borde de abajo quedaba fuera. En la tarjeta ganan dos píxeles; en la
+  ficha, una celda con botones se ajusta a su contenido.
+- `tests/test_b2w2_move_presentation.py`: 17 pruebas. Suite completa: 1329.
+
 # v0.2.6-alpha.47 — dos fallos de la interfaz, reportados con captura
 
 - **Tarjetas de drafteo vacías**: potencia, precisión y PP ya salen de la ROM
