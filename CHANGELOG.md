@@ -1,6 +1,32 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.33 — búsqueda de la mochila y el dinero
+
+El ciclo de combate y bajas de B2/W2 queda **validado físicamente al completo**:
+daño en tiempo real, KO en el momento, descuento de vida, selector, sustitución y
+recuperación al curar.
+
+Todo lo que le queda a B2/W2 —mochila, MT, utilidades y medallas— depende de
+direcciones de RAM que **no están demostradas**. No se implementa nada sobre una
+dirección inventada, así que el paso siguiente es obtener la evidencia.
+
+- Nueva herramienta `tools_b2w2_bag_capture.py`, de **solo lectura**, con su
+  lanzador de doble clic `buscar_mochila_b2w2.bat`.
+- El método no es un escaneo a ciegas. En quinta generación cada hueco de la
+  mochila son dos enteros de 16 bits seguidos: identificador y cantidad. El
+  usuario dice cuántas unidades tiene de dos o tres objetos concretos y se busca
+  **ese par exacto**, quedándose solo con las zonas donde aparecen varios objetos
+  juntos: una coincidencia mucho más difícil de fabricar por azar que un número
+  suelto.
+- Los identificadores salen de la misma tabla de PKHeX que ya usa RoleRun, no de
+  una lista escrita a mano.
+- Se lee dos veces con una pausa: lo que no sobrevive a ambas lecturas era un
+  buffer transitorio.
+- El dinero se busca aparte, como entero de 32 bits alineado.
+- Nada de lo que salga de aquí es una dirección de producción mientras no se
+  confirme con un segundo estado.
+
 # v0.2.6-alpha.32 — los PS y la baja, ya en tiempo real
 
 La traza física del usuario resolvió el diagnóstico. Tres hallazgos, todos

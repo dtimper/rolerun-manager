@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.32`
+- Versión de aplicación: `v0.2.6-alpha.33`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,22 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.33 — el siguiente paso de B2/W2 es evidencia, no código
+
+El usuario validó físicamente el ciclo completo de combate y bajas: daño en
+tiempo real, KO en el momento, descuento de vida, selector, sustitución y
+recuperación al curar.
+
+Lo que le queda a B2/W2 —mochila, MT, utilidades y medallas— depende en todos los
+casos de direcciones de RAM no demostradas, así que la siguiente entrega es una
+herramienta de diagnóstico y no una implementación.
+
+`tools_b2w2_bag_capture.py` busca el par (identificador, cantidad) de 16 bits que
+usa la mochila de quinta generación, con las cantidades reales que el usuario ve
+en su partida, y conserva solo las zonas donde coinciden varios objetos distintos
+y que sobreviven a dos lecturas separadas. El dinero se busca aparte como entero
+de 32 bits alineado.
 
 ### v0.2.6 Alpha.32 — PS y bajas en tiempo real durante el combate
 
