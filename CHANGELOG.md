@@ -1,6 +1,34 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.31 — diagnóstico de la baja durante el combate
+
+La sustitución quedó **validada físicamente**. Queda un único fallo abierto en el
+ciclo de bajas: ni los PS ni la baja se actualizan mientras dura el combate; todo
+aparece al terminarlo.
+
+No se implementa nada a ciegas. Hay dos explicaciones posibles y **ninguna está
+demostrada**, así que se instrumenta:
+
+1. Que el **bloque de party** de Gen 5 no refleje el daño hasta que acaba el
+   combate. RoleRun lee la party para detectar bajas, así que si el juego no la
+   toca antes, la baja no puede verse antes.
+2. Que la **lane de presentación** rechace la lectura justo al morir. El byte de
+   estado de `0x0225B1C4` solo tiene demostrados los valores 0 y 1, y
+   `parse_battle_copies` rechaza cualquier otro; un rechazo deja la lane sin
+   confirmar y RoleRun cae al bloque de party. La auditoría del 27-08-2026 ya
+   anticipó este riesgo sin poder medirlo.
+
+- Nueva herramienta `tools_b2w2_battle_faint_capture.py`, de **solo lectura**.
+  Muestrea a la vez los PS de la party y las dos filas de batalla con su byte de
+  estado, y ejecuta **el parser de producción** sobre cada muestra anotando si
+  acepta o rechaza y por qué. El diagnóstico dice lo que RoleRun ve de verdad, no
+  lo que supondríamos que ve.
+- Solo registra los cambios, no las 1.800 muestras, para que el archivo sea
+  legible.
+- Se registran las validaciones físicas del usuario: casilla correcta liberada,
+  selector, recuperación al curar y sustitución completa.
+
 # v0.2.6-alpha.30 — dos hilos dejan de romperse los tipos entre ellos
 
 Al aplicar una sustitución saltaba un error que no tenía nada que ver con la

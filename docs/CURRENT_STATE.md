@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.30`
+- Versión de aplicación: `v0.2.6-alpha.31`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,22 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.31 — el ciclo de bajas, cerrado salvo el tiempo real
+
+El usuario validó físicamente la sustitución completa: el debilitado llega al
+Cementerio, el sustituto entra heredando el rol y la casilla de origen queda
+vacía. Con alpha.29 quedaron validados además la casilla correcta liberada, el
+selector y la recuperación al curar.
+
+Queda **un fallo abierto**: ni los PS ni la baja se actualizan durante el
+combate; todo aparece al terminarlo. Hay dos explicaciones plausibles —que el
+bloque de party de Gen 5 no se actualice hasta el final del combate, o que la
+lane de presentación rechace la lectura al morir por un byte de estado no
+demostrado— y **ninguna está probada**. Se añade
+`tools_b2w2_battle_faint_capture.py`, de solo lectura, que muestrea party y filas
+de batalla en paralelo y ejecuta el parser de producción sobre cada muestra
+anotando su veredicto.
 
 ### v0.2.6 Alpha.30 — aislamiento de ctypes y lector serializado
 
