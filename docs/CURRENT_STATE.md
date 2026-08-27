@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.28`
+- Versión de aplicación: `v0.2.6-alpha.29`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,28 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.29 — la baja de B2/W2 vuelve a tener salida
+
+La prueba física de alpha.28 demostró que detectar la baja no basta: había que
+poder salir de ella. La rama B2/W2 del monitor no llamaba a
+`_process_oras_battle_state` ni a `_reconcile_pending_faints_against_party`, que
+los otros cinco backends sí llaman.
+
+Sin la primera nunca se marca `battle_ended`, y de ahí salían tres síntomas a la
+vez: el selector de sustituto no se abría porque lo exige, curar al debilitado no
+lo devolvía porque `clear_stale_detected_faint_for_alive_party` exige
+`battle_ended` o `prompt_shown`, y reiniciar no ayudaba porque la baja se
+persiste en la Run. Sin la segunda, resolver la baja desde el PC del juego pasaba
+desapercibido.
+
+Se añade además una regla de presentación común a todos los juegos: una baja
+pendiente **reserva la casilla de su rol**. Esa casilla pertenece al rol y es la
+que heredará el sustituto; permitir que un miembro SIN ROL se deslizara hasta
+ella movía el hueco visible a un rol distinto del que había quedado libre.
+
+Baseline completa: **1092 passed**. Validación física de la sustitución todavía
+pendiente.
 
 ### v0.2.6 Alpha.28 — bajas y sustitución en B2/W2
 

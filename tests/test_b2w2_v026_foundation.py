@@ -506,6 +506,8 @@ def _ui_double(*, current_game: SaveGameData):
             (game, source),
         ),
         _live_metadata_is_missing=lambda current, live: False,
+        _process_oras_battle_state=lambda state: None,
+        _reconcile_pending_faints_against_party=lambda game: None,
         _publish_oras_live_snapshot=lambda snapshot, **kwargs: published.append((snapshot, kwargs)),
         _update_top_status=lambda: None,
         _schedule_oras_live_reconciliation=lambda delay: scheduled.append(delay),

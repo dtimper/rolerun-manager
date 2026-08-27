@@ -1,6 +1,35 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.29 — la baja de B2/W2 deja de quedarse en un limbo
+
+Alpha.28 detectaba la baja pero no permitía salir de ella. Reportado con detalle:
+no aparecía la opción de sustituir, curar al debilitado no lo devolvía, reiniciar
+juego y programa tampoco, y el hueco vacío se desplazaba al rol equivocado.
+
+Dos causas con una raíz común: la rama B2/W2 del monitor **no llamaba a dos
+funciones que los otros cinco backends sí llaman**.
+
+- Sin `_process_oras_battle_state` no se marca nunca `battle_ended`. El selector
+  de sustituto lo exige, así que no se abría. Y
+  `clear_stale_detected_faint_for_alive_party` exige `battle_ended` **o**
+  `prompt_shown`, así que curar al debilitado tampoco lo devolvía. Como la baja se
+  persiste en la Run, reiniciar no cambiaba nada. Una sola llamada ausente
+  explicaba tres de los síntomas.
+- Sin `_reconcile_pending_faints_against_party`, resolver la baja desde el PC del
+  propio juego no se detectaba.
+- B2/W2 habla de `battle`/`none`; el resto del programa, de `wild`/`trainer`/
+  `none`. La traducción se hace explícita, con `None` cuando la lane no está
+  confirmada, que es lo que ya hacen los demás backends.
+
+Y una tercera, de presentación y aplicable a todos los juegos:
+
+- La casilla de un rol **pertenece al rol**, y es la que heredará el sustituto.
+  Un miembro SIN ROL podía deslizarse hasta la casilla del caído, moviendo el
+  hueco visible a otro rol distinto: se veía vacío el puesto de Support cuando
+  quien había caído era el Asesino. Una baja pendiente reserva ahora su casilla.
+- Baseline completa: **1092 passed**.
+
 # v0.2.6-alpha.28 — bajas y sustitución en B2/W2
 
 El corazón de una RoleRun. Sus tres dependencias quedaron validadas por el

@@ -729,6 +729,8 @@ def test_team_grid_never_turns_a_six_member_role_conflict_into_a_seventh_positio
         _role_slot_occupants=lambda members: RoleRunManager._role_slot_occupants(
             manager, members,
         ),
+        # Sin bajas pendientes no hay ninguna casilla reservada (alpha.29).
+        _roles_reserved_by_pending_faints=lambda: set(),
     )
 
     occupants, extras, positions, extra_indices = RoleRunManager._team_role_grid_layout(

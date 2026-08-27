@@ -956,6 +956,24 @@ class RoleRunManager(ctk.CTk):
                 extras.append(pokemon)
         return occupants, extras
 
+    def _roles_reserved_by_pending_faints(self) -> set[str]:
+        """Roles cuya casilla debe quedar visiblemente vacía por una baja pendiente.
+
+        La casilla pertenece al rol, y el sustituto heredará exactamente ese rol.
+        Dejar que un miembro SIN ROL se deslizara hasta ella movía el hueco a otro
+        rol distinto: el usuario veía vacío el puesto de Support cuando quien
+        había caído era el Asesino, y un Pokémon sin rol ocupando el del Asesino.
+        """
+        project = getattr(self, "project", None)
+        if project is None:
+            return set()
+        reservados: set[str] = set()
+        for evento in list(getattr(project, "pending_faints", ()) or ()):
+            role = str(evento.get("role", "") or "")
+            if role in ROLE_TO_KEY:
+                reservados.add(role)
+        return reservados
+
     def _team_role_grid_layout(
         self, party: list[SavePokemon] | None = None,
     ) -> tuple[dict[str, SavePokemon], list[SavePokemon], dict[str, int], set[int]]:
@@ -969,12 +987,15 @@ class RoleRunManager(ctk.CTk):
         """
         party = list(party if party is not None else self._projected_party())
         occupants, extras = self._role_slot_occupants(party)
+        # Una baja pendiente reserva su casilla: es la que heredará el sustituto.
+        reservados = self._roles_reserved_by_pending_faints()
         positions: dict[str, int] = {}
         free_indices: list[int] = []
         for role_index, role_name in enumerate(ROLE_ORDER):
             member = occupants.get(role_name)
             if member is None:
-                free_indices.append(role_index)
+                if role_name not in reservados:
+                    free_indices.append(role_index)
             else:
                 positions[self._pokemon_identity(member)] = role_index
 
@@ -9639,6 +9660,20 @@ class RoleRunManager(ctk.CTk):
                 # de publicar detecta las bajas. Su writer de sustitución ya
                 # existe, así que abrirlo ya no deja al usuario a medio flujo.
                 self._process_oras_health_snapshot(published_health, source=health_source)
+            # alpha.29: sin estas dos llamadas la baja quedaba en un limbo del que
+            # no se podía salir. El selector de sustituto exige ``battle_ended``, y
+            # la limpieza de una baja obsoleta exige ``battle_ended`` o
+            # ``prompt_shown``; B2/W2 no marcaba ninguno de los dos, así que el
+            # debilitado desaparecía de la vista para siempre: ni sustituible, ni
+            # recuperable curándolo, ni al reiniciar.
+            self._process_oras_battle_state(
+                "trainer" if probe_state == "battle"
+                else "none" if probe_state == "none"
+                else None
+            )
+            # Y si el usuario resuelve la baja desde el PC del propio juego,
+            # RoleRun debe enterarse en lugar de seguir esperando.
+            self._reconcile_pending_faints_against_party(snapshot.game)
             difference = diff_live_party(before_game, snapshot.game)
             # Publicar solo ante cambios de composición dejaba la ficha sin
             # estadísticas, IV, EV ni naturaleza en cuanto algo reponía la vista

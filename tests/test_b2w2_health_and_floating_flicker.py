@@ -280,6 +280,14 @@ def _monitor(probe) -> SimpleNamespace:
         _sync_live_layout=lambda refresh_floating=True: None,
         _schedule_team_integrity_check=lambda: None,
         _probe=probe,
+        estados_de_combate=[],
+        reconciliaciones=[],
+    )
+    manager._process_oras_battle_state = lambda state: (
+        manager.estados_de_combate.append(state)
+    )
+    manager._reconcile_pending_faints_against_party = lambda game: (
+        manager.reconciliaciones.append(game)
     )
 
     def procesar(game, *, source="overworld"):
