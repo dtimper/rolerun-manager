@@ -1,6 +1,15 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.53 — medallas VALIDADAS FÍSICAMENTE
+
+El contador marca 1 tras la Medalla Base y los botones manuales ya no aparecen.
+Cierra alpha.50, 51 y 52.
+
+Con esto B2/W2 tiene implementado todo lo que la Run necesita. Lo único sin
+validar físicamente es el drafteo y el borrado de movimientos (alpha.46-48).
+Siguiente frente: los otros cuatro juegos de DS.
+
 # v0.2.6-alpha.52 — la dirección de medallas, confirmada contra el juego
 
 Con una medalla conseguida, `0x022266A8` vale **0x01**: lo que predijo la

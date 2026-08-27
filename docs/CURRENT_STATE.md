@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.52`
+- Versión de aplicación: `v0.2.6-alpha.53`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,36 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.53 — medallas VALIDADAS FÍSICAMENTE
+
+El usuario confirmó (27-08-2026) que el contador de la cabecera marca **1** tras
+conseguir la Medalla Base, y que los botones de sumar y restar ya no aparecen.
+Con esto quedan cerradas alpha.50, 51 y 52.
+
+**Estado de B2/W2.** Todo lo que la Run necesita está implementado:
+
+| Capacidad | Estado |
+| --- | --- |
+| Equipo, PC, batalla y PS en vivo | validado |
+| Roles y EV | validado |
+| Curación | validado |
+| Bajas y sustitución | validado |
+| Mochila y utilidades de cabecera | validado |
+| Enseñar MT (tabla viva, filtro por rol) | validado |
+| Datos de juego desde la ROM | validado |
+| Medallas | validado |
+| Drafteo y borrado de movimientos | **implementado, sin validar** |
+
+Lo único descartado por decisión del usuario: cambiar el rol de un Pokémon que
+permanece en el PC. Basta con que entre al equipo con el rol que le toca.
+
+**Siguiente frente: los otros cuatro juegos de DS** (DP, Pt, HGSS, BW), que hoy
+tienen soporte de guardado pero cero tiempo real. B2/W2 se usa como plantilla,
+no como copia: lo común —resolución de la base del proceso, primitivas de
+memoria, contrato del writer transaccional, lectura de la ROM NDS— ya está
+escrito de forma reutilizable; lo específico de cada juego (direcciones, formato
+PK4 frente a PK5) va en su descriptor.
 
 ### v0.2.6 Alpha.52 — la dirección de medallas, confirmada contra el juego
 
