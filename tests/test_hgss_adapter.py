@@ -311,3 +311,23 @@ def test_el_pc_de_cuarta_declara_dieciocho_cajas() -> None:
 
     assert PC_BOX_COUNT_HGSS == 18
     assert PK4_STORED_SIZE == 136
+
+
+def test_la_carga_de_mt_en_vivo_es_solo_de_quinta() -> None:
+    """Cuarta no tiene tabla de MT demostrada, así que no entra en ese flujo.
+
+    Y de paso: la lista de juegos que entran y el diccionario de etiquetas que
+    hay dos líneas más abajo se actualizaban por separado. A Blanco le faltaba
+    su entrada desde que entró, así que ese camino reventaba con `KeyError`.
+    """
+    import inspect
+
+    from app.ui import RoleRunManager
+
+    fuente = inspect.getsource(RoleRunManager._start_live_tm_inventory_load)
+    assert "MELONDS_GEN5_REALTIME_GAME_KEYS" in fuente
+    assert "MELONDS_REALTIME_GAME_KEYS" not in fuente.replace(
+        "MELONDS_GEN5_REALTIME_GAME_KEYS", "",
+    )
+    # Sin corchetes: una etiqueta que falte no puede tumbar la carga.
+    assert "}.get(engine_key," in fuente

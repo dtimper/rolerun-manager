@@ -9692,6 +9692,7 @@ class RoleRunManager(ctk.CTk):
                     "bdsp": "Ryujinx",
                     "b2w2": "melonDS",
                     "bw": "melonDS",
+                    "hgss": "melonDS",
                 }.get(self._active_azahar_realtime_key(), "Azahar")
                 self.sync_status = (
                     f"◌ Reconectando {self._active_azahar_realtime_label()} en {backend}…"
@@ -15063,11 +15064,15 @@ class RoleRunManager(ctk.CTk):
         """
         engine_key = str(getattr(self.save_engine, "key", "") or "")
         if engine_key not in (
-            *GEN7_REALTIME_GAME_KEYS, "bdsp", "oras", "xy", *MELONDS_REALTIME_GAME_KEYS,
+            *GEN7_REALTIME_GAME_KEYS, "bdsp", "oras", "xy",
+            *MELONDS_GEN5_REALTIME_GAME_KEYS,
         ):
             if on_failed is not None:
                 on_failed()
             return
+        # `.get` y no `[...]`: la lista de arriba y este diccionario se
+        # actualizaban por separado, y a Blanco le faltaba su entrada desde que
+        # entró. Una etiqueta que falte no puede tumbar la carga de MT.
         label = {
             "usum": "UltraSol/UltraLuna",
             "sm": "Sol/Luna",
@@ -15075,7 +15080,8 @@ class RoleRunManager(ctk.CTk):
             "oras": "Omega Rubí/Zafiro Alfa",
             "xy": "Pokémon X/Y",
             "b2w2": "Negro 2/Blanco 2",
-        }[engine_key]
+            "bw": "Negro/Blanco",
+        }.get(engine_key, "tu partida")
         if self._sm_tm_inventory_load_in_progress:
             if on_failed is not None:
                 on_failed()
