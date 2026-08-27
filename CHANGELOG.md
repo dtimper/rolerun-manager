@@ -1,6 +1,32 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.25 — la ficha de B2/W2 deja de estar vacía y los EV se reparten
+
+Dos fallos del mismo reporte, ambos de la misma familia que el anterior: algo que
+compara demasiado poco.
+
+- **La ficha en «—».** `diff_live_party` compara composición, orden, roles,
+  movimientos y nivel, e **ignora a propósito** estadísticas, IV, EV y
+  naturaleza. La rama B2/W2 solo publicaba la captura viva cuando ese diff
+  detectaba algo, así que en cuanto algo reponía `current_game` desde el guardado
+  —recargar tras guardar dentro del juego, o abrir la Run— esos datos se perdían
+  para siempre. Asignar un rol cambiaba el rol, el diff se activaba, y por eso
+  «al elegir el rol ya aparecen los stats».
+- Ahora se republica también cuando la captura viva trae datos que la vista no
+  tiene. Es una comprobación en un solo sentido y por identidad fuerte, así que
+  se cumple una vez y deja de cumplirse: no republica en bucle.
+- **Los EV no se repartían.** El cálculo del reparto de EV de un rol estaba
+  condicionado a `{"bdsp", "oras", "xy", "sm", "usum"}` escrito como literal en
+  **siete sitios distintos**, y B2/W2 no estaba en ninguno. Se sustituye por la
+  constante `ROLE_EV_WRITER_GAME_KEYS`, que ya incluye B2/W2 porque desde
+  alpha.24 tiene writer.
+- Los tres usos restantes de ese literal son de MT/ROM, otra capacidad distinta,
+  y se dejan intactos a propósito.
+- Recordatorio del contrato: en **Líbero** la ausencia de reparto automático es
+  deliberada; RoleRun pide antes las dos características al jugador.
+- Baseline completa: **1040 passed**.
+
 # v0.2.6-alpha.24 — writer de roles de B2/W2
 
 Asignar un rol en Negro 2 no hacía absolutamente nada: los seis seguían en

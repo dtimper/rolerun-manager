@@ -272,6 +272,7 @@ def _monitor(probe) -> SimpleNamespace:
         _cancel_oras_initial_auto_sync=lambda: None,
         _discard_b2w2_ghost_team_changes=lambda: 0,
         _publish_live_health=lambda game: publicados.append(game) or True,
+        _live_metadata_is_missing=lambda current, live: False,
         _publish_oras_live_snapshot=lambda snapshot, **kwargs: None,
         _update_top_status=lambda: None,
         _schedule_oras_live_reconciliation=lambda delay: None,

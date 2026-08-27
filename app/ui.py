@@ -142,6 +142,11 @@ AZAHAR_REALTIME_GAME_KEYS = {"oras", "xy", "sm", "usum"}
 REALTIME_READ_GAME_KEYS = AZAHAR_REALTIME_GAME_KEYS | {"bdsp", "b2w2"}
 INSTANT_REALTIME_UI_GAME_KEYS = AZAHAR_REALTIME_GAME_KEYS | {"bdsp", "b2w2"}
 AUTOMATIC_BADGE_GAME_KEYS = {"oras", "xy", "sm", "usum"}
+# Backends cuyo writer de rol escribe además el reparto de EV del rol. Estaba
+# repetido como literal en siete sitios, y olvidar uno bastaba para que un
+# juego escribiera la marca del rol pero no sus EV: exactamente lo que le
+# pasaba a B2/W2 antes de tener writer.
+ROLE_EV_WRITER_GAME_KEYS = {"bdsp", "oras", "xy", "sm", "usum", "b2w2"}
 # Equipo y PC son una sola pantalla desde la unificación de la vista. La barra
 # principal solo ofrece "team"; "pc" sobrevive como destino histórico y como
 # página restaurable, pero ambas renderizan exactamente lo mismo. Todo lo que
@@ -8264,7 +8269,7 @@ class RoleRunManager(ctk.CTk):
             old_evs = tuple(int(pokemon.evs.get(key, 0)) for key in STAT_KEYS)
             new_evs = None
             if (
-                self._active_azahar_realtime_key() in {"bdsp", "oras", "xy", "sm", "usum"}
+                self._active_azahar_realtime_key() in ROLE_EV_WRITER_GAME_KEYS
                 and pokemon.evs
             ):
                 # Los cinco roles fijos pueden normalizarse sin interacción. En
@@ -8297,7 +8302,7 @@ class RoleRunManager(ctk.CTk):
         pero Líbero no tiene una distribución determinista: abrir el selector
         es por tanto una precondición de la escritura, no un efecto posterior.
         """
-        if self._active_azahar_realtime_key() not in {"bdsp", "oras", "xy", "sm", "usum"}:
+        if self._active_azahar_realtime_key() not in ROLE_EV_WRITER_GAME_KEYS:
             return False
         pending = next((
             change for change in changes
@@ -8901,6 +8906,41 @@ class RoleRunManager(ctk.CTk):
                 changed = True
         return changed
 
+    @staticmethod
+    def _live_metadata_is_missing(current, live) -> bool:
+        """¿La vista actual carece de datos que la captura viva sí trae?
+
+        ``diff_live_party`` solo compara composición, orden, roles, movimientos y
+        nivel: ignora estadísticas, IV, EV y naturaleza. Por eso, cuando algo
+        repone ``current_game`` desde el guardado —recargar tras guardar dentro
+        del juego, o abrir la Run—, un backend que solo republica ante cambios de
+        composición se quedaba **para siempre** sin esos datos, y la ficha
+        mostraba «—» en todas las características.
+
+        Se comprueba por identidad fuerte y solo en un sentido: si la captura
+        viva tiene el dato y la vista actual no, hay que publicar.
+        """
+        if current is None or live is None:
+            return False
+        def identidad(pokemon):
+            return (
+                int(getattr(pokemon, "species_id", 0) or 0),
+                int(getattr(pokemon, "pid", 0) or 0),
+                int(getattr(pokemon, "tid", 0) or 0),
+                int(getattr(pokemon, "sid", 0) or 0),
+            )
+        actuales = {identidad(pokemon): pokemon for pokemon in getattr(current, "party", ())}
+        for vivo in getattr(live, "party", ()):
+            actual = actuales.get(identidad(vivo))
+            if actual is None:
+                continue
+            for campo in ("stats", "ivs", "evs", "base_stats"):
+                if getattr(vivo, campo, None) and not getattr(actual, campo, None):
+                    return True
+            if getattr(vivo, "nature", "") and not getattr(actual, "nature", ""):
+                return True
+        return False
+
     def _apply_live_health_incrementally(self) -> bool:
         """Refresca solo las barras de PS. ``False`` si hay que reconstruir.
 
@@ -9327,7 +9367,7 @@ class RoleRunManager(ctk.CTk):
             role = fallback_role if fallback_role in ROLE_ORDER else "SIN ROL"
             symbol = self._role_symbol(role)
         live_key = str(getattr(getattr(self, "save_engine", None), "key", ""))
-        if live_key in {"bdsp", "oras", "xy", "sm", "usum"} and role == "Líbero" and len(libero_stats) != 2:
+        if live_key in ROLE_EV_WRITER_GAME_KEYS and role == "Líbero" and len(libero_stats) != 2:
             context = "floating" if self._floating_bar_is_visible() else "main"
             self._prompt_libero_ev_stats(
                 incoming,
@@ -9338,7 +9378,7 @@ class RoleRunManager(ctk.CTk):
             )
             return True
         incoming_snapshot = self._incoming_snapshot_for_role(incoming, role, [])
-        if live_key in {"bdsp", "oras", "xy", "sm", "usum"}:
+        if live_key in ROLE_EV_WRITER_GAME_KEYS:
             desired_evs = self._bdsp_role_evs(role, libero_stats)
             if desired_evs is not None:
                 incoming_snapshot["evs"] = dict(zip(STAT_KEYS, desired_evs))
@@ -9572,14 +9612,19 @@ class RoleRunManager(ctk.CTk):
             if published_health is not None:
                 self._publish_live_health(published_health)
             difference = diff_live_party(before_game, snapshot.game)
-            if difference.changed:
+            # Publicar solo ante cambios de composición dejaba la ficha sin
+            # estadísticas, IV, EV ni naturaleza en cuanto algo reponía la vista
+            # desde el guardado, porque ese diff ignora precisamente esos datos.
+            faltan_metadatos = self._live_metadata_is_missing(before_game, snapshot.game)
+            if difference.changed or faltan_metadatos:
                 self._publish_oras_live_snapshot(snapshot, difference=difference)
+            if difference.changed:
                 self.sync_status = (
                     f"✓ Negro 2/Blanco 2 → RoleRun · {difference.label()} "
                     "· solo lectura"
                 )
                 self._update_top_status()
-            else:
+            elif not faltan_metadatos:
                 # Antes se forzaba aquí una reconstrucción completa de la barra
                 # flotante en CADA ciclo del monitor, es decir una vez por
                 # segundo, aunque no hubiera cambiado absolutamente nada. Ese era
@@ -11312,7 +11357,7 @@ class RoleRunManager(ctk.CTk):
         self.current_game = result.game
         self._oras_live_health_snapshot = result.game
         followup_ev_changes: list[PendingRoleChange] = []
-        if self._active_azahar_realtime_key() in {"bdsp", "oras", "xy", "sm", "usum"}:
+        if self._active_azahar_realtime_key() in ROLE_EV_WRITER_GAME_KEYS:
             for team_change in changes:
                 if not isinstance(team_change, PendingTeamChange) or not team_change.incoming_snapshot:
                     continue
@@ -16760,7 +16805,7 @@ class RoleRunManager(ctk.CTk):
             incoming_libero_stats,
         )
         backend_key = str(getattr(getattr(self, "save_engine", None), "key", ""))
-        if backend_key in {"bdsp", "oras", "xy", "sm", "usum"} and desired_evs is not None:
+        if backend_key in ROLE_EV_WRITER_GAME_KEYS and desired_evs is not None:
             incoming_snapshot["evs"] = dict(zip(STAT_KEYS, desired_evs))
 
         self.run.pending_changes.append(PendingTeamChange(
@@ -18727,7 +18772,7 @@ class RoleRunManager(ctk.CTk):
         else:
             old_evs = tuple(int(pokemon.evs.get(key, 0)) for key in STAT_KEYS)
             new_evs = None
-            if self._active_azahar_realtime_key() in {"bdsp", "oras", "xy", "sm", "usum"} and pokemon.evs:
+            if self._active_azahar_realtime_key() in ROLE_EV_WRITER_GAME_KEYS and pokemon.evs:
                 new_evs = self._bdsp_role_evs(role, libero_stats)
             reconcile_gen7_stats = self._active_azahar_realtime_key() in {"sm", "usum"} and new_evs is not None
             if role != base_role or (new_evs is not None and new_evs != old_evs) or reconcile_gen7_stats:

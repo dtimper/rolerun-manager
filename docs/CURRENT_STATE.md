@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.24`
+- Versión de aplicación: `v0.2.6-alpha.25`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,25 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.25 — metadatos vivos y reparto de EV en B2/W2
+
+La validación física de alpha.24 confirmó que la marca del rol se escribe en el
+juego, y destapó dos cosas más.
+
+La ficha mostraba «—» en estadísticas, IV, EV y naturaleza hasta que se asignaba
+un rol. `diff_live_party` ignora esos campos por diseño, y la rama B2/W2 solo
+publicaba la captura viva cuando ese diff detectaba algo; cualquier recarga desde
+el guardado dejaba la vista sin ellos de forma permanente. Se publica ahora
+también cuando la captura viva trae datos que la vista no tiene, comprobado por
+identidad fuerte y en un solo sentido.
+
+Los EV de un rol no se repartían porque la lista de backends con reparto estaba
+escrita como literal en siete sitios y B2/W2 no figuraba en ninguno. Ahora es la
+constante `ROLE_EV_WRITER_GAME_KEYS`. Los tres usos restantes de ese literal
+pertenecen a MT/ROM y se conservan.
+
+Baseline completa: **1040 passed**.
 
 ### v0.2.6 Alpha.24 — writer de roles y EV en B2/W2
 
