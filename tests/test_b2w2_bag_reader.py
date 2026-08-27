@@ -155,3 +155,53 @@ def test_un_bolsillo_lleno_hasta_el_ultimo_hueco_sigue_siendo_valido() -> None:
     legales = sorted(medicinas.legal)[:medicinas.slots]
     entradas = parse_bag(_construir({"Medicine": [(i, 1) for i in legales]}))
     assert len(entradas) == len(legales)
+
+
+# --------------------------------------------------------------------------
+# El adaptador publica la mochila por el contrato común
+# --------------------------------------------------------------------------
+
+def test_el_adaptador_publica_la_mochila_por_el_contrato_comun() -> None:
+    """Es la vía por la que la interfaz y las MT leerán el inventario."""
+    from types import SimpleNamespace
+
+    from app.b2w2_live import BAG_BASE, B2W2BagEntry, B2W2BagRead
+    from app.realtime.b2w2_adapter import B2W2RealTimeAdapter
+
+    entradas = (
+        B2W2BagEntry("Medicine", 0, 17, 3),
+        B2W2BagEntry("TMHMs", 0, 348, 1),
+    )
+    lector = SimpleNamespace(
+        read_party=lambda: SimpleNamespace(process_id=42, process_name="melonDS.exe"),
+        read_bag=lambda party: B2W2BagRead(
+            42, "melonDS.exe", 0x1000, BAG_BASE, b"", entradas,
+        ),
+    )
+
+    inventario, proceso, base = B2W2RealTimeAdapter(reader=lector).read_tm_inventory()
+
+    assert inventario == {17: 3, 348: 1}
+    assert base == BAG_BASE
+    assert proceso.process_id == 42
+
+
+def test_un_testigo_del_guardado_no_sustituye_a_la_ram() -> None:
+    """Coger o gastar un objeto hace que difieran: manda siempre la RAM."""
+    from types import SimpleNamespace
+
+    from app.b2w2_live import BAG_BASE, B2W2BagEntry, B2W2BagRead
+    from app.realtime.b2w2_adapter import B2W2RealTimeAdapter
+
+    lector = SimpleNamespace(
+        read_party=lambda: SimpleNamespace(process_id=1, process_name="melonDS.exe"),
+        read_bag=lambda party: B2W2BagRead(
+            1, "melonDS.exe", 0x1000, BAG_BASE, b"", (B2W2BagEntry("Medicine", 0, 17, 3),),
+        ),
+    )
+
+    inventario, _proceso, _base = B2W2RealTimeAdapter(reader=lector).read_tm_inventory(
+        {17: 99, 4: 5},
+    )
+
+    assert inventario == {17: 3}

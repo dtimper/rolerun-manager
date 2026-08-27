@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.37`
+- Versión de aplicación: `v0.2.6-alpha.38`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,18 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.38 — la mochila publicada por el contrato común
+
+El usuario validó físicamente el lector: lo que RoleRun lee coincide con la
+mochila del juego, bolsillo por bolsillo.
+
+El adaptador implementa ya `read_tm_inventory`, el contrato por el que el resto
+de RoleRun pide el inventario a cualquier backend, de modo que B2/W2 deja de ser
+una excepción. El testigo del guardado sigue siendo solo diagnóstico: manda
+siempre la muestra de RAM.
+
+Falta mostrarlo en la interfaz y el writer de mochila/MT.
 
 ### v0.2.6 Alpha.37 — lector de la mochila B2/W2
 

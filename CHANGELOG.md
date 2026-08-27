@@ -1,6 +1,20 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.38 — la mochila de B2/W2, por el contrato común
+
+El lector quedó **validado físicamente**: lo que RoleRun lee coincide con la
+mochila del juego, bolsillo por bolsillo.
+
+- El adaptador implementa `read_tm_inventory`, que es el contrato por el que el
+  resto de RoleRun —la interfaz y el selector de MT— pide el inventario a
+  cualquier backend. B2/W2 deja así de ser una excepción.
+- El testigo del guardado sigue siendo **solo diagnóstico**: en cuanto el jugador
+  coge o gasta un objeto ambos difieren, y manda siempre la muestra de RAM.
+- Baseline completa: **1129 passed**.
+
+Falta mostrarlo en la interfaz y, más adelante, el writer.
+
 # v0.2.6-alpha.37 — lector de la mochila de B2/W2
 
 Con la estructura ya demostrada, el lector.

@@ -1,0 +1,65 @@
+{
+  "format": "rolerun-b2w2-bag-read-v1",
+  "captured_at": "2026-08-27T15:30:39.254383+02:00",
+  "environment": "Pokemon Negro 2 Espana - melonDS 1.1",
+  "guest_base": "0x0221D9A4",
+  "entradas": [
+    {
+      "bolsillo": "Items",
+      "hueco": 0,
+      "item_id": 4,
+      "nombre": "Poké Ball",
+      "cantidad": 3
+    },
+    {
+      "bolsillo": "Items",
+      "hueco": 1,
+      "item_id": 57,
+      "nombre": "Ataque X",
+      "cantidad": 1
+    },
+    {
+      "bolsillo": "KeyItems",
+      "hueco": 0,
+      "item_id": 621,
+      "nombre": "Videomisor",
+      "cantidad": 1
+    },
+    {
+      "bolsillo": "KeyItems",
+      "hueco": 1,
+      "item_id": 437,
+      "nombre": "Bloc de Amigos",
+      "cantidad": 1
+    },
+    {
+      "bolsillo": "KeyItems",
+      "hueco": 2,
+      "item_id": 442,
+      "nombre": "Mapa",
+      "cantidad": 1
+    },
+    {
+      "bolsillo": "TMHMs",
+      "hueco": 0,
+      "item_id": 348,
+      "nombre": "MT21",
+      "cantidad": 1
+    },
+    {
+      "bolsillo": "Medicine",
+      "hueco": 0,
+      "item_id": 17,
+      "nombre": "Poción",
+      "cantidad": 3
+    },
+    {
+      "bolsillo": "Medicine",
+      "hueco": 1,
+      "item_id": 22,
+      "nombre": "Antiparalizador",
+      "cantidad": 2
+    }
+  ],
+  "note": "Lectura con el lector y el validador de produccion. Solo lectura."
+}

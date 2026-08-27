@@ -7,6 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from ..b2w2_live import (
+    BAG_BASE,
     STAT_ORDER_PERSONAL, B2W2LiveError, B2W2MelonDSReader, B2W2RoleWrite,
     PK5_PARTY_SIZE, PK5_STORED_SIZE, _crypt,
 )
@@ -113,6 +114,35 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
             stats[0], stats[0], stats[1], stats[2], stats[5], stats[3], stats[4],
         )
         return stored + _crypt(bytes(extension), pokemon.pid)
+
+    def read_tm_inventory(
+        self,
+        saved_items=None,
+        *,
+        save_path=None,
+    ) -> tuple[dict[int, int], object, int]:
+        """Publica la mochila viva completa, MT incluidas.
+
+        ``saved_items`` es solo un testigo de diagnóstico: una diferencia con el
+        guardado es lo esperable en cuanto el jugador coge o gasta un objeto, así
+        que nunca se sustituye la muestra de RAM por ese valor antiguo.
+
+        La estructura está demostrada, no supuesta: ver `b2w2_live.BAG_BASE`.
+        """
+        del save_path  # La mochila vive en el proceso, no en el archivo.
+        party_read = self.reader.read_party()
+        mochila = self.reader.read_bag(party_read)
+        inventario = {
+            int(entrada.item_id): int(entrada.quantity)
+            for entrada in mochila.entries
+        }
+        return (
+            inventario,
+            LiveProcessInfo(
+                "melonDS", mochila.process_id, 0, mochila.process_name,
+            ),
+            BAG_BASE,
+        )
 
     def read_pc(
         self, anchors, *, box_count: int | None = None,
