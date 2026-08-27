@@ -1,13 +1,25 @@
 from __future__ import annotations
 
-"""Tabla de MT/MO de Pokémon Negro 2 y Blanco 2.
+"""Tabla MT/MO de quinta generación **de referencia**, extraída de PKHeX.
 
-A diferencia de ORAS, X/Y o Perla Reluciente, aquí **no hace falta la ROM del
-usuario**: la quinta generación no admite randomización de MT en el flujo que
-RoleRun soporta, así que la correspondencia MT → movimiento es la misma en toda
-partida de B2/W2 y se puede extraer una sola vez de PKHeX.
+ESTO NO ES LA FUENTE DE VERDAD DE UNA PARTIDA.
 
-Y no se copió a mano de ninguna lista. `tools_extract_gen5_tm` la **deriva** de
+RoleRun está pensado para jugarse en randomizers, y un randomizer puede cambiar
+qué movimiento enseña cada MT. Esta tabla describe la quinta generación
+original, así que solo es correcta en una partida sin randomizar. La tabla buena
+es la que el juego tiene cargada en memoria, y se lee en vivo como el resto de
+B2/W2.
+
+Para qué sirve entonces: es la **referencia con la que se localiza y se valida**
+esa tabla viva. En una partida no randomizada, el tramo de RAM correcto tiene
+que coincidir movimiento a movimiento con esta lista, y esa coincidencia es la
+que demuestra la dirección por un segundo camino independiente de su forma.
+Ver `tools_b2w2_tm_table_capture.py`.
+
+Lo que sí es fijo, randomizada la partida o no, es qué objeto es cada MT: MT01
+es el objeto 328 y MT21 el 348 en cualquier B2/W2.
+
+La lista no se copió a mano de ninguna parte. `tools_extract_gen5_tm` la **deriva** de
 la propia lógica de PKHeX: enciende un solo bit de MT en una ficha personal en
 blanco y pregunta qué movimiento queda enseñable. Comprobado contra hechos
 independientes: MT21 = Frustración (la MT que el usuario tiene en su partida),

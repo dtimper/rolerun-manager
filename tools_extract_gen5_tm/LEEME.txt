@@ -5,11 +5,20 @@ QUE HACE
 Genera data/b2w2_tm_table.json: los 101 objetos MT/MO de quinta generacion y el
 movimiento que ensena cada uno.
 
-POR QUE NO HACE FALTA LA ROM DEL USUARIO
+PARA QUE SIRVE - Y PARA QUE NO
 
-Quinta generacion no admite la randomizacion de MT que si obliga a leer la ROM
-en ORAS, X/Y o Perla Reluciente. La correspondencia es la misma en toda partida
-de B2/W2, asi que se extrae una sola vez y se guarda en el repositorio.
+NO es la fuente de verdad de una partida. RoleRun esta pensado para jugarse en
+randomizers, y un randomizer puede cambiar que movimiento ensena cada MT. Esta
+tabla describe la quinta generacion original.
+
+Sirve como REFERENCIA con la que localizar y validar la tabla que el juego
+tiene cargada en memoria, que es la que manda. En una partida sin randomizar,
+el tramo de RAM correcto tiene que coincidir movimiento a movimiento con esta
+lista, y esa coincidencia demuestra la direccion por un camino independiente de
+su forma. Ver tools_b2w2_tm_table_capture.py.
+
+Lo que si es fijo, randomizada la partida o no, es que objeto es cada MT: MT01
+es el objeto 328 y MT21 el 348 en cualquier B2/W2.
 
 COMO LO AVERIGUA
 

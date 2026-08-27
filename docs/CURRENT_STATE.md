@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.39`
+- Versión de aplicación: `v0.2.6-alpha.40`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,36 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.40 — la tabla de MT, replanteada para randomizers
+
+**Corrección de un supuesto equivocado de alpha.39.** Alpha.39 extrajo la tabla
+MT → movimiento de PKHeX dando por hecho que en quinta generación es fija. No lo
+es para este proyecto: RoleRun está pensado para jugarse en **randomizers**, y un
+randomizer cambia qué movimiento enseña cada MT. Esa tabla describe la quinta
+generación original y solo acierta en una partida sin randomizar.
+
+- La tabla que manda es la que el juego tiene cargada en memoria. Se lee en vivo,
+  como el equipo y la mochila, así que vale sea cual sea la partida.
+- `data/b2w2_tm_table.json` se conserva **como referencia**, no como fuente: es
+  con lo que se localiza y se valida el tramo de RAM correcto. En una partida sin
+  randomizar tiene que coincidir movimiento a movimiento, y esa coincidencia
+  demuestra la dirección por un camino independiente de su forma.
+- Lo que sí es fijo, randomizada la partida o no, es qué objeto es cada MT: MT01
+  es el objeto 328 y MT21 el 348 en cualquier B2/W2.
+- `tools_b2w2_tm_table_capture.py` + `buscar_mts_b2w2.bat`: busca 101 movimientos
+  seguidos, todos entre 1 y 559 y todos distintos. Peor caso medido: 6,4 s sobre
+  los 4 MiB. Sobre ruido totalmente válido aparecen falsos candidatos, y por eso
+  la herramienta no se queda con «hay uno»: exige además la coincidencia.
+- Lo que **no** cambia: la compatibilidad por especie se sigue ignorando a
+  propósito. En RoleRun quién puede aprender una MT lo decide el **rol**, no la
+  tabla del juego.
+- Pendiente de la captura del usuario para fijar la dirección.
+
+### v0.2.6 Alpha.39 — VALIDADO FÍSICAMENTE
+
+El usuario confirmó (27-08-2026) que los tres botones de la cabecera funcionan
+en Negro 2: Caramelos Raros ×999, Repelentes Máximos ×999 y dinero al máximo.
 
 ### v0.2.6 Alpha.39 — las utilidades de la cabecera escriben en B2/W2
 

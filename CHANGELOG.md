@@ -1,6 +1,27 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.40 — la tabla de MT, replanteada para randomizers
+
+**Corrige un supuesto equivocado de alpha.39.** Alpha.39 extrajo la tabla
+MT → movimiento de PKHeX dando por hecho que en quinta generación es fija. No lo
+es para este proyecto: RoleRun está pensado para jugarse en **randomizers**, y un
+randomizer cambia qué movimiento enseña cada MT.
+
+- La tabla que manda es la que el juego tiene cargada en memoria, y se lee en
+  vivo como el equipo y la mochila.
+- `data/b2w2_tm_table.json` pasa a ser **referencia**, no fuente: sirve para
+  localizar y validar el tramo de RAM correcto. En una partida sin randomizar
+  tiene que coincidir movimiento a movimiento.
+- Qué objeto es cada MT sí es fijo: MT01 = 328, MT21 = 348 en cualquier B2/W2.
+- `tools_b2w2_tm_table_capture.py` + `buscar_mts_b2w2.bat`: 101 movimientos
+  seguidos, todos entre 1 y 559 y todos distintos. Peor caso 6,4 s sobre 4 MiB.
+- La compatibilidad por especie se sigue ignorando a propósito: en RoleRun quién
+  puede aprender una MT lo decide el **rol**.
+- `tests/test_b2w2_tm_table_search.py`: 10 pruebas nuevas.
+- **alpha.39 queda validado físicamente**: los tres botones de la cabecera
+  funcionan en Negro 2 (confirmado por el usuario el 27-08-2026).
+
 # v0.2.6-alpha.39 — las utilidades de la cabecera, escribiendo en Negro 2
 
 Los tres botones que hay junto a la vida (Caramelos Raros ×999, Repelentes

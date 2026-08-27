@@ -1,4 +1,12 @@
-"""La tabla de MT/MO de B2/W2.
+"""La tabla MT/MO de quinta generación **de referencia**.
+
+No es la fuente de verdad de una partida: RoleRun se juega en randomizers, y un
+randomizer cambia qué movimiento enseña cada MT. Esta tabla describe la quinta
+generación original y sirve para **localizar y validar** la tabla que el juego
+tiene cargada en memoria, que es la que manda.
+
+Lo que estas pruebas fijan, por tanto, es que la referencia es fiel a la quinta
+generación original. Lo que es fijo pase lo que pase es el objeto de cada MT.
 
 No está copiada a mano. `tools_extract_gen5_tm` la deriva de la propia lógica
 de PKHeX: enciende un solo bit de MT en una ficha personal en blanco y pregunta
