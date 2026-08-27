@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.54`
+- Versión de aplicación: `v0.2.6-alpha.55`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,31 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.55 — el bloque vivo es un espejo del guardado
+
+**Un hallazgo que cambia el coste de cada juego nuevo.** El bloque que quinta
+generación mantiene en RAM es un **espejo contiguo del guardado**: partiendo
+*solo* de la dirección del dinero de Negro 2, ya demostrada, y del
+desplazamiento que PKHeX declara para ese campo, se calcula dónde empezaría el
+bloque; y con esa base el contador del equipo y los seis Pokémon aparecen en el
+guardado real del usuario, en las posiciones exactas que predice PKHeX.
+
+Seis bloques PK5 con checksum válido no aparecen por azar.
+
+**Qué significa:** cada juego nuevo necesita **un ancla, no seis**. Encontrado
+el equipo en la RAM de Blanco, la mochila, el dinero y las medallas salen
+restando y sumando desplazamientos ya conocidos.
+
+**Lo que no autoriza** es heredar direcciones. Sondeado en PKHeX: Blanco guarda
+el dinero en `0x21200` y Negro 2 en `0x21100`. Misma regla, distintos números.
+
+- `tools_bw_anchor_capture.py` + `buscar_ancla_blanco.bat`: busca un PK5 de
+  party válido en la RAM de melonDS y exige que **las tres cosas** cuadren —el
+  contador ocho bytes antes, y el dinero y las medallas donde los predice el
+  desplazamiento del guardado—. Una coincidencia suelta no basta.
+- `tests/test_gen5_save_mirror.py` fija la regla y su límite.
+- Suite completa: 1371.
 
 ### v0.2.6 Alpha.54 — Blanco: la base común, y qué comparte de verdad con Negro 2
 

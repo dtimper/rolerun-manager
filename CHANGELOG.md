@@ -1,6 +1,18 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.55 — el bloque vivo es un espejo del guardado
+
+Partiendo solo del dinero de Negro 2 y del desplazamiento que PKHeX declara,
+el contador del equipo y sus seis Pokémon aparecen en el guardado real en las
+posiciones predichas. Cada juego nuevo necesita **un ancla, no seis**.
+
+No autoriza heredar direcciones: Blanco guarda el dinero en `0x21200` y Negro 2
+en `0x21100`. Misma regla, distintos números.
+
+- `tools_bw_anchor_capture.py` + `buscar_ancla_blanco.bat`.
+- `tests/test_gen5_save_mirror.py`. Suite completa: 1371.
+
 # v0.2.6-alpha.54 — Blanco: la base común de ROM de DS
 
 Primer paso del segundo juego de DS, hecho sin pedir nada al usuario: sus cinco
