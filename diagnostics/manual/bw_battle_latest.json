@@ -1,0 +1,71 @@
+{
+  "format": "rolerun-bw-battle-v1",
+  "captured_at": "2026-08-27T20:18:24.658400+02:00",
+  "environment": "Negro/Blanco Espana - melonDS 1.1",
+  "metodo": "Firma de cuatro campos contra un miembro del equipo -especie, PS maximos, habilidad y nivel- sobre filas de siete valores de 16 bits. Se descartan las posiciones que caen dentro del bloque de equipo, que no son el carril de combate.",
+  "ps_en_pantalla": 19,
+  "equipo": [
+    {
+      "mote": "Purrloin",
+      "especie": 509,
+      "nivel": 5,
+      "ps": "19/19",
+      "habilidad": 84
+    },
+    {
+      "mote": "Serperior",
+      "especie": 497,
+      "nivel": 50,
+      "ps": "147/150",
+      "habilidad": 65
+    },
+    {
+      "mote": "Patrat",
+      "especie": 504,
+      "nivel": 7,
+      "ps": "25/25",
+      "habilidad": 51
+    },
+    {
+      "mote": "Lillipup",
+      "especie": 506,
+      "nivel": 4,
+      "ps": "20/20",
+      "habilidad": 53
+    },
+    {
+      "mote": "Panpour",
+      "especie": 515,
+      "nivel": 10,
+      "ps": "30/30",
+      "habilidad": 82
+    }
+  ],
+  "candidatos": [
+    {
+      "direccion": "0x0226D670",
+      "offset": 2545264,
+      "mote": "Purrloin",
+      "especie": 509,
+      "nivel": 5,
+      "ps": "19/19",
+      "ps_valor": 19,
+      "estado": 0
+    },
+    {
+      "direccion": "0x0226E348",
+      "offset": 2548552,
+      "mote": "Purrloin",
+      "especie": 509,
+      "nivel": 5,
+      "ps": "19/19",
+      "ps_valor": 19,
+      "estado": 0
+    }
+  ],
+  "coinciden_con_pantalla": [
+    "0x0226D670",
+    "0x0226E348"
+  ],
+  "note": "Diagnostico de solo lectura. Una fila aqui no pasa a produccion mientras no se distingan presentacion y logica con los PS."
+}

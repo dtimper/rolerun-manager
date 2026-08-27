@@ -1,6 +1,23 @@
 from __future__ import annotations
 
-"""Traza manual read-only de las dos copias de batalla observadas en B2/W2."""
+"""Traza manual de solo lectura de las dos copias de batalla de quinta.
+
+QUE SEPARA ESTA HERRAMIENTA
+
+Encontrar las dos filas es facil: comparten especie, PS maximos, habilidad y
+nivel con el Pokemon que esta luchando. Lo dificil es saber CUAL ES CUAL, porque
+fuera de la animacion las dos dicen lo mismo.
+
+Se distinguen por el tiempo. La copia LOGICA baja los PS en cuanto el golpe se
+resuelve; la de PRESENTACION los baja al ritmo de la barra, unas decimas
+despues. Esta traza muestrea las dos cada 10 ms durante un turno y apunta cuando
+cambia cada una: la que cambia mas tarde es la que manda en pantalla.
+
+Importa cual es cual: con la logica como autoridad, RoleRun adelantaria el KO a
+la animacion y cantaria una baja que el jugador todavia no ha visto.
+
+No escribe un solo byte en la partida ni activa ninguna capacidad.
+"""
 
 import ctypes
 import json
@@ -11,13 +28,19 @@ from datetime import datetime
 from pathlib import Path
 
 from app.b2w2_live import B2W2MelonDSReader, DS_RAM_BASE
+from app.gen5_memory import GEN5_MEMORY
 
 
-COPY_GUEST_BASES = (0x0225B1B0, 0x0225B5F8)
+# Las dos filas candidatas de cada juego. En Negro 2 ya estan demostradas y
+# ordenadas -presentacion primero-; en Blanco salieron de la busqueda por firma
+# del 27-08-2026 y esta traza es justo lo que decide su orden.
+CANDIDATAS = {
+    "b2w2": (0x0225B1B0, 0x0225B5F8),
+    "bw": (0x0226D670, 0x0226E348),
+}
 SAMPLE_SIZE = 14  # especie, max HP, HP, dos words auxiliares, habilidad, nivel
 WAIT_SECONDS = 60.0
 TAIL_SECONDS = 5.0
-OUTPUT = Path("diagnostics/manual/b2w2_battle_timing_latest.json")
 
 
 def _open_read_handle(pid: int):
@@ -51,12 +74,17 @@ def _decode(raw: bytes) -> list[int]:
     return list(struct.unpack("<7H", raw))
 
 
-def main() -> None:
-    party = B2W2MelonDSReader().read_party()
-    print("Traza temporal de combate B2/W2 preparada (solo lectura).")
-    print("Entra en combate y deja listo un turno en el que Tepig vaya a recibir daño.")
-    print("Pulsa INTRO justo antes de ejecutar el turno; después vuelve a melonDS.")
+def main(clave: str = "b2w2") -> None:
+    memoria = GEN5_MEMORY[clave]
+    bases = CANDIDATAS[clave]
+    party = B2W2MelonDSReader(memoria).read_party()
+    print(f"Traza temporal de combate · {memoria.label} · solo lectura.")
+    print(f"Filas vigiladas: {', '.join(f'0x{b:08X}' for b in bases)}")
+    print()
+    print("Entra en combate y prepara un turno en el que TU Pokémon reciba daño.")
+    print("Pulsa INTRO justo antes de ejecutar el turno y vuelve a melonDS.")
     input()
+    COPY_GUEST_BASES = bases
     kernel32, handle = _open_read_handle(party.process_id)
     host_addresses = [
         party.allocation_base + (guest - DS_RAM_BASE) for guest in COPY_GUEST_BASES
@@ -88,9 +116,10 @@ def main() -> None:
     finally:
         kernel32.CloseHandle(handle)
     payload = {
-        "format": "rolerun-b2w2-battle-timing-v1",
+        "format": "rolerun-gen5-battle-timing-v1",
+        "juego": memoria.key,
         "captured_at": datetime.now().astimezone().isoformat(),
-        "environment": "Pokémon Negro 2 España · melonDS 1.1",
+        "environment": f"{memoria.label} España · melonDS 1.1",
         "guest_bases": [f"0x{value:08X}" for value in COPY_GUEST_BASES],
         "field_order": ["species", "max_hp", "current_hp", "aux_1", "aux_2", "ability", "level"],
         "wait_seconds": WAIT_SECONDS,
@@ -100,12 +129,15 @@ def main() -> None:
         "transitions": transitions,
         "note": "Diagnóstico temporal; no constituye aún una dirección de producción.",
     }
+    OUTPUT = Path(f"diagnostics/manual/{clave}_battle_timing_latest.json")
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Traza terminada: {OUTPUT.resolve()}")
-    print("Ya puedes avisar a Codex.")
+    print("Avisame y seguimos.")
     input()
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+
+    main(sys.argv[1] if len(sys.argv) > 1 else "b2w2")

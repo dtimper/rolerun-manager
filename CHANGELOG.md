@@ -1,6 +1,18 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.61 — la tabla de MT de Blanco, y el combate a medias
+
+**MT: `0x0209EA88`.** De 381 tramos con la forma correcta, uno solo coincide
+101 de 101 con la referencia de PKHeX.
+
+**Combate: localizado, no ordenado.** Dos filas exactas, pero con la vida llena
+las dos dicen lo mismo y no se sabe cuál manda en pantalla. Elegir mal
+adelantaría el KO a la animación, así que siguen apagadas.
+`cual_es_cual_combate_blanco.bat` las separa por tiempo.
+
+Suite completa: 1397.
+
 # v0.2.6-alpha.60 — Blanco VALIDADO: lectura y escritura
 
 Confirmado sobre la partida real: equipo, cajas PC, intercambios Equipo↔PC y el

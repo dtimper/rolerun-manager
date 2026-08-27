@@ -102,13 +102,22 @@ GEN5_MEMORY: dict[str, Gen5Memory] = {
     # cuatro PK5 seguidos separados 220 bytes -su equipo de cuatro- y, en la
     # dirección que predice la resta, el dinero exacto que declaró (1624).
     #
-    # La tabla de MT y las copias de batalla siguen sin demostrarse: no viven
-    # en este bloque.
+    # La tabla de MT se demostró el 27-08-2026 con la misma búsqueda por forma
+    # que en Negro 2: de 381 tramos con la forma correcta, uno solo coincide
+    # 101 de 101 con la lista derivada de PKHeX.
+    #
+    # Las copias de batalla están LOCALIZADAS pero todavía no ORDENADAS. La
+    # búsqueda por firma encontró exactamente dos filas —0x0226D670 y
+    # 0x0226E348— que comparten especie, PS máximos, habilidad y nivel con el
+    # Pokémon en combate. Cuál de las dos manda en pantalla solo se ve con una
+    # traza temporal, porque fuera de la animación las dos dicen lo mismo, y
+    # equivocarse adelantaría el KO a la animación. Hasta entonces valen None.
     "bw": Gen5Memory(
         key="bw",
         label="Negro/Blanco",
         party_data=0x02234974,
         save_money=0x21200,
         save_badges=0x21204,
+        tm_table=0x0209EA88,
     ),
 }

@@ -99,15 +99,16 @@ def test_las_direcciones_derivadas_de_blanco() -> None:
 
 
 def test_lo_que_todavia_no_se_ha_demostrado_de_blanco() -> None:
-    """No están en el bloque del guardado, así que no salen de la resta.
+    """El carril de batalla, que no sale de la resta ni de una sola lectura.
 
-    Declararlas a ojo sería inventarlas. Mientras valgan None, el backend sabe
-    que esas capacidades no están disponibles todavía.
+    La tabla de MT sí se demostró: vive en el binario del juego y se encontró
+    por forma y contenido. El carril de batalla está localizado pero sin
+    ordenar, y hasta saber cuál de las dos filas manda vale None: declararlo a
+    ojo sería inventarlo.
     """
-    assert BW.tm_table is None
     assert BW.battle_presentation is None
     assert BW.battle_logical is None
-    assert B2W2.tm_table is not None, "Negro 2 sí las tiene demostradas"
+    assert B2W2.battle_presentation is not None, "Negro 2 sí lo tiene demostrado"
 
 
 # --------------------------------------------------------------------------
@@ -197,12 +198,8 @@ def test_lo_no_demostrado_se_niega_con_su_motivo() -> None:
     from app.b2w2_live import B2W2LiveError
 
     lector = _lector("bw")
-    for llamada in (
-        lambda: lector.read_tm_table(object()),
-        lambda: lector._read_battle_rows(object()),
-    ):
-        with pytest.raises(B2W2LiveError, match="no esta demostrado en Negro/Blanco"):
-            llamada()
+    with pytest.raises(B2W2LiveError, match="no esta demostrado en Negro/Blanco"):
+        lector._read_battle_rows(object())
 
 
 def test_negro_2_no_niega_nada_de_eso() -> None:
@@ -213,6 +210,8 @@ def test_negro_2_no_niega_nada_de_eso() -> None:
     assert lector._demostrada(
         lector.memory.battle_presentation, "batalla",
     ) == B2W2.battle_presentation
+    # Y Blanco tampoco niega ya la tabla de MT, que se demostró en alpha.61.
+    assert _lector("bw")._demostrada(BW.tm_table, "MT") == BW.tm_table
 
 
 # --------------------------------------------------------------------------
@@ -393,3 +392,53 @@ def test_el_pc_se_lee_de_la_direccion_de_su_juego() -> None:
         assert lectura.guest_base == memoria.pc
         assert lectura.empty_slots == 24 * 30 - 1
         assert [p.nickname for p in lectura.pokemon] == ["Tepig"]
+
+
+# --------------------------------------------------------------------------
+# La tabla de MT de Blanco
+# --------------------------------------------------------------------------
+
+CAPTURA_MT = Path(__file__).resolve().parent.parent / "diagnostics" / "manual" / (
+    "bw_tm_table_latest.json"
+)
+
+
+@pytest.fixture(scope="module")
+def captura_mt():
+    import json
+
+    if not CAPTURA_MT.exists():
+        pytest.skip("No hay captura de MT de Blanco en este equipo.")
+    return json.loads(CAPTURA_MT.read_text(encoding="utf-8"))
+
+
+def test_la_tabla_de_mt_de_blanco_esta_demostrada() -> None:
+    assert BW.tm_table == 0x0209EA88
+    assert BW.tm_table != B2W2.tm_table, "no se hereda de Negro 2"
+
+
+def test_solo_un_tramo_coincidio_con_la_referencia(captura_mt) -> None:
+    """381 tramos tenían la forma; uno solo tenía además el contenido."""
+    assert captura_mt["identicas_a_pkhex"] == [f"0x{BW.tm_table:08X}"]
+    assert len(captura_mt["candidatos"]) > 100, "la forma sola no bastaba"
+
+
+def test_el_tramo_bueno_coincide_en_las_ciento_una(captura_mt) -> None:
+    bueno = next(
+        c for c in captura_mt["candidatos"]
+        if c["direccion"] == f"0x{BW.tm_table:08X}"
+    )
+
+    assert bueno["coincidencias_con_pkhex"] == 101
+
+
+def test_la_batalla_de_blanco_sigue_sin_ordenarse() -> None:
+    """Localizada no es lo mismo que demostrada.
+
+    La búsqueda por firma encontró exactamente dos filas, pero cuál manda en
+    pantalla solo se ve con una traza temporal: fuera de la animación las dos
+    dicen lo mismo. Equivocarse adelantaría el KO a la animación, así que
+    mientras no se sepa, la capacidad sigue apagada.
+    """
+    assert BW.battle_presentation is None
+    assert BW.battle_logical is None

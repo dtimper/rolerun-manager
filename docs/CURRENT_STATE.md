@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.60`
+- Versión de aplicación: `v0.2.6-alpha.61`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,32 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.61 — la tabla de MT de Blanco, y el combate a medias
+
+**MT demostrada: `0x0209EA88`.** La misma búsqueda por forma que en Negro 2: de
+**381** tramos con la forma de una tabla de MT, uno solo coincide **101 de 101**
+con la lista derivada de PKHeX. La forma sola no bastaba —381 candidatos lo
+dicen—; lo que decide es el contenido.
+
+**El combate está localizado pero no ordenado.** La búsqueda por firma encontró
+**exactamente dos** filas, `0x0226D670` y `0x0226E348`, que comparten especie,
+PS máximos, habilidad y nivel con el Pokémon en combate. Eso confirma que son
+las dos copias.
+
+Lo que no se puede saber con esa captura es **cuál manda en pantalla**: el
+Pokémon estaba a vida llena, así que las dos decían 19/19. Fuera de la
+animación siempre dicen lo mismo.
+
+Y elegir mal no es cosmético: con la copia lógica como autoridad, RoleRun
+adelantaría el KO a la animación y cantaría una baja que el jugador todavía no
+ha visto. Es exactamente lo que el diseño de Negro 2 evita. Así que ambas siguen
+valiendo `None` y la capacidad, apagada.
+
+`cual_es_cual_combate_blanco.bat` lo resuelve: muestrea las dos cada 10 ms
+durante un turno y apunta cuál baja los PS más tarde. Esa es la de presentación.
+
+- Suite completa: 1397.
 
 ### v0.2.6 Alpha.60 — Blanco VALIDADO: lectura y escritura
 
