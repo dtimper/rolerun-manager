@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.49`
+- Versión de aplicación: `v0.2.6-alpha.50`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,34 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.50 — medallas en tiempo real, y el dinero corregido
+
+**Medallas: `0x022266A8`**, deducidas sin pedir ninguna captura.
+
+El dinero ya estaba demostrado en `0x022266A4`. Faltaba la distancia hasta las
+medallas, y eso lo dice PKHeX: cambiar `Misc5B2W2.Badges` en un guardado en
+blanco mueve el byte `0x21104`, y cambiar el dinero mueve `0x21100..0x21102`.
+Medallas = dinero + 4. Misma vecindad que ORAS.
+
+La equivalencia entre guardado y RAM está confirmada por partida doble: el
+guardado real del usuario pone **4524** en `0x21100`, exactamente el valor con el
+que empezó su traza de dinero.
+
+- Quinta guarda **un bit por medalla**, no el número como ORAS: se cuentan.
+- Si no se pueden leer se publica `None`, no un cero: un cero sería
+  indistinguible de no tener ninguna.
+- La procedencia se declara en el contrato común (`badge_source_is_live`), que
+  rechaza por defecto cualquier fuente no registrada.
+
+**Corregido de paso: el dinero ocupa tres bytes, no cuatro.** PKHeX solo toca
+`0x21100..0x21102`. RoleRun escribía cuatro y pisaba el byte siguiente, que no le
+pertenece. En el guardado del usuario ese byte vale cero, así que la validación
+física de alpha.39 no se vio afectada, pero no había motivo para escribirlo.
+
+- `tests/test_b2w2_badges.py`: 25 pruebas. Suite completa: 1355.
+- **Pendiente de validación física**: al conseguir una medalla, el contador de
+  la cabecera debe subir solo. Hoy el guardado marca cero.
 
 ### v0.2.6 Alpha.49 — el marco cortado, esta vez medido
 

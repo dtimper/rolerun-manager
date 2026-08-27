@@ -7,7 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from ..b2w2_live import (
-    BAG_BASE, MONEY_MAX, TM_TABLE_BASE,
+    BADGES_ADDRESS, BAG_BASE, MONEY_MAX, TM_TABLE_BASE,
     STAT_ORDER_PERSONAL, B2W2LiveError, B2W2MelonDSReader, B2W2RoleWrite,
     PK5_PARTY_SIZE, PK5_STORED_SIZE, _crypt,
 )
@@ -686,6 +686,23 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
                 "battle", DiagnosticLevel.WARNING, str(exc),
                 "B2/W2 battle lane aislado",
             )
+        # Medallas: cuatro bytes detras del dinero, un bit cada una. Si no se
+        # pueden leer no se inventa un cero, que seria indistinguible de no
+        # tener ninguna: se publica None y la cabecera lo dice.
+        medallas = None
+        try:
+            medallas = int(self.reader.read_badges(raw))
+            badge_diagnostic = LiveDiagnostic(
+                "badges", DiagnosticLevel.OK,
+                f"Medallas detectadas: {medallas}.",
+                f"0x{BADGES_ADDRESS:08X} · un bit por medalla",
+            )
+        except Exception as exc:
+            badge_diagnostic = LiveDiagnostic(
+                "badges", DiagnosticLevel.WARNING,
+                str(exc) or "Fallo al leer medallas.",
+                f"0x{BADGES_ADDRESS:08X}",
+            )
         diagnostics = (
             LiveDiagnostic(
                 "party", DiagnosticLevel.OK,
@@ -694,6 +711,7 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
                 "PK5 nominal · doble lectura + checksum + identidad · PKHeX PK5",
             ),
             battle_diagnostic,
+            badge_diagnostic,
         )
         return RealTimeSnapshot(
             game,
@@ -704,6 +722,8 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
             battle=battle,
             diagnostics=diagnostics,
             sequence=sequence,
+            badges=medallas,
+            badge_source=f"melonDS vivo · 0x{BADGES_ADDRESS:08X}",
         )
 
     def capture_monitor(

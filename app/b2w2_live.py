@@ -63,10 +63,21 @@ BAG_MAX_QUANTITY = 999
 # iniciales, esta es la unica direccion que paso de 4524 a 4224 al gastar dinero
 # dentro del juego (diagnostics/manual/b2w2_bag_latest.json).
 MONEY_ADDRESS = 0x022266A4
-MONEY_SIZE = 4
+# TRES bytes, no cuatro. PKHeX solo toca 0x21100..0x21102 del guardado al
+# cambiar el dinero, y el guardado real del usuario confirma la equivalencia:
+# ahi pone 4524, que es exactamente el valor con el que empezo la traza.
+# Escribir cuatro pisaba el byte siguiente, que no es del dinero.
+MONEY_SIZE = 3
 # Es el tope que escribe la utilidad de RoleRun. Un limite mayor no esta
 # demostrado en B2/W2, asi que no se admite.
 MONEY_MAX = 999_999
+# Cuatro bytes despues del dinero, un bit por medalla. La relacion sale del
+# propio PKHeX: cambiar Misc5B2W2.Badges mueve el byte 0x21104 del guardado y
+# el dinero los 0x21100..0x21102, o sea dinero + 4. Es la misma vecindad que
+# ORAS, donde ORAS_BADGES_ADDRESS tambien es ORAS_MONEY_ADDRESS + 4.
+BADGES_ADDRESS = MONEY_ADDRESS + 4
+BADGES_SIZE = 1
+BADGES_TOTAL = 8
 # Demostrado con la captura del 27-08-2026 (b2w2_tm_table_latest.json). En los
 # 4 MiB de RAM hay UN solo tramo con la forma de una tabla de MT —101 valores de
 # 16 bits seguidos, todos entre 1 y 559 y todos distintos— y, indexado por
@@ -201,6 +212,13 @@ def parse_bag(raw: bytes) -> tuple[B2W2BagEntry, ...]:
             vistos.add(item_id)
             entradas.append(B2W2BagEntry(pocket.tipo, hueco, item_id, cantidad))
     return tuple(entradas)
+
+
+def parse_b2w2_badges(raw: bytes) -> int:
+    """Cuenta las medallas de un byte de bits. Ocho como maximo."""
+    if len(raw) != BADGES_SIZE:
+        raise B2W2LiveError("El byte de medallas B2/W2 no mide un byte.")
+    return int(bin(raw[0]).count("1"))
 
 
 def bag_pocket_for(item_id: int) -> B2W2BagPocket:
@@ -1826,7 +1844,18 @@ class B2W2MelonDSReader:
     def read_money(self, party_read: B2W2PartyRead | None = None) -> int:
         lectura = party_read or self.read_party()
         crudo = self._read_guest_twice(lectura, MONEY_ADDRESS, MONEY_SIZE)
-        return int(struct.unpack("<I", crudo)[0])
+        return int.from_bytes(crudo, "little")
+
+    @_serialized
+    def read_badges(self, party_read: B2W2PartyRead | None = None) -> int:
+        """Cuenta las medallas conseguidas. Quinta las guarda como bits.
+
+        A diferencia de ORAS, que guarda el numero, aqui cada bit es una
+        medalla, asi que se cuentan los encendidos.
+        """
+        lectura = party_read or self.read_party()
+        crudo = self._read_guest_twice(lectura, BADGES_ADDRESS, BADGES_SIZE)
+        return parse_b2w2_badges(crudo)
 
     @_serialized
     def write_bag_items(self, party_read: B2W2PartyRead, peticiones) -> B2W2BagRead:
@@ -1888,7 +1917,7 @@ class B2W2MelonDSReader:
         if not 0 <= amount <= MONEY_MAX:
             raise B2W2LiveError(f"B2/W2 admite como maximo {MONEY_MAX} P.")
         antes = self._read_guest_twice(party_read, MONEY_ADDRESS, MONEY_SIZE)
-        deseado = struct.pack("<I", amount)
+        deseado = amount.to_bytes(MONEY_SIZE, "little")
         if antes == deseado:
             # Ya tenia esa cantidad: no se escribe un solo byte en la partida.
             return amount

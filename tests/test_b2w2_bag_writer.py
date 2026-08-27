@@ -180,7 +180,7 @@ class _FakeMelonDS(B2W2MelonDSReader):
     def __init__(self, mochila: bytes, dinero: int = 4224) -> None:
         super().__init__()
         self.memoria = bytearray(mochila)
-        self.dinero = struct.pack("<I", dinero)
+        self.dinero = int(dinero).to_bytes(MONEY_SIZE, "little")
         self.escrituras: list[tuple[int, int]] = []
         # Cuántas escrituras seguidas pisa el juego. Con 1 se corrompe la
         # escritura pero el rollback llega limpio, que es el caso normal.
@@ -217,7 +217,7 @@ class _FakeMelonDS(B2W2MelonDSReader):
                 struct.pack_into("<HH", self.memoria, bag_pocket_for(CARAMELO_RARO).offset, 17, 1)
             return
         if host_address == base + (MONEY_ADDRESS - DS_RAM_BASE):
-            self.dinero = struct.pack("<I", 7) if pisada else bytes(payload)
+            self.dinero = (7).to_bytes(MONEY_SIZE, "little") if pisada else bytes(payload)
             return
         raise AssertionError(f"escritura en una direccion no prevista: 0x{host_address:X}")
 
@@ -317,7 +317,7 @@ def test_el_dinero_se_escribe_y_se_verifica() -> None:
     lector = _lector(4224)
 
     assert lector.write_money(lector.party, MONEY_MAX) == MONEY_MAX
-    assert struct.unpack("<I", lector.dinero)[0] == MONEY_MAX
+    assert int.from_bytes(lector.dinero, "little") == MONEY_MAX
 
 
 def test_si_ya_tenia_ese_dinero_no_se_escribe_un_solo_byte() -> None:
@@ -335,7 +335,7 @@ def test_un_readback_de_dinero_que_no_coincide_restaura_el_saldo() -> None:
     with pytest.raises(B2W2LiveError, match="readback"):
         lector.write_money(lector.party, MONEY_MAX)
 
-    assert struct.unpack("<I", lector.dinero)[0] == 4224
+    assert int.from_bytes(lector.dinero, "little") == 4224
 
 
 @pytest.mark.parametrize("cantidad", [MONEY_MAX + 1, 9_999_999, -1])
@@ -401,7 +401,7 @@ def test_el_adaptador_aplica_objetos_y_dinero_en_la_misma_pasada() -> None:
     mochila = lector.read_bag()
     assert mochila.quantity_of(CARAMELO_RARO) == 999
     assert mochila.quantity_of(REPELENTE_MAXIMO) == 999
-    assert struct.unpack("<I", lector.dinero)[0] == MONEY_MAX
+    assert int.from_bytes(lector.dinero, "little") == MONEY_MAX
     assert resultado.applied_count == 3
 
 

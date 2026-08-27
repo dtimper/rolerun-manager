@@ -1,6 +1,20 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.50 — medallas en tiempo real, y el dinero corregido
+
+**`0x022266A8`**, deducida sin pedir captura: PKHeX dice que las medallas caen
+cuatro bytes detrás del dinero, ya demostrado. Misma vecindad que ORAS. La
+equivalencia guardado↔RAM la confirma el propio guardado del usuario, que pone
+4524 donde su traza de dinero empezó en 4524.
+
+- Quinta guarda un bit por medalla, no el número: se cuentan.
+- Sin lectura fiable se publica `None`, no un cero.
+- **El dinero ocupa tres bytes, no cuatro**: RoleRun escribía uno de más que no
+  le pertenece. En el guardado del usuario valía cero, así que la validación de
+  alpha.39 no se vio afectada.
+- `tests/test_b2w2_badges.py`: 25 pruebas. Suite completa: 1355.
+
 # v0.2.6-alpha.49 — el marco cortado, esta vez medido
 
 Alpha.48 lo intentó a ojo y lo empeoró. Reconstruida la tarjeta real y medida:

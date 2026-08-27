@@ -25,7 +25,7 @@ revisión, región y melonDS concretos.
 | MT/drafteo | Compatibilidad, posesión, enseñar/borrar y consumo Gen 5 | Lectura de ataques lista; resto **PENDIENTE** | Reader mochila antes de cualquier writer |
 | Curación | PS, estado y PP de todo el equipo | **IMPLEMENTADO · TEST · VALIDADO FÍSICAMENTE** (27-08-2026, Negro 2 España/melonDS 1.1, alpha.26). PP base Gen 5 extraídos de PKHeX.Core | Repetir con Más PP y varios estados alterados |
 | Utilidades | Caramelo Raro, Repelente Máximo y dinero | Dinero: **ANCLA DEMOSTRADA** en `0x022266A4`, u32, confirmado con dos estados (4524→4224). **WRITER IMPLEMENTADO · TEST** (alpha.39): los tres botones de la cabecera escriben mochila y dinero con relectura fresca, readback, verificación semántica y rollback. Tope 999 999, el único demostrado. **VALIDADO FÍSICAMENTE** (27-08-2026, alpha.39) | Cerrado |
-| Progreso | Medallas/gimnasios sin retroceso ni duplicado | **PENDIENTE** | Flags antes/después de medalla |
+| Progreso | Medallas/gimnasios sin retroceso ni duplicado | **IMPLEMENTADO · TEST** (alpha.50): `0x022266A8`, un bit por medalla, cuatro bytes detrás del dinero ya demostrado. Deducido de PKHeX y confirmado contra el guardado real (4524 en `0x21100`) | Validación física: conseguir una medalla y ver subir el contador |
 | UI | Barra, ficha, PC, avisos live/stale/inválido y compuertas | Equipo y miembros SIN ROL en barra **VALIDADOS FÍSICAMENTE**; resto por lane | Validación visible por incorporación |
 | Estado | Run, historial, contadores, metadata PC y recuperación | Base común activa; integración **PENDIENTE** | Regresión por evento |
 | Salidas | OBS y barra flotante sin guardar | Equipo/PS **VALIDADOS**; resto **PENDIENTE** | Validación por evento |

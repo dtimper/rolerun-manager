@@ -9,6 +9,8 @@ from ..save_engine_client import SaveGameData
 
 
 _LIVE_BADGE_SOURCE_PREFIXES = (
+    # B2/W2: un bit por medalla, cuatro bytes detrás del dinero ya demostrado.
+    "melonDS vivo ·",
     "Premios líderes ·",
     "SUBE vivo",
     "EventWork vivo ·",
