@@ -28,9 +28,11 @@ from ..gen4_memory import GEN4_MEMORY, Gen4Memory
 from ..hgss_live import (
     PC_BOX_SLOT_COUNT, HgssLiveError, HgssMelonDSReader,
 )
+from ..hgss_tm_service import build_tm_profile
 from ..hgss_write import HgssMelonDSWriter, HgssRoleWrite
 from ..models import (
     PendingChange, PendingInventoryChange, PendingPartyHeal, PendingRoleChange,
+    PendingTMTeach,
 )
 from ..pk4 import STAT_ORDER_PERSONAL
 from ..pokemon_stats import nature_presentation, stat_dict
@@ -128,6 +130,36 @@ class HgssRealTimeAdapter(RealTimeGameAdapter):
         return (
             f"{int(miembro.species_id)}:{int(miembro.pid)}:"
             f"{int(miembro.tid)}:{int(miembro.sid)}"
+        )
+
+    def read_tm_profile(self):
+        """Qué enseña cada MT **en esta partida**, leído del juego.
+
+        No hay ROM que pedir ni archivo que cargar: la lista vive en la RAM, y
+        es la única fuente correcta jugando en randomizers.
+        """
+        movimientos = self.reader.read_tm_table()
+        rom = self.rom_getter()
+        origen = f"melonDS · 0x{self.memory.tm_table:08X}"
+        if rom is not None:
+            origen = f"{rom.name} · {origen}"
+        return build_tm_profile(movimientos, source=origen, rom=rom)
+
+    def read_tm_inventory(self, saved_items=None, *, save_path=None):
+        """La mochila viva completa, MT incluidas.
+
+        ``saved_items`` es solo un testigo de diagnóstico: una diferencia con el
+        guardado es lo normal en cuanto el jugador coge o gasta un objeto.
+        """
+        del save_path, saved_items      # la mochila vive en el proceso
+        party_read = self.reader.read_party()
+        mochila = self.reader.read_bag(party_read)
+        return (
+            dict(mochila.items),
+            LiveProcessInfo(
+                "melonDS", party_read.process_id, 0, party_read.process_name,
+            ),
+            1,
         )
 
     def _localizar(self, party_read, change, que: str):
@@ -502,6 +534,28 @@ class HgssRealTimeAdapter(RealTimeGameAdapter):
         # al contrario que en quinta. Escribir el movimiento sin descontar el
         # objeto le regalaría la MT al jugador, y la mochila de HeartGold
         # todavía no está mapeada.
+        if all(isinstance(item, PendingTMTeach) for item in cambios):
+            party_read = self.reader.read_party()
+            perfil = self.read_tm_profile()
+            ensenanzas = []
+            for item in cambios:
+                hueco_equipo, identidad, hueco, move_id = self._move_target_for(
+                    party_read, item,
+                )
+                tm = next(
+                    (t for t in perfil.tms.values() if t.move_id == move_id), None,
+                )
+                if tm is None:
+                    raise HgssLiveError(
+                        f"Ninguna MT de esta partida enseña el movimiento "
+                        f"#{move_id}."
+                    )
+                ensenanzas.append((hueco_equipo, identidad, hueco, move_id, tm.item_id))
+            self.writer.write_tm_teach(
+                party_read, ensenanzas, base_pp_for=self.base_pp_for,
+            )
+            return self._resultado(current, len(ensenanzas))
+
         if all(isinstance(item, PendingChange) for item in cambios):
             party_read = self.reader.read_party()
             ensenanzas = [self._move_target_for(party_read, item) for item in cambios]

@@ -55,6 +55,7 @@ from .gen4_memory import (
 import json  # noqa: E402  (se usa para el reparto de la mochila)
 
 from .pk4 import (
+    MOVE_ID_MAX,
     PK4_PARTY_SIZE,
     PK4_STORED_SIZE,
     Pk4Error,
@@ -68,6 +69,8 @@ MAX_PARTY = 6
 MONEY_MAX = 999999
 PC_BOX_DATA_SIZE = PC_BOX_SLOT_COUNT * PK4_STORED_SIZE
 PC_MATRIX_SIZE = PC_BOX_COUNT * PC_BOX_STRIDE
+# Las 92 MT y las 8 MO, en el orden en que el juego las guarda.
+TM_TABLE_COUNT = 100
 # Misma política que en quinta: la base se recuerda, pero el descubrimiento
 # completo -el único que detecta ambigüedad- se rehace cada minuto.
 BASE_REDISCOVERY_SECONDS = 60.0
@@ -637,6 +640,61 @@ class HgssMelonDSReader:
             )
         finally:
             _KERNEL32.CloseHandle(handle)
+
+    @_serialized
+    @perf.timed("hgss.read_tm_table")
+    def read_tm_table(self, party_read: HgssPartyRead | None = None) -> tuple[int, ...]:
+        """Qué movimiento enseña cada MT **en esta partida**.
+
+        Se lee del juego y no de una tabla guardada: RoleRun se juega en
+        randomizers, y ahí cada MT enseña otra cosa. Un randomizer cambia el
+        contenido de la tabla, no su posición.
+        """
+        direccion = self._demostrada(self.memory.tm_table, "La tabla de MT")
+        lectura = party_read or self.read_party()
+        handle = self._abrir(lectura, "la tabla de MT")
+        tamano = TM_TABLE_COUNT * 2
+
+        def capturar() -> bytes:
+            buffer = ctypes.create_string_buffer(tamano)
+            recibido = ctypes.c_size_t()
+            if not _KERNEL32.ReadProcessMemory(
+                handle,
+                ctypes.c_void_p(lectura.allocation_base + (direccion - DS_RAM_BASE)),
+                buffer, tamano, ctypes.byref(recibido),
+            ) or recibido.value != tamano:
+                raise HgssLiveError("Lectura incompleta de la tabla de MT.")
+            return buffer.raw
+
+        try:
+            crudo = None
+            for _intento in range(INTENTOS_EN_LA_BASE_CONOCIDA):
+                primera, segunda = capturar(), capturar()
+                if primera == segunda:
+                    crudo = primera
+                    break
+            if crudo is None:
+                raise HgssLiveError("La tabla de MT de HeartGold no se quedó quieta.")
+            tabla = struct.unpack(f"<{TM_TABLE_COUNT}H", crudo)
+            if any(not 1 <= valor <= MOVE_ID_MAX for valor in tabla):
+                raise HgssLiveError(
+                    "La tabla de MT declara un movimiento que no existe en cuarta."
+                )
+            return tabla
+        finally:
+            _KERNEL32.CloseHandle(handle)
+
+    def _demostrada(self, direccion: int | None, capacidad: str) -> int:
+        """Dirección de una capacidad, o un error claro si no se demostró.
+
+        Un juego puede tener ancla y todavía no tener tabla de MT: esa no vive
+        en el bloque del guardado, así que no sale de la resta.
+        """
+        if direccion is None:
+            raise HgssLiveError(
+                f"{capacidad} todavía no está demostrada en {self.memory.label}."
+            )
+        return int(direccion)
 
     @_serialized
     @perf.timed("hgss.read_bag")

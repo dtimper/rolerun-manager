@@ -595,16 +595,17 @@ def test_dos_cambios_de_movimiento_sobre_el_mismo_hueco_se_rechazan() -> None:
     assert emulador.escrituras == []
 
 
-def test_las_mt_no_entran_todavia_porque_en_cuarta_se_gastan() -> None:
+def test_ensenar_una_mt_gasta_el_objeto() -> None:
     """En quinta las MT son reutilizables; en cuarta **se consumen**.
 
-    Escribir el movimiento sin descontar el objeto le regalaría la MT al
-    jugador, y la mochila de HeartGold todavía no está mapeada.
+    Escribir el movimiento sin descontar el objeto le regalaría la MT.
     """
     import inspect
 
-    from app.realtime.hgss_adapter import HgssRealTimeAdapter
+    from app.hgss_write import HgssMelonDSWriter
 
-    fuente = inspect.getsource(HgssRealTimeAdapter.apply_changes)
-    assert "PendingTMTeach" not in fuente
-    assert "PendingChange" in fuente
+    fuente = inspect.getsource(HgssMelonDSWriter.write_tm_teach)
+    # Las dos escrituras van o no van juntas.
+    assert "set_bag_quantity" in fuente
+    assert "no se descontó de la mochila" in fuente
+    assert "deshacer()" in fuente

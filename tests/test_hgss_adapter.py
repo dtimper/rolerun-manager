@@ -64,6 +64,11 @@ class _LectorFalso:
     def read_trainer(self, party_read=None):
         return HgssTrainerRead(self.dinero, self.johto, self.kanto)
 
+    def read_bag(self, party_read=None):
+        from app.hgss_live import HgssBagRead, bag_pockets
+
+        return HgssBagRead(bag_pockets(HGSS), {}, dict(getattr(self, "bolsa", {})))
+
     def read_pc(self, party_read=None):
         dentro = []
         for indice_caso, hueco_global in self.pc_slots:
@@ -261,12 +266,13 @@ def test_reiniciar_el_estado_olvida_la_base(adaptador) -> None:
     assert lector.olvidos == 1
 
 
-def test_las_mt_siguen_sin_writer_en_cuarta(adaptador) -> None:
-    from app.realtime.adapter import RealTimeAdapterError
-
-    adapter, _lector = adaptador
-    with pytest.raises(RealTimeAdapterError):
-        adapter.read_tm_inventory()
+def test_la_mochila_viva_se_publica_para_el_selector_de_mt(adaptador) -> None:
+    adapter, lector = adaptador
+    lector.bolsa = {50: 3, 378: 1}
+    inventario, proceso, intentos = adapter.read_tm_inventory()
+    assert inventario == {50: 3, 378: 1}
+    assert proceso.name == "melonDS.exe"
+    assert intentos == 1
 
 
 def test_una_operacion_sin_writer_se_niega_con_su_motivo(adaptador) -> None:
@@ -323,23 +329,19 @@ def test_el_pc_de_cuarta_declara_dieciocho_cajas() -> None:
     assert PK4_STORED_SIZE == 136
 
 
-def test_la_carga_de_mt_en_vivo_es_solo_de_quinta() -> None:
-    """Cuarta no tiene tabla de MT demostrada, así que no entra en ese flujo.
+def test_la_carga_de_mt_en_vivo_incluye_a_cuarta() -> None:
+    """Cuarta ya tiene su tabla demostrada y entra en el mismo flujo.
 
-    Y de paso: la lista de juegos que entran y el diccionario de etiquetas que
-    hay dos líneas más abajo se actualizaban por separado. A Blanco le faltaba
-    su entrada desde que entró, así que ese camino reventaba con `KeyError`.
+    La lista de juegos que entran y el diccionario de etiquetas de dos líneas
+    más abajo se actualizaban por separado. A Blanco le faltaba su entrada desde
+    que entró, así que ese camino reventaba con `KeyError`; ahora usa `.get`.
     """
     import inspect
 
     from app.ui import RoleRunManager
 
     fuente = inspect.getsource(RoleRunManager._start_live_tm_inventory_load)
-    assert "MELONDS_GEN5_REALTIME_GAME_KEYS" in fuente
-    assert "MELONDS_REALTIME_GAME_KEYS" not in fuente.replace(
-        "MELONDS_GEN5_REALTIME_GAME_KEYS", "",
-    )
-    # Sin corchetes: una etiqueta que falte no puede tumbar la carga.
+    assert "MELONDS_REALTIME_GAME_KEYS" in fuente
     assert "}.get(engine_key," in fuente
 
 
@@ -552,12 +554,13 @@ def test_un_hueco_de_movimiento_imposible_se_rechaza(adaptador) -> None:
         )])
 
 
-def test_el_selector_de_mt_ya_no_deja_fuera_a_blanco() -> None:
-    """Su tabla está demostrada y su adaptador la lee; la lista estaba a mano."""
+def test_el_selector_de_mt_usa_un_conjunto_y_no_una_lista_a_mano() -> None:
+    """A Blanco le faltaba su entrada desde que entró y se quedó sin MT."""
     import inspect
 
-    from app.ui import RoleRunManager
+    from app.ui import LIVE_TM_GAME_KEYS, RoleRunManager
 
     fuente = inspect.getsource(RoleRunManager._open_tm_selector)
-    assert 'MTs todavía no disponibles' in fuente
-    assert '{"bdsp", "oras", "xy", "sm", "usum"} | MELONDS_GEN5_REALTIME_GAME_KEYS' in fuente
+    assert "LIVE_TM_GAME_KEYS" in fuente
+    for clave in ("hgss", "bw", "b2w2"):
+        assert clave in LIVE_TM_GAME_KEYS

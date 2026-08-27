@@ -182,6 +182,10 @@ AUTOMATIC_BADGE_GAME_KEYS = {"oras", "xy", "sm", "usum"} | MELONDS_REALTIME_GAME
 ROLE_EV_WRITER_GAME_KEYS = (
     {"bdsp", "oras", "xy", "sm", "usum"} | MELONDS_REALTIME_GAME_KEYS
 )
+# Backends que saben decir qué enseña cada MT en la partida abierta. Estaba
+# repetido como literal en tres sitios y añadir un juego obligaba a acordarse de
+# los tres: a Blanco le faltó uno desde que entró y se quedó sin MT.
+LIVE_TM_GAME_KEYS = ROLE_EV_WRITER_GAME_KEYS
 # Equipo y PC son una sola pantalla desde la unificación de la vista. La barra
 # principal solo ofrece "team"; "pc" sobrevive como destino histórico y como
 # página restaurable, pero ambas renderizan exactamente lo mismo. Todo lo que
@@ -7441,10 +7445,12 @@ class RoleRunManager(ctk.CTk):
             "hgss": (
                 "Oro HeartGold/Plata SoulSilver lee en tiempo real equipo, cajas "
                 "PC, dinero y medallas desde melonDS mediante PK4 validados por "
-                "checksum e identidad. Roles con su reparto de EV y curación "
-                "completa usan escritura transaccional con readback y rollback. "
-                "Los movimientos, el Equipo↔PC, el carril de combate y la tabla "
-                "de MT todavía no están demostrados y permanecen deshabilitados."
+                "checksum e identidad. Roles con su reparto de EV, curación "
+                "completa, movimientos, MT y las utilidades de la cabecera usan "
+                "escritura transaccional con readback y rollback. **En cuarta "
+                "las MT se gastan**, así que enseñar una descuenta el objeto de "
+                "la mochila en la misma transacción. El Equipo↔PC y el carril "
+                "de combate todavía no están demostrados."
             ),
         }
         return descriptions.get(str(live_key or ""), "Backend realtime no identificado.")
@@ -13061,7 +13067,7 @@ class RoleRunManager(ctk.CTk):
     def _resolve_global_tm_profile(self):
         """Resuelve únicamente fuentes ya usadas por el selector individual."""
         key = str(getattr(self.save_engine, "key", "") or "")
-        if key not in {"bdsp", "oras", "xy", "sm", "usum", "b2w2"} or not self.current_save:
+        if key not in LIVE_TM_GAME_KEYS or not self.current_save:
             return None
         if not self._oras_live_active:
             messagebox.showinfo(
@@ -13070,9 +13076,9 @@ class RoleRunManager(ctk.CTk):
                 parent=self._dialog_parent(),
             )
             return None
-        if key in MELONDS_GEN5_REALTIME_GAME_KEYS:
-            # Quinta no pide ninguna ROM: la tabla se lee de la RAM del juego,
-            # que es lo único correcto jugando en randomizers.
+        if key in MELONDS_REALTIME_GAME_KEYS:
+            # Ni cuarta ni quinta piden ROM para esto: la tabla se lee de la RAM
+            # del juego, que es lo único correcto jugando en randomizers.
             return self._get_b2w2_tm_profile()
         if key == "bdsp":
             return self._get_bdsp_tm_profile(prompt=True)
@@ -15130,7 +15136,7 @@ class RoleRunManager(ctk.CTk):
         engine_key = str(getattr(self.save_engine, "key", "") or "")
         if engine_key not in (
             *GEN7_REALTIME_GAME_KEYS, "bdsp", "oras", "xy",
-            *MELONDS_GEN5_REALTIME_GAME_KEYS,
+            *MELONDS_REALTIME_GAME_KEYS,
         ):
             if on_failed is not None:
                 on_failed()
@@ -15146,6 +15152,7 @@ class RoleRunManager(ctk.CTk):
             "xy": "Pokémon X/Y",
             "b2w2": "Negro 2/Blanco 2",
             "bw": "Negro/Blanco",
+            "hgss": "Oro HeartGold/Plata SoulSilver",
         }.get(engine_key, "tu partida")
         if self._sm_tm_inventory_load_in_progress:
             if on_failed is not None:
@@ -15518,12 +15525,13 @@ class RoleRunManager(ctk.CTk):
         is_sm = engine_key == "sm"
         is_usum = engine_key == "usum"
         is_gen7 = engine_key in GEN7_REALTIME_GAME_KEYS
-        is_b2w2 = engine_key in MELONDS_GEN5_REALTIME_GAME_KEYS
+        # Cuarta y quinta comparten flujo: los dos leen la tabla de la RAM.
+        is_b2w2 = engine_key in MELONDS_REALTIME_GAME_KEYS
         # Con la lista escrita a mano, a Blanco le faltaba su entrada desde que
         # entró: su tabla de MT está demostrada y su adaptador la lee, pero este
         # selector le contestaba que las MT no estaban disponibles. Se usa el
         # conjunto, que es lo que se actualiza al añadir un juego.
-        if engine_key not in ({"bdsp", "oras", "xy", "sm", "usum"} | MELONDS_GEN5_REALTIME_GAME_KEYS):
+        if engine_key not in LIVE_TM_GAME_KEYS:
             messagebox.showinfo(
                 "MTs todavía no disponibles",
                 "El selector automático de MTs todavía no está conectado a este adaptador de juego.",

@@ -481,3 +481,123 @@ class HgssMelonDSWriter:
         except Exception:
             deshacer()
             raise
+
+    def write_tm_teach(self, party_read: HgssPartyRead, ensenanzas, *, base_pp_for):
+        """Enseña una o varias MT **gastando el objeto**, como hace el juego.
+
+        ``ensenanzas`` son tuplas ``(hueco_equipo, identidad, hueco, move_id,
+        item_id)``. Es la diferencia gorda con quinta, donde las MT son
+        reutilizables: aquí escribir el movimiento sin descontar el objeto le
+        regalaría la MT al jugador.
+
+        Las dos escrituras —el Pokémon y la mochila— van o no van juntas: si la
+        segunda falla, se deshace también la primera.
+        """
+        peticiones = list(ensenanzas)
+        if not peticiones:
+            raise HgssLiveError("No hay ninguna MT de HeartGold que enseñar.")
+
+        antes_equipo = self.reader.read_party()
+        if antes_equipo.process_id != party_read.process_id:
+            raise HgssLiveError("melonDS cambió antes de enseñar la MT.")
+        antes_bolsa = self.reader.read_bag(antes_equipo)
+
+        equipo_nuevo = bytearray(antes_equipo.raw)
+        bolsa_nueva = dict(antes_bolsa.raw)
+        gastados: dict[int, int] = {}
+        esperados: dict[int, tuple[int, int]] = {}
+        vistos: set[tuple[int, int]] = set()
+
+        for hueco_equipo, identidad, hueco, move_id, item_id in peticiones:
+            hueco_equipo, hueco = int(hueco_equipo), int(hueco)
+            move_id, item_id = int(move_id), int(item_id)
+            if not 0 <= hueco_equipo < antes_equipo.count:
+                raise HgssLiveError("El hueco del equipo está fuera de rango.")
+            if (hueco_equipo, hueco) in vistos:
+                raise HgssLiveError("Dos MT sobre el mismo hueco de movimiento.")
+            vistos.add((hueco_equipo, hueco))
+            miembro = antes_equipo.pokemon[hueco_equipo]
+            if (miembro.pid, miembro.tid, miembro.sid) != tuple(identidad):
+                raise HgssLiveError("La identidad de la MT cambió antes de escribir.")
+
+            quedan = int(antes_bolsa.items.get(item_id, 0)) - gastados.get(item_id, 0)
+            if quedan <= 0:
+                raise HgssLiveError(
+                    f"No queda ninguna unidad del objeto #{item_id} en la mochila."
+                )
+            gastados[item_id] = gastados.get(item_id, 0) + 1
+
+            desde = hueco_equipo * PK4_PARTY_SIZE
+            try:
+                equipo_nuevo[desde:desde + PK4_PARTY_SIZE] = pk4_party_with_move(
+                    bytes(equipo_nuevo[desde:desde + PK4_PARTY_SIZE]),
+                    hueco, move_id, base_pp_for=base_pp_for,
+                )
+            except Pk4Error as exc:
+                raise HgssLiveError(str(exc)) from exc
+            esperados[hueco_equipo] = (hueco, move_id)
+
+        for item_id, unidades in gastados.items():
+            bolsillo = bag_pocket_for(self.memory, item_id)
+            bolsa_nueva[bolsillo.key] = set_bag_quantity(
+                bolsa_nueva[bolsillo.key], bolsillo, item_id,
+                int(antes_bolsa.items.get(item_id, 0)) - unidades,
+            )
+
+        tocados = [
+            bolsillo for bolsillo in antes_bolsa.pockets
+            if bolsa_nueva[bolsillo.key] != antes_bolsa.raw[bolsillo.key]
+        ]
+        destino_equipo = self._party_host(antes_equipo)
+
+        def escribir_bolsa(origen: dict[str, bytes]) -> None:
+            for bolsillo in tocados:
+                self._write_process_bytes(
+                    antes_equipo.process_id,
+                    antes_equipo.allocation_base + (bolsillo.address - DS_RAM_BASE),
+                    origen[bolsillo.key],
+                )
+
+        def deshacer() -> None:
+            self._write_process_bytes(
+                antes_equipo.process_id, destino_equipo, antes_equipo.raw,
+            )
+            escribir_bolsa(antes_bolsa.raw)
+            if self.reader.read_party().raw != antes_equipo.raw:
+                raise HgssLiveError(
+                    "El rollback de la MT no se pudo confirmar en el equipo; no guardes."
+                )
+            if self.reader.read_bag(antes_equipo).raw != antes_bolsa.raw:
+                raise HgssLiveError(
+                    "El rollback de la MT no se pudo confirmar en la mochila; no guardes."
+                )
+
+        try:
+            self._write_process_bytes(
+                antes_equipo.process_id, destino_equipo, bytes(equipo_nuevo),
+            )
+            escribir_bolsa(bolsa_nueva)
+
+            despues_equipo = self.reader.read_party()
+            if despues_equipo.raw != bytes(equipo_nuevo):
+                raise HgssLiveError("El readback del equipo tras la MT no coincide.")
+            for hueco_equipo, (hueco, move_id) in esperados.items():
+                miembro = despues_equipo.pokemon[hueco_equipo]
+                if int(miembro.move_ids[hueco - 1]) != move_id:
+                    raise HgssLiveError(
+                        "La MT no quedó escrita en el hueco elegido."
+                    )
+                if int(miembro.move_pp[hueco - 1]) != int(base_pp_for(move_id) or 0):
+                    raise HgssLiveError("Los PP de la MT no quedaron al máximo.")
+
+            despues_bolsa = self.reader.read_bag(antes_equipo)
+            for item_id, unidades in gastados.items():
+                esperado = int(antes_bolsa.items.get(item_id, 0)) - unidades
+                if int(despues_bolsa.items.get(item_id, 0)) != esperado:
+                    raise HgssLiveError(
+                        f"La MT #{item_id} no se descontó de la mochila."
+                    )
+            return despues_equipo, despues_bolsa
+        except Exception:
+            deshacer()
+            raise

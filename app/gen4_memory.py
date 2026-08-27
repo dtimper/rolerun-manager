@@ -108,6 +108,9 @@ class Gen4Memory:
     save_party_data: int = SAVE_PARTY_DATA
     save_pc: int = SAVE_PC
     save_bag_pouches: dict[str, tuple[int, int]] | None = None
+    # Fuera del bloque del guardado: vive en el binario del juego, así que hay
+    # que demostrarla aparte. Un juego puede tener ancla y todavía no tenerla.
+    tm_table: int | None = None
 
     @property
     def bag_pouches(self) -> dict[str, tuple[int, int]]:
@@ -156,5 +159,15 @@ GEN4_MEMORY: dict[str, Gen4Memory] = {
         key="hgss",
         label="Oro HeartGold/Plata SoulSilver",
         party_data=0x0227C304,
+        # La tabla de MT, localizada el 28-08-2026. La lista de las 92 MT sale
+        # del binario de las ROM de Perla y Platino del usuario -las dos dan
+        # exactamente la misma-, y se buscó esa firma en los 4 MiB de la RAM
+        # del DS: **aparece una sola vez**.
+        #
+        # Y se valida sola: la MO05 que hay ahí es Torbellino, no Despejar. Esa
+        # es justo la diferencia conocida entre HeartGold y Platino, así que lo
+        # que se ha encontrado no es una copia de la referencia sino la tabla
+        # propia de HeartGold.
+        tm_table=0x021000B4,
     ),
 }

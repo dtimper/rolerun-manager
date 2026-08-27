@@ -1,6 +1,38 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.80 — las MT de HeartGold, y se gastan
+
+Cambiar un movimiento pasaba por el selector de MT, y el selector contestaba que
+no estaban disponibles. Ya lo están.
+
+**Cómo se localizó la tabla.** Las 92 MT son idénticas en toda la cuarta
+generación, así que su lista salió del binario de las ROM de **Perla y Platino**
+del usuario —las dos dan exactamente la misma—. Esa firma de 92 movimientos se
+buscó en los 4 MiB de RAM del DS con HeartGold cargado: **aparece una sola vez**,
+en `0x021000B4`.
+
+**Y se valida sola.** La MO05 que hay ahí es **Torbellino**, no Despejar: justo
+la diferencia conocida entre HeartGold y Platino. Lo encontrado no es una copia
+de la referencia, es la tabla propia del juego. Las dos MT que el usuario tenía
+en la mochila salieron MT51 Respiro y MT70 Destello.
+
+El arm9 de HeartGold va comprimido, por eso hubo que buscarla en memoria en vez
+de leerla del archivo como en Perla y Platino.
+
+**En cuarta las MT se gastan.** Enseñar una no es solo escribir el movimiento:
+hay que descontar el objeto, y las dos escrituras —el Pokémon y la mochila— van o
+no van juntas. Si la segunda falla, se deshace también la primera. Antes de
+escribir se comprueba que quede al menos una unidad.
+
+**Y otra lista escrita a mano, menos.** Los juegos que saben leer su tabla de MT
+estaban repetidos como literal en tres sitios, y a Blanco le faltó uno desde que
+entró. Ahora es `LIVE_TM_GAME_KEYS`, y hay una prueba que vigila que no vuelva a
+haber cuatro copias.
+
+`app/hgss_tm_service.py`, `data/gen4_tm_table.json` y `tests/test_hgss_tm.py`
+(10). Suite completa: **1715**.
+
 # v0.2.6-alpha.79 — las tres utilidades de la cabecera, en HeartGold
 
 Caramelos Raros ×999, Repelentes Máximos ×999 y dinero al tope. Probado contra
