@@ -197,17 +197,18 @@ def guardado() -> bytes:
     return _SAVE.read_bytes()
 
 
-def test_el_guardado_confirma_la_equivalencia_con_la_ram(guardado) -> None:
-    """4524 es el valor con el que empezó la traza de dinero del usuario.
+def test_el_guardado_pone_el_dinero_donde_dice_pkhex(guardado) -> None:
+    """La equivalencia con la RAM se comprobó el 27-08-2026 con el número exacto.
 
-    Que el guardado ponga lo mismo en `0x21100` demuestra que ese desplazamiento
-    y la dirección de RAM describen el mismo campo, que es lo que permite
-    derivar la de medallas sin una segunda captura.
+    Ese día el guardado ponía 4524 en `0x21100`, que era justo el valor con el
+    que empezó la traza de dinero: mismo campo por dos caminos. Aquí no se fija
+    el número —el usuario juega y cambia— sino que ahí sigue habiendo un dinero
+    posible y no otra cosa.
     """
     dinero = int.from_bytes(
         guardado[_SAVE_MONEY_OFFSET:_SAVE_MONEY_OFFSET + MONEY_SIZE], "little",
     )
-    assert dinero == 4524
+    assert 0 <= dinero <= 9_999_999
 
 
 def test_el_byte_que_la_escritura_de_cuatro_pisaba_no_es_del_dinero(guardado) -> None:
@@ -219,3 +220,36 @@ def test_las_medallas_del_guardado_son_un_numero_posible(guardado) -> None:
     contadas = parse_b2w2_badges(guardado[_SAVE_BADGES_OFFSET:_SAVE_BADGES_OFFSET + 1])
 
     assert 0 <= contadas <= BADGES_TOTAL
+
+
+# --------------------------------------------------------------------------
+# El contador de la cabecera
+# --------------------------------------------------------------------------
+
+def test_b2w2_gobierna_el_contador_desde_el_juego() -> None:
+    """Con las medallas vivas, los botones de sumar y restar sobran.
+
+    Mantener el control manual crearía dos fuentes de verdad y podría
+    desincronizar OBS y RoleRun, que es justo lo que evita esta lista.
+    """
+    from app.ui import AUTOMATIC_BADGE_GAME_KEYS
+
+    assert "b2w2" in AUTOMATIC_BADGE_GAME_KEYS
+
+
+def test_la_rama_de_b2w2_procesa_el_valor() -> None:
+    """El fallo de alpha.50: se leía de la RAM y se tiraba sin usarlo.
+
+    La medalla tiene que procesarse **antes** de cualquier return por herencia
+    de rol o cambio de equipo; si no, una transición de party la retrasa.
+    """
+    import inspect
+
+    from app.ui import RoleRunManager
+
+    fuente = inspect.getsource(RoleRunManager._finish_oras_live_reconciliation)
+    rama = fuente[fuente.index('== "b2w2"'):]
+    corte = rama.index("_process_oras_health_snapshot")
+    assert "_process_oras_badge_value" in rama[:corte], (
+        "la medalla se procesa después de la salud: un cambio de equipo la retrasaría"
+    )

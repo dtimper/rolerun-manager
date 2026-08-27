@@ -1,6 +1,18 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.51 — la medalla ya llega al contador
+
+Alpha.50 leía las medallas y las tiraba: la rama de B2/W2 del monitor nunca
+llamaba a `_process_oras_badge_value`. Reportado al conseguir la Medalla Base.
+
+- Se procesa antes de cualquier return por herencia de rol o cambio de equipo,
+  con una prueba que fija ese orden.
+- B2/W2 entra en `AUTOMATIC_BADGE_GAME_KEYS`: desaparecen los botones de sumar
+  y restar medallas, porque el valor lo gobierna el juego.
+- `comprobar_medallas_b2w2.bat` confirma la dirección con una sola lectura.
+- `tests/test_b2w2_badges.py`: 27 pruebas. Suite completa: 1355.
+
 # v0.2.6-alpha.50 — medallas en tiempo real, y el dinero corregido
 
 **`0x022266A8`**, deducida sin pedir captura: PKHeX dice que las medallas caen

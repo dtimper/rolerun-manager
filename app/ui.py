@@ -147,7 +147,7 @@ LIVE_PC_READ_GAME_KEYS = GEN6_REALTIME_GAME_KEYS | GEN7_REALTIME_GAME_KEYS | {"b
 AZAHAR_REALTIME_GAME_KEYS = {"oras", "xy", "sm", "usum"}
 REALTIME_READ_GAME_KEYS = AZAHAR_REALTIME_GAME_KEYS | {"bdsp", "b2w2"}
 INSTANT_REALTIME_UI_GAME_KEYS = AZAHAR_REALTIME_GAME_KEYS | {"bdsp", "b2w2"}
-AUTOMATIC_BADGE_GAME_KEYS = {"oras", "xy", "sm", "usum"}
+AUTOMATIC_BADGE_GAME_KEYS = {"oras", "xy", "sm", "usum", "b2w2"}
 # Backends cuyo writer de rol escribe además el reparto de EV del rol. Estaba
 # repetido como literal en siete sitios, y olvidar uno bastaba para que un
 # juego escribiera la marca del rol pero no sus EV: exactamente lo que le
@@ -9640,6 +9640,28 @@ class RoleRunManager(ctk.CTk):
             # B2/W2 publica party, PC y el carril de presentación de combate.
             # KO permanece cerrado: todavía no hay writer de sustitución seguro.
             before_game = self.current_game
+            # alpha.51: sin esto la medalla se leía de la RAM y se tiraba. Va
+            # antes de cualquier return por herencia de rol o cambio de equipo,
+            # igual que en BDSP: una transición de party no puede retrasarla.
+            # El valor es absoluto 0..8 y su procedencia RAM autoriza también
+            # una carga de estado anterior, que en melonDS es de un clic.
+            if badge_value is not None:
+                badge_changed = self._process_oras_badge_value(
+                    badge_value, source=badge_source,
+                )
+                if (
+                    0 <= int(badge_value) <= 8
+                    and (
+                        badge_changed
+                        or int(badge_value) == int(
+                            self.project.counters.get("medallas", 0)
+                        )
+                    )
+                ):
+                    self._oras_badge_live_value = int(badge_value)
+                    self._oras_badge_live_source = str(
+                        badge_source or "desconocida"
+                    )
             probe_state = getattr(battle_probe, "state", "unknown")
             probe_health = getattr(battle_probe, "health_game", None)
             if probe_state == "battle" and probe_health is not None:

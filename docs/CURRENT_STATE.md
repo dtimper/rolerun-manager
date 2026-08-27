@@ -1,7 +1,7 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.50`
+- Versión de aplicación: `v0.2.6-alpha.51`
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
@@ -15,6 +15,28 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### v0.2.6 Alpha.51 — la medalla ya llega al contador
+
+Alpha.50 leía las medallas de la RAM y **las tiraba**: la rama de B2/W2 del
+monitor nunca llamaba a `_process_oras_badge_value`, así que el contador no se
+enteraba. Reportado por el usuario al conseguir la Medalla Base.
+
+- La medalla se procesa ahora **antes** de cualquier return por herencia de rol
+  o cambio de equipo, igual que en Perla Reluciente: una transición de party no
+  puede retrasarla. Hay una prueba que fija ese orden, no solo la llamada.
+- B2/W2 entra en `AUTOMATIC_BADGE_GAME_KEYS`, así que **desaparecen los botones
+  de sumar y restar medallas**. Con el valor gobernado por el juego, mantener el
+  control manual crearía dos fuentes de verdad.
+
+**La dirección sigue sin confirmarse contra el juego.** Se dedujo de PKHeX y del
+ancla de dinero, lo cual da por hecho que el bloque vivo respeta el reparto del
+guardado más allá del propio dinero. `comprobar_medallas_b2w2.bat` lo resuelve
+con una sola lectura: con N medallas conseguidas, el byte tiene que tener N bits
+encendidos, y la herramienta lista todas las posiciones de la zona que encajan
+para no fiarse de una sola.
+
+- `tests/test_b2w2_badges.py`: 27 pruebas. Suite completa: 1355.
 
 ### v0.2.6 Alpha.50 — medallas en tiempo real, y el dinero corregido
 
