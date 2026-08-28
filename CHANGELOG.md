@@ -1,6 +1,80 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.100 — las tarjetas del equipo se actualizan, no se rehacen
+
+Medido con customtkinter en el equipo del usuario, para una tarjeta del equipo:
+
+| operación | una | las seis |
+|---|---|---|
+| construirla | 34,71 ms | **208 ms** |
+| destruirla | 16,11 ms | 97 ms |
+| **reconfigurarla entera** | **4,69 ms** | **28 ms** |
+
+Hasta ahora cualquier refresco interno de *Equipo y PC* pasaba por
+`_smooth_render_page`, que construye un body entero y llama a `render_page()`,
+que vacía la superficie y la rehace. Los 305 ms de destruir y reconstruir el
+equipo se pagaban enteros por cosas tan pequeñas como que terminara de bajarse
+un sprite.
+
+Ahora, cuando la página es la misma y solo han cambiado los datos, se cambian
+los datos.
+
+## Qué se actualiza
+
+Todo lo que la tarjeta enseña: sprite, mote y nivel, la barra y el texto de PS,
+las seis estadísticas con el color de su naturaleza, habilidad, objeto y los
+cuatro movimientos con su marcado —alto, fondo, borde y color de texto—. Y
+después la rejilla del PC, el rótulo de la caja y la ficha, que es exactamente
+lo que ya refrescaba cambiar de caja.
+
+## Qué frena el camino rápido
+
+La vista se construye con unos botones, unos límites y un modo concretos que
+este camino **no** rehace. En cuanto alguno cambiaría, se devuelve el control al
+render normal:
+
+- otra forma de equipo: otro rol, otro ocupante o otro estado en cualquiera de
+  las seis casillas —de ahí dependen el icono del rol, el rótulo y el marco
+  dorado de preparación—;
+- aparece o desaparece **CURAR EQUIPO** o **FIJAR ROLES**;
+- cambian las cajas o los huecos del PC, o todavía no hay datos del PC;
+- la ventana se estrecha por debajo de 1160 y entra el modo compacto;
+- modo de sustitución por debilitado, o modo banner;
+- la vista aún no está compuesta, o no es la que Windows está enseñando;
+- alguien pidió volver arriba o enfocar a un miembro: eso lo hace el render que
+  mueve el scroll.
+
+Un freno de más solo cuesta tiempo. Uno de menos deja la pantalla mintiendo.
+
+## El dato viejo invisible
+
+Lo delicado de actualizar en sitio no es que se olvide un `configure` —eso se
+ve—, sino que quede una referencia vieja donde nadie mira. Las tarjetas
+llevaban el Pokémon **metido en el cierre** del clic y del arrastre, y en el
+diccionario del destino de soltar. Actualizada la tarjeta sin tocar eso, soltar
+sobre ella habría movido al Pokémon anterior.
+
+El Pokémon deja de vivir en el cierre y pasa a `_team_card_pokemon`, que se
+consulta en el momento —el mismo arreglo que ya llevaba la rejilla del PC al
+empezar a reutilizar sus casillas—. Y se reapunta **al final**, solo si toda la
+parte visible ha ido bien: enseñar a uno y arrastrar a otro sería peor que no
+acelerar nada.
+
+De paso, un arrastre sin Pokémon ya no empieza. Los huecos vacíos del PC también
+tienen el arrastre enganchado desde que sus botones se reutilizan entre cajas.
+
+## Pruebas
+
+`tests/test_team_card_update.py` actualiza una tarjeta con un Pokémon distinto
+en todo y exige que **todos** los textos registrados cambien, además de leer el
+código fuente para que ninguna clave que la tarjeta registra se quede sin tocar.
+`tests/test_team_pc_refresh_in_place.py` cubre los frenos uno a uno y comprueba
+que el camino rápido vuelve antes del doble buffer y no se salta lo que
+`render_page()` hace fuera de él.
+
+1826 passed, 1 skipped.
+
 # v0.2.6-alpha.99 — la rueda donde no estaba, y fuera los plazos fijos
 
 Cinco arreglos sobre el mismo síntoma, todos localizados leyendo el camino

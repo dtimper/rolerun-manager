@@ -12008,6 +12008,26 @@ class RoleRunManager(ctk.CTk):
         # Si el estado editable cambió, este render marca el límite de una acción
         # para Ctrl+Z/Ctrl+Shift+Z. Navegar sin editar no genera pasos fantasma.
         self._record_edit_transition()
+
+        # Un refresco interno de Equipo y PC que no cambia la forma de la página
+        # no necesita un body nuevo: cambiar los datos cuesta decenas de
+        # milisegundos y reconstruirlos, cientos. Las navegaciones y los
+        # refrescos que piden volver arriba o enfocar a alguien siguen por el
+        # camino de siempre, que es el que mueve el scroll.
+        if (
+            _prepared_navigation_overlay is None
+            and not reset_scroll
+            and not self._team_focus_identity
+            and self.active_page in TEAM_PC_PAGES
+            and self._shell_built
+            and self._refrescar_team_pc_en_sitio()
+        ):
+            # Lo que `render_page()` hace fuera del body: no está en el doble
+            # buffer, así que aquí se hace igual que allí.
+            self._render_sidebar()
+            self._update_top_status()
+            self._render_context_navigation()
+            return
         scroll_px = self._capture_body_scroll_px() if preserve_scroll else 0.0
         scroll_fraction = self._capture_body_scroll_fraction() if preserve_scroll else 0.0
 
@@ -13270,6 +13290,61 @@ class RoleRunManager(ctk.CTk):
             pokemon, profile, inventory, source_detail,
             initial_move_id=int(entry["move_id"]), return_page="tms",
         )
+
+    def _refrescar_team_pc_en_sitio(self) -> bool:
+        """Cambia los datos de Equipo y PC sin reconstruir la página.
+
+        Devuelve si pudo. Un ``False`` significa que hay que repintar de verdad,
+        y se decide **antes** de tocar nada: la vista se construyó con unos
+        botones, unos límites de caja y un modo concretos que aquí no se
+        rehacen, así que si alguno de ellos cambiaría, este camino no vale.
+        """
+        vista = getattr(self, "_team_pc_view", None)
+        if vista is None or vista is not getattr(self, "_presented_team_pc_view", None):
+            return False
+        if not self.current_game or self._faint_replacement_mode is not None:
+            return False
+        if getattr(vista, "mode_banner", None) or not self._widget_alive(
+            getattr(vista, "frame", None),
+        ):
+            return False
+        if not vista.is_fully_composed(vista.pc_box_count):
+            return False
+
+        pc_data = self._team_pc_cached_data()
+        if pc_data is None:
+            # La caja aún se está leyendo: la página cambia de forma al llegar.
+            return False
+        if (
+            int(pc_data.box_count) != vista.pc_box_count
+            or int(pc_data.box_slot_count) != vista.pc_slot_count
+            or bool(vista.compact) != (self.winfo_width() <= 1160)
+        ):
+            return False
+        # Los dos botones de cabecera existen o no según estas dos condiciones,
+        # y no se crean ni se destruyen por este camino.
+        if (
+            (vista.on_heal_party is not None) != bool(self._live_party_heal_available())
+            or (vista.on_fix_roles is not None) != bool(self._roles_pendientes_de_fijar())
+        ):
+            return False
+
+        projected_party = list(self._projected_party())
+        team_slots = build_fixed_team_slots(
+            projected_party,
+            lambda pokemon: self._effective_role(pokemon)[0],
+            self._pokemon_identity,
+        )
+        box_number = max(1, min(int(self._pc_page_box or 1), int(pc_data.box_count)))
+        members = self._team_pc_box_members(pc_data, box_number)
+        if not vista.refrescar_en_sitio(team_slots, members, box_number):
+            return False
+
+        self._pc_page_box = box_number
+        # La barrera inicial compara contra lo que la vista compuso de verdad.
+        # Sin actualizarlo aquí, la firma quedaría hablando del equipo anterior.
+        vista._source_health_signature = self._party_health_signature(projected_party)
+        return True
 
     def _render_team_pc_unified_page(self) -> None:
         """Compone Equipo, Caja PC e inspector sin duplicar lógica funcional."""
