@@ -317,3 +317,49 @@ def test_si_el_repintado_revienta_se_dice_con_que(vista) -> None:
     assert anotado[-1][0] == "casillas.reventaron"
     assert anotado[-1][1]["error"] == "RuntimeError"
     assert "algo se rompio" in anotado[-1][1]["detalle"]
+
+
+def test_un_hueco_del_pc_que_se_llena_despues_tambien_se_puede_arrastrar(vista) -> None:
+    """Fue el fallo real: pulsar encima del sprite no ejecutaba nada.
+
+    customtkinter crea los hijos de un CTkButton cuando le parece: nacido sin
+    imagen tiene dos, con imagen tres, y el tercero es el que sostiene el
+    sprite. Los botones del PC se reutilizan entre cajas y se enganchaban una
+    sola vez al crearlos, asi que ese tercer hijo se quedaba sin enganche.
+
+    Y explicaba la asimetria: los del equipo iban siempre -sus tarjetas se
+    rehacen enteras- y los del PC "a veces", segun donde se pulsara.
+    """
+    root, superficie = vista
+    hueco = 25
+
+    superficie._pc_cell(hueco, None)                # nace vacio
+    root.update_idletasks()
+    superficie._pc_cell(hueco, _Mono(9))            # y luego se llena
+    root.update_idletasks()
+
+    boton = superficie.pc_buttons[hueco]
+    sin_enganchar = [
+        type(hijo).__name__ for hijo in boton.winfo_children()
+        if not getattr(hijo, "_rolerun_arrastre_enganchado", False)
+    ]
+    assert not sin_enganchar, (
+        f"estos hijos no arrastran: {sin_enganchar}"
+    )
+    assert getattr(boton, "_rolerun_arrastre_enganchado", False)
+
+
+def test_volver_a_pasar_el_enganche_no_apila_manejadores(vista) -> None:
+    """Con `add="+"`, a la sexta caja un clic dispararia seis arrastres."""
+    root, superficie = vista
+    hueco = 26
+    superficie._pc_cell(hueco, _Mono(9))
+    root.update_idletasks()
+    boton = superficie.pc_buttons[hueco]
+    antes = boton.bind("<ButtonPress-1>")
+
+    for _caja in range(6):
+        superficie._pc_cell(hueco, _Mono(9))
+    root.update_idletasks()
+
+    assert boton.bind("<ButtonPress-1>") == antes, "se apilaron manejadores"

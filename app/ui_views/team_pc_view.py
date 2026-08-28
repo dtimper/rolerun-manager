@@ -1354,7 +1354,8 @@ class UnifiedTeamPCView:
         self._pc_slot_pokemon[slot] = pokemon
 
         button = self.pc_buttons.get(slot)
-        if button is not None and self._widget_vivo(button):
+        reutilizado = button is not None and self._widget_vivo(button)
+        if reutilizado:
             # Reutilizar, y además solo escribir lo que cambia: al pasar de caja
             # la mayoría de las casillas se quedan igual, y un `configure` con
             # colores repinta el canvas aunque el valor sea el mismo.
@@ -1395,6 +1396,17 @@ class UnifiedTeamPCView:
                     self.sonar("raton") if self._pc_slot_pokemon.get(s) else None
                 ),
                 add="+",
+            )
+
+        if reutilizado:
+            # Poner o quitar la imagen puede cambiar los hijos del botón, y un
+            # hijo nuevo nace sin enganchar: un CTkButton creado sin imagen tiene
+            # dos hijos y con imagen tres, y el tercero es el que sostiene el
+            # sprite. Pulsar justo encima de él no hacía nada. Volver a pasar es
+            # barato y no apila: cada widget recuerda si ya lo tiene.
+            self._bind_drag_tree(
+                button, "pc", None,
+                pokemon_getter=lambda s=slot: self._pc_slot_pokemon.get(s),
             )
 
         # Se dice las dos cosas, no solo una: con las casillas reutilizadas, un
@@ -2384,6 +2396,26 @@ class UnifiedTeamPCView:
         excluded = exclude or set()
         if widget in excluded:
             return
+        # Cada widget se engancha una sola vez en su vida. Aquí se usa `add="+"`,
+        # así que volver a pasar por uno ya enganchado apilaría manejadores: a la
+        # sexta caja, un clic dispararía seis arrastres.
+        #
+        # Pero hace falta poder volver a pasar, porque customtkinter crea hijos
+        # cuando le parece: un CTkButton nacido sin imagen tiene dos hijos y con
+        # imagen tres, y el tercero es el que sostiene el sprite. Sin volver a
+        # recorrer, pulsar justo encima del sprite de una casilla que empezó
+        # vacía no ejecutaba absolutamente nada.
+        if getattr(widget, "_rolerun_arrastre_enganchado", False):
+            for child in widget.winfo_children():
+                self._bind_drag_tree(
+                    child, context, pokemon,
+                    exclude=excluded, pokemon_getter=pokemon_getter,
+                )
+            return
+        try:
+            widget._rolerun_arrastre_enganchado = True
+        except Exception:
+            pass
         if pokemon_getter is None:
             def pokemon_getter(_fijo=pokemon):
                 return _fijo

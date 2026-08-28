@@ -1,6 +1,63 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.0-alpha.8 — el sprite no arrastraba, y el PC se leía demasiado
+
+## Por qué a veces no dejaba arrastrar del PC
+
+El rastro que se añadió en la versión anterior lo dijo a la primera. Con el
+usuario intentando mover a Absol del PC al equipo, la traza tenía **solo**
+arrastres `origen=team`:
+
+```
+22:50:12  arrastre.empieza   origen=team widget=Label
+22:50:12  arrastre.se_mueve  origen=team
+```
+
+Ni un `origen=pc`. Ni siquiera un `no_empieza`. Al pulsar en la casilla del PC no
+se ejecutaba **nada**: ahí no había enganche.
+
+Y medido con customtkinter, la causa:
+
+| botón | hijos |
+|---|---|
+| creado **sin** imagen | `[CTkCanvas, Label]` |
+| creado **con** imagen | `[CTkCanvas, Label, Label]` ← el tercero sostiene el sprite |
+
+Los botones del PC **se reutilizan entre cajas** y se enganchaban una sola vez,
+al crearlos. Un hueco que nacía vacío y se llenaba después estrenaba un hijo sin
+enganchar: **pulsar justo encima del sprite no hacía nada**, y pulsar en el
+número o el fondo sí.
+
+Eso explica las dos mitades del síntoma: los del equipo iban siempre —sus
+tarjetas se rehacen enteras— y los del PC «a veces», según dónde se pulsara.
+
+Ahora cada widget recuerda si ya está enganchado, así que se puede volver a
+recorrer un botón sin apilar manejadores. Sin ese recuerdo, a la sexta caja un
+clic dispararía seis arrastres.
+
+## El juego solo se entrecorta con RoleRun abierto
+
+El usuario insistió, y tenía razón. Medido en una sesión suya de 22 minutos:
+
+| operación | veces | tiempo |
+|---|---|---|
+| `realtime.read_pc` | 430 | **57,3 s** |
+| `realtime.capture_monitor` | 1733 | 11,1 s |
+| `engine.run` | 12 | 2,2 s |
+| **total** | | **71,8 s = 5,4% del tiempo** |
+
+Cada lectura del PC son ~400 KB de la memoria de **otro proceso**, y competir
+por ahí con el emulador tiene un coste que se oye.
+
+Un sondeo fijo cada 2,5 segundos es mucho para detectar algo que casi nunca
+pasa: que el jugador reorganice sus cajas dentro del juego. Ahora empieza rápido
+y se va espaciando hasta 20 segundos mientras el PC no se mueva; **cualquier
+cambio lo devuelve al mínimo**, así que reaccionar sigue siendo inmediato cuando
+importa.
+
+1967 passed, 1 skipped.
+
 # v0.3.0-alpha.7 — dejar de conjeturar sobre el arrastre del PC
 
 «A veces los slots del PC no deja arrastrarlos al equipo. Los del equipo creo

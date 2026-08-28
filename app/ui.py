@@ -206,6 +206,14 @@ LIVE_TM_GAME_KEYS = ROLE_EV_WRITER_GAME_KEYS
 # dependa de "estar en Equipo y PC" debe usar este conjunto: comprobar solo
 # "pc" dejó el seguimiento del PC vivo inalcanzable para B2/W2 y BDSP.
 TEAM_PC_PAGES = {"team", "pc"}
+
+#: Cada cuánto se relee el PC buscando cambios hechos dentro del juego. Cuesta
+#: 400 KB de lectura de la memoria de Ryujinx, y esa lectura compite con el
+#: emulador: medido, 57 segundos leyendo el PC en una sesión de 22 minutos, un
+#: 5,4% del tiempo entre todas las lecturas. Se empieza rápido y se va espaciando
+#: mientras el PC no se mueva; cualquier cambio vuelve a acelerarlo.
+BDSP_PC_POLL_MIN_MS = 2500
+BDSP_PC_POLL_MAX_MS = 20000
 # Sin este límite, una descarga de sprite sin red enrutada podía quedarse
 # colgada indefinidamente. La barrera inicial espera a los sprites, así que ese
 # cuelgue dejaba RoleRun en la pantalla de carga para siempre.
@@ -753,6 +761,7 @@ class RoleRunManager(ctk.CTk):
         self._last_role_conflict_signature: tuple | None = None
         self._pc_cache: SavePCData | None = None
         self._pc_cache_signature: tuple[int, int] | None = None
+        self._pc_poll_delay = BDSP_PC_POLL_MIN_MS
         # Cuántas cajas tiene el PC y de qué tamaño. Es del juego, no de la
         # lectura: escribir invalida el contenido en caché, pero el PC sigue
         # teniendo las mismas cajas. Sin esto la página se rehacía con una sola
@@ -6407,6 +6416,15 @@ class RoleRunManager(ctk.CTk):
                     changed=projection_changed,
                 )
 
+            # El sondeo se espacia mientras el PC no se mueva. Leerlo cuesta 400
+            # KB de la memoria de Ryujinx cada vez, y esa lectura compite con el
+            # emulador: medido, 57 segundos de lectura del PC en una sesión de 22
+            # minutos. Un cambio hecho dentro del juego vuelve a acelerarlo.
+            self._pc_poll_delay = (
+                BDSP_PC_POLL_MIN_MS if projection_changed
+                else min(BDSP_PC_POLL_MAX_MS, int(self._pc_poll_delay) * 2)
+            )
+
             self._pc_cache = pc_data
             self._pc_cache_signature = signature
 
@@ -6567,7 +6585,7 @@ class RoleRunManager(ctk.CTk):
                 return False
         return True
 
-    def _schedule_bdsp_pc_poll(self, delay: int = 2500) -> None:
+    def _schedule_bdsp_pc_poll(self, delay: int | None = None) -> None:
         """Sondea PC↔PC solo mientras la página live compatible está visible.
 
         No hay escaneo: reutiliza la matriz completa y el doble read demostrados
@@ -6592,7 +6610,8 @@ class RoleRunManager(ctk.CTk):
                 self.current_game, self.current_game, force=True,
             )
 
-        self._bdsp_pc_poll_after_id = self.after(max(150, int(delay)), poll)
+        espera = int(self._pc_poll_delay) if delay is None else int(delay)
+        self._bdsp_pc_poll_after_id = self.after(max(150, espera), poll)
 
     def _apply_project_marker_layout(self, data: SaveGameData | None) -> None:
         """Reinterpreta las seis marcas según el contrato persistido de la Run."""
