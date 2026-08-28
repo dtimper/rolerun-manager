@@ -94,6 +94,7 @@ from .sonido import Sonidos
 from .sm_rom_service import SMRomProfileError, load_sm_rom_tm_profile
 from .usum_rom_service import USUMRomProfileError, load_usum_rom_tm_profile
 from .live_review import inverse_oras_live_change
+from .ui_components import fundido_de_tarjeta
 from .ui_components import (
     IntegratedRoleInfoPopover,
     IntegratedRunStatePanel,
@@ -3947,6 +3948,26 @@ class RoleRunManager(ctk.CTk):
     # etiquetas siguen aquí para que una Run antigua siga teniendo nombre.
     GAMES_OCULTOS = frozenset({"dp", "pt", "hgss"})
 
+    #: Tamaño al que se pinta cada banner en el selector. Las capas del fundido
+    #: se componen ya a esta medida: es lo que se ve, y evita nueve copias de
+    #: 1040x224 por juego.
+    WELCOME_TARJETA = (520, 112)
+
+    #: La capa oscura cubre la tarjeta entera. Tapar solo la mitad de abajo
+    #: —como hacía la franja de antes— cruzaba el título que los banners nuevos
+    #: llevan dibujado dentro, y a media transición se leían dos superpuestos.
+    WELCOME_FRANJA = (2, 2, 518, 110)
+    WELCOME_FRANJA_RADIO = 15
+
+    #: Dónde cae cada pieza del menú, en el mismo orden en que se pintan. Sirve
+    #: para medir de qué color queda el banner justo debajo de cada una.
+    WELCOME_SITIOS = (
+        (110, 17, 410, 33),    # estado del archivo
+        (110, 38, 410, 61),    # título de la edición
+        (158, 66, 252, 96),    # ARCHIVOS
+        (268, 66, 374, 96),    # ABRIR / CONFIGURAR
+    )
+
     GAME_OPTIONS = [
         ("dp", "Diamante / Perla", True),
         ("pt", "Platino", True),
@@ -3995,6 +4016,29 @@ class RoleRunManager(ctk.CTk):
         except OSError:
             pass
         return ""
+
+    def _colores_bajo_el_menu(self, image_path) -> tuple[str, ...]:
+        """El color del banner justo debajo de cada rótulo del menú.
+
+        Es el color desde el que nace cada texto, para que aparezca fundiéndose
+        en vez de encenderse de golpe. Se mide en lugar de suponerse porque los
+        banners no se parecen entre sí: Sol/Luna es clarísimo y Blanca/Negra
+        casi negro, así que un mismo color de partida dejaría un texto fantasma
+        en uno de los dos.
+        """
+        neutro = tuple("#111111" for _sitio in self.WELCOME_SITIOS)
+        try:
+            if not image_path.exists():
+                return neutro
+            lienzo = Image.open(image_path).convert("RGB").resize(
+                self.WELCOME_TARJETA, Image.LANCZOS,
+            )
+        except Exception:
+            return neutro
+        return tuple(
+            fundido_de_tarjeta.color_medio(lienzo, sitio)
+            for sitio in self.WELCOME_SITIOS
+        )
 
     def _game_source_status(self, profile: GameSourceProfile) -> tuple[str, str]:
         if profile.is_available:
@@ -4308,45 +4352,54 @@ class RoleRunManager(ctk.CTk):
             start_x = -70 if column == 0 else 70
             card.place(x=start_x, y=0, relwidth=1.0, relheight=1.0)
 
+            # Los banners llevan el título dentro, así que en reposo la tarjeta
+            # es solo el banner. La franja del menú se compone DENTRO de la
+            # imagen —Tk no sabe de transparencias por widget— y el fundido es
+            # cambiar de una capa a la siguiente.
             image_path = RESOURCES_DIR / "game_cards" / f"{key}.png"
+            capas: list[ctk.CTkImage] = []
+            image_label = None
             if image_path.exists():
                 try:
                     source = Image.open(image_path).convert("RGBA")
-                    # CTkImage adapta la imagen al tamaño de la tarjeta.
-                    card_image = ctk.CTkImage(
-                        light_image=source,
-                        dark_image=source,
-                        size=(520, 112),
-                    )
-                    self._welcome_card_images.append(card_image)
+                    # A tamaño de pantalla: es lo que se ve, y evita nueve
+                    # copias de 1040x224 por cada juego.
+                    lienzo = source.resize(self.WELCOME_TARJETA, Image.LANCZOS)
+                    for capa in fundido_de_tarjeta.capas_de_la_franja(
+                        lienzo, self.WELCOME_FRANJA,
+                        radio=self.WELCOME_FRANJA_RADIO,
+                    ):
+                        imagen = ctk.CTkImage(
+                            light_image=capa, dark_image=capa,
+                            size=self.WELCOME_TARJETA,
+                        )
+                        self._welcome_card_images.append(imagen)
+                        capas.append(imagen)
                     image_label = ctk.CTkLabel(
-                        card, text="", image=card_image, fg_color="transparent"
+                        card, text="", image=capas[0], fg_color="transparent",
                     )
                     image_label.place(x=0, y=0, relwidth=1.0, relheight=1.0)
                 except Exception:
+                    capas = []
                     image_label = None
-            else:
-                image_label = None
 
-            # Capa inferior para reforzar el contraste del texto.
-            shade = ctk.CTkFrame(
-                card, fg_color="#111111", corner_radius=14, height=54
-            )
-            shade.place(relx=0.012, rely=0.52, relwidth=0.976, relheight=0.44)
+            # De qué color queda el banner justo debajo de cada rótulo. Es el
+            # color desde el que nace su texto, y hay que medirlo: Sol/Luna es
+            # clarísimo y Blanca/Negra casi negro, así que un mismo color de
+            # partida dejaría un fantasma en uno de los dos.
+            fondos = self._colores_bajo_el_menu(image_path)
 
-            ctk.CTkLabel(
+            status = ctk.CTkLabel(
                 card, text=source_status, text_color=source_color,
-                font=ctk.CTkFont("Segoe UI", 9, "bold"), anchor="w",
-            ).place(x=19, rely=0.60, anchor="w")
+                font=ctk.CTkFont("Segoe UI", 9, "bold"),
+            )
 
             title = ctk.CTkLabel(
                 card,
                 text=label.upper(),
                 text_color=TEXT,
                 font=ctk.CTkFont("Segoe UI", 15, "bold"),
-                anchor="w",
             )
-            title.place(x=19, rely=0.79, anchor="w")
 
             files_button = ctk.CTkButton(
                 card,
@@ -4362,8 +4415,6 @@ class RoleRunManager(ctk.CTk):
                 text_color=GOLD,
                 font=ctk.CTkFont("Segoe UI", 10, "bold"),
             )
-            files_button.place(relx=1.0, x=-126, rely=0.79, anchor="e")
-
             button = ctk.CTkButton(
                 card,
                 text="ABRIR" if source_profile.is_available else "CONFIGURAR",
@@ -4376,9 +4427,67 @@ class RoleRunManager(ctk.CTk):
                 text_color="#101010",
                 font=ctk.CTkFont("Segoe UI", 12, "bold"),
             )
-            button.place(relx=1.0, x=-17, rely=0.79, anchor="e")
 
-            def set_hover(active: bool, target=card) -> None:
+            # (widget, sitio, colores finales). El sitio no se aplica hasta que
+            # el texto empieza a revelarse: antes, la franja todavía deja ver el
+            # banner y un rótulo encima se leería como suciedad.
+            menu = (
+                (status, {"relx": 0.5, "rely": 0.22, "anchor": "center"},
+                 {"text_color": source_color}),
+                (title, {"relx": 0.5, "rely": 0.44, "anchor": "center"},
+                 {"text_color": TEXT}),
+                (files_button, {"relx": 0.5, "x": -8, "rely": 0.72, "anchor": "e"},
+                 {"text_color": GOLD, "border_color": "#6E5934"}),
+                (button, {"relx": 0.5, "x": 8, "rely": 0.72, "anchor": "w"},
+                 {"text_color": "#101010", "fg_color": GOLD}),
+            )
+
+            estado_del_fundido = {"paso": 0, "hacia": 0, "id": None}
+
+            def pintar_menu(paso: int, piezas=menu, capas=capas,
+                            fondos=fondos, lienzo_label=image_label) -> None:
+                avance = paso / fundido_de_tarjeta.PASOS
+                revelado = fundido_de_tarjeta.avance_del_texto(avance)
+                if capas and self._widget_alive(lienzo_label):
+                    lienzo_label.configure(image=capas[paso])
+                for indice, (widget, sitio, colores) in enumerate(piezas):
+                    if not self._widget_alive(widget):
+                        continue
+                    if revelado <= 0.0:
+                        widget.place_forget()
+                        continue
+                    debajo = fundido_de_tarjeta.color_bajo_la_franja(
+                        fondos[indice], avance,
+                    )
+                    widget.configure(**{
+                        opcion: fundido_de_tarjeta.mezclar(debajo, final, revelado)
+                        for opcion, final in colores.items()
+                    })
+                    widget.place(**sitio)
+
+            def animar_fundido(estado=estado_del_fundido, pintar=pintar_menu) -> None:
+                estado["id"] = None
+                siguiente = fundido_de_tarjeta.siguiente_paso(
+                    int(estado["paso"]), int(estado["hacia"]),
+                )
+                if siguiente == estado["paso"]:
+                    return
+                estado["paso"] = siguiente
+                pintar(siguiente)
+                if siguiente == estado["hacia"]:
+                    return
+                try:
+                    # Estos no se apuntan en `_welcome_animation_ids`: cada
+                    # fotograma añadiría uno y la lista solo se vacía al
+                    # repintar la pantalla. El fundido se para solo en diez
+                    # fotogramas y cada uno comprueba que su widget siga vivo.
+                    estado["id"] = self.after(
+                        fundido_de_tarjeta.FOTOGRAMA_MS, animar_fundido,
+                    )
+                except Exception:
+                    estado["id"] = None
+
+            def set_hover(active: bool, target=card, estado=estado_del_fundido) -> None:
                 try:
                     if not target.winfo_exists():
                         return
@@ -4389,8 +4498,13 @@ class RoleRunManager(ctk.CTk):
                     target.place_configure(y=-2 if active else 0)
                 except Exception:
                     pass
+                estado["hacia"] = fundido_de_tarjeta.PASOS if active else 0
+                if estado["id"] is None:
+                    animar_fundido()
 
-            hover_widgets = [card, shade, title, files_button, button]
+            pintar_menu(0)
+
+            hover_widgets = [card, title, status, files_button, button]
             if image_label is not None:
                 hover_widgets.append(image_label)
             for widget in hover_widgets:

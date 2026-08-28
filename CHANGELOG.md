@@ -1,6 +1,59 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.0-alpha.16 — banners nuevos y el menú de cada juego sale al pasar el ratón
+
+Los siete banners de la hoja que pasó el usuario sustituyen a las portadas del
+selector. Se recortaron de la rejilla original (dos columnas de 799x200 en
+`x=24` y `x=850`, filas en `y=34/260/486/711`) y se ajustaron al 4,64:1 de la
+tarjeta quitando lo mismo por arriba que por abajo, que es donde sobra margen.
+
+|          |            |
+|----------|------------|
+| `bw`     | Blanca / Negra |
+| `b2w2`   | Blanca 2 / Negra 2 |
+| `xy`     | X / Y |
+| `oras`   | Omega Rubí / Zafiro Alfa |
+| `sm`     | Sol / Luna |
+| `usum`   | Ultra Sol / Ultra Luna |
+| `bdsp`   | Diamante Brillante / Perla Reluciente |
+
+Diamante/Perla, Platino y HeartGold/SoulSilver conservan su portada antigua:
+están ocultos en el selector y no había banner para ellos.
+
+## El menú sale al pasar el ratón, con fundido
+
+Los banners llevan el título dibujado dentro, así que en reposo la tarjeta es
+**solo el banner**: taparlo con la franja fija de antes era tapar justo lo que se
+ha dibujado. El estado del archivo, ARCHIVOS y ABRIR aparecen al pasar por
+encima y se van al salir.
+
+## Lo que costó que se viera bien
+
+Tk no sabe de transparencias por widget: un `CTkFrame` está o no está, y acercar
+su color al del banner tampoco sirve porque **el banner no es un color**, tiene
+un sol, una luna y un logo. Así que la capa oscura se compone **dentro de la
+imagen**, que es donde sí hay alfa de verdad, y el fundido es cambiar de una
+capa a la siguiente. Once capas por juego, hechas una sola vez.
+
+Tres cosas se decidieron mirando el resultado, no a ojo:
+
+- **Se oscurece la tarjeta entera.** El primer intento copiaba la franja de
+  antes, que cae justo sobre el título del banner: a media transición se leían
+  dos títulos superpuestos.
+- **La capa no llega a tapar del todo** (86% → 94%). Sin tope, la tarjeta se
+  quedaba en un rectángulo plano; dejando pasar algo, el dibujo se intuye debajo.
+- **El texto se revela tarde y con curva.** Un texto de Tk tampoco tiene
+  opacidad: lo que se hace es moverlo desde el color que tiene el fondo debajo,
+  estimado con la media de esa zona. Mientras el banner se siga viendo, su
+  textura no coincide con esa media y el rótulo asoma como un rectángulo plano
+  —el botón ABRIR, que va relleno, era el que más cantaba—. Empieza en 0,6, con
+  el fondo ya al 56% de negro, y carga hacia el final.
+
+Ese color de partida **se mide por banner y por rótulo**, no se supone: Sol/Luna
+es clarísimo (`#4E4233` bajo el estado) y Blanca/Negra casi negro (`#38382C`).
+Con un único color de partida, uno de los dos habría dejado texto fantasma.
+
 # v0.3.0-alpha.15 — el arranque deja de componer seis veces lo que se ve una
 
 Del log de rendimiento del usuario (`perf_2026-08-28.jsonl`, sesión de las
