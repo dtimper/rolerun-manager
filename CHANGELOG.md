@@ -1,6 +1,44 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.92 — HeartGold cura, y a la primera
+
+**Cura sin romper nada.** Registro de la partida del usuario:
+
+    12:15:57  curación  error: null  aplicados: 6
+
+Y confirma la causa que se identificó en alpha.88: los tres «Huevo malo» venían
+de **mutar una lectura partida**. Desde que una lectura solo vale si el mismo
+contenido sale tres veces, lo que se escribe es coherente y el juego lo acepta.
+
+## El falso negativo que quedaba
+
+La primera pulsación, treinta segundos antes, se había negado:
+
+    12:15:26  curación  error: «El equipo cambió entre la lectura y la
+                        escritura; no se ha tocado nada»  aplicados: 0
+
+No era un fallo —no se escribió ni un byte, que es lo correcto— pero obligaba a
+pulsar dos veces. La grabación a 0,5 ms explica por qué: **cada ficha alterna
+entre cifrada y en claro por su cuenta**, muchas veces por segundo. El mismo
+Pokémon con el mismo checksum sale una vez cifrado y a la siguiente en claro, y
+los dos contenidos son igual de válidos.
+
+Exigir los bytes de las seis fichas hacía que la escritura se negara por el
+parpadeo de una que ni se toca.
+
+Ahora la comprobación previa exige:
+
+- el mismo proceso, la misma reserva y **la misma dirección de bloque**;
+- los mismos Pokémon en los seis huecos;
+- y los mismos bytes **solo en las fichas que se van a escribir**.
+
+De los demás huecos no sale ni un byte, así que comparar sus bytes no protegía
+de nada. Si parpadea la ficha que sí se va a escribir, ahí no se cede: se niega
+y no se toca nada.
+
+Suite completa: **1793**.
+
 # v0.2.6-alpha.91 — grabar el momento de la escritura
 
 Se acabó lo que se puede demostrar leyendo antes y leyendo después. Todo sale

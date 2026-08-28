@@ -151,6 +151,7 @@ class HgssMelonDSWriter:
 
     def _confirmar_direccion(
         self, antes: HgssPartyRead, base_al_leer: int | None = None,
+        huecos: tuple[int, ...] | None = None,
     ) -> None:
         """Que se vaya a escribir en el mismo sitio del que se leyó.
 
@@ -172,7 +173,22 @@ class HgssMelonDSWriter:
 
         - el mismo proceso y la misma reserva,
         - **la misma dirección de bloque** -esto es lo que faltaba-,
-        - y los mismos bytes, no solo los mismos Pokémon.
+        - los mismos Pokémon en los seis huecos,
+        - y los mismos bytes en **las fichas que se van a escribir**.
+
+        POR QUÉ SOLO EN ESAS
+
+        Porque cada ficha alterna entre cifrada y en claro por su cuenta, muchas
+        veces por segundo: grabado a 0,5 ms sobre la partida real, el mismo
+        Pokémon con el mismo checksum sale una vez cifrado y a la siguiente en
+        claro. Los dos contenidos son válidos y dicen exactamente lo mismo.
+
+        Exigir los bytes de las seis hacía fallar la curación por el parpadeo de
+        una que ni se toca. Pasó en la partida del usuario: la primera pulsación
+        se negó -«el equipo cambió», cero escritos- y la segunda, treinta
+        segundos después, curó los seis. Comparar solo los rangos que se van a
+        escribir quita esos falsos negativos sin ceder nada, porque de los demás
+        huecos no sale ni un byte.
         """
         _bloque_demostrado(self.reader)
         ahora = self.reader.read_party()
@@ -185,12 +201,23 @@ class HgssMelonDSWriter:
             ahora.process_id != antes.process_id
             or ahora.allocation_base != antes.allocation_base
             or ahora.count != antes.count
-            or ahora.raw != antes.raw
+            or ahora.pokemon != antes.pokemon
         ):
             raise HgssLiveError(
                 "El equipo cambió entre la lectura y la escritura; no se ha "
                 "tocado nada. Vuelve a intentarlo."
             )
+        rangos = (
+            [(h * PK4_PARTY_SIZE, (h + 1) * PK4_PARTY_SIZE) for h in huecos]
+            if huecos is not None
+            else [(0, len(antes.raw))]
+        )
+        for desde, hasta in rangos:
+            if ahora.raw[desde:hasta] != antes.raw[desde:hasta]:
+                raise HgssLiveError(
+                    "La ficha que se iba a escribir cambió entre la lectura y "
+                    "la escritura; no se ha tocado nada. Vuelve a intentarlo."
+                )
 
     def _party_host(self, lectura: HgssPartyRead) -> int:
         return lectura.allocation_base + (self.memory.party_data - DS_RAM_BASE)
@@ -291,7 +318,7 @@ class HgssMelonDSWriter:
         for intento in range(INTENTOS_DE_ESCRITURA):
             # Fuera del `try`, por lo mismo: si el bloque se ha movido no se ha
             # escrito nada y deshacer con la dirección vieja sería el destrozo.
-            self._confirmar_direccion(antes, base_al_leer)
+            self._confirmar_direccion(antes, base_al_leer, tuple(tocados))
             try:
                 return intentar()
             except Exception:
@@ -696,7 +723,9 @@ class HgssMelonDSWriter:
         # salido ni un byte, y `deshacer` escribiría con la dirección vieja:
         # eso no deshace nada, mete una ficha donde no va. Es lo que deja un
         # «Huevo malo».
-        self._confirmar_direccion(antes_equipo, base_al_leer)
+        self._confirmar_direccion(
+            antes_equipo, base_al_leer, tuple(sorted(esperados)),
+        )
         try:
             escribir_equipo(bytes(equipo_nuevo))
             escribir_bolsa(bolsa_nueva)

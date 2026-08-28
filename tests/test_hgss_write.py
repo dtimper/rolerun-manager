@@ -261,6 +261,9 @@ class _MelonDSFalso:
         )
         self.escrituras: list[bytes] = []
         self.mueve_el_bloque = False
+        # Qué hueco alterna entre cifrado y en claro en cada lectura, como
+        # hacen las fichas de verdad.
+        self.parpadea: int | None = None
         self.original = bytes(self.raw)
         self.process_id = 4242
 
@@ -272,6 +275,11 @@ class _MelonDSFalso:
 
             self.memory = replace(
                 self.memory, party_data=self.memory.party_data + 36,
+            )
+        if self.parpadea is not None:
+            desde = self.parpadea * PK4_PARTY_SIZE
+            self.raw[desde:desde + PK4_PARTY_SIZE] = _del_reves(
+                bytes(self.raw[desde:desde + PK4_PARTY_SIZE]),
             )
         crudo = bytes(self.raw)
         return HgssPartyRead(
@@ -682,3 +690,34 @@ def test_si_el_bloque_se_mueve_entre_leer_y_escribir_no_se_escribe() -> None:
         )
     assert emulador.escrituras == [], "no se escribe ni un byte"
     assert bytes(emulador.raw) == emulador.original
+
+
+def test_que_parpadee_una_ficha_que_no_se_toca_no_impide_escribir() -> None:
+    """El falso negativo que obligaba a pulsar CURAR dos veces.
+
+    Cada ficha alterna entre cifrada y en claro por su cuenta, muchas veces por
+    segundo. Exigir los bytes de las seis hacía que la escritura se negara por
+    el parpadeo de una que ni se toca: en la partida del usuario, la primera
+    pulsación se negó con cero escritos y la segunda curó los seis.
+    """
+    emulador = _MelonDSFalso()
+    writer = _WriterDePrueba(emulador)
+    peticion = _peticion(emulador, 1)
+    emulador.parpadea = 0            # el hueco 1 cambia de estado sin parar
+
+    despues = writer.write_party_roles(emulador.read_party(), [peticion])
+
+    assert despues.pokemon[1].evs == (252, 0, 0, 252, 6, 0)
+    assert despues.pokemon[0].evs == emulador.read_party().pokemon[0].evs
+
+
+def test_que_parpadee_la_ficha_que_se_va_a_escribir_si_lo_impide() -> None:
+    """Ahí no se puede ceder: se escribiría encima de algo que ya no es lo leído."""
+    emulador = _MelonDSFalso()
+    writer = _WriterDePrueba(emulador)
+    peticion = _peticion(emulador, 1)
+    emulador.parpadea = 1            # justo el hueco que se va a escribir
+
+    with pytest.raises(HgssLiveError, match="cambió"):
+        writer.write_party_roles(emulador.read_party(), [peticion])
+    assert emulador.escrituras == [], "no se escribe ni un byte"
