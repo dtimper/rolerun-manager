@@ -8,7 +8,7 @@ import tkinter as tk
 
 from app.config import DANGER, GOLD, MUTED, PANEL, PANEL_ALT, SUCCESS, TEXT
 from app.ui_components.repintado import configurar_si_cambia
-from app.animacion import Vuelo, centro_en_la_raiz
+from app.animacion import Vuelo, centro_en_la_raiz, medida
 from app.pc_browser import pokemon_matches_pc_query
 from app.pokemon_stats import STAT_KEYS, STAT_LABELS
 from app.ui_state.spatial_navigation import event_targets_text_input, keypress_sequences
@@ -2192,12 +2192,15 @@ class UnifiedTeamPCView:
         hasta = centro_en_la_raiz(destino, raiz)
         if desde is None or hasta is None or desde == hasta:
             return False
-        imagen = self.sprite_for(pokemon, (56, 56))
-        if imagen is None:
+        desde_tam = medida(origen)
+        hasta_tam = medida(destino)
+        if desde_tam is None or hasta_tam is None:
             return False
         try:
-            movil = ctk.CTkLabel(raiz, text="", image=imagen, fg_color="transparent")
+            movil = self._tarjeta_en_vuelo(pokemon, destino)
         except Exception:
+            return False
+        if movil is None:
             return False
         self.detener_vuelos()
         # El arco crece con la distancia: entre paneles se nota, entre dos
@@ -2206,11 +2209,56 @@ class UnifiedTeamPCView:
         vuelo = Vuelo(
             raiz, movil, desde, hasta,
             arco=min(90.0, salto * 0.12),
+            # Además de viajar, cambia de tamaño hasta encajar con el hueco al
+            # que va. Una casilla del PC que crece hasta ser una tarjeta del
+            # equipo se lee como «esto se convierte en aquello»; el mismo sprite
+            # aterrizando, solo como «algo se ha movido».
+            desde_tam=desde_tam, hasta_tam=hasta_tam,
             al_terminar=lambda: self._vuelos.discard(vuelo),
         )
         self._vuelos.add(vuelo)
         vuelo.empezar()
         return True
+
+    def _tarjeta_en_vuelo(self, pokemon: Any, destino: Any) -> Any:
+        """El móvil: un marco con el aspecto del sitio al que va.
+
+        Se copian el color y el radio del destino para que al llegar no haya un
+        salto visual entre lo que vuela y lo que aparece debajo. Solo se leen; si
+        el destino no sabe decirlos, se usan los de una tarjeta.
+        """
+        def leer(nombre: str, por_defecto: Any) -> Any:
+            try:
+                valor = destino.cget(nombre)
+            except Exception:
+                return por_defecto
+            return valor if valor not in ("", None) else por_defecto
+
+        marco = ctk.CTkFrame(
+            self._raiz_para_animar,
+            fg_color=leer("fg_color", "#202020"),
+            corner_radius=leer("corner_radius", 12),
+            border_width=2, border_color=GOLD,
+        )
+        marco.grid_propagate(False)
+        marco.pack_propagate(False)
+        imagen = self.sprite_for(pokemon, (56, 56))
+        if imagen is not None:
+            self.images.append(imagen)
+            ctk.CTkLabel(
+                marco, text="", image=imagen, fg_color="transparent",
+            ).place(relx=0.5, rely=0.5, anchor="center")
+        else:
+            ctk.CTkLabel(
+                marco,
+                text=str(
+                    getattr(pokemon, "nickname", "")
+                    or getattr(pokemon, "species", "")
+                )[:14],
+                text_color=GOLD, fg_color="transparent",
+                font=ctk.CTkFont("Segoe UI", 12, "bold"),
+            ).place(relx=0.5, rely=0.5, anchor="center")
+        return marco
 
     def detener_vuelos(self) -> None:
         """Retira cualquier sprite en el aire. Uno huérfano se queda pegado."""

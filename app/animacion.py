@@ -48,6 +48,16 @@ def altura_del_arco(paso: float, alto: float) -> float:
     return -math.sin(math.pi * max(0.0, min(1.0, paso))) * alto
 
 
+def medida(widget: Any) -> tuple[int, int] | None:
+    """Ancho y alto de un widget, o ``None`` si ya no está."""
+    try:
+        if not widget.winfo_exists():
+            return None
+        return int(widget.winfo_width()), int(widget.winfo_height())
+    except Exception:
+        return None
+
+
 def centro_en_la_raiz(widget: Any, raiz: Any) -> tuple[int, int] | None:
     """Dónde está el centro de un widget, en coordenadas de la ventana.
 
@@ -81,6 +91,9 @@ class Vuelo:
         *,
         duracion_ms: int = VUELO_MS,
         arco: float = 0.0,
+        desde_tam: tuple[int, int] | None = None,
+        hasta_tam: tuple[int, int] | None = None,
+        al_crecer: Callable[[float], None] | None = None,
         al_terminar: Callable[[], None] | None = None,
     ) -> None:
         self.raiz = raiz
@@ -89,6 +102,12 @@ class Vuelo:
         self.hasta = hasta
         self.duracion_ms = max(FOTOGRAMA_MS, int(duracion_ms))
         self.arco = float(arco)
+        # Crecer mientras se viaja convierte «algo se ha movido» en «esto se
+        # está convirtiendo en aquello». Es la diferencia entre un icono que
+        # aterriza y una tarjeta que se forma.
+        self.desde_tam = desde_tam
+        self.hasta_tam = hasta_tam
+        self.al_crecer = al_crecer
         self.al_terminar = al_terminar
         self.transcurrido = 0
         self._pendiente: Any = None
@@ -110,10 +129,33 @@ class Vuelo:
         x = self.desde[0] + (self.hasta[0] - self.desde[0]) * suave
         y = self.desde[1] + (self.hasta[1] - self.desde[1]) * suave
         y += altura_del_arco(paso, self.arco)
+        if self.desde_tam and self.hasta_tam:
+            # El tamaño va por `configure`, no por `place`: customtkinter
+            # rechaza `width`/`height` en `place` con un ValueError, y como aquí
+            # todo está protegido, ese error se tragaba y mataba el vuelo en dos
+            # fotogramas en vez de dar la cara.
+            try:
+                self.movil.configure(
+                    width=int(
+                        self.desde_tam[0]
+                        + (self.hasta_tam[0] - self.desde_tam[0]) * suave
+                    ),
+                    height=int(
+                        self.desde_tam[1]
+                        + (self.hasta_tam[1] - self.desde_tam[1]) * suave
+                    ),
+                )
+            except Exception:
+                return False
         try:
             self.movil.place(x=int(x), y=int(y), anchor="center")
         except Exception:
             return False
+        if self.al_crecer is not None:
+            try:
+                self.al_crecer(suave)
+            except Exception:
+                pass
         return True
 
     def _fotograma(self) -> None:

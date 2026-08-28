@@ -148,6 +148,11 @@ class _Widget:
         self._x, self._y, self._ancho, self._alto = x, y, ancho, alto
         self.destruido = False
         self.posiciones: list[tuple[int, int]] = []
+        self.tamanos: list[tuple[int, int]] = []
+
+    def configure(self, **kwargs) -> None:
+        if "width" in kwargs and "height" in kwargs:
+            self.tamanos.append((kwargs["width"], kwargs["height"]))
 
     def winfo_exists(self) -> bool:
         return not self.destruido
@@ -284,3 +289,50 @@ def test_el_programa_no_trae_sonido() -> None:
 
     fuente = inspect.getsource(RoleRunManager.__init__)
     assert "Sonidos(activo=False)" in fuente
+
+
+def test_el_movil_crece_hasta_encajar_con_su_destino() -> None:
+    """Una casilla que crece hasta ser una tarjeta se lee como una conversion.
+
+    El mismo sprite aterrizando solo se lee como "algo se ha movido".
+    """
+    raiz = _Raiz()
+    movil = _Widget(0, 0)
+
+    Vuelo(
+        raiz, movil, (0, 0), (400, 0),
+        desde_tam=(66, 66), hasta_tam=(780, 102),
+        duracion_ms=10 * FOTOGRAMA_MS,
+    ).empezar()
+    raiz.correr()
+
+    assert movil.tamanos[0] == (66, 66)
+    assert movil.tamanos[-1] == (780, 102)
+    anchos = [w for w, _h in movil.tamanos]
+    assert anchos == sorted(anchos), "el ancho tiene que crecer sin retroceder"
+
+
+def test_sin_tamanos_no_se_toca_el_tamano() -> None:
+    """Un vuelo que solo viaja no debe pagar un `configure` por fotograma."""
+    raiz = _Raiz()
+    movil = _Widget(0, 0)
+
+    Vuelo(raiz, movil, (0, 0), (10, 10), duracion_ms=4 * FOTOGRAMA_MS).empezar()
+    raiz.correr()
+
+    assert movil.tamanos == []
+
+
+def test_el_tamano_no_va_por_place() -> None:
+    """customtkinter rechaza width/height en `place` con un ValueError.
+
+    Como aquí todo está protegido, ese error se tragaba y mataba el vuelo en dos
+    fotogramas en vez de dar la cara.
+    """
+    import inspect
+
+    fuente = inspect.getsource(Vuelo._colocar)
+    colocar = fuente[fuente.index("self.movil.place("):]
+
+    assert "width" not in colocar and "height" not in colocar
+    assert "self.movil.configure(" in fuente

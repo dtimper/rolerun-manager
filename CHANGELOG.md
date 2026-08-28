@@ -1,6 +1,35 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.0-alpha.9 — la tarjeta se forma mientras viaja
+
+Antes volaba un sprite suelto de tamaño fijo. Ahora vuela **un marco con el
+aspecto del sitio al que va**, que además **cambia de tamaño** hasta encajar con
+el hueco de destino: una casilla del PC de 66 px que crece hasta ser la tarjeta
+del equipo.
+
+Una casilla que crece hasta convertirse en una tarjeta se lee como «esto se
+convierte en aquello». El mismo sprite aterrizando, solo como «algo se ha
+movido».
+
+El color y el radio del marco se **leen del destino**, para que al llegar no haya
+un salto visual entre lo que vuela y lo que aparece debajo.
+
+## Un error que se estaba tragando
+
+customtkinter **rechaza `width` y `height` en `place()`** con un `ValueError`:
+hay que pasarlos por `configure`. Como en la animación todo está protegido, ese
+error se tragaba y **mataba el vuelo en dos fotogramas** en vez de dar la cara.
+
+Medido tras el arreglo: 39 fotogramas creciendo de 60×60 a 419×99 sobre un
+objetivo de 420×100. Y hay una prueba que comprueba que el tamaño no vuelve a
+irse por `place`.
+
+Un vuelo sin cambio de tamaño **no paga ningún `configure`**: reconfigurar un
+CTkFrame cuesta 1,4 ms medidos, y eso solo se gasta cuando aporta.
+
+1970 passed, 1 skipped.
+
 # v0.3.0-alpha.8 — el sprite no arrastraba, y el PC se leía demasiado
 
 ## Por qué a veces no dejaba arrastrar del PC
