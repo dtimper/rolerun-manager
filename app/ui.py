@@ -13353,43 +13353,63 @@ class RoleRunManager(ctk.CTk):
         y se decide **antes** de tocar nada: la vista se construyó con unos
         botones, unos límites de caja y un modo concretos que aquí no se
         rehacen, así que si alguno de ellos cambiaría, este camino no vale.
+
+        Cada negativa deja anotado su motivo. Reconstruir cuesta entre 626 y 937
+        ms medidos —30.255 llamadas a Tcl—, así que saber cuál de las nueve
+        condiciones lo impidió es la diferencia entre arreglarlo y adivinar.
         """
+        motivo = self._motivo_para_reconstruir_team_pc()
+        if motivo is not None:
+            perf.mark("ui.render.reconstruye", motivo=motivo)
+            return False
+        return self._aplicar_refresco_team_pc_en_sitio()
+
+    def _motivo_para_reconstruir_team_pc(self) -> str | None:
+        """Qué impide actualizar en sitio, o ``None`` si no lo impide nada."""
         if self._initial_shell_waiting:
             # La barrera de arranque no publica por timeout: compara la
             # evidencia de lo que la vista materializó y espera indefinidamente
             # si no cuadra. Ahí hay que reconstruir, que es lo que esa
             # comprobación sabe verificar.
-            return False
+            return "arrancando"
         vista = getattr(self, "_team_pc_view", None)
-        if vista is None or vista is not getattr(self, "_presented_team_pc_view", None):
-            return False
-        if not self.current_game or self._faint_replacement_mode is not None:
-            return False
-        if getattr(vista, "mode_banner", None) or not self._widget_alive(
-            getattr(vista, "frame", None),
-        ):
-            return False
+        if vista is None:
+            return "sin vista"
+        if vista is not getattr(self, "_presented_team_pc_view", None):
+            return "vista no publicada"
+        if not self.current_game:
+            return "sin partida"
+        if self._faint_replacement_mode is not None:
+            return "sustitucion por baja"
+        if getattr(vista, "mode_banner", None):
+            return "modo banner"
+        if not self._widget_alive(getattr(vista, "frame", None)):
+            return "vista destruida"
         if not vista.is_fully_composed(vista.pc_box_count):
-            return False
+            return "vista a medio componer"
 
         pc_data = self._team_pc_cached_data()
         if pc_data is None:
             # La caja aún se está leyendo: la página cambia de forma al llegar.
-            return False
-        if (
-            int(pc_data.box_count) != vista.pc_box_count
-            or int(pc_data.box_slot_count) != vista.pc_slot_count
-            or bool(vista.compact) != (self.winfo_width() <= 1160)
-        ):
-            return False
+            return "sin datos del PC"
+        if int(pc_data.box_count) != vista.pc_box_count:
+            return "otro numero de cajas"
+        if int(pc_data.box_slot_count) != vista.pc_slot_count:
+            return "otro tamano de caja"
+        if bool(vista.compact) != (self.winfo_width() <= 1160):
+            return "cambio el modo compacto"
         # Los dos botones de cabecera existen o no según estas dos condiciones,
         # y no se crean ni se destruyen por este camino.
-        if (
-            (vista.on_heal_party is not None) != bool(self._live_party_heal_available())
-            or (vista.on_fix_roles is not None) != bool(self._roles_pendientes_de_fijar())
-        ):
-            return False
+        if (vista.on_heal_party is not None) != bool(self._live_party_heal_available()):
+            return "cambio el boton de curar"
+        if (vista.on_fix_roles is not None) != bool(self._roles_pendientes_de_fijar()):
+            return "cambio el boton de fijar roles"
+        return None
 
+    def _aplicar_refresco_team_pc_en_sitio(self) -> bool:
+        """Pone los datos de ahora en la vista ya construida."""
+        vista = self._team_pc_view
+        pc_data = self._team_pc_cached_data()
         projected_party = list(self._projected_party())
         team_slots = build_fixed_team_slots(
             projected_party,
@@ -13399,6 +13419,7 @@ class RoleRunManager(ctk.CTk):
         box_number = max(1, min(int(self._pc_page_box or 1), int(pc_data.box_count)))
         members = self._team_pc_box_members(pc_data, box_number)
         if not vista.refrescar_en_sitio(team_slots, members, box_number):
+            perf.mark("ui.render.reconstruye", motivo="otra forma de equipo")
             return False
 
         self._pc_page_box = box_number

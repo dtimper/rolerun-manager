@@ -140,3 +140,30 @@ def test_el_sondeo_del_mando_no_se_cuela_entre_las_operaciones_caras(capsys) -> 
     assert "ui.poll_gamepad" not in cara, "el sondeo se coló entre las caras"
     assert "ui.poll_gamepad" in alta
     assert "116" in alta, "no se ve el pico"
+
+
+def test_se_cuentan_las_reconstrucciones_y_sus_motivos(capsys) -> None:
+    """21 reconstrucciones y 18,7 s en una sesion de cuatro arrastres.
+
+    Reconstruir cuesta entre 626 y 937 ms medidos, asi que cada motivo que
+    aparezca aqui son segundos de espera con nombre y sitio.
+    """
+    ver_lentitud.reconstrucciones([
+        _r(0, "ui.render.reconstruye", kind="mark", motivo="sin datos del PC"),
+        _r(1, "ui.render_page", 733.0),
+        _r(2, "ui.render.reconstruye", kind="mark", motivo="sin datos del PC"),
+        _r(3, "ui.render_page", 812.0),
+        _r(4, "ui.render.reconstruye", kind="mark", motivo="otra forma de equipo"),
+        _r(5, "ui.render.en_sitio", kind="mark", pagina="team"),
+    ])
+    salida = capsys.readouterr().out
+
+    assert "actualizadas en sitio ......... 1" in salida
+    assert "reconstruidas ................. 2" in salida
+    assert "2 x  sin datos del PC" in salida
+    assert "1 x  otra forma de equipo" in salida
+
+
+def test_sin_repintados_no_se_inventa_un_cero(capsys) -> None:
+    ver_lentitud.reconstrucciones([_r(0, "obs.sync", 12.0)])
+    assert "no se repinto" in capsys.readouterr().out

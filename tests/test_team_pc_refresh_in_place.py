@@ -68,11 +68,22 @@ def _gestor(vista: _VistaFalsa):
         _team_pc_box_members=lambda data, box: {1: _Mono("GASTLY")},
         _party_health_signature=lambda party: "firma",
     )
+    yo._motivo_para_reconstruir_team_pc = (
+        lambda: RoleRunManager._motivo_para_reconstruir_team_pc(yo)
+    )
+    yo._aplicar_refresco_team_pc_en_sitio = (
+        lambda: RoleRunManager._aplicar_refresco_team_pc_en_sitio(yo)
+    )
     return yo, datos
 
 
 def _refrescar(yo) -> bool:
     return RoleRunManager._refrescar_team_pc_en_sitio(yo)
+
+
+def _motivo(yo) -> str | None:
+    """Qué impide actualizar en sitio. Reconstruir cuesta 733 ms de mediana."""
+    return RoleRunManager._motivo_para_reconstruir_team_pc(yo)
 
 
 def test_con_todo_igual_se_refresca_en_sitio() -> None:
@@ -94,6 +105,7 @@ def test_una_vista_construida_pero_no_presentada_no_vale() -> None:
     yo, _datos = _gestor(vista)
     yo._presented_team_pc_view = _VistaFalsa()
 
+    assert _motivo(yo) == "vista no publicada"
     assert _refrescar(yo) is False
     assert vista.refrescos == []
 
@@ -107,6 +119,7 @@ def test_si_aparece_o_desaparece_un_boton_de_cabecera_hay_que_repintar() -> None
         vista = _VistaFalsa()
         yo, _datos = _gestor(vista)
         setattr(yo, atributo, ahora)
+        assert _motivo(yo).startswith("cambio el boton"), atributo
         assert _refrescar(yo) is False, atributo
         assert vista.refrescos == []
 
@@ -116,6 +129,7 @@ def test_si_cambian_los_limites_del_pc_hay_que_repintar() -> None:
     yo, datos = _gestor(vista)
     datos.box_count = 20                       # la lectura del PC trajo más cajas
 
+    assert _motivo(yo) == "otro numero de cajas"
     assert _refrescar(yo) is False
 
 
@@ -125,6 +139,7 @@ def test_sin_datos_del_pc_todavia_hay_que_repintar() -> None:
     yo, _datos = _gestor(vista)
     yo._team_pc_cached_data = lambda: None
 
+    assert _motivo(yo) == "sin datos del PC"
     assert _refrescar(yo) is False
 
 
@@ -134,6 +149,7 @@ def test_al_estrecharse_la_ventana_hay_que_repintar() -> None:
     yo, _datos = _gestor(vista)
     yo.winfo_width = lambda: 1100
 
+    assert _motivo(yo) == "cambio el modo compacto"
     assert _refrescar(yo) is False
 
 
@@ -142,6 +158,7 @@ def test_en_modo_sustitucion_por_debilitado_hay_que_repintar() -> None:
     yo, _datos = _gestor(vista)
     yo._faint_replacement_mode = "algo"
 
+    assert _motivo(yo) == "sustitucion por baja"
     assert _refrescar(yo) is False
 
 
@@ -150,6 +167,7 @@ def test_una_vista_a_medio_componer_no_se_toca() -> None:
     vista.compuesta = False
     yo, _datos = _gestor(vista)
 
+    assert _motivo(yo) == "vista a medio componer"
     assert _refrescar(yo) is False
 
 
@@ -211,5 +229,14 @@ def test_mientras_arranca_no_se_actualiza_en_sitio() -> None:
     yo, _datos = _gestor(vista)
     yo._initial_shell_waiting = True
 
+    assert _motivo(yo) == "arrancando"
     assert _refrescar(yo) is False
     assert vista.refrescos == []
+
+
+def test_cuando_no_hay_nada_que_lo_impida_no_se_inventa_un_motivo() -> None:
+    """Sin esto, un motivo mal escrito reconstruiria siempre en silencio."""
+    vista = _VistaFalsa()
+    yo, _datos = _gestor(vista)
+
+    assert _motivo(yo) is None

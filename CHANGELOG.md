@@ -1,6 +1,59 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.106 — los 4-5 segundos son 21 reconstrucciones
+
+Ya está medido en la máquina del usuario, con BDSP. Soltando un Pokémon del
+equipo al PC:
+
+| desde que se suelta | qué pasa |
+|---|---|
+| **+846 ms** | reconstrucción entera, **dentro del propio `drop`** y por tanto con la interfaz congelada |
+| +1124 ms | la escritura se envía (`save_live_changes`: 26 ms) |
+| +1552 ms | el emulador confirma (`realtime.apply_changes`: **428 ms**) |
+| **+2716 ms** | segunda reconstrucción entera, en `finalize_live_changes` |
+| **+3640 ms** | tercera reconstrucción entera, en `finish_team_pc_load` |
+
+**La escritura al juego no es el problema: son 428 ms.** El resto lo pone la
+interfaz rehaciéndose tres veces, a 626–937 ms cada vez.
+
+En toda la sesión —cuatro arrastres— hubo **21 reconstrucciones que suman 18,7
+segundos**, contra 3 refrescos en sitio.
+
+## Por qué una reconstrucción cuesta casi un segundo
+
+Perfilada la construcción de la vista con Tk real, por cada una:
+
+- **30.255 llamadas a Tcl**;
+- **268 ms** dentro de `__draw_rounded_rect_with_border_font_shapes`, que es
+  customtkinter dibujando esquinas redondeadas;
+- 145 ms moviendo coordenadas de canvas.
+
+No hay micro-optimización que arregle eso: el coste **es** el número de widgets.
+La única salida es dejar de reconstruir.
+
+## Lo que se añade aquí
+
+El camino rápido ya existe y cuesta 37 ms, pero se negó en las 21. No dejaba
+dicho por qué. Ahora **cada negativa anota su motivo** —«sin datos del PC»,
+«otro numero de cajas», «otra forma de equipo», «arrancando»…— y
+`ver_lentitud.bat` los cuenta.
+
+Es la diferencia entre arreglarlo y adivinar: cada motivo que aparezca en esa
+lista son segundos de espera con nombre y sitio.
+
+## El .bat estaba roto
+
+`ver_lentitud.bat` se generó con `printf`, y el `` de `toolser_lentitud.py`
+se convirtió en un tabulador vertical: quedó `toolser_lentitud.py`. El usuario lo
+ejecutó y no salió nada.
+
+Como todos los diagnósticos se le entregan como `.bat` de doble clic, un `.bat`
+roto cuesta el viaje entero. `test_bats_apuntan_a_algo.py` comprueba ahora que
+ningún `.bat` lleve caracteres de control y que todo script que invoque exista.
+
+1854 passed, 1 skipped.
+
 # v0.2.6-alpha.105 — partir los 2585 ms de un repintado
 
 La sesión de BDSP del usuario, sin llegar a arrastrar nada, ya dejó un hallazgo

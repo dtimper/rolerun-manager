@@ -160,6 +160,37 @@ def reparto(registros: list[dict]) -> None:
         print(f"  {media:11.2f}ms  {por_segundo:9.0f}/s  {peor:7.1f}ms   {op}")
 
 
+def reconstrucciones(registros: list[dict]) -> None:
+    """Cuantas veces se rehizo la pagina entera, y por que.
+
+    Reconstruir cuesta entre 626 y 937 ms medidos -30.255 llamadas a Tcl-, asi
+    que cada motivo que aparezca aqui son segundos de espera con nombre.
+    """
+    motivos: dict[str, int] = {}
+    for registro in registros:
+        if registro.get("op") == "ui.render.reconstruye":
+            motivo = str(registro.get("motivo", "?"))
+            motivos[motivo] = motivos.get(motivo, 0) + 1
+    en_sitio = sum(1 for r in registros if r.get("op") == "ui.render.en_sitio")
+    caros = [
+        float(r.get("ms", 0.0) or 0.0)
+        for r in registros if r.get("op") == "ui.render_page"
+    ]
+
+    if not motivos and not en_sitio:
+        print("  (nada anotado: la pagina no se repinto en esta sesion)")
+        return
+    print(f"  actualizadas en sitio ......... {en_sitio}")
+    if caros:
+        caros.sort()
+        print(f"  reconstruidas ................. {len(caros)}"
+              f"   (mediana {caros[len(caros) // 2]:.0f} ms,"
+              f" total {sum(caros) / 1000:.1f} s)")
+    print()
+    for motivo, veces in sorted(motivos.items(), key=lambda par: -par[1]):
+        print(f"    {veces:3d} x  {motivo}")
+
+
 def main() -> int:
     ruta, registros = cargar()
     if ruta is None:
@@ -176,6 +207,10 @@ def main() -> int:
     print()
     print("  === CADA VEZ QUE SE SOLTO UN POKEMON ===")
     lineas_de_tiempo(registros)
+    print()
+    print("  === POR QUE SE RECONSTRUYO LA PAGINA ===")
+    print()
+    reconstrucciones(registros)
     print()
     print("  === REPARTO POR OPERACION (toda la sesion) ===")
     print()
