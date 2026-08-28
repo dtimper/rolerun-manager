@@ -36,7 +36,7 @@ En Ryujinx, marcar **«disable input when out of focus»** en los ajustes de
 entrada. A partir de ahí RoleRun deja de suspender nada, y da igual si hay mando
 conectado o no.
 
-1971 passed, 1 skipped.
+1973 passed, 1 skipped.
 
 # v0.3.0-alpha.11 — era RoleRun, y lo hacía a propósito
 
