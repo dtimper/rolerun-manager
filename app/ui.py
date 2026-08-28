@@ -58,7 +58,7 @@ from .save_service import SaveInfo, SaveService
 from .run_service import RunProject, RunProjectService
 from .game_source_service import GameSourceProfile, GameSourceProfileService
 from .reporte_de_bugs import BUGS_DIR, guardar_reporte, informes
-from .ventana_activa import fraccion_tapada, rectangulo, ventana_activa
+from .ventana_activa import mayor_tapadura
 from .win_hotkeys import WindowsHotkeyManager
 from .sdl_gamepad import BUTTON_NAMES, RyujinxInputGate, SDLGamepad
 from .obs_sync import ObsSyncService, SaveFileWatcher
@@ -1887,6 +1887,11 @@ class RoleRunManager(ctk.CTk):
 
     def _auto_float_if_minimized(self) -> None:
         self._unmap_after_id = None
+        if self._barra_oculta_por_tapado:
+            # Esa minimización la hizo el propio sondeo para no dejar a RoleRun
+            # sin icono. Reabrir la barra aquí la pondría encima de lo que está
+            # tapando el juego, que es justo lo que se estaba evitando.
+            return
         try:
             minimized = str(self.state()) == "iconic"
         except Exception:
@@ -3361,31 +3366,26 @@ class RoleRunManager(ctk.CTk):
     JUEGO_TAPADO = 0.25
 
     def _el_juego_esta_tapado(self) -> bool:
-        """Si la ventana activa se le ha puesto encima al juego, en su pantalla.
+        """Si hay algo puesto encima del juego, en su misma pantalla.
 
         Cambiar a otra aplicación **no** basta: con dos monitores, mirar el
         navegador en el segundo deja el juego a la vista y la barra sigue
-        haciendo falta. Lo que la estorba es que algo la tape de verdad, y eso
-        se decide comparando los rectángulos en coordenadas de escritorio.
+        haciendo falta.
+
+        Y no se mira la ventana con foco sino la **pila de ventanas**. Con algo
+        puesto delante del juego, pinchar en la otra pantalla no destapa el
+        juego: el estorbo sigue donde estaba. Preguntar por la ventana activa
+        respondía que no, y la barra volvía a aparecer encima de la aplicación
+        que tapaba el juego.
         """
         if os.name != "nt":
             return False
-        activa = ventana_activa()
-        if not activa:
-            return False
-        try:
-            propias = {int(self.winfo_id())}
-            bar = self.floating_bar
-            if bar is not None and bar.winfo_exists():
-                propias.add(int(bar.winfo_id()))
-        except Exception:
-            propias = set()
-        if activa in propias or self._foreground_belongs_to_this_process():
-            return False
         juego = int(getattr(self, "_last_supported_emulator_hwnd", 0) or 0)
-        if not juego or activa == juego:
+        if not juego:
             return False
-        return fraccion_tapada(rectangulo(juego), rectangulo(activa)) >= self.JUEGO_TAPADO
+        # Las ventanas de RoleRun están encima del juego por diseño: la barra
+        # flotante es exactamente eso.
+        return mayor_tapadura(juego, {os.getpid()}) >= self.JUEGO_TAPADO
 
     def _poll_floating_bar(self) -> None:
         self._floating_bar_poll_id = None
@@ -3406,6 +3406,15 @@ class RoleRunManager(ctk.CTk):
                     bar.withdraw()
                 except Exception:
                     pass
+                # En modo flotante la ventana principal está retirada, así que
+                # esconder la barra dejaba a RoleRun sin ninguna ventana y sin
+                # icono en la barra de tareas: desaparecía del todo. Minimizada
+                # sigue estando ahí para volver a ella cuando se quiera.
+                try:
+                    if str(self.state()) == "withdrawn":
+                        self.iconify()
+                except Exception:
+                    pass
                 self._barra_oculta_por_tapado = True
             # El sondeo sigue vivo aunque la barra no se vea: en modo flotante la
             # ventana principal está retirada, así que nada más la traería de
@@ -3419,6 +3428,11 @@ class RoleRunManager(ctk.CTk):
         if oculta:
             try:
                 bar.deiconify()
+                # La ventana principal vuelve a retirarse: en modo flotante solo
+                # debe verse la barra, y se había minimizado únicamente para no
+                # dejar a RoleRun sin icono mientras estaba escondida.
+                if str(self.state()) == "iconic":
+                    self.withdraw()
             except Exception:
                 pass
             self._barra_oculta_por_tapado = False

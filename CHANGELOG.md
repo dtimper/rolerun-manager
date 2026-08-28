@@ -1,6 +1,39 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.117 — mirar la pila, no quién tiene el foco
+
+Dos fallos de la versión anterior, y el segundo era de fondo.
+
+## RoleRun desaparecía del todo
+
+En modo flotante la ventana principal está retirada, así que esconder la barra
+dejaba a RoleRun **sin ninguna ventana y sin icono en la barra de tareas**.
+
+Ahora, al esconderla, la ventana principal se minimiza: sigue estando ahí para
+volver a ella. Al destaparse el juego, vuelve a retirarse y solo se ve la barra,
+como debe ser.
+
+Y esa minimización no puede reabrir la barra por el camino de siempre —minimizar
+a mano equivale a entrar en la barra—, porque la pondría justo encima de lo que
+está tapando el juego.
+
+## Preguntaba por la ventana equivocada
+
+La comprobación miraba **la ventana con foco**. Con un navegador puesto delante
+del juego, pinchar en la otra pantalla dejaba activa una ventana que no solapa
+nada… y la barra reaparecía **encima del navegador**, tapando el juego igual.
+
+El estorbo sigue donde estaba aunque pierda el foco. Así que ahora se recorre la
+**pila de ventanas** por encima del juego —`GetWindow` con `GW_HWNDPREV`— y se
+mira cuánto lo tapan las que están visibles, no minimizadas y con superficie,
+saltándose las del propio juego y las de RoleRun, que están encima por diseño.
+
+Se devuelve la mayor tapadura y no la suma: dos ventanas encima pueden solaparse
+entre sí, y sumar contaría dos veces la misma zona.
+
+1913 passed, 1 skipped.
+
 # v0.2.6-alpha.116 — guardar un fallo sin parar el directo
 
 Dos cosas para poder jugar en directo sin ir reportando sobre la marcha.

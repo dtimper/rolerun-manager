@@ -98,11 +98,46 @@ def test_el_sondeo_sigue_vivo_con_la_barra_retirada() -> None:
 
 
 def test_las_ventanas_propias_no_cuentan_como_tapar_el_juego() -> None:
-    """La propia barra está encima del juego por diseño."""
+    """La barra flotante esta encima del juego por diseno."""
     import inspect
 
     from app.ui import RoleRunManager
 
     fuente = inspect.getsource(RoleRunManager._el_juego_esta_tapado)
-    assert "_foreground_belongs_to_this_process" in fuente
-    assert "self.floating_bar" in fuente
+    assert "os.getpid()" in fuente, "RoleRun se contaria a si mismo como estorbo"
+
+
+def test_se_mira_la_pila_de_ventanas_y_no_cual_tiene_el_foco() -> None:
+    """Con algo delante del juego, pinchar en otra pantalla no lo destapa.
+
+    El estorbo sigue donde estaba. Preguntando por la ventana activa la
+    respuesta era "no esta tapado", y la barra volvia a aparecer encima de la
+    aplicacion que tapaba el juego.
+    """
+    import inspect
+
+    from app.ui import RoleRunManager
+
+    fuente = inspect.getsource(RoleRunManager._el_juego_esta_tapado)
+    assert "mayor_tapadura" in fuente
+    assert "ventana_activa()" not in fuente
+
+
+def test_esconder_la_barra_no_deja_a_rolerun_sin_icono() -> None:
+    """En modo flotante la ventana principal esta retirada.
+
+    Sin esto, esconder la barra dejaba a RoleRun sin ninguna ventana y sin icono
+    en la barra de tareas: desaparecia del todo.
+    """
+    import inspect
+
+    from app.ui import RoleRunManager
+
+    sondeo = inspect.getsource(RoleRunManager._poll_floating_bar)
+    esconder = sondeo[sondeo.index("if self._el_juego_esta_tapado():"):]
+    assert "self.iconify()" in esconder[:esconder.index("            return")]
+    assert "self.withdraw()" in sondeo[sondeo.index("if oculta:"):]
+
+    # Y esa minimizacion no puede reabrir la barra por el camino de siempre.
+    minimizar = inspect.getsource(RoleRunManager._auto_float_if_minimized)
+    assert "self._barra_oculta_por_tapado" in minimizar

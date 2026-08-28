@@ -1282,6 +1282,9 @@ def test_minimizing_role_run_switches_to_floating_mode() -> None:
         state=lambda: "iconic",
         current_game=object(),
         _faint_picker_blocks_floating=lambda: False,
+        # No es la minimizacion que hace el sondeo al esconder la barra porque
+        # algo tapa el juego: esa no debe reabrirla.
+        _barra_oculta_por_tapado=False,
         open_floating_bar=lambda: actions.append("floating"),
         _restore_main_window_maximized=lambda: actions.append("maximized"),
     )
