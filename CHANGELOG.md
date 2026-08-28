@@ -1,6 +1,22 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.109 — un resumen, una sesión
+
+El JSONL de tiempos es uno por día y se abre en modo añadir, así que un día de
+trabajo mezcla todas las sesiones en el mismo archivo. El resumen las sumaba:
+la primera medición dio 30 reconstrucciones y la siguiente 40, cuando la sesión
+nueva había hecho **10**.
+
+Con las cifras sumadas no hay forma de saber si un arreglo funcionó, que es
+justo para lo que se mide.
+
+RoleRun deja ahora una marca `sesion.inicio` al abrirse, y `ver_lentitud.bat`
+corta ahí. Las mediciones anteriores a la marca se cortan por el silencio largo
+que deja cerrar el programa y volver a abrirlo.
+
+1860 passed, 1 skipped.
+
 # v0.2.6-alpha.108 — una reconstrucción obligaba a la siguiente
 
 Con los motivos completos, el arrastre queda explicado entero. Del equipo al PC,

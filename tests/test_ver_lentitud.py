@@ -167,3 +167,42 @@ def test_se_cuentan_las_reconstrucciones_y_sus_motivos(capsys) -> None:
 def test_sin_repintados_no_se_inventa_un_cero(capsys) -> None:
     ver_lentitud.reconstrucciones([_r(0, "obs.sync", 12.0)])
     assert "no se repinto" in capsys.readouterr().out
+
+
+def test_el_resumen_habla_solo_de_la_ultima_sesion() -> None:
+    """El JSONL es uno por dia y se abre en modo anadir.
+
+    Sin este corte, un dia de trabajo suma las reconstrucciones de todas las
+    sesiones y no hay forma de saber si un arreglo funciono: la primera medicion
+    dio 30 reconstrucciones y la siguiente 40, cuando en realidad fueron 10.
+    """
+    registros = [
+        _r(0, "sesion.inicio", kind="mark", version="0.2.6-alpha.107"),
+        _r(10, "ui.render_page", 700.0),
+        _r(20, "sesion.inicio", kind="mark", version="0.2.6-alpha.108"),
+        _r(30, "ui.render_page", 40.0),
+    ]
+
+    ultima = ver_lentitud.ultima_sesion(registros)
+
+    assert len(ultima) == 2
+    assert ultima[0]["op"] == "sesion.inicio"
+    assert ultima[1]["ms"] == 40.0
+
+
+def test_una_medicion_vieja_sin_marca_se_corta_por_el_silencio() -> None:
+    """Cerrar el programa y volver a abrirlo deja un hueco largo."""
+    registros = [
+        _r(0, "ui.render_page", 700.0),
+        _r(60_000, "ui.render_page", 40.0),     # un minuto despues: otra sesion
+        _r(60_100, "obs.sync", 12.0),
+    ]
+
+    ultima = ver_lentitud.ultima_sesion(registros)
+
+    assert [r["op"] for r in ultima] == ["ui.render_page", "obs.sync"]
+
+
+def test_una_sola_sesion_no_se_recorta() -> None:
+    registros = [_r(i * 100, "ui.render_page", 700.0) for i in range(5)]
+    assert len(ver_lentitud.ultima_sesion(registros)) == 5

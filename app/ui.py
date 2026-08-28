@@ -235,6 +235,10 @@ class RoleRunManager(ctk.CTk):
 
     def __init__(self) -> None:
         super().__init__()
+        # El JSONL de tiempos es uno por dia y se abre en modo anadir, asi que
+        # un dia de trabajo mezcla varias sesiones en el mismo archivo. Esta
+        # marca deja el corte para que el resumen hable solo de la ultima.
+        perf.mark("sesion.inicio", version=APP_VERSION)
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("dark-blue")
         # Interfaz pensada para trabajar maximizada / capturarla como escena en OBS.

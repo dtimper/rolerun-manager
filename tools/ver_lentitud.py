@@ -51,7 +51,28 @@ def cargar() -> tuple[Path | None, list[dict]]:
         except Exception:
             continue
     registros.sort(key=lambda r: r.get("t", ""))
-    return ruta, registros
+    return ruta, ultima_sesion(registros)
+
+
+def ultima_sesion(registros: list[dict]) -> list[dict]:
+    """Se queda con la ultima vez que se abrio RoleRun.
+
+    El JSONL es uno por dia y se abre en modo anadir: un dia de trabajo mezcla
+    varias sesiones. Sin este corte, el resumen suma reconstrucciones de
+    sesiones anteriores y no hay forma de saber si un arreglo funciono.
+    """
+    for indice in range(len(registros) - 1, -1, -1):
+        if registros[indice].get("op") == "sesion.inicio":
+            return registros[indice:]
+    # Mediciones anteriores a la marca: se corta por un silencio largo, que es
+    # lo que deja cerrar el programa y volver a abrirlo.
+    corte = 0
+    for indice in range(1, len(registros)):
+        anterior = instante(registros[indice - 1])
+        actual = instante(registros[indice])
+        if anterior and actual and (actual - anterior).total_seconds() > 20:
+            corte = indice
+    return registros[corte:]
 
 
 def instante(registro: dict) -> datetime | None:
