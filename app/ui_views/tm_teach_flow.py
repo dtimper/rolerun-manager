@@ -6,6 +6,7 @@ from typing import Any
 import customtkinter as ctk
 
 from app.config import DANGER, GOLD, MUTED, PANEL, PANEL_ALT, SUCCESS, TEXT
+from app.ui_components.repintado import configurar_si_cambia
 from app.ui_state.spatial_navigation import (
     SpatialSelection,
     SpatialTarget,
@@ -226,7 +227,8 @@ class IntegratedTMTeachFlow:
         selected_widget = None
         for key, (widget, _callback, base_color, base_width) in self._keyboard_targets.items():
             try:
-                widget.configure(
+                configurar_si_cambia(
+                    widget,
                     border_color="#F2C45E" if key == selected else base_color,
                     border_width=4 if key == selected else base_width,
                 )

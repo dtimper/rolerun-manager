@@ -1,6 +1,56 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.103 — el mismo hallazgo, en los otros 29 sitios
+
+En Equipo y PC, comparar antes de escribir bajó un refresco de 376 ms a 37, y
+el hover de una tarjeta de 135 ms a nada. El patrón que lo causaba —«repinta
+todos los elementos para mover un único resalte»— no era exclusivo de esa
+vista: buscándolo por AST aparecen **29 sitios más**, y casi todos cuelgan de
+una tecla o del ratón.
+
+## Qué se movía
+
+| dónde | cuándo se dispara |
+|---|---|
+| menú lateral y menú flotante | cada flecha |
+| botones de navegación | cada repintado de página |
+| rejilla de MT, compatibilidad del equipo, resalte de MT | cada cambio de selección |
+| rol, Pokémon y movimiento de Drafteos | cada elección |
+| selectores de rol, de estadísticas y de baja | cada clic |
+| contadores de cabecera y avisos de atajos | cada actualización |
+
+## Lo que cuesta mover un resalte
+
+Medido con customtkinter en el equipo del usuario, moviendo el resalte una
+posición dentro de una rejilla:
+
+| elementos | repintar todo | comparar antes |
+|---|---|---|
+| 8 | 13,05 ms | **3,17 ms** |
+| 30 | 46,64 ms | **3,16 ms** |
+| 100 | 153,93 ms | **3,34 ms** |
+
+Lo importante de esa tabla no es el factor: es que la columna de la derecha **no
+crece**. Se escriben los dos elementos que cambian, y da igual que la rejilla
+tenga ocho o cien.
+
+## Por qué una función y no un parche global
+
+Sería más corto sustituir `CTkBaseClass.configure` de una vez. No se hizo a
+propósito: un cambio silencioso dentro de la biblioteca haría que algún widget
+dejara de repintarse en un caso que no conocemos —cambio de tema, geometría,
+imagen recreada— y el síntoma sería «no se ve el cambio», que es peor que ir
+lento. `app/ui_components/repintado.py` es explícito y se ve en cada sitio.
+
+## La guardia
+
+`test_solo_se_escribe_lo_que_cambia.py` recorre `app/` entera por AST y falla si
+vuelve a aparecer un `configure` con opciones de color dentro de un bucle. El
+patrón vuelve solo, porque al escribirlo lo natural es repintarlo todo.
+
+1841 passed, 1 skipped.
+
 # v0.2.6-alpha.102 — medir los 4-5 segundos antes de tocarlos
 
 Con el repintado ya en 37 ms, mover un Pokémon del equipo al PC sigue tardando

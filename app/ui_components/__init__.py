@@ -6,6 +6,7 @@ from .operation_bar import OperationStatusBar
 from .role_info_popover import IntegratedRoleInfoPopover
 from .run_state_panel import IntegratedRunStatePanel
 from .role_icons import RoleIconProvider
+from .repintado import configurar_si_cambia
 
 __all__ = [
     "IntegratedRoleInfoPopover",
@@ -14,4 +15,5 @@ __all__ = [
     "CenteredLoadingIndicator",
     "OperationStatusBar",
     "RoleIconProvider",
+    "configurar_si_cambia",
 ]

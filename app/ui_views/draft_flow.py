@@ -7,6 +7,7 @@ import customtkinter as ctk
 
 from app.config import DANGER, GOLD, MUTED, PANEL, PANEL_ALT, SUCCESS, TEXT
 from app.pokemon_stats import STAT_KEYS, STAT_LABELS
+from app.ui_components.repintado import configurar_si_cambia
 from app.ui_state.spatial_navigation import (
     SpatialSelection,
     SpatialTarget,
@@ -299,7 +300,8 @@ class IntegratedDraftFlow:
         selected = None if self._external_navigation_focus else self._keyboard_navigation.selected_key
         for key, (widget, _callback, base_color, base_width) in self._keyboard_targets.items():
             try:
-                widget.configure(
+                configurar_si_cambia(
+                    widget,
                     border_color="#F2C45E" if key == selected else base_color,
                     border_width=4 if key == selected else base_width,
                 )

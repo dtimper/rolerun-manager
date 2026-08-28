@@ -92,6 +92,7 @@ from .ui_components import (
     IntegratedWindowSurface,
     OperationStatusBar,
     RoleIconProvider,
+    configurar_si_cambia,
 )
 from .ui_state import (
     DEFAULT_PAGE,
@@ -3226,8 +3227,11 @@ class RoleRunManager(ctk.CTk):
         for index, button in enumerate(self._floating_menu_buttons):
             try:
                 selected = index == self._floating_menu_index
-                button.configure(border_color="#73A9FF" if selected else "#4A3D25",
-                                 border_width=3 if selected else 1)
+                configurar_si_cambia(
+                    button,
+                    border_color="#73A9FF" if selected else "#4A3D25",
+                    border_width=3 if selected else 1,
+                )
             except Exception:
                 pass
 
@@ -3394,7 +3398,7 @@ class RoleRunManager(ctk.CTk):
                 if not bar.winfo_exists():
                     return False
                 color = DANGER if fraction <= .25 else (GOLD if fraction <= .5 else SUCCESS)
-                bar.configure(progress_color=color)
+                configurar_si_cambia(bar, progress_color=color)
                 bar.set(fraction)
         except Exception:
             return False
@@ -4557,7 +4561,8 @@ class RoleRunManager(ctk.CTk):
         selected = int(getattr(self, "_sidebar_keyboard_index", 0)) if entries else -1
         for index, (page, button) in enumerate(entries):
             try:
-                button.configure(
+                configurar_si_cambia(
+                    button,
                     fg_color="#2A2417" if index == selected else (
                         "#242018" if page == self.active_page else "transparent"
                     ),
@@ -5597,10 +5602,12 @@ class RoleRunManager(ctk.CTk):
             self.sidebar_run.configure(text="SIN RUN ACTIVA", text_color=MUTED, state="disabled")
         for page, button in self.nav_buttons.items():
             selected = page == primary_page_for(self.active_page)
-            button.configure(
+            configurar_si_cambia(
+                button,
                 fg_color=PANEL_ALT if selected else "transparent",
                 text_color=GOLD if selected else MUTED,
-                border_width=1 if selected else 0, border_color=GOLD,
+                border_width=1 if selected else 0,
+                border_color=GOLD,
             )
 
     def _render_context_navigation(self) -> None:
@@ -5835,7 +5842,8 @@ class RoleRunManager(ctk.CTk):
         if self._widget_alive(counter_surface):
             counters = self.project.counters if self.project and self.current_game else {}
             for key, label in getattr(self, "header_counter_labels", {}).items():
-                label.configure(
+                configurar_si_cambia(
+                    label,
                     text=str(int(counters.get(key, 0))) if counters else "—",
                     text_color=GOLD if counters else MUTED,
                 )
@@ -7116,7 +7124,8 @@ class RoleRunManager(ctk.CTk):
             for existing_action, existing_key in self.project.hotkeys.items():
                 normalized_existing = WindowsHotkeyManager.normalize_key_name(existing_key)
                 if normalized_existing == normalized and existing_action != action:
-                    status.configure(
+                    configurar_si_cambia(
+                        status,
                         text=f"{normalized.upper()} ya está asignada a otra acción.",
                         text_color=DANGER,
                     )
@@ -7211,7 +7220,8 @@ class RoleRunManager(ctk.CTk):
             assigned.update({f"menu_{key}": value for key, value in self.project.controller_menu_buttons.items()})
             for existing_action, existing in assigned.items():
                 if existing_action != action and existing == button:
-                    status.configure(
+                    configurar_si_cambia(
+                        status,
                         text=f"{button.upper()} ya está asignado a otra acción.",
                         text_color=DANGER,
                     )
@@ -12545,7 +12555,8 @@ class RoleRunManager(ctk.CTk):
                 if not button.winfo_exists():
                     continue
                 selected = self.run.role == role
-                button.configure(
+                configurar_si_cambia(
+                    button,
                     fg_color="#2A2419" if selected else "#1B1B1B",
                     border_width=2 if selected else 1,
                     border_color=GOLD if selected else "#3A3A3A",
@@ -12561,7 +12572,8 @@ class RoleRunManager(ctk.CTk):
                 if not button.winfo_exists():
                     continue
                 selected = self.run.pokemon_slot == slot
-                button.configure(
+                configurar_si_cambia(
+                    button,
                     fg_color="#2A2419" if selected else PANEL_ALT,
                     hover_color="#332B1D" if selected else "#303030",
                     border_width=2 if selected else 1,
@@ -12584,11 +12596,20 @@ class RoleRunManager(ctk.CTk):
             button = self.draft_move_select_buttons.get(index)
             try:
                 if card is not None and card.winfo_exists():
-                    card.configure(border_width=2 if selected else 0, border_color=GOLD)
+                    configurar_si_cambia(
+                        card,
+                        border_width=2 if selected else 0,
+                        border_color=GOLD,
+                    )
                 if label is not None and label.winfo_exists():
-                    label.configure(text=result["move"], text_color=GOLD if selected else TEXT)
+                    configurar_si_cambia(
+                        label,
+                        text=result["move"],
+                        text_color=GOLD if selected else TEXT,
+                    )
                 if button is not None and button.winfo_exists():
-                    button.configure(
+                    configurar_si_cambia(
+                        button,
                         text="ELEGIDO" if selected else "ELEGIR",
                         fg_color="#D7B467" if selected else GOLD,
                         hover_color="#E0C17E",
@@ -16425,7 +16446,8 @@ class RoleRunManager(ctk.CTk):
         def refresh_buttons() -> None:
             for slot, button in buttons.items():
                 chosen = slot in selected
-                button.configure(
+                configurar_si_cambia(
+                    button,
                     fg_color="#3A1D1D" if chosen else PANEL_ALT,
                     border_color=DANGER if chosen else GOLD,
                     text_color=DANGER if chosen else TEXT,
@@ -17214,7 +17236,7 @@ class RoleRunManager(ctk.CTk):
                 pic = self._get_team_sprite(candidate)
                 if pic is not None:
                     window._swap_images.append(pic)
-                    sprite_label.configure(image=pic)
+                    configurar_si_cambia(sprite_label, image=pic)
                 else:
                     pending_sprite_labels.append((sprite_label, candidate))
                 pc_role, pc_symbol = self._pc_effective_role(candidate)
@@ -17251,7 +17273,7 @@ class RoleRunManager(ctk.CTk):
                                 remaining.append((label, mon))
                                 continue
                             window._swap_images.append(refreshed)
-                            label.configure(image=refreshed)
+                            configurar_si_cambia(label, image=refreshed)
                         except Exception:
                             continue
                     if remaining:
@@ -17342,7 +17364,8 @@ class RoleRunManager(ctk.CTk):
                 selected.add(key)
             for stat_key, button in buttons.items():
                 chosen = stat_key in selected
-                button.configure(
+                configurar_si_cambia(
+                    button,
                     fg_color=GOLD if chosen else PANEL_ALT,
                     text_color="#111111" if chosen else TEXT,
                 )
@@ -17686,7 +17709,8 @@ class RoleRunManager(ctk.CTk):
             for candidate, button in buttons.items():
                 chosen = candidate == role
                 is_free = candidate in free_roles
-                button.configure(
+                configurar_si_cambia(
+                    button,
                     fg_color=GOLD if chosen else PANEL_ALT,
                     text_color="#111111" if chosen else (SUCCESS if is_free else TEXT),
                     border_color=GOLD if chosen else (SUCCESS if is_free else "#444444"),
@@ -19239,7 +19263,8 @@ class RoleRunManager(ctk.CTk):
             for candidate, button in buttons.items():
                 chosen = candidate == role
                 is_free = candidate in free_roles
-                button.configure(
+                configurar_si_cambia(
+                    button,
                     fg_color=GOLD if chosen else PANEL_ALT,
                     text_color="#111111" if chosen else (SUCCESS if is_free else TEXT),
                     border_color=GOLD if chosen else (SUCCESS if is_free else "#444444"),
@@ -20175,7 +20200,8 @@ class RoleRunManager(ctk.CTk):
         def set_role_button_state(selected: str | None) -> None:
             for name, button in role_buttons.items():
                 active = name == selected
-                button.configure(
+                configurar_si_cambia(
+                    button,
                     fg_color="#2A2418" if active else PANEL_ALT,
                     border_color=GOLD if active else "#3A3A3A",
                     border_width=2 if active else 1,

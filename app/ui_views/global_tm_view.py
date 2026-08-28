@@ -6,6 +6,7 @@ from typing import Any
 import customtkinter as ctk
 
 from app.config import GOLD, MUTED, PANEL, PANEL_ALT, TEXT
+from app.ui_components.repintado import configurar_si_cambia
 from app.ui_state.spatial_navigation import SpatialSelection, SpatialTarget, event_targets_text_input, keypress_sequences
 
 SELECTED = "#73A9FF"
@@ -234,17 +235,26 @@ class GlobalTMView:
         for identity, widgets in self._team_widgets.items():
             pokemon, card, name_label, species_label, role_label, move_labels, action = widgets
             enabled = identity in compatible; already = identity in known
-            card.configure(fg_color=PANEL if enabled else "#171717", border_width=2 if enabled else 1,
-                           border_color=GOLD if enabled else "#2D2D2D")
-            name_label.configure(text_color=TEXT if enabled else "#666666")
-            species_label.configure(text_color=MUTED if enabled else "#4F4F4F")
-            role_label.configure(text_color=GOLD if enabled else "#555555")
+            configurar_si_cambia(
+                card,
+                fg_color=PANEL if enabled else "#171717",
+                border_width=2 if enabled else 1,
+                border_color=GOLD if enabled else "#2D2D2D",
+            )
+            configurar_si_cambia(name_label, text_color=TEXT if enabled else "#666666")
+            configurar_si_cambia(species_label, text_color=MUTED if enabled else "#4F4F4F")
+            configurar_si_cambia(role_label, text_color=GOLD if enabled else "#555555")
             for move_label in move_labels:
-                move_label.configure(text_color="#D8D8D8" if enabled else "#4A4A4A",
-                                     fg_color="#292929" if enabled else "#202020")
-            action.configure(
+                configurar_si_cambia(
+                    move_label,
+                    text_color="#D8D8D8" if enabled else "#4A4A4A",
+                    fg_color="#292929" if enabled else "#202020",
+                )
+            configurar_si_cambia(
+                action,
                 text="ELEGIR" if enabled else ("YA LO CONOCE" if already else "NO CUMPLE EL ROL"),
-                state="normal" if enabled else "disabled", fg_color=GOLD if enabled else "#242424",
+                state="normal" if enabled else "disabled",
+                fg_color=GOLD if enabled else "#242424",
                 command=lambda item=entry, member=pokemon: self.on_choose(item, member),
             )
         self._rebuild_keyboard()
@@ -270,8 +280,12 @@ class GlobalTMView:
     def _update_tm_highlight(self) -> None:
         for move_id, button in self._tm_buttons.items():
             active = move_id == self.preview_move_id
-            button.configure(fg_color="#27231B" if active else PANEL,
-                             border_color=GOLD if active else "#3A3A3A", border_width=2 if active else 1)
+            configurar_si_cambia(
+                button,
+                fg_color="#27231B" if active else PANEL,
+                border_color=GOLD if active else "#3A3A3A",
+                border_width=2 if active else 1,
+            )
 
     def _rebuild_keyboard(self) -> None:
         self._keyboard_targets.clear(); targets: list[SpatialTarget] = []
@@ -343,8 +357,11 @@ class GlobalTMView:
     def _apply_keyboard(self) -> None:
         selected = None if self._external_navigation_focus else self._keyboard.selected_key
         for key, (widget, _callback, color, width) in self._keyboard_targets.items():
-            try: widget.configure(border_color="#F2C45E" if key == selected else color,
-                                  border_width=4 if key == selected else width)
+            try: configurar_si_cambia(
+                     widget,
+                     border_color="#F2C45E" if key == selected else color,
+                     border_width=4 if key == selected else width,
+                 )
             except Exception: pass
 
     def set_external_navigation_focus(self, active: bool) -> None:

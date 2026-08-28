@@ -7,6 +7,7 @@ import customtkinter as ctk
 import tkinter as tk
 
 from app.config import DANGER, GOLD, MUTED, PANEL, PANEL_ALT, SUCCESS, TEXT
+from app.ui_components.repintado import configurar_si_cambia
 from app.pc_browser import pokemon_matches_pc_query
 from app.pokemon_stats import STAT_KEYS, STAT_LABELS
 from app.ui_state.spatial_navigation import event_targets_text_input, keypress_sequences
@@ -2123,30 +2124,10 @@ class UnifiedTeamPCView:
                 child.bind("<Enter>", on_enter, add="+")
                 child.bind("<Leave>", on_leave, add="+")
 
-    @staticmethod
-    def _configurar_si_cambia(widget, **opciones) -> None:
-        """``configure`` solo con lo que de verdad cambia.
-
-        Medido con customtkinter en el equipo del usuario:
-
-            configure de un CTkFrame con 4 colores ..... 1,445 ms
-            configure de un CTkButton con 5 opciones ... 0,844 ms
-            configure(text=) a secas ................... 0,047 ms
-            leer esas mismas opciones con cget .........  0,001 ms
-
-        Cualquier opción de color obliga a customtkinter a repintar el canvas
-        entero, cambie o no el valor. Comparar antes es mil veces más barato que
-        escribir, y en un refresco normal casi nada ha cambiado.
-        """
-        cambios = {}
-        for clave, valor in opciones.items():
-            try:
-                if widget.cget(clave) != valor:
-                    cambios[clave] = valor
-            except Exception:
-                cambios[clave] = valor
-        if cambios:
-            widget.configure(**cambios)
+    #: El mismo ayudante que usan el menú lateral, Drafteos y MT. Se deja
+    #: enganchado aquí porque esta vista lo llama desde métodos que las pruebas
+    #: ejercitan con un objeto suelto, sin instancia real.
+    _configurar_si_cambia = staticmethod(configurar_si_cambia)
 
     @staticmethod
     def _widget_vivo(widget) -> bool:
