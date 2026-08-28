@@ -1,6 +1,37 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.0-alpha.2 — el primer drafteo enciende los botones
+
+Con la pestaña de Drafteos abierta y cero drafteos, sumar uno dejaba una pantalla
+rota: aparecía un panel «Elige el rol del drafteo» flotando en mitad de la
+página, y debajo las seis tarjetas seguían diciendo **EN PREPARACIÓN**.
+
+Era código heredado. Esa rama destruía un paso que ya no existe y llamaba a
+`_render_role_step`, el renderizador del **diseño antiguo por pasos**, que dibuja
+dentro del body actual: encima del flujo visual que ya estaba ahí.
+
+## Por qué hay que repintar y no basta con refrescar
+
+Cada tarjeta decide al construirse si su botón está encendido:
+
+```python
+eligible = role != "SIN ROL" and self.draft_count > 0
+```
+
+Así que cruzar el cero cambia lo que hay que construir, no solo cómo se ve.
+Refrescar los botones dejaba seis tarjetas apagadas con drafteos disponibles.
+
+Ahora se repinta la página, **en las dos direcciones**: gastar el último drafteo
+también vuelve a apagarlas. Y de 3 a 4 no se repinta nada, porque ahí no cambia
+la forma.
+
+`_render_role_step` queda sin llamantes. Una prueba recorre `app/` y falla si
+alguien vuelve a invocarlo: cualquier llamada nueva reviviría exactamente este
+fallo.
+
+1936 passed, 1 skipped.
+
 # v0.3.0-alpha.1 — empieza la 0.3: que se vea y que se oiga
 
 La 0.2.6 se fue en velocidad y en pruebas. La 0.3 empieza por lo contrario: que

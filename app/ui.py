@@ -7129,21 +7129,20 @@ class RoleRunManager(ctk.CTk):
             self._refresh_dashboard_counter(counter)
             self._update_top_status()
         elif self.active_page == "drafts" and counter == "drafteos":
-            # Si la pantalla estaba en el estado vacío y entra el primer drafteo
-            # (botón, hotkey o barra flotante), habilitamos el flujo al instante.
-            if previous_value <= 0 < current_value:
-                old_step = self.step_widgets.pop(1, None)
-                try:
-                    if old_step is not None and old_step.winfo_exists():
-                        old_step.destroy()
-                except Exception:
-                    pass
-                self._render_role_step(0)
-                self._refresh_draft_role_buttons()
-                self._schedule_body_scroll_redraw()
+            # Cada tarjeta decide al construirse si su botón está encendido
+            # (`eligible = role != "SIN ROL" and draft_count > 0`), así que
+            # cruzar el cero —en cualquier dirección— obliga a rehacer la
+            # página. Refrescar solo los botones dejaría seis tarjetas diciendo
+            # «EN PREPARACIÓN» con drafteos disponibles.
+            #
+            # Antes esto dibujaba el paso de rol del diseño antiguo dentro del
+            # body actual, encima del flujo visual: salía un panel «Elige el rol
+            # del drafteo» flotando sobre unas tarjetas que seguían apagadas.
+            if (previous_value <= 0) != (current_value <= 0):
+                self._smooth_render_page(preserve_scroll=True)
             else:
                 self._refresh_draft_role_buttons()
-            self._update_top_status()
+                self._update_top_status()
         if self._shell_built:
             self._render_sidebar()
             self._update_top_status()
