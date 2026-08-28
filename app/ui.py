@@ -843,6 +843,10 @@ class RoleRunManager(ctk.CTk):
         # pantalla. Hay que distinguirlo de haberla cerrado a mano: solo
         # se trae de vuelta la que se retiró por esto.
         self._barra_oculta_por_tapado = False
+        # El menu flotante tapa el juego entero y va en `-topmost`, asi que
+        # se retira por lo mismo que la barra. Igual que ella, hay que saber
+        # si lo escondio el sondeo o alguna otra cosa.
+        self._menu_oculto_por_tapado = False
         self._floating_enabled = self._load_floating_enabled()
         self._floating_button_text = ctk.StringVar(
             value=f"BARRA FLOTANTE · {'ON' if self._floating_enabled else 'OFF'}"
@@ -2821,8 +2825,16 @@ class RoleRunManager(ctk.CTk):
         self._floating_launcher_close_button = None
         if resume_game:
             self._ryujinx_input_gate.release(all_levels=True)
+        # Cerrar el menu mientras estaba escondido por tapadura no puede
+        # devolver la barra encima de la aplicacion que tapa el juego: se le
+        # pasa el testigo al sondeo, que ya sabe cuando toca traerla.
+        escondido = self._menu_oculto_por_tapado
+        self._menu_oculto_por_tapado = False
+        if escondido:
+            self._barra_oculta_por_tapado = True
+            self._schedule_floating_bar_poll()
         bar = getattr(self, "floating_bar", None)
-        if not self._game_overlay_active and bar is not None:
+        if not escondido and not self._game_overlay_active and bar is not None:
             try:
                 if bar.winfo_exists() and str(bar.state()) == "withdrawn":
                     bar.deiconify()
@@ -2998,6 +3010,10 @@ class RoleRunManager(ctk.CTk):
         except Exception:
             pass
         launcher.focus_force()
+        # El sondeo lo reprograma el repintado de la barra, y la barra acaba
+        # de retirarse: sin esto el menu se queda sin nadie que lo vigile.
+        self._menu_oculto_por_tapado = False
+        self._schedule_floating_bar_poll()
 
     def _show_floating_menu_home(self, launcher) -> None:
         """Compone el selector raíz y conserva una sola autoridad de teclado."""
@@ -3457,8 +3473,97 @@ class RoleRunManager(ctk.CTk):
         # flotante es exactamente eso.
         return mayor_tapadura(juego, {os.getpid()}) >= self.JUEGO_TAPADO
 
+    def _vigilar_el_menu_flotante(self) -> bool:
+        """Retira el menu flotante cuando el juego deja de verse.
+
+        El menu es un ``Toplevel`` sin marco, del tamano exacto de la ventana
+        del juego y en ``-topmost``. Eso esta bien mientras se juega, que es
+        para lo que existe, pero al cambiar a otra aplicacion se quedaba pintado
+        encima de ella: RoleRun ocupando media pantalla del navegador.
+
+        Se aplica la misma regla que a la barra —y por el mismo motivo, que lo
+        que va encima del juego no pinta nada cuando el juego no se ve—, pero
+        aqui se esconde en vez de destruirse: al volver, el menu sigue en la
+        seccion donde estaba.
+
+        Devuelve si se ha hecho cargo, para que el sondeo no siga con la barra.
+        """
+        launcher = self._floating_launcher
+        if not self._widget_alive(launcher):
+            self._menu_oculto_por_tapado = False
+            return False
+        try:
+            oculto = str(launcher.state()) == "withdrawn"
+        except Exception:
+            self._menu_oculto_por_tapado = False
+            return False
+        if oculto and not self._menu_oculto_por_tapado:
+            # Lo retiro otra cosa. Ese gesto se respeta.
+            return True
+        if self._el_juego_esta_tapado():
+            if not oculto:
+                self._esconder_el_menu_flotante(launcher)
+            return True
+        if oculto:
+            self._devolver_el_menu_flotante(launcher)
+        return True
+
+    def _esconder_el_menu_flotante(self, launcher) -> None:
+        try:
+            launcher.grab_release()
+        except Exception:
+            pass
+        try:
+            launcher.withdraw()
+        except Exception:
+            return
+        # Con el menu abierto, la barra y la ventana principal estan retiradas.
+        # Esconder el menu sin mas dejaria a RoleRun sin ninguna ventana y sin
+        # icono en la barra de tareas: desaparecido. Minimizado sigue estando.
+        try:
+            if str(self.state()) == "withdrawn":
+                self.iconify()
+        except Exception:
+            pass
+        # Mientras el menu no se ve no hay cruceta que interceptar, y dejar el
+        # emulador retenido lo unico que consigue es congelar la partida
+        # mientras el usuario esta en otra aplicacion.
+        self._ryujinx_input_gate.release(all_levels=True)
+        self._menu_oculto_por_tapado = True
+
+    def _devolver_el_menu_flotante(self, launcher) -> None:
+        self._menu_oculto_por_tapado = False
+        try:
+            launcher.deiconify()
+            # Reaparecer no garantiza recuperar el `-topmost`, y un menu por
+            # debajo del juego no se ve.
+            launcher.attributes("-topmost", True)
+            launcher.lift()
+        except Exception:
+            return
+        try:
+            if str(self.state()) == "iconic":
+                self.withdraw()
+        except Exception:
+            pass
+        self._ryujinx_input_gate.acquire()
+        try:
+            launcher.grab_set()
+        except Exception:
+            pass
+        try:
+            launcher.focus_force()
+        except Exception:
+            pass
+
     def _poll_floating_bar(self) -> None:
         self._floating_bar_poll_id = None
+        if self._vigilar_el_menu_flotante():
+            try:
+                self._floating_bar_poll_id = self.after(500, self._poll_floating_bar)
+            except Exception:
+                self._floating_bar_poll_id = None
+            return
         bar = self.floating_bar
         if not bar or not bar.winfo_exists():
             self._barra_oculta_por_tapado = False

@@ -1,6 +1,54 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.0-alpha.13 — el menú flotante deja de pintarse sobre otras aplicaciones
+
+> *«cuando lo pongo en menú (que se pausa) y luego cambio de aplicación, se queda
+> el menú flotando en esa aplicación. Haz que se quede en RoleRun.»*
+
+El menú flotante es un `Toplevel` sin marco, del tamaño exacto de la ventana del
+juego y en `-topmost`. Mientras se juega eso es justo lo que se quiere. Al
+cambiar a otra aplicación dejaba de serlo: RoleRun se quedaba ocupando media
+pantalla del navegador.
+
+Y nadie estaba mirando, literalmente. El sondeo que retira la barra cuando algo
+tapa el juego **lo reprograma el repintado de la barra**, y abrir el menú retira
+la barra. El sondeo se apagaba en el mismo gesto que creaba el problema:
+
+```
+_toggle_floating_launcher  ->  bar.withdraw()
+_poll_floating_bar         ->  barra retirada y no fue por tapadura  ->  return
+```
+
+Ahora el sondeo mira primero el menú y se reprograma siempre mientras esté
+abierto. La regla es la misma que ya aceptamos para la barra —lo que va encima
+del juego no pinta nada cuando el juego no se ve, y cambiar a otro **monitor** no
+cuenta—, con tres diferencias propias del menú:
+
+- **Se esconde, no se destruye.** Al volver, sigue en la sección donde estaba.
+- **Suelta el agarre.** Un `grab_set` de una ventana invisible se come todos los
+  eventos de ratón; ya nos pasó con los modales de la barra.
+- **Suelta el emulador.** El menú retiene Ryujinx para que la cruceta no llegue
+  al personaje. Escondido no hay nada que interceptar, y seguir reteniéndolo solo
+  congelaba la partida mientras el usuario estaba en otra aplicación.
+
+RoleRun queda **minimizado**, no desaparecido: con el menú abierto la barra y la
+ventana principal están retiradas, así que esconder el menú sin más dejaba a
+RoleRun sin ninguna ventana y sin icono en la barra de tareas. Es el mismo fallo
+que ya se corrigió para la barra.
+
+Pruebas: `tests/test_menu_flotante_tapado.py`, montadas sobre los métodos reales
+con un menú y una compuerta falsos, no sobre el texto del código.
+
+## Y una prueba que dependía de la máquina
+
+Al poner el usuario `disable_input_when_out_of_focus` en `True`, la suite se puso
+roja sin que nadie tocara el código:
+`test_bdsp_foreground_gate_is_idempotent_and_releases_on_focus_loss` llamaba a la
+función real, que lee el `Config.json` de Ryujinx de quien ejecute las pruebas.
+Verde o roja según cómo tuviera el usuario el emulador. Ahora fija ese valor,
+como ya hacía la prueba hermana de la alpha.12.
+
 # v0.3.0-alpha.12 — que no lea el mando el emulador, en vez de pararlo
 
 El usuario preguntó lo correcto: *¿no se podría hacer esa protección sin parar

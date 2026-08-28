@@ -107,6 +107,8 @@ def test_main_controller_navigation_keeps_controlled_repeat_after_single_owner_f
 
 
 def test_bdsp_foreground_gate_is_idempotent_and_releases_on_focus_loss() -> None:
+    import app.ui as ui
+
     class Gate:
         def __init__(self) -> None:
             self.active = False
@@ -140,14 +142,23 @@ def test_bdsp_foreground_gate_is_idempotent_and_releases_on_focus_loss() -> None
         _widget_alive=lambda _widget: False,
     )
 
-    assert RoleRunManager._sync_role_run_foreground_input_gate(manager) is True
-    assert RoleRunManager._sync_role_run_foreground_input_gate(manager) is True
-    assert gate.acquires == 1
+    # La retencion tambien depende de si el emulador se protege solo, y eso se
+    # lee del `Config.json` real de quien ejecute las pruebas. Sin fijarlo aqui,
+    # esta prueba pasaba o fallaba segun como tuviera el usuario Ryujinx: la
+    # cambio a mano y la suite se puso roja sin que nadie tocara el codigo.
+    anterior = ui.ryujinx_ignora_el_mando_sin_foco
+    ui.ryujinx_ignora_el_mando_sin_foco = lambda: False
+    try:
+        assert RoleRunManager._sync_role_run_foreground_input_gate(manager) is True
+        assert RoleRunManager._sync_role_run_foreground_input_gate(manager) is True
+        assert gate.acquires == 1
 
-    manager._foreground = False
-    assert RoleRunManager._sync_role_run_foreground_input_gate(manager) is False
-    assert gate.releases == 1
-    assert manager._role_run_foreground_gate_held is False
+        manager._foreground = False
+        assert RoleRunManager._sync_role_run_foreground_input_gate(manager) is False
+        assert gate.releases == 1
+        assert manager._role_run_foreground_gate_held is False
+    finally:
+        ui.ryujinx_ignora_el_mando_sin_foco = anterior
 
 
 def test_gamepad_poll_reserves_ryujinx_before_sampling_and_dispatch() -> None:
