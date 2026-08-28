@@ -666,32 +666,6 @@ def test_ensenar_una_mt_gasta_el_objeto() -> None:
     assert "deshacer()" in fuente
 
 
-def test_si_el_bloque_se_mueve_entre_leer_y_escribir_no_se_escribe() -> None:
-    """Lo que dejó dos «Huevo malo» en la partida del usuario.
-
-    En la RAM conviven **tres copias** del bloque del guardado -medido:
-    0x0227C2DC, 0x02376864 y 0x02399884, las tres con los mismos seis Pokémon- y
-    además el bloque cambia de sitio. Escribir con la dirección vieja mete la
-    ficha donde no va, y el juego enseña un «Huevo malo».
-
-    Como las tres copias dan el mismo equipo al interpretarlas, comparar por
-    contenido **no las distingue**: hay que comparar la dirección y los bytes.
-    """
-    emulador = _MelonDSFalso()
-    writer = _WriterDePrueba(emulador)
-    lectura = emulador.read_party()
-    emulador.mueve_el_bloque = True
-
-    with pytest.raises(HgssLiveError, match="se movió"):
-        writer.write_party_heal(
-            lectura,
-            [(p.slot, (p.pid, p.tid, p.sid)) for p in lectura.pokemon],
-            base_pp_for=_pp_fijo,
-        )
-    assert emulador.escrituras == [], "no se escribe ni un byte"
-    assert bytes(emulador.raw) == emulador.original
-
-
 def test_que_parpadee_una_ficha_que_no_se_toca_no_impide_escribir() -> None:
     """El falso negativo que obligaba a pulsar CURAR dos veces.
 
@@ -711,13 +685,55 @@ def test_que_parpadee_una_ficha_que_no_se_toca_no_impide_escribir() -> None:
     assert despues.pokemon[0].evs == emulador.read_party().pokemon[0].evs
 
 
-def test_que_parpadee_la_ficha_que_se_va_a_escribir_si_lo_impide() -> None:
-    """Ahí no se puede ceder: se escribiría encima de algo que ya no es lo leído."""
+def test_se_escribe_donde_se_leyo_aunque_el_bloque_se_haya_movido() -> None:
+    """Lo que dejó tres «Huevo malo»: escribir con la dirección vieja.
+
+    El bloque del guardado cambia de sitio -se le vio en 0x0227C26C, 0x0227C290,
+    0x0227C2FC y 0x0227C2DC-. La transacción se protege construyendo la mutación
+    con la misma lectura que le da la dirección, así que el cambio va siempre
+    donde se acaba de leer.
+    """
+    emulador = _MelonDSFalso()
+    emulador.mueve_el_bloque = True
+    writer = _WriterDePrueba(emulador)
+    lectura = emulador.read_party()
+
+    despues = writer.write_party_roles(lectura, [_peticion(emulador, 1)])
+
+    assert despues.pokemon[1].evs == (252, 0, 0, 252, 6, 0)
+    # Y el búfer sigue siendo un equipo legible: nada se escribió a destiempo.
+    assert len(emulador.read_party().pokemon) == emulador.count
+
+
+def test_que_parpadee_la_ficha_que_se_escribe_tampoco_lo_impide() -> None:
+    """El falso negativo que dejaba la curación sin hacer.
+
+    Curar toca varias fichas a la vez y cada una parpadea entre cifrada y en
+    claro por su cuenta. Exigir sus bytes iguales entre la lectura y la
+    escritura no podía cumplirse casi nunca. Lo que se comprueba ahora es el
+    contenido, que es lo que no cambia.
+    """
     emulador = _MelonDSFalso()
     writer = _WriterDePrueba(emulador)
     peticion = _peticion(emulador, 1)
     emulador.parpadea = 1            # justo el hueco que se va a escribir
 
-    with pytest.raises(HgssLiveError, match="cambió"):
-        writer.write_party_roles(emulador.read_party(), [peticion])
-    assert emulador.escrituras == [], "no se escribe ni un byte"
+    despues = writer.write_party_roles(emulador.read_party(), [peticion])
+
+    assert despues.pokemon[1].evs == (252, 0, 0, 252, 6, 0)
+    assert tuple(despues.pokemon[1].markings) == (False, True, False, False, False, False)
+
+
+def test_curar_el_equipo_entero_con_todas_las_fichas_parpadeando() -> None:
+    """El caso real: seis fichas, todas cambiando de estado sin parar."""
+    emulador = _MelonDSFalso()
+    writer = _WriterDePrueba(emulador)
+    lectura = emulador.read_party()
+    objetivos = [(p.slot, (p.pid, p.tid, p.sid)) for p in lectura.pokemon]
+    emulador.parpadea = 0
+
+    despues = writer.write_party_heal(lectura, objetivos, base_pp_for=_pp_fijo)
+
+    for miembro in despues.pokemon:
+        assert miembro.current_hp == miembro.max_hp
+        assert miembro.status_condition == 0

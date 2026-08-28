@@ -234,93 +234,133 @@ class HgssMelonDSWriter:
         ``objetivos`` son pares ``(hueco, identidad)``. ``mutar`` recibe el
         bloque de 236 bytes del miembro y devuelve el nuevo. ``verificar`` recibe
         el miembro releído y su identidad, y debe lanzar si algo no cuadra.
+
+        POR QUÉ LA MUTACIÓN SE CONSTRUYE CON LA LECTURA QUE SE CONFIRMA
+
+        El intento anterior leía el equipo, preparaba el cambio, y justo antes de
+        escribir releía y exigía los mismos bytes. Eso no podía funcionar: cada
+        ficha **alterna entre cifrada y en claro** por su cuenta, muchas veces
+        por segundo -grabado a 0,5 ms sobre la partida real-, así que la segunda
+        lectura casi nunca coincide con la primera aunque no haya cambiado nada.
+        Curar toca varias fichas a la vez, y que todas coincidieran era casi
+        imposible: la curación se negaba una y otra vez.
+
+        La ventana entre leer y escribir no se cierra comparando mejor, se cierra
+        **no teniéndola**: se lee, se muta esa misma lectura y se escribe. Lo que
+        sale es siempre un registro derivado del estado que se acaba de ver.
+
+        Lo que sí se sigue exigiendo, que es lo que protege de verdad:
+
+        - que el bloque esté **demostrado vivo**;
+        - que **no se haya movido** entre leer y escribir -escribir con la
+          dirección vieja es lo que dejó tres «Huevo malo»-;
+        - que la identidad de cada hueco sea la que la petición declara;
+        - y un readback con el parser de producción antes de dar nada por bueno.
         """
-        peticiones = list(objetivos)
+        peticiones = [(int(hueco), tuple(identidad)) for hueco, identidad in objetivos]
         if not peticiones:
             raise HgssLiveError(f"No hay ningún {que} de HeartGold que escribir.")
-
-        antes = self.reader.read_party()
-        base_al_leer = self.memory.block_base
-        if antes.process_id != party_read.process_id:
-            raise HgssLiveError(f"melonDS cambió antes de escribir {que} en HeartGold.")
-
-        crudo_viejo = antes.raw
-        crudo_nuevo = bytearray(crudo_viejo)
-        vistos: dict[int, tuple[int, int, int]] = {}
-        for hueco, identidad in peticiones:
-            hueco = int(hueco)
-            if not 0 <= hueco < antes.count:
-                raise HgssLiveError("El hueco del equipo de HeartGold está fuera de rango.")
-            if hueco in vistos:
-                raise HgssLiveError(f"Dos cambios de {que} sobre el mismo hueco.")
-            miembro = antes.pokemon[hueco]
-            if (miembro.pid, miembro.tid, miembro.sid) != tuple(identidad):
-                raise HgssLiveError(
-                    f"La identidad del {que} de HeartGold cambió antes de escribir."
-                )
-            desde = hueco * PK4_PARTY_SIZE
-            try:
-                crudo_nuevo[desde:desde + PK4_PARTY_SIZE] = mutar(
-                    hueco, bytes(crudo_viejo[desde:desde + PK4_PARTY_SIZE]),
-                )
-            except Pk4Error as exc:
-                raise HgssLiveError(str(exc)) from exc
-            vistos[hueco] = tuple(identidad)
-
-        if bytes(crudo_nuevo) == crudo_viejo:
-            # Ya estaba puesto: no se escribe un solo byte en la partida.
-            return antes
-
-        destino = self._party_host(antes)
-        # Solo se escriben las fichas que cambian. Volcar el bloque entero
-        # devolvía a los demás miembros al estado -cifrado o en claro- que
-        # tenían cuando se leyó, y el juego los va cambiando por su cuenta:
-        # eran 1180 bytes de riesgo por cada curación de un solo Pokémon.
-        tocados = sorted(vistos)
-
-        def escribir(origen: bytes) -> None:
-            for hueco in tocados:
-                desde = hueco * PK4_PARTY_SIZE
-                self._write_process_bytes(
-                    antes.process_id, destino + desde,
-                    bytes(origen[desde:desde + PK4_PARTY_SIZE]),
-                )
-
-        # Cómo tiene que quedar el equipo una vez interpretado. Los bytes no se
-        # pueden comparar -el juego los reescribe solo, ver `_confirmar_direccion`-
-        # pero el contenido sí, y es lo que de verdad importa.
-        esperados = parse_party_block(bytes(crudo_nuevo), antes.count)
-
-        def deshacer() -> None:
-            escribir(crudo_viejo)
-            restaurado = self.reader.read_party()
-            if restaurado.raw != crudo_viejo or restaurado.pokemon != antes.pokemon:
-                raise HgssLiveError(
-                    f"El rollback de {que} en HeartGold no se pudo confirmar; no guardes."
-                )
-
-        def intentar() -> HgssPartyRead:
-            escribir(bytes(crudo_nuevo))
-            despues = self.reader.read_party()
-            if (
-                despues.count != antes.count
-                or despues.raw != bytes(crudo_nuevo)
-                or despues.pokemon != esperados
-            ):
-                raise HgssLiveError(f"El readback de {que} en HeartGold no coincide.")
-            for hueco, identidad in vistos.items():
-                verificado = despues.pokemon[hueco]
-                if (verificado.pid, verificado.tid, verificado.sid) != identidad:
-                    raise HgssLiveError("La identidad verificada de HeartGold no coincide.")
-                verificar(verificado, hueco)
-            return despues
+        if len({hueco for hueco, _ in peticiones}) != len(peticiones):
+            raise HgssLiveError(f"Dos cambios de {que} sobre el mismo hueco.")
 
         for intento in range(INTENTOS_DE_ESCRITURA):
-            # Fuera del `try`, por lo mismo: si el bloque se ha movido no se ha
-            # escrito nada y deshacer con la dirección vieja sería el destrozo.
-            self._confirmar_direccion(antes, base_al_leer, tuple(tocados))
+            _bloque_demostrado(self.reader)
+            antes = self.reader.read_party()
+            base_al_leer = self.memory.block_base
+            if antes.process_id != party_read.process_id:
+                raise HgssLiveError(
+                    f"melonDS cambió antes de escribir {que} en HeartGold."
+                )
+
+            crudo_viejo = antes.raw
+            crudo_nuevo = bytearray(crudo_viejo)
+            vistos: dict[int, tuple[int, int, int]] = {}
+            for hueco, identidad in peticiones:
+                if not 0 <= hueco < antes.count:
+                    raise HgssLiveError(
+                        "El hueco del equipo de HeartGold está fuera de rango."
+                    )
+                miembro = antes.pokemon[hueco]
+                if (miembro.pid, miembro.tid, miembro.sid) != identidad:
+                    raise HgssLiveError(
+                        f"La identidad del {que} de HeartGold cambió antes de escribir."
+                    )
+                desde = hueco * PK4_PARTY_SIZE
+                try:
+                    crudo_nuevo[desde:desde + PK4_PARTY_SIZE] = mutar(
+                        hueco, bytes(crudo_viejo[desde:desde + PK4_PARTY_SIZE]),
+                    )
+                except Pk4Error as exc:
+                    raise HgssLiveError(str(exc)) from exc
+                vistos[hueco] = identidad
+
+            if bytes(crudo_nuevo) == crudo_viejo:
+                # Ya estaba puesto: no se escribe un solo byte en la partida.
+                return antes
+
+            # Solo se escriben las fichas que cambian. Volcar el bloque entero
+            # devolvía a los demás miembros al estado -cifrado o en claro- que
+            # tenían al leerlos, y el juego los va cambiando por su cuenta.
+            tocados = sorted(vistos)
+            destino = self._party_host(antes)
+            esperados = parse_party_block(bytes(crudo_nuevo), antes.count)
+
+            def escribir(origen, _destino=destino, _tocados=tocados,
+                         _pid=antes.process_id, _base=base_al_leer):
+                # Si el lector dijera ahora otra dirección, escribir aquí sería
+                # escribir en la copia vieja: eso es lo que dejó los huevos.
+                if self.memory.block_base != _base:
+                    raise HgssLiveError(
+                        "El bloque del guardado se movió entre la lectura y la "
+                        "escritura; no se ha tocado nada. Vuelve a intentarlo."
+                    )
+                for hueco in _tocados:
+                    desde = hueco * PK4_PARTY_SIZE
+                    self._write_process_bytes(
+                        _pid, _destino + desde,
+                        bytes(origen[desde:desde + PK4_PARTY_SIZE]),
+                    )
+
+            def deshacer():
+                escribir(crudo_viejo)
+                restaurado = self.reader.read_party()
+                # Por contenido, no por bytes: la ficha puede haber vuelto a
+                # parpadear entre que se escribió y que se releyó, y eso no
+                # cambia nada de la partida.
+                if (
+                    restaurado.count != antes.count
+                    or restaurado.pokemon != antes.pokemon
+                ):
+                    raise HgssLiveError(
+                        f"El rollback de {que} en HeartGold no se pudo confirmar; "
+                        "no guardes."
+                    )
+
             try:
-                return intentar()
+                escribir(bytes(crudo_nuevo))
+            except HgssLiveError:
+                # No ha salido ni un byte: no hay nada que deshacer.
+                if intento == INTENTOS_DE_ESCRITURA - 1:
+                    raise
+                continue
+
+            try:
+                despues = self.reader.read_party()
+                # `esperados` cubre los seis huecos con todo lo que se puede
+                # cambiar -PS, PP, EV, marcas, identidad-, así que comparar el
+                # contenido es más fuerte que comparar los bytes de uno solo.
+                if despues.count != antes.count or despues.pokemon != esperados:
+                    raise HgssLiveError(
+                        f"El readback de {que} en HeartGold no coincide."
+                    )
+                for hueco, identidad in vistos.items():
+                    verificado = despues.pokemon[hueco]
+                    if (verificado.pid, verificado.tid, verificado.sid) != identidad:
+                        raise HgssLiveError(
+                            "La identidad verificada de HeartGold no coincide."
+                        )
+                    verificar(verificado, hueco)
+                return despues
             except Exception:
                 # Se deshace siempre. Si el rollback se confirma, la memoria es
                 # coherente y el fallo fue del intento: se puede repetir. Si no

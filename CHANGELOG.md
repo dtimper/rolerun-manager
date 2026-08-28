@@ -1,6 +1,46 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.93 — la curación no compara bytes que parpadean
+
+La versión anterior seguía negándose: «La ficha que se iba a escribir cambió
+entre la lectura y la escritura». **Medido sobre la partida real**, 25 pares de
+lecturas seguidas del equipo:
+
+| lo que se comparaba | falla |
+|---------------------|-------|
+| los bytes de las seis fichas | **7 de 25** |
+| los bytes de alguna ficha tocada | **7 de 25** |
+| el contenido ya interpretado | **0 de 25** |
+
+Un 28 % de fallo por pulsación, y desde alpha.89 esa comprobación estaba fuera
+del bucle de reintentos —para que un rollback no escribiera con la dirección
+vieja—, así que había **una sola oportunidad por pulsación**. Eso es exactamente
+lo que el usuario veía.
+
+## El arreglo
+
+La ventana entre leer y escribir no se cierra comparando mejor: se cierra **no
+teniéndola**. La transacción lee, muta **esa misma lectura** y escribe. Lo que
+sale es siempre un registro derivado del estado que se acaba de ver, así que ya
+no hay nada que volver a confirmar.
+
+Lo que se sigue exigiendo, que es lo que protege de verdad:
+
+- que el bloque esté **demostrado vivo**;
+- que **no se haya movido** entre leer y escribir —escribir con la dirección
+  vieja es lo que dejó tres «Huevo malo»—;
+- que la identidad de cada hueco sea la que la petición declara;
+- y un readback con el parser de producción, **por contenido**: `esperados`
+  cubre los seis huecos con todo lo que se puede cambiar —PS, PP, EV, marcas,
+  identidad—, así que es más fuerte que comparar los bytes de uno solo.
+
+Las pruebas del parpadeo se invierten en consecuencia: que una ficha alterne
+entre cifrada y en claro —la que se toca o cualquier otra— ya no impide escribir,
+y hay una que cura las seis con todas parpadeando.
+
+Suite completa: **1794**.
+
 # v0.2.6-alpha.92 — HeartGold cura, y a la primera
 
 **Cura sin romper nada.** Registro de la partida del usuario:
