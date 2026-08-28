@@ -1,6 +1,52 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.113 — el juego se congela al enseñar una MT: qué se descartó
+
+El usuario enseña una MT desde RoleRun y **el juego se queda congelado**, hay que
+reiniciar Ryujinx. Aquí no se arregla nada todavía: se descarta una hipótesis
+midiendo y se deja el rastro para la próxima.
+
+## Lo que dice la traza
+
+La escritura se verificó a las 16:20:51 y tocó dos sitios: el core PB8 del
+Pokémon (328 bytes) y **un registro de 12 bytes de la mochila**. Después RoleRun
+siguió leyendo el juego **con normalidad durante 68 segundos** —90 capturas
+seguidas, sin un solo fallo— hasta que el usuario reinició Ryujinx.
+
+Eso no exonera a la escritura: un juego congelado se ve exactamente así desde
+fuera. Su proceso sigue vivo y su memoria sigue siendo legible.
+
+## La hipótesis que parecía buena, y era falsa
+
+Curar y cambiar roles escriben el core PB8 y nunca han congelado el juego. Lo
+único nuevo al enseñar una MT es la mochila. Y un registro de `saveItem` es:
+
+```
+0..3   cantidad (int32)
+4      vanish_new    5  favorito    6  mostrar movimiento
+7..9   relleno (tiene que ser 0)
+10..11 orden en la mochila (uint16)
+```
+
+RoleRun **solo escribe la cantidad**. Al gastar la última MT, el registro queda
+con cantidad 0 conservando su orden — parecía un estado que el juego nunca crea.
+
+**Medido con `mirar_mochila_bdsp.bat`, que solo lee: la partida ya tiene siete
+registros así.** El juego los produce él solo. La hipótesis se cae.
+
+## Lo que queda
+
+`mirar_mochila_bdsp.bat` se queda como herramienta: lee la mochila viva y enseña
+cada registro tal cual está en memoria, sin escribir nada.
+
+Y la traza de escritura deja de decir solo «applied_count: 1»: ahora anota **qué
+se pidió escribir** —tipo de cambio, Pokémon, hueco de movimiento, número de MT,
+objeto y cantidad previa—. Saber que se aplicó «un cambio» no permite volver
+sobre una escritura que congeló el juego.
+
+1875 passed, 1 skipped.
+
 # v0.2.6-alpha.112 — la casilla se destruía y luego reventaba
 
 `build_fixed_team_slots` devuelve una **tupla**. El repintado por casillas hacía

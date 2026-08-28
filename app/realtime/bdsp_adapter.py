@@ -176,6 +176,26 @@ class BDSPRealTimeAdapter(RealTimeGameAdapter):
             # El diagnóstico nunca puede invalidar una captura RAM válida.
             return
 
+    @staticmethod
+    def _describir_cambio(change: object) -> dict[str, object]:
+        """Lo que identifica un cambio, sin suponer de qué tipo es.
+
+        Se anota para poder volver sobre una escritura después: si el juego se
+        queda congelado, saber que se aplicó "1 cambio" no dice qué mirar.
+        """
+        interesa = (
+            "operation", "pokemon", "pokemon_identity", "species",
+            "old_role", "new_role", "move_slot", "old_move", "new_move",
+            "new_move_id", "tm_number", "item_id", "item_name",
+            "quantity_before", "party_slot", "box", "box_slot",
+        )
+        fila: dict[str, object] = {"tipo": type(change).__name__}
+        for nombre in interesa:
+            valor = getattr(change, nombre, None)
+            if valor is not None:
+                fila[nombre] = valor if isinstance(valor, (int, bool)) else str(valor)
+        return fila
+
     def record_ui_event(self, event: str, **fields: object) -> None:
         """Añade una frontera UI compacta al journal BDSP de la sesión."""
         self._trace({"event": str(event), **fields})
@@ -451,6 +471,10 @@ class BDSPRealTimeAdapter(RealTimeGameAdapter):
                 "event": "write-verified",
                 "applied_count": int(receipt.applied_count),
                 "already_applied": bool(receipt.already_applied),
+                # Qué se pidió escribir, no solo cuántos bytes. Tras un
+                # congelado del juego, "applied_count: 1" no permite reconstruir
+                # qué se tocó ni volver a mirarlo leyendo.
+                "cambios": [self._describir_cambio(change) for change in changes],
                 "watches": [
                     {"address": int(watch.address), "size": len(watch.expected)}
                     for watch in receipt.memory_watches
