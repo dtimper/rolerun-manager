@@ -43,6 +43,20 @@ _CASOS = json.loads(
 HGSS = GEN4_MEMORY["hgss"]
 
 
+def _del_reves(bloque: bytes) -> bytes:
+    """La misma ficha guardada al revés: cifrada si estaba en claro, y al revés.
+
+    Es lo que hace el juego solo, muchas veces por segundo. Cambia los 236 bytes
+    enteros y no cambia ni un dato del Pokémon.
+    """
+    from app.pk4 import PK4_STORED_SIZE, _con_extension, _extension, unshuffle_pk4
+
+    pid, orden, canonico, cifrado = unshuffle_pk4(bloque[:PK4_STORED_SIZE])
+    return _con_extension(
+        canonico, orden, pid, not cifrado, _extension(bloque, pid, cifrado),
+    )
+
+
 def _hueco(box: int, box_slot: int) -> int:
     return (box - 1) * PC_BOX_STRIDE + (box_slot - 1) * PK4_STORED_SIZE
 
@@ -70,8 +84,17 @@ class _Emulador:
         self.party_original = bytes(self.party)
         self.pc_original = bytes(self.pc)
         self.escrituras: list[tuple[int, int]] = []
+        # Qué hueco alterna entre cifrado y en claro en cada lectura, como hacen
+        # las fichas de verdad: medido, 7 de 25 pares de lecturas seguidas del
+        # equipo dan bytes distintos y 0 dan contenido distinto.
+        self.parpadea: int | None = None
 
     def read_party(self) -> HgssPartyRead:
+        if self.parpadea is not None:
+            desde = self.parpadea * PK4_PARTY_SIZE
+            self.party[desde:desde + PK4_PARTY_SIZE] = _del_reves(
+                bytes(self.party[desde:desde + PK4_PARTY_SIZE]),
+            )
         crudo = bytes(self.party[:self.count * PK4_PARTY_SIZE])
         return HgssPartyRead(
             self.process_id, "melonDS.exe", 0, self.count, crudo,
@@ -357,4 +380,59 @@ def test_preparar_un_cambio_equipo_pc_lo_envia_al_emulador() -> None:
     # Y va después de crear los cambios, no antes.
     assert fuente.index("pending_before = {") < fuente.index(
         "_request_oras_live_auto_apply_since(pending_before)"
+    )
+
+
+def test_equipo_al_pc_con_una_ficha_parpadeando() -> None:
+    """El mismo fallo que dejaba la curación sin hacer, en Equipo↔PC.
+
+    Cada ficha alterna entre cifrada y en claro por su cuenta -medido: 7 de 25
+    pares de lecturas seguidas dan bytes distintos, 0 dan contenido distinto-.
+    Comparar los bytes del equipo hacía fallar la operación sin que pasara nada.
+    """
+    emu = _Emulador(miembros=3, guardados=())
+    writer = _Writer(emu)
+    antes = emu.read_party()
+    saliente = antes.pokemon[1]
+    emu.parpadea = 0            # una ficha que ni se mueve, cambiando de estado
+
+    equipo, _pc = writer.resize_party_pc(
+        antes, operation="party-to-box", party_slot=1, box=1, box_slot=1,
+        expected_identity=_identidad(saliente),
+    )
+
+    assert equipo.count == 2
+    guardado = parse_pk4_boxed(bytes(emu.pc[:PK4_STORED_SIZE]), 0)
+    assert _identidad(guardado) == _identidad(saliente)
+
+
+def test_ningun_camino_compara_los_bytes_del_equipo() -> None:
+    """La regresión que costó tres «Huevo malo» y una tarde entera.
+
+    Los bytes del equipo no valen como criterio: cada ficha parpadea entre
+    cifrada y en claro sin que la partida cambie -medido: 7 de 25 pares de
+    lecturas seguidas dan bytes distintos, 0 dan contenido distinto-. Lo que
+    distingue una copia del bloque de otra es su dirección, que sí se exige.
+
+    El PC y la mochila **sí** son estables -1 contenido en 12 lecturas- y se
+    siguen comparando byte a byte: por eso esta prueba solo mira el equipo.
+    """
+    from pathlib import Path
+
+    fuente = (
+        Path(__file__).resolve().parent.parent / "app" / "hgss_write.py"
+    ).read_text(encoding="utf-8")
+
+    del_equipo = ("read_party()", "antes.raw", "antes_equipo.raw",
+                  "despues_equipo.raw", "restaurado.raw", "ahora.raw")
+    # `antes.raw` también es la mochila en `write_bag_items`, y ahí sí vale.
+    de_otros = ("bolsillo", "read_bag", "bolsa", "read_pc", "_pc.raw")
+    culpables = [
+        linea.strip() for linea in fuente.splitlines()
+        if ".raw" in linea and ("!=" in linea or "==" in linea)
+        and any(nombre in linea for nombre in del_equipo)
+        and not any(nombre in linea for nombre in de_otros)
+    ]
+    assert not culpables, (
+        "vuelve a comparar bytes del equipo: " + " | ".join(culpables)
     )

@@ -207,17 +207,12 @@ class HgssMelonDSWriter:
                 "El equipo cambió entre la lectura y la escritura; no se ha "
                 "tocado nada. Vuelve a intentarlo."
             )
-        rangos = (
-            [(h * PK4_PARTY_SIZE, (h + 1) * PK4_PARTY_SIZE) for h in huecos]
-            if huecos is not None
-            else [(0, len(antes.raw))]
-        )
-        for desde, hasta in rangos:
-            if ahora.raw[desde:hasta] != antes.raw[desde:hasta]:
-                raise HgssLiveError(
-                    "La ficha que se iba a escribir cambió entre la lectura y "
-                    "la escritura; no se ha tocado nada. Vuelve a intentarlo."
-                )
+        # Los bytes del equipo NO se comparan: cada ficha parpadea entre
+        # cifrada y en claro por su cuenta. Medido, 25 pares de lecturas
+        # seguidas: 7 dan bytes distintos y 0 dan contenido distinto. Lo que
+        # distingue una copia del bloque de otra es `block_base`, que sí se
+        # exige; los bytes solo producían falsos negativos.
+        del huecos
 
     def _party_host(self, lectura: HgssPartyRead) -> int:
         return lectura.allocation_base + (self.memory.party_data - DS_RAM_BASE)
@@ -750,7 +745,7 @@ class HgssMelonDSWriter:
         def deshacer() -> None:
             escribir_equipo(antes_equipo.raw)
             escribir_bolsa(antes_bolsa.raw)
-            if self.reader.read_party().raw != antes_equipo.raw:
+            if self.reader.read_party().pokemon != antes_equipo.pokemon:
                 raise HgssLiveError(
                     "El rollback de la MT no se pudo confirmar en el equipo; no guardes."
                 )
@@ -771,7 +766,9 @@ class HgssMelonDSWriter:
             escribir_bolsa(bolsa_nueva)
 
             despues_equipo = self.reader.read_party()
-            if despues_equipo.raw != bytes(equipo_nuevo):
+            if despues_equipo.pokemon != parse_party_block(
+                bytes(equipo_nuevo), antes_equipo.count,
+            ):
                 raise HgssLiveError("El readback del equipo tras la MT no coincide.")
             for hueco_equipo, (hueco, move_id) in esperados.items():
                 miembro = despues_equipo.pokemon[hueco_equipo]
@@ -848,7 +845,10 @@ class HgssMelonDSWriter:
                 bytes((antes_equipo.count,)),
             )
             restaurado = self.reader.read_party()
-            if restaurado.raw != antes_equipo.raw:
+            if (
+                restaurado.count != antes_equipo.count
+                or restaurado.pokemon != antes_equipo.pokemon
+            ):
                 raise HgssLiveError(
                     f"El rollback de {que} no se pudo confirmar; no guardes."
                 )
@@ -876,7 +876,9 @@ class HgssMelonDSWriter:
             despues_equipo = self.reader.read_party()
             if despues_equipo.count != contador_nuevo:
                 raise HgssLiveError(f"El contador del equipo tras {que} no coincide.")
-            if despues_equipo.raw != equipo_nuevo[:contador_nuevo * PK4_PARTY_SIZE]:
+            if despues_equipo.pokemon != parse_party_block(
+                bytes(equipo_nuevo[:contador_nuevo * PK4_PARTY_SIZE]), contador_nuevo,
+            ):
                 raise HgssLiveError(f"El readback del equipo tras {que} no coincide.")
             despues_pc = self.reader.read_pc(despues_equipo)
             for offset, contenido in huecos.items():

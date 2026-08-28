@@ -1,6 +1,28 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.94 — el mismo criterio en los otros tres caminos
+
+**La curación funciona, confirmado por el usuario.** Y el fallo que la tenía
+parada seguía intacto en todo lo demás: enseñar MT, Equipo↔PC y bolsa/dinero
+comparaban los bytes del equipo antes de escribir. Los tres se habrían negado
+igual, con el mismo 28 % por intento.
+
+Ahora ninguno compara bytes del equipo. Lo que se exige es lo que no parpadea:
+
+- el bloque **demostrado vivo** y en la **misma dirección**;
+- la identidad de cada hueco;
+- y el readback **por contenido**, con el parser de producción.
+
+**El PC y la mochila se siguen comparando byte a byte**, porque ahí sí valen: 1
+único contenido en 12 lecturas seguidas de cada uno.
+
+Queda una prueba estructural que lo vigila —`test_ningun_camino_compara_los_bytes_del_equipo`—
+para que esto no vuelva por la puerta de atrás, más una funcional de Equipo↔PC
+con una ficha parpadeando.
+
+Suite completa: **1796**.
+
 # v0.2.6-alpha.93 — la curación no compara bytes que parpadean
 
 La versión anterior seguía negándose: «La ficha que se iba a escribir cambió
