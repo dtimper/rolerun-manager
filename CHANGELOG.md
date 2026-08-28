@@ -1,6 +1,50 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.97 — cuarta fuera de la lista, y el sprite se redimensiona una vez
+
+## Cuarta generación se oculta
+
+Diamante/Perla, Platino y HeartGold/SoulSilver salen de la selección de juegos.
+Leer funciona entero —equipo, cajas, dinero, medallas, MT, a 18 ms— pero
+escribir no se puede garantizar: una escritura de 236 bytes no es atómica para
+el juego emulado, y si mira el registro a medio escribir lo marca como «Huevo
+malo» sin vuelta atrás.
+
+Se **ocultan**, no se borran: el código está entero y probado, y sus etiquetas
+siguen ahí para que una Run antigua conserve su nombre. Es un `frozenset` de tres
+claves, así que volver a ofrecerlas es quitar una línea.
+
+## El sprite se redimensiona una vez, no una por tarjeta
+
+Medido con los sprites del proyecto, que son **PNG de 512×512**:
+
+| | |
+|--|--|
+| `copy()` + `thumbnail` LANCZOS a 118 px | **3,77 ms por sprite** |
+| devolver uno ya hecho | **0,00 ms** |
+
+`sprite_pil_cache` guardaba el PNG decodificado, pero cada tarjeta hacía después
+su propia copia y su propio LANCZOS:
+
+- una caja del PC son treinta tarjetas → **113 ms** por repintado,
+- el equipo son seis → **23 ms**,
+- Equipo y PC enseña las dos cosas → **136 ms** cada vez,
+- y la página se repinta **entera** cada vez que termina de bajar un sprite.
+
+Ahora hay una caché por `(especie, tamaño)` que devuelve el `CTkImage` ya hecho
+—se pueden compartir entre widgets—, y un sprite que llega tarde invalida lo que
+hubiera redimensionado de esa especie, que sería la silueta de ausencia.
+
+## Para seguir midiendo
+
+`medir_lentitud.bat` abre RoleRun con la instrumentación encendida
+(`ROLERUN_PERF=1`, que ya existía y nunca se había usado). Deja un JSONL por día
+con una línea por operación, y con eso se sabe qué tarda de verdad en vez de
+suponerlo.
+
+Suite completa: **1802**.
+
 # v0.2.6-alpha.96 — cinco de seis, y la marca que nadie miraba
 
 **Corrección de alpha.95: lo de «mezcla de dos escrituras» era falso.** Salió de

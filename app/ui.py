@@ -592,6 +592,10 @@ class RoleRunManager(ctk.CTk):
         self.draft_card_images: list[ctk.CTkImage] = []
         self._sprite_refresh_scheduled = False
         self.sprite_pil_cache: dict[int, Image.Image] = {}
+        # El sprite YA redimensionado, por (especie, tamaño). Ver
+        # `_sprite_image`: sin esto, cada tarjeta rehacía un LANCZOS de
+        # 3,77 ms sobre un PNG de 512x512.
+        self._sprite_image_cache: dict[tuple[int, tuple[int, int]], Any] = {}
         # Especies mostradas con silueta local por no haber podido
         # descargar su imagen. Se reintenta al recargar la partida.
         self._sprite_placeholder_species: set[int] = set()
@@ -3584,6 +3588,18 @@ class RoleRunManager(ctk.CTk):
 
     # ---------- WELCOME / GAME SELECTION ----------
 
+    # Cuarta generación no se ofrece en la selección.
+    #
+    # Leer funciona entero -equipo, cajas, dinero, medallas, MT, y a 18 ms-, pero
+    # escribir no se puede garantizar: una escritura de 236 bytes no es atómica
+    # para el juego emulado, y si mira el registro a medio escribir lo marca como
+    # «Huevo malo» sin vuelta atrás. Medido sobre la partida real: FIJAR ROLES
+    # dejó cinco miembros perfectos y el sexto roto.
+    #
+    # Se ocultan en vez de borrarse: el código está entero y probado, y sus
+    # etiquetas siguen aquí para que una Run antigua siga teniendo nombre.
+    GAMES_OCULTOS = frozenset({"dp", "pt", "hgss"})
+
     GAME_OPTIONS = [
         ("dp", "Diamante / Perla", True),
         ("pt", "Platino", True),
@@ -3912,11 +3928,18 @@ class RoleRunManager(ctk.CTk):
         grid = ctk.CTkFrame(root, fg_color="transparent")
         grid.pack(expand=True, fill="both", padx=50, pady=(0, 34))
         grid.grid_columnconfigure((0, 1), weight=1, uniform="games")
-        grid.grid_rowconfigure(tuple(range(5)), weight=1, uniform="games")
+        # Las filas salen de los juegos que se ven, no de los que hay: con tres
+        # ocultos sobraban filas vacías que encogían las tarjetas.
+        visibles = [
+            opcion for opcion in self.GAME_OPTIONS
+            if opcion[0] not in self.GAMES_OCULTOS
+        ]
+        filas = (len(visibles) + 1) // 2
+        grid.grid_rowconfigure(tuple(range(filas)), weight=1, uniform="games")
 
         cards: list[tuple[ctk.CTkFrame, int, int]] = []
 
-        for index, (key, label, enabled) in enumerate(self.GAME_OPTIONS):
+        for index, (key, label, enabled) in enumerate(visibles):
             row, column = divmod(index, 2)
             source_profile = self.game_source_profiles.get(key)
             source_status, source_color = self._game_source_status(source_profile)
@@ -12877,10 +12900,8 @@ class RoleRunManager(ctk.CTk):
             self.dashboard_role_widgets[role_key] = (card, eye)
 
             if pokemon:
-                source = self._sprite_source(pokemon)
-                if source is not None:
-                    source.thumbnail((138, 108), Image.Resampling.LANCZOS)
-                    image = ctk.CTkImage(light_image=source, dark_image=source, size=source.size)
+                image = self._sprite_image(pokemon, (138, 108))
+                if image is not None:
                     self.dashboard_sprite_images[pokemon.slot] = image
                     ctk.CTkLabel(card, text="", image=image, height=118, fg_color="transparent").grid(row=0, column=0, pady=(10, 0))
                 else:
@@ -12919,10 +12940,8 @@ class RoleRunManager(ctk.CTk):
             for pokemon in role_extras:
                 extra = ctk.CTkFrame(extras_row, fg_color="#202020", corner_radius=10, border_width=1, border_color="#3A3A3A")
                 extra.pack(side="left", padx=4, pady=3)
-                src = self._sprite_source(pokemon)
-                if src is not None:
-                    src.thumbnail((52, 52), Image.Resampling.LANCZOS)
-                    img = ctk.CTkImage(light_image=src, dark_image=src, size=src.size)
+                img = self._sprite_image(pokemon, (52, 52))
+                if img is not None:
                     self.dashboard_sprite_images[-1000 - len(self.dashboard_sprite_images)] = img
                     ctk.CTkLabel(extra, text="", image=img).pack(side="left", padx=(7, 3), pady=5)
                 ctk.CTkLabel(
@@ -13571,13 +13590,7 @@ class RoleRunManager(ctk.CTk):
     ) -> ctk.CTkImage | None:
         if pokemon is None:
             return None
-        source = self._sprite_source(pokemon)
-        if source is None:
-            return None
-        source.thumbnail(size, Image.Resampling.LANCZOS)
-        return ctk.CTkImage(
-            light_image=source, dark_image=source, size=source.size,
-        )
+        return self._sprite_image(pokemon, size)
 
     def _team_pc_pokemon_has_pending_change(self, pokemon: SavePokemon, context: str) -> bool:
         identity = self._pokemon_identity(pokemon)
@@ -20803,6 +20816,39 @@ class RoleRunManager(ctk.CTk):
         self._load_sprite_async(pokemon)
         return None
 
+    def _sprite_image(
+        self, pokemon: SavePokemon | None, size: tuple[int, int],
+    ) -> ctk.CTkImage | None:
+        """El sprite ya redimensionado, cacheado por especie y tamaño.
+
+        `sprite_pil_cache` guarda el PNG decodificado, pero eso no bastaba: los
+        sprites son de 512x512 y cada tarjeta hacía su propia copia y su propio
+        LANCZOS. Medido sobre los sprites del proyecto: **3,77 ms cada uno**.
+
+        Una caja del PC son treinta tarjetas -113 ms de repintado gastados en
+        rehacer lo mismo-, el equipo son otros 23 ms, y la página se repinta
+        entera cada vez que termina de bajar un sprite.
+
+        Devolver el que ya está hecho cuesta 0 ms. Un `CTkImage` se puede
+        compartir entre widgets, así que no hace falta uno por tarjeta.
+        """
+        if pokemon is None:
+            return None
+        clave = (int(getattr(pokemon, "species_id", 0) or 0), tuple(size))
+        cacheada = self._sprite_image_cache.get(clave)
+        if cacheada is not None:
+            return cacheada
+        source = self._sprite_source(pokemon)
+        if source is None:
+            # Sin sprite todavía: no se cachea nada, que ya llegará.
+            return None
+        source.thumbnail(size, Image.Resampling.LANCZOS)
+        imagen = ctk.CTkImage(
+            light_image=source, dark_image=source, size=source.size,
+        )
+        self._sprite_image_cache[clave] = imagen
+        return imagen
+
     def _get_dashboard_sprite(self, pokemon: SavePokemon) -> ctk.CTkImage | None:
         source = self._sprite_source(pokemon)
         if source is None:
@@ -20820,11 +20866,7 @@ class RoleRunManager(ctk.CTk):
         return ctk.CTkImage(light_image=canvas, dark_image=canvas, size=size)
 
     def _get_team_sprite(self, pokemon: SavePokemon) -> ctk.CTkImage | None:
-        source = self._sprite_source(pokemon)
-        if source is None:
-            return None
-        source.thumbnail((118, 118), Image.Resampling.LANCZOS)
-        return ctk.CTkImage(light_image=source, dark_image=source, size=source.size)
+        return self._sprite_image(pokemon, (118, 118))
 
     def _schedule_sprite_page_refresh(self) -> None:
         if self._sprite_refresh_scheduled or self.active_page not in {"dashboard", "team", "drafts"}:
@@ -20932,6 +20974,10 @@ class RoleRunManager(ctk.CTk):
                         self._sprite_placeholder_species.add(species_id)
                         faltantes.append(species_id)
                 self.sprite_pil_cache[species_id] = image
+                # El sprite que acaba de llegar invalida lo que hubiera
+                # redimensionado de esa especie, que sería el hueco o la silueta.
+                for clave in [c for c in self._sprite_image_cache if c[0] == species_id]:
+                    self._sprite_image_cache.pop(clave, None)
                 self._apply_sprite(slot, image)
                 if self.project and self.current_game:
                     self._sync_obs_state(self.current_game)

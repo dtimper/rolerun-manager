@@ -31,6 +31,10 @@ class _SpriteHarness:
     def __init__(self) -> None:
         self.sprite_queue: queue.SimpleQueue = queue.SimpleQueue()
         self.sprite_pil_cache: dict[int, Image.Image] = {}
+        # El sprite ya redimensionado. Un sprite que llega tarde tiene
+        # que invalidar lo que se hubiera cacheado de esa especie, que
+        # sería la silueta de ausencia.
+        self._sprite_image_cache: dict = {}
         self._sprite_placeholder_species: set[int] = set()
         self._sprite_requests_in_flight: set[int] = set()
         self.project = None
