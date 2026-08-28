@@ -258,8 +258,13 @@ def test_las_estadisticas_de_la_partida_real_cuadran_con_la_tabla_personal() -> 
 def _en_claro(cifrado: bytes) -> bytes:
     """El mismo PK4 tal y como el juego lo deja cuando trabaja con él.
 
-    Medido sobre la partida real: el Hoothoot del usuario estaba así, con
-    `sanity` a 4 y el cuerpo sin cifrar. Los otros cuatro miembros, cifrados.
+    Grabado a 0,5 ms sobre la partida real: el mismo Pokémon, con el mismo
+    checksum, sale una vez cifrado y a la siguiente en claro, y los dos dicen
+    exactamente lo mismo.
+
+    La cabecera **no se toca**. Aquí se forzaba `sanity` a 4 porque se creyó que
+    era la marca del estado en claro; era falso, y el Hoothoot del que salió esa
+    idea era casi con seguridad un «Huevo malo» ya estropeado.
     """
     import struct
 
@@ -267,7 +272,6 @@ def _en_claro(cifrado: bytes) -> bytes:
 
     pid, _sanity, checksum = struct.unpack_from("<IHH", cifrado, 0)
     cabecera = bytearray(cifrado[:8])
-    struct.pack_into("<H", cabecera, 4, 4)          # el sanity que deja el juego
     cuerpo = _crypt(cifrado[8:PK4_STORED_SIZE], checksum)
     cola = cifrado[PK4_STORED_SIZE:]
     return bytes(cabecera) + cuerpo + (_crypt(cola, pid) if cola else b"")

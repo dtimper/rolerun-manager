@@ -1,6 +1,50 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.96 — cinco de seis, y la marca que nadie miraba
+
+**Corrección de alpha.95: lo de «mezcla de dos escrituras» era falso.** Salió de
+una lectura suelta, que se parte. Con mayoría de 60 lecturas por hueco, la
+partida tras FIJAR ROLES estaba así:
+
+| hueco | | EV escritos |
+|-------|--|-------------|
+| 1 TOTODILE | correcto | (252, 252, 0, 0, 0, 0) |
+| 2 HOOTHOOT | correcto | (0, 252, 0, 0, 0, 252) |
+| 3 RATTATA | correcto | (0, 0, 0, 252, 0, 252) |
+| **4 WOOPER** | **roto** | `sanity=0x0004` |
+| 5 GASTLY | correcto | (252, 0, 0, 0, 252, 0) |
+| 6 SPINARAK | correcto | (0, 0, 252, 0, 252, 0) |
+
+**FIJAR ROLES funcionó en cinco de seis.** El sexto lleva algo en los dos bytes
+de 0x04 que los otros cinco no llevan, y que tampoco llevan los veinticuatro
+casos generados por PKHeX: todos ellos, 0x0000.
+
+## Lo que se hace con eso
+
+No se sabe qué significa cada valor de ese campo, así que **no se rechaza nada
+por su contenido**. Se vigila como **cambio**: si no vale lo mismo antes y
+después de escribir, el juego ha tocado esa ficha por su cuenta y se deshace.
+
+La referencia se toma **una sola vez**, no en cada intento. Se comprobó con el
+doble de pruebas que tomarla de nuevo dejaba entrar la marca como referencia
+buena en el intento siguiente, y la protección no servía de nada.
+
+Esto no cierra el problema —una escritura de 236 bytes no es atómica para el
+juego emulado, y lo que pase después del readback no lo ve nadie— pero sí cubre
+el caso que se midió: que el juego marque la ficha mientras se escribe.
+
+## Corregido también
+
+La nota de `unshuffle_pk4` decía que `sanity=4` marcaba el estado en claro. Era
+falsa y llevaba media sesión ahí. El Hoothoot del que salió esa idea era casi con
+seguridad un «Huevo malo» ya estropeado, y el ayudante de pruebas `_en_claro`
+forzaba ese 4 a mano por la misma razón: ahora deja la cabecera como está.
+
+La escritura de cuarta sigue apagada.
+
+Suite completa: **1797**.
+
 # v0.2.6-alpha.95 — la prueba: el juego reescribe encima de lo escrito
 
 Cuarto «Huevo malo», esta vez al pulsar FIJAR ROLES. Y por fin se capturó el

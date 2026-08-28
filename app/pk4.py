@@ -55,6 +55,19 @@ _PERMUTATIONS = (
     (1, 2, 3, 0), (1, 3, 2, 0), (2, 1, 3, 0), (3, 1, 2, 0), (2, 3, 1, 0), (3, 2, 1, 0),
 )
 
+# EL CAMPO QUE EL JUEGO TOCA CUANDO ALGO LE HUELE MAL
+#
+# Dos bytes en 0x04, en la cabecera que va siempre en claro. Valen 0 en los seis
+# miembros sanos de la partida del usuario y en los veinticuatro casos generados
+# por PKHeX. El único registro que salió «Huevo malo» -el Wooper del cuarto
+# incidente- llevaba 0x0004.
+#
+# No se sabe qué significa cada valor, así que **no se usa como regla**: nada se
+# rechaza por su contenido. Se usa como **cambio**, que es lo que sí demuestra
+# algo: si no vale lo mismo antes y después de escribir, el juego ha tocado esa
+# ficha por su cuenta.
+PK4_SANITY = 0x04
+
 # Desplazamientos dentro del PK4 canónico (descifrado y desbarajado).
 PK4_SPECIES = 0x08
 PK4_HELD_ITEM = 0x0A
@@ -135,16 +148,13 @@ def unshuffle_pk4(block: bytes):
     HAY DOS ESTADOS, Y HAY QUE RESPETAR EL QUE HAYA
 
     Un PK4 vive en memoria **cifrado o en claro**, y el juego pasa de uno a otro
-    cuando trabaja con ese Pokémon. Medido el 28-08-2026 sobre la partida del
-    usuario: de sus cinco miembros, cuatro estaban cifrados y el Hoothoot en
-    claro, con `sanity` a 4 en vez de a 0. Leyéndolo descifrado daba la especie
-    2288 y un mote de basura; leyéndolo tal cual, la especie 163 y «HOOTHOOT».
+    cuando trabaja con ese Pokémon: grabado a 0,5 ms sobre la partida real, el
+    mismo Pokémon con el mismo checksum sale una vez cifrado y a la siguiente en
+    claro, y los dos contenidos dicen exactamente lo mismo.
 
-    Eso era lo que hacía fallar la lectura entera una y otra vez: no era una RAM
-    inquieta, era un miembro en el otro estado.
-
-    El estado **no se deduce del `sanity`**: se demuestra con el checksum, que es
-    la prueba que ya se usa para todo lo demás. Si la suma del cuerpo tal cual
+    El estado **no se deduce del `sanity`** —esa nota estuvo aquí media sesión y
+    era falsa; ver `PK4_SANITY`—: se demuestra con el checksum, que es la prueba
+    que ya se usa para todo lo demás. Si la suma del cuerpo tal cual
     cuadra, está en claro; si cuadra al descifrarlo, está cifrado; si no cuadra
     de ninguna forma, el bloque no vale.
 

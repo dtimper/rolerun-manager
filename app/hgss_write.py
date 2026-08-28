@@ -29,6 +29,7 @@ Y si lo que se pide ya está puesto, no se escribe nada.
 """
 
 import ctypes
+import struct
 from ctypes import wintypes
 from dataclasses import dataclass
 
@@ -40,7 +41,8 @@ from .hgss_live import (
 )
 from .gen4_memory import PC_BOX_COUNT, PC_BOX_SLOT_COUNT, PC_BOX_STRIDE
 from .pk4 import (
-    PK4_PARTY_SIZE, PK4_STORED_SIZE, Pk4Error, empty_pk4_party, empty_pk4_stored,
+    PK4_PARTY_SIZE, PK4_SANITY, PK4_STORED_SIZE, Pk4Error, empty_pk4_party,
+    empty_pk4_stored,
     parse_pk4_boxed, parse_pk4_party, pk4_party_healed, pk4_party_with_move,
     pk4_party_with_role, pk4_party_without_moves,
 )
@@ -258,6 +260,12 @@ class HgssMelonDSWriter:
         if len({hueco for hueco, _ in peticiones}) != len(peticiones):
             raise HgssLiveError(f"Dos cambios de {que} sobre el mismo hueco.")
 
+        # La referencia de la marca se toma UNA vez. Si se volviera a tomar en
+        # cada intento, un registro que el juego acaba de marcar entraría como
+        # referencia buena en el intento siguiente y la protección no serviría
+        # de nada: se comprobó, y así pasaba.
+        marcas_originales: dict[int, int] | None = None
+
         for intento in range(INTENTOS_DE_ESCRITURA):
             _bloque_demostrado(self.reader)
             antes = self.reader.read_party()
@@ -339,8 +347,30 @@ class HgssMelonDSWriter:
                     raise
                 continue
 
+            def marca(crudo, hueco):
+                return struct.unpack_from(
+                    "<H", crudo, hueco * PK4_PARTY_SIZE + PK4_SANITY,
+                )[0]
+
+            if marcas_originales is None:
+                marcas_originales = {h: marca(crudo_viejo, h) for h in tocados}
+
             try:
                 despues = self.reader.read_party()
+                # Que el juego no haya tocado la ficha por su cuenta.
+                #
+                # Una escritura de 236 bytes no es atómica para el juego
+                # emulado. Si mira el registro a medio escribir, el checksum no
+                # le cuadra y lo marca. Pasó con FIJAR ROLES: cinco de seis
+                # quedaron perfectos y el sexto salió «Huevo malo» con este
+                # campo a 0x0004 mientras los demás seguían a 0x0000 -y el
+                # readback dijo que todo había ido bien, porque nadie lo miraba-.
+                for hueco in tocados:
+                    if marca(despues.raw, hueco) != marcas_originales[hueco]:
+                        raise HgssLiveError(
+                            f"El juego tocó el miembro {hueco + 1} mientras se "
+                            f"escribía {que}; se deshace el cambio."
+                        )
                 # `esperados` cubre los seis huecos con todo lo que se puede
                 # cambiar -PS, PP, EV, marcas, identidad-, así que comparar el
                 # contenido es más fuerte que comparar los bytes de uno solo.

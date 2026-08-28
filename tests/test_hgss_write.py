@@ -737,3 +737,33 @@ def test_curar_el_equipo_entero_con_todas_las_fichas_parpadeando() -> None:
     for miembro in despues.pokemon:
         assert miembro.current_hp == miembro.max_hp
         assert miembro.status_condition == 0
+
+
+def test_si_el_juego_marca_la_ficha_al_escribirla_se_deshace() -> None:
+    """El cuarto «Huevo malo», y por qué RoleRun dijo que todo había ido bien.
+
+    Una escritura de 236 bytes no es atómica para el juego emulado: si mira el
+    registro a medio escribir, el checksum no le cuadra y lo marca. De los seis
+    registros de FIJAR ROLES, cinco quedaron perfectos y el sexto salió con el
+    campo de 0x04 a 0x0004 mientras los demás seguían a 0x0000. El readback lo
+    dio por bueno porque nadie miraba ese campo.
+    """
+    import struct
+
+    from app.pk4 import PK4_SANITY
+
+    emulador = _MelonDSFalso()
+
+    class _MarcaAlEscribir(_WriterDePrueba):
+        def _write_process_bytes(self, process_id, host_address, payload):
+            super()._write_process_bytes(process_id, host_address, payload)
+            # El juego pilla la ficha a medias y la marca.
+            desde = 1 * PK4_PARTY_SIZE + PK4_SANITY
+            memoria = bytearray(self.emulador.raw)
+            if memoria[desde:desde + 2] == bytes(2):
+                struct.pack_into("<H", memoria, desde, 4)
+                self.emulador.raw = memoria
+
+    writer = _MarcaAlEscribir(emulador)
+    with pytest.raises(HgssLiveError, match="tocó el miembro 2"):
+        writer.write_party_roles(emulador.read_party(), [_peticion(emulador, 1)])
