@@ -1,6 +1,33 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.84 — el bloque del guardado se mueve: escritura de cuarta cortada
+
+Al sacar el Pokémon del PC, el juego enseñó un **«Huevo malo»**. Eso es lo que
+muestra cuando un Pokémon tiene el cuerpo de uno y el checksum de otro, y lo
+causó una escritura de RoleRun.
+
+**La causa, medida.** El ancla no es estable. El equipo estuvo en `0x0227C304`
+y apareció después en `0x0227C328`, treinta y seis bytes más allá: en la
+posición nueva el bloque coincide al **99,64 %** con el archivo de la partida y
+en la vieja al **37 %**. Además hay varias copias del bloque a la vez y no todas
+están al día. Toda la arquitectura de cuarta daba por sabida esa dirección.
+
+Leer con la dirección vieja es tolerable: el checksum caza lo que no cuadra y la
+lectura falla en vez de mentir. **Escribir no lo es**, y por eso queda cortado:
+
+- `hgss_write` niega cualquier escritura con un mensaje que dice por qué.
+- HeartGold sale de los conjuntos de writer de la interfaz, así que sus botones
+  de curar, MT y roles no aparecen. La lectura se queda entera.
+- La ayuda del backend lo dice con todas las letras.
+
+Se reactivará cuando la dirección se **localice en cada operación** en vez de
+darse por sabida. Todo lo escrito para cuarta —roles, curación, movimientos, MT,
+mochila, Equipo↔PC— sigue en su sitio y con sus pruebas; lo que falta es el
+anclaje.
+
+Suite completa: **1779**.
+
 # v0.2.6-alpha.83 — el cambio se preparaba y nadie lo enviaba
 
 Al sacar un Pokémon del PC, la pantalla decía «APLICANDO CAMBIO», el Pokémon

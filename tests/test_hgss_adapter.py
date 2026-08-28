@@ -304,10 +304,12 @@ def test_heartgold_entra_en_las_listas_que_le_tocan() -> None:
     for conjunto in (
         REALTIME_READ_GAME_KEYS, LIVE_PC_READ_GAME_KEYS,
         INSTANT_REALTIME_UI_GAME_KEYS, AUTOMATIC_BADGE_GAME_KEYS,
-        # Roles con su reparto de EV: escritura demostrada desde alpha.73.
-        ROLE_EV_WRITER_GAME_KEYS,
     ):
         assert "hgss" in conjunto
+    # Pero NO en las de escritura: cortadas mientras el bloque del guardado se
+    # mueva dentro de la RAM. Escribir con la dirección vieja dejó un «Huevo
+    # malo» en la partida del usuario.
+    assert "hgss" not in ROLE_EV_WRITER_GAME_KEYS
 
 
 def test_la_ayuda_de_heartgold_no_promete_lo_que_no_tiene() -> None:
@@ -316,10 +318,10 @@ def test_la_ayuda_de_heartgold_no_promete_lo_que_no_tiene() -> None:
     texto = RoleRunManager._live_runtime_help_text("hgss")
     assert "medallas" in texto
     # Lo que sí hace…
-    assert "rollback" in texto
-    # …y lo que todavía no.
-    assert "no están demostrados" in texto
-    assert "MT" in texto
+    assert "tiempo real" in texto
+    # …y lo que no, dicho con todas las letras.
+    assert "ESCRITURA está desactivada" in texto
+    assert "Huevo malo" in texto
 
 
 def test_el_pc_de_cuarta_declara_dieciocho_cajas() -> None:
@@ -476,20 +478,21 @@ def test_despues_de_escribir_el_guardado_publicado_lo_dice(adaptador) -> None:
     assert resultado.game.raw["live_write"] is True
 
 
-def test_la_curacion_completa_ya_esta_disponible_en_heartgold() -> None:
-    """El botón CURAR EQUIPO no debe salir sin writer detrás.
+def test_los_botones_de_escritura_no_salen_sin_writer_detras() -> None:
+    """Pasó en quinta: el botón CURAR EQUIPO se renderizaba sin tenerlo.
 
-    Pasó en quinta: en alpha.16 se renderizaba sin tenerlo, encolaba seis
-    curaciones que nadie escribía y dejaba la sesión viva sin lecturas, porque
-    el monitor exige la cola vacía.
+    Encolaba seis curaciones que nadie escribía y dejaba la sesión viva sin
+    lecturas, porque el monitor exige la cola vacía. Cuarta está ahora en esa
+    situación a propósito, así que sus botones no deben aparecer.
     """
     import inspect
 
-    from app.ui import RoleRunManager
+    from app.ui import MELONDS_WRITE_GAME_KEYS, RoleRunManager
 
     fuente = inspect.getsource(RoleRunManager._live_party_heal_available)
-    assert "MELONDS_REALTIME_GAME_KEYS" in fuente
-    assert "MELONDS_GEN5_REALTIME_GAME_KEYS" not in fuente
+    assert "MELONDS_WRITE_GAME_KEYS" in fuente
+    assert "hgss" not in MELONDS_WRITE_GAME_KEYS
+    assert {"b2w2", "bw"} <= MELONDS_WRITE_GAME_KEYS
 
 
 def test_cada_intento_de_escritura_viva_queda_registrado() -> None:
@@ -562,5 +565,5 @@ def test_el_selector_de_mt_usa_un_conjunto_y_no_una_lista_a_mano() -> None:
 
     fuente = inspect.getsource(RoleRunManager._open_tm_selector)
     assert "LIVE_TM_GAME_KEYS" in fuente
-    for clave in ("hgss", "bw", "b2w2"):
+    for clave in ("bw", "b2w2"):
         assert clave in LIVE_TM_GAME_KEYS

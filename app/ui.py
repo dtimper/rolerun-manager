@@ -159,6 +159,16 @@ MELONDS_GEN5_REALTIME_GAME_KEYS = {"b2w2", "bw"}
 # interfaz ofrecería curar, fijar roles o enseñar MT sobre un backend que no
 # sabe hacerlo.
 MELONDS_GEN4_REALTIME_GAME_KEYS = {"hgss"}
+# Cuarta lee, pero **no escribe**: cortado el 28-08-2026. El bloque del guardado
+# se mueve dentro de la RAM -el equipo pasó de `0x0227C304` a `0x0227C328`- y
+# hay varias copias a la vez. Con la dirección vieja, una escritura puede dejar
+# un Pokémon con el cuerpo de uno y el checksum de otro: el juego lo enseña como
+# «Huevo malo», y le pasó al usuario. Se reactivará cuando la dirección se
+# localice en cada operación en vez de darse por sabida.
+MELONDS_GEN4_ESCRIBE = False
+MELONDS_WRITE_GAME_KEYS = MELONDS_GEN5_REALTIME_GAME_KEYS | (
+    MELONDS_GEN4_REALTIME_GAME_KEYS if MELONDS_GEN4_ESCRIBE else set()
+)
 MELONDS_REALTIME_GAME_KEYS = (
     MELONDS_GEN5_REALTIME_GAME_KEYS | MELONDS_GEN4_REALTIME_GAME_KEYS
 )
@@ -180,7 +190,7 @@ AUTOMATIC_BADGE_GAME_KEYS = {"oras", "xy", "sm", "usum"} | MELONDS_REALTIME_GAME
 # juego escribiera la marca del rol pero no sus EV: exactamente lo que le
 # pasaba a B2/W2 antes de tener writer.
 ROLE_EV_WRITER_GAME_KEYS = (
-    {"bdsp", "oras", "xy", "sm", "usum"} | MELONDS_REALTIME_GAME_KEYS
+    {"bdsp", "oras", "xy", "sm", "usum"} | MELONDS_WRITE_GAME_KEYS
 )
 # Backends que saben decir qué enseña cada MT en la partida abierta. Estaba
 # repetido como literal en tres sitios y añadir un juego obligaba a acordarse de
@@ -3566,7 +3576,7 @@ class RoleRunManager(ctk.CTk):
         máximo, estado a cero y PP al tope con los Más PP aplicados.
         """
         return self._active_azahar_realtime_key() in (
-            {"bdsp", "sm", "usum", "xy", "oras"} | MELONDS_REALTIME_GAME_KEYS
+            {"bdsp", "sm", "usum", "xy", "oras"} | MELONDS_WRITE_GAME_KEYS
         )
 
     # ---------- WELCOME / GAME SELECTION ----------
@@ -7445,12 +7455,10 @@ class RoleRunManager(ctk.CTk):
             "hgss": (
                 "Oro HeartGold/Plata SoulSilver lee en tiempo real equipo, cajas "
                 "PC, dinero y medallas desde melonDS mediante PK4 validados por "
-                "checksum e identidad. Roles con su reparto de EV, curación "
-                "completa, movimientos, MT y las utilidades de la cabecera usan "
-                "escritura transaccional con readback y rollback. **En cuarta "
-                "las MT se gastan**, así que enseñar una descuenta el objeto de "
-                "la mochila en la misma transacción. El Equipo↔PC y el carril "
-                "de combate todavía no están demostrados."
+                "checksum e identidad. La ESCRITURA está desactivada: el bloque "
+                "del guardado se mueve dentro de la RAM y con la dirección vieja "
+                "una escritura puede dejar un Pokémon como «Huevo malo». Se "
+                "reactivará cuando la dirección se localice en cada operación."
             ),
         }
         return descriptions.get(str(live_key or ""), "Backend realtime no identificado.")
@@ -7477,7 +7485,7 @@ class RoleRunManager(ctk.CTk):
         return bool(
             self.run.pending_changes
             and self._active_azahar_realtime_key() not in (
-                {"sm", "usum", "bdsp"} | MELONDS_REALTIME_GAME_KEYS
+                {"sm", "usum", "bdsp"} | MELONDS_WRITE_GAME_KEYS
             )
         )
 

@@ -58,6 +58,34 @@ _PROCESS_QUERY_INFORMATION = 0x0400
 # rollback no se confirma, no se reintenta nada y se avisa.
 INTENTOS_DE_ESCRITURA = 3
 
+# ESCRITURA CORTADA A PROPÓSITO — 28-08-2026
+#
+# El bloque del guardado **se mueve dentro de la RAM**. Medido sobre la partida
+# del usuario: el equipo estuvo en `0x0227C304` y apareció después en
+# `0x0227C328`, treinta y seis bytes más allá, con el bloque entero coincidiendo
+# al 99,64 % con el archivo en la nueva posición y al 37 % en la vieja. Y hay
+# varias copias del bloque a la vez, no todas al día.
+#
+# Con un ancla fija, una escritura puede caer junto a donde debía y dejar un
+# Pokémon con el cuerpo de uno y el checksum de otro. Eso es exactamente lo que
+# el juego enseña como **«Huevo malo»**, y le pasó al usuario.
+#
+# Leer con el ancla fija es tolerable —lo que no cuadre lo caza el checksum y la
+# lectura falla en vez de mentir—, pero escribir no lo es. Queda cortado hasta
+# que la dirección se localice de nuevo en cada operación en vez de darse por
+# sabida.
+ESCRITURA_HABILITADA = False
+
+
+def _escritura_permitida() -> None:
+    if not ESCRITURA_HABILITADA:
+        raise HgssLiveError(
+            "La escritura en HeartGold está desactivada. El bloque del guardado "
+            "se mueve dentro de la RAM y una escritura con la dirección vieja "
+            "puede dejar un Pokémon como «Huevo malo». Se reactivará cuando la "
+            "dirección se localice en cada operación."
+        )
+
 if _KERNEL32 is not None:
     _KERNEL32.WriteProcessMemory.argtypes = [
         wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t,
@@ -98,6 +126,7 @@ class HgssMelonDSWriter:
 
     @staticmethod
     def _write_process_bytes(process_id: int, host_address: int, payload: bytes) -> None:
+        _escritura_permitida()
         if _KERNEL32 is None:
             raise HgssLiveError("melonDS en Windows es obligatorio.")
         handle = _KERNEL32.OpenProcess(

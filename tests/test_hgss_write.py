@@ -609,3 +609,22 @@ def test_ensenar_una_mt_gasta_el_objeto() -> None:
     assert "set_bag_quantity" in fuente
     assert "no se descontó de la mochila" in fuente
     assert "deshacer()" in fuente
+
+
+def test_la_escritura_real_esta_cortada() -> None:
+    """El bloque del guardado se mueve dentro de la RAM.
+
+    Medido el 28-08-2026: el equipo estuvo en `0x0227C304` y apareció después
+    en `0x0227C328`, con el bloque coincidiendo al 99,64 % con el archivo en la
+    posición nueva y al 37 % en la vieja. Con la dirección vieja, una escritura
+    puede dejar un Pokémon con el cuerpo de uno y el checksum de otro: el juego
+    lo enseña como **«Huevo malo»**, y le pasó al usuario.
+
+    Leer con la dirección vieja es tolerable —el checksum caza lo que no cuadra
+    y la lectura falla en vez de mentir—; escribir no lo es.
+    """
+    from app.hgss_write import ESCRITURA_HABILITADA, HgssMelonDSWriter
+
+    assert ESCRITURA_HABILITADA is False
+    with pytest.raises(HgssLiveError, match="Huevo malo"):
+        HgssMelonDSWriter._write_process_bytes(0, 0, b"\x00")
