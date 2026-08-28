@@ -1,6 +1,32 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.0-alpha.6 — «MOVIENDO EN EL PC» para siempre
+
+El writer del movimiento dentro del PC estaba listo y la interfaz lo ofrecía,
+pero **dos compuertas de la UI seguían sin conocer la operación**. El resultado
+fue el peor posible: el cambio se creaba, el rótulo decía «MOVIENDO EN EL PC ·
+Verificando Caja 1, posición 11 → Caja 1, posición 3»… y ahí se quedaba.
+
+Nadie llegaba a escribir nada, y nada avisaba de ello. Ni un error, ni un
+rechazo: un estado que no termina nunca.
+
+## Las dos compuertas
+
+Existen por buenas razones —no aplicar a ciegas una cola entera, y avisar de lo
+que no se puede aplicar en vivo—, pero son **listas de operaciones escritas a
+mano en sitios distintos** del que las declara:
+
+- `_request_oras_live_auto_apply`: si la operación no está, el cambio nunca llega
+  al writer.
+- `_oras_live_unsupported_changes`: si no está, se anuncia como no aplicable.
+
+Añadir un writer obligaba a acordarse de las dos. Ahora hay una prueba que ata
+las tres listas: lo que `BDSPLiveWriter.apply` sabe despachar tiene que
+atravesar todas las compuertas. Con el código anterior falla en dos.
+
+1958 passed, 1 skipped.
+
 # v0.3.0-alpha.5 — mover Pokémon dentro del PC en Perla Reluciente
 
 Arrastrar de un hueco del PC a otro decía «DESTINO NO HABILITADO». Ya no.

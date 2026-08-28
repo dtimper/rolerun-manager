@@ -8155,6 +8155,11 @@ class RoleRunManager(ctk.CTk):
                     supported_ids.add(id(change))
                 elif isinstance(change, PendingTeamChange) and change.operation in {
                     "swap-party-box", "party-to-box", "box-to-party", "replace-fainted",
+                    # Mover dentro del PC son las dos escrituras de caja que
+                    # `party-to-box` y `box-to-party` ya hacen. Sin esta entrada
+                    # el cambio se creaba, el rótulo decía «MOVIENDO EN EL PC» y
+                    # ahí se quedaba para siempre: nadie llegaba a escribirlo.
+                    "move-box-slot",
                 }:
                     # El writer BDSP 1↔1 ya valida las identidades party/PC,
                     # hace readback semántico y rollback. Debe atravesar también
@@ -11052,6 +11057,7 @@ class RoleRunManager(ctk.CTk):
                     continue
                 if isinstance(change, PendingTeamChange) and change.operation in {
                     "swap-party-box", "party-to-box", "box-to-party", "replace-fainted",
+                    "move-box-slot",
                 }:
                     continue
                 label = {
