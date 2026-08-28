@@ -153,6 +153,23 @@ def main() -> int:
             cuando = datetime.fromtimestamp(tramo["inicio"]).strftime("%H:%M:%S")
             print(f"     {cuando}   {duracion:5.1f}s")
 
+    arrastres = [
+        f for f in filas if str(f.get("event", "")).startswith("arrastre.")
+    ]
+    if arrastres:
+        print()
+        print("  arrastres de esta traza:")
+        for f in arrastres[-25:]:
+            cuando = datetime.fromtimestamp(f["timestamp"]).strftime("%H:%M:%S")
+            extra = " ".join(
+                f"{k}={v}" for k, v in f.items()
+                if k not in ("version", "timestamp", "event")
+            )
+            print(f"     {cuando}   {str(f['event']):<22} {extra}")
+        print()
+        print("  un 'empieza' sin su 'se_mueve' es un arrastre que se quedo")
+        print("  en el sitio: el raton se movio y el aviso no llego al widget.")
+
     escrituras = [f for f in filas if f.get("event") == "write-verified"]
     if escrituras:
         print()

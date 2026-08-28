@@ -136,3 +136,32 @@ def test_sin_traza_lo_dice_y_no_revienta(monkeypatch, capsys, tmp_path) -> None:
 
     assert ver_congelados.main() == 1
     assert "No hay traza" in capsys.readouterr().out
+
+
+def test_los_arrastres_salen_en_el_resumen(monkeypatch, capsys, tmp_path) -> None:
+    """Un 'empieza' sin su 'se_mueve' es un arrastre que se quedo en el sitio.
+
+    El fallo es intermitente -"a veces no me deja arrastrar los del PC"- y la
+    medicion de tiempos solo existe si se abrio con medir_lentitud.bat. Nadie
+    se acuerda de medir justo cuando falla, asi que esto tiene que verse en el
+    trazado del juego, que esta siempre encendido.
+    """
+    import json
+
+    registro = tmp_path / "bdsp_realtime_trace_latest.jsonl"
+    registro.write_text("\n".join(json.dumps(f) for f in [
+        {"version": "0.3.0", **_captura(100.0, [10, 0, 1], foco=True)},
+        {"version": "0.3.0", "event": "arrastre.empieza", "timestamp": 100.2,
+         "origen": "pc", "widget": "CTkLabel"},
+        {"version": "0.3.0", "event": "arrastre.se_mueve", "timestamp": 100.4,
+         "origen": "pc"},
+        {"version": "0.3.0", **_captura(100.8, [10, 0, 2], foco=True)},
+    ]) + "\n", encoding="utf-8")
+    monkeypatch.setattr(ver_congelados, "RUTA", registro)
+
+    assert ver_congelados.main() == 0
+    salida = capsys.readouterr().out
+    salida.encode("cp1252")
+    assert "arrastre.empieza" in salida
+    assert "arrastre.se_mueve" in salida
+    assert "origen=pc" in salida

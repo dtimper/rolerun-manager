@@ -13595,10 +13595,16 @@ class RoleRunManager(ctk.CTk):
         except Exception:
             pass
 
-    @staticmethod
-    def _anotar_de_la_vista(evento: str, **campos: object) -> None:
-        """Recoge lo que la vista quiera dejar anotado en la medición."""
+    def _anotar_de_la_vista(self, evento: str, **campos: object) -> None:
+        """Recoge lo que la vista quiera dejar anotado.
+
+        Va a los dos sitios a propósito. La medición de tiempos solo existe si se
+        abrió con `medir_lentitud.bat`, y un fallo intermitente —«a veces no me
+        deja arrastrar»— nunca aparece cuando uno se acuerda de medir. El
+        trazado del juego en vivo está siempre encendido.
+        """
         perf.mark(f"ui.{evento}", **campos)
+        self._record_bdsp_ui_event(evento, **campos)
 
     def _refrescar_team_pc_en_sitio(
         self, overlay=None, reset_scroll: bool = False,

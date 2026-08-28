@@ -1,6 +1,45 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.0-alpha.7 — dejar de conjeturar sobre el arrastre del PC
+
+«A veces los slots del PC no deja arrastrarlos al equipo. Los del equipo creo
+que sí que deja siempre.»
+
+Esa asimetría es la pista, y se han descartado dos explicaciones **midiendo**:
+
+- que `configure(image=…)` cree un hijo nuevo sin enganchar en un botón
+  reutilizado. **No lo crea**: un CTkButton nacido sin imagen se queda en
+  `[CTkCanvas, Label]` y sigue igual después de ponerle una.
+- que el destino no se resolviera. Con la ventana mapeada de verdad, los seis
+  destinos de equipo van primeros y soltar desde una casilla del PC sobre una
+  tarjeta devuelve `('pc', 'team')`.
+
+Queda una diferencia real: una casilla del PC es un **CTkButton con hijos
+propios y su propio manejador de clic**, y una tarjeta del equipo es un marco.
+Pero eso ya sería la tercera conjetura, y no hay con qué elegir entre ellas.
+
+## Lo que se hace en su lugar
+
+El rastro del arrastre **se graba siempre**. Estaba solo en la medición de
+tiempos, que únicamente existe si se abrió con `medir_lentitud.bat`, y un fallo
+intermitente no aparece cuando uno se acuerda de medir. Ahora va también al
+trazado del juego en vivo, que está siempre encendido.
+
+Y se anota el paso que faltaba: **de «he pulsado» a «estoy moviendo»**. Con eso
+la traza distingue las dos cosas que hoy se ven igual:
+
+| en la traza | qué pasó |
+|---|---|
+| ni `arrastre.empieza` | el clic no llegó al widget: no hay enganche ahí |
+| `empieza` sin `se_mueve` | el movimiento del ratón no llega al widget pulsado |
+| las dos y `se_pierde` | se soltó donde no había destino |
+
+`ver_congelados_bdsp.bat` los lista. La próxima vez que pase, la traza lo dice
+sin tener que reproducirlo a propósito.
+
+1959 passed, 1 skipped.
+
 # v0.3.0-alpha.6 — «MOVIENDO EN EL PC» para siempre
 
 El writer del movimiento dentro del PC estaba listo y la interfaz lo ofrecía,

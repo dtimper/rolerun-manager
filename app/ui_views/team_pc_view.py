@@ -1973,7 +1973,10 @@ class UnifiedTeamPCView:
                 hueco_vacio=pokemon is None,
             )
             return
-        self.anotar("arrastre.empieza", origen=context)
+        self.anotar(
+            "arrastre.empieza", origen=context,
+            widget=type(getattr(event, "widget", None)).__name__,
+        )
         self._cancel_drag()
         self._drag_origin = (int(event.x_root), int(event.y_root))
         self._drag_source = (str(context), pokemon)
@@ -2077,6 +2080,10 @@ class UnifiedTeamPCView:
             return None
         distance = abs(int(event.x_root) - self._drag_origin[0]) + abs(int(event.y_root) - self._drag_origin[1])
         if not self._drag_started and distance >= 7:
+            # Aquí es donde un arrastre pasa de "he pulsado" a "estoy moviendo".
+            # Si `_begin_drag` corrió y esto no, el movimiento del ratón no está
+            # llegando al widget donde se pulsó, y eso es lo que hay que ver.
+            self.anotar("arrastre.se_mueve", origen=str(self._drag_source[0]))
             self._drag_started = True
             self._suppress_click_once = True
             context, pokemon = self._drag_source
