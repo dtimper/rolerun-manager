@@ -1,6 +1,42 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.90 — herramienta para ver cuándo la ficha está en reposo
+
+`cuando_se_puede_escribir_heartgold.bat`. Muestrea el bloque de equipo a 0,5 ms
+y clasifica cada ficha en **reposo** (cifrada y legible), **en claro** (legible
+sin cifrar) o **partida** (pillada a medias), en tres fases: quieto, andando y
+con el menú Pokémon abierto. No escribe ni un byte.
+
+Sirve para comprobar la hipótesis de alpha.89: que el juego descifra la ficha en
+su sitio y la vuelve a cifrar, y que escribir dentro de esa ventana deja el
+checksum sin cuadrar —un «Huevo malo»—.
+
+## Lo que ya se ve en un ensayo de 2 segundos
+
+4029 muestras, partida quieta:
+
+| hueco | reposo | en claro | partida | ventana mala |
+|-------|--------|----------|---------|--------------|
+| 1 | 3951 | 30 | 48 | 0,5 ms |
+| 2 | 2533 | 198 | 1298 | **hasta 14 ms** |
+| 3 | 3949 | 32 | 48 | 0,5 ms |
+| 4 | 3967 | 24 | 38 | 0,5 ms |
+| 5 | 3948 | 31 | 50 | 0,5 ms |
+| 6 | 3962 | 20 | 47 | 0,5 ms |
+
+**Las ventanas existen**: la ficha sale de reposo decenas de veces por segundo.
+Y el hueco 2 está fuera de reposo el 37 % del tiempo, **por posición y no por
+Pokémon** —el que está ahí ahora no es el que estaba antes—.
+
+Lo prometedor: las rachas de reposo duran entre 25 y 120 ms y una escritura tarda
+menos de 1 ms. Si la hipótesis se confirma, esperar a una racha de reposo y
+escribir dentro cabe de sobra.
+
+La escritura de cuarta sigue apagada.
+
+Suite completa: **1791**.
+
 # v0.2.6-alpha.89 — la escritura de cuarta se apaga hasta demostrar el mecanismo
 
 Tercer «Huevo malo» en la partida del usuario al pulsar CURAR. Lo que se sabe
