@@ -17,17 +17,30 @@ que no vuelva a encenderse solo.
 
 El vuelo del Pokémon entre el equipo y el PC se queda: eso no se objetó.
 
-## Contexto que puede importar
+## Y de paso, el congelado tiene explicación
 
-El usuario reporta que Windows **no puede abrir el mezclador de volumen**, y que
-el juego se le bloqueó nada más abrir RoleRun. Eso no es un síntoma de RoleRun:
-es el servicio de audio de Windows atascado, y un emulador se cuelga así porque
-su hilo de audio se queda esperando.
+Investigando esto salió la pieza que faltaba. El usuario reportó que Windows **no
+podía abrir el mezclador de volumen**, y que **al cerrar Ryujinx el mezclador se
+abrió al instante**.
 
-Los efectos reproducían con `winsound.PlaySound` **en un hilo por sonido**, y
-moverse por una caja del PC podía lanzar muchos seguidos. Apagarlos quita esa
-vía. No explica el primer congelado —fue con la escritura de una MT, mucho antes
-de que existieran los sonidos—, así que no se da por cerrado nada.
+Eso señala a Ryujinx teniendo atascado el audio de Windows, y encaja con todo lo
+medido hasta ahora:
+
+- **es intermitente** —depende de cuándo se atasque el audio—;
+- **el reloj del juego seguía avanzando** durante un congelado: el hilo de CPU
+  sigue vivo y el que se queda esperando es el de audio;
+- la memoria del juego seguía siendo legible y coherente;
+- **reiniciar Ryujinx era lo único que lo arreglaba**.
+
+También explica por qué dos hipótesis sobre la escritura de MT no llevaban a
+ningún sitio: la mochila queda como el juego la deja y `_set_move` escribe lo
+mismo que `CoreParam.SetWaza`. La escritura no era el problema; coincidió.
+
+Lo accionable está en Ryujinx, no aquí: **Options → Settings → Audio → Audio
+Backend**, y cambiar el que esté puesto por otro (SDL2 / OpenAL / SoundIO).
+
+Los efectos de RoleRun reproducían con `winsound.PlaySound` **en un hilo por
+sonido**, así que apagarlos también quita a RoleRun de esa disputa.
 
 1937 passed, 1 skipped.
 
