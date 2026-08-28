@@ -1,6 +1,41 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.85 — la dirección ya no se da por sabida: se busca
+
+HeartGold vuelve a escribir, con la causa del «Huevo malo» resuelta de raíz.
+
+**Encontrar el bloque.** El nombre del entrenador y sus identificadores no
+cambian mientras se juega, así que sirven de firma y viven al principio del
+bloque. Sumando la marca `0x20060623` que cuarta pone al final del bloque
+general, de los cuatro candidatos que aparecían en la RAM del usuario quedan los
+dos de verdad.
+
+**Saber cuál manda.** Los dos que quedan se parecen tanto que tienen hasta el
+mismo pie. Lo que los distingue es que **el vivo se mueve**: en 30 muestras
+tomadas en tres décimas de segundo, el bloque bueno cambió nueve veces y la
+copia congelada ninguna. Ni siquiera hizo falta estar en combate. Es la misma
+prueba de dos estados que localizó las filas de combate de Blanco.
+
+**No escribir a ciegas.** Dos condiciones, y sin las dos no se toca nada:
+
+1. Que el bloque esté demostrado vivo.
+2. Que la dirección **siga valiendo justo antes de escribir**: se relee el
+   equipo y tiene que salir byte a byte el mismo. Eso cierra la ventana por la
+   que se coló el fallo —la lectura fue buena y, para cuando llegó la escritura,
+   el bloque ya se había movido—.
+
+**Y una tercera cosa que apareció por el camino.** La extensión de combate puede
+ir en un estado distinto del cuerpo: se vio un Totodile con el cuerpo cifrado y
+la extensión en claro, y leerla al revés lo dejaba a nivel 50 con 52226 PS. Como
+no tiene checksum propio, se decide por coherencia: nivel entre 1 y 100, PS
+máximos que quepan en el juego y actuales que no los pasen.
+
+Medido después: **60 lecturas seguidas sin un fallo**, con el bloque localizado
+solo, y ni un valor imposible.
+
+Suite completa: **1782**.
+
 # v0.2.6-alpha.84 — el bloque del guardado se mueve: escritura de cuarta cortada
 
 Al sacar el Pokémon del PC, el juego enseñó un **«Huevo malo»**. Eso es lo que

@@ -159,13 +159,13 @@ MELONDS_GEN5_REALTIME_GAME_KEYS = {"b2w2", "bw"}
 # interfaz ofrecería curar, fijar roles o enseñar MT sobre un backend que no
 # sabe hacerlo.
 MELONDS_GEN4_REALTIME_GAME_KEYS = {"hgss"}
-# Cuarta lee, pero **no escribe**: cortado el 28-08-2026. El bloque del guardado
-# se mueve dentro de la RAM -el equipo pasó de `0x0227C304` a `0x0227C328`- y
-# hay varias copias a la vez. Con la dirección vieja, una escritura puede dejar
-# un Pokémon con el cuerpo de uno y el checksum de otro: el juego lo enseña como
-# «Huevo malo», y le pasó al usuario. Se reactivará cuando la dirección se
-# localice en cada operación en vez de darse por sabida.
-MELONDS_GEN4_ESCRIBE = False
+# El bloque del guardado de cuarta **se mueve dentro de la RAM** y hay varias
+# copias a la vez. Escribir con la dirección vieja dejó un «Huevo malo» en la
+# partida del usuario. Desde alpha.85 la dirección se localiza —por la firma del
+# entrenador y la marca del bloque— y se comprueba cuál de las copias actualiza
+# el juego, mirando cuál se mueve; y antes de cada escritura se confirma que
+# sigue valiendo. Sin esas dos pruebas, el writer se niega.
+MELONDS_GEN4_ESCRIBE = True
 MELONDS_WRITE_GAME_KEYS = MELONDS_GEN5_REALTIME_GAME_KEYS | (
     MELONDS_GEN4_REALTIME_GAME_KEYS if MELONDS_GEN4_ESCRIBE else set()
 )
@@ -437,6 +437,9 @@ class RoleRunManager(ctk.CTk):
         self.hgss_realtime_adapter = HgssRealTimeAdapter(
             role_layout_getter=lambda: self.native_save_engine.role_marker_layout,
             rom_getter=lambda: self._get_gen4_rom_profile("hgss"),
+            save_path_getter=lambda: str(
+                getattr(self.current_save, "path", "") or "",
+            ) or None,
         )
 
         self.realtime_registry = RealTimeRegistry()
@@ -7455,10 +7458,13 @@ class RoleRunManager(ctk.CTk):
             "hgss": (
                 "Oro HeartGold/Plata SoulSilver lee en tiempo real equipo, cajas "
                 "PC, dinero y medallas desde melonDS mediante PK4 validados por "
-                "checksum e identidad. La ESCRITURA está desactivada: el bloque "
-                "del guardado se mueve dentro de la RAM y con la dirección vieja "
-                "una escritura puede dejar un Pokémon como «Huevo malo». Se "
-                "reactivará cuando la dirección se localice en cada operación."
+                "checksum e identidad. Roles con su reparto de EV, curación, "
+                "movimientos, MT —que en cuarta **se gastan**—, las utilidades "
+                "de la cabecera y Equipo↔PC usan escritura transaccional con "
+                "readback y rollback. El bloque del guardado se mueve dentro de "
+                "la RAM, así que su dirección se localiza y se comprueba cuál "
+                "de las copias usa el juego antes de escribir nada. El carril "
+                "de combate todavía no está demostrado."
             ),
         }
         return descriptions.get(str(live_key or ""), "Backend realtime no identificado.")

@@ -195,10 +195,50 @@ def reshuffle_pk4(
     return bytes(cabecera) + (_crypt(cuerpo, checksum) if cifrado else cuerpo)
 
 
+# Un nivel va de 1 a 100 y ningún Pokémon de cuarta pasa de 999 PS: con eso se
+# distingue una extensión bien leída de una leída en el estado equivocado.
+_NIVEL_MAXIMO = 100
+_PS_MAXIMOS = 999
+
+
+def _extension_coherente(cola: bytes) -> bool:
+    """Si esos 100 bytes se pueden leer como una extensión de combate."""
+    if len(cola) < 0x14:
+        return False
+    nivel = cola[PK4_LEVEL - PK4_STORED_SIZE]
+    actual, maximo = struct.unpack_from("<2H", cola, PK4_CURRENT_HP - PK4_STORED_SIZE)
+    return (
+        1 <= nivel <= _NIVEL_MAXIMO
+        and 0 < maximo <= _PS_MAXIMOS
+        and actual <= maximo
+    )
+
+
 def _extension(block: bytes, pid: int, cifrado: bool) -> bytes:
-    """La extensión de combate, en claro. Va en el mismo estado que el cuerpo."""
+    """La extensión de combate, en claro.
+
+    Normalmente va en el mismo estado que el cuerpo, pero **no siempre**: se ha
+    visto un Totodile cuyo cuerpo cuadraba cifrado y cuya extensión estaba en
+    claro, y leerla al revés lo dejaba a nivel 50 con 52226 PS.
+
+    La extensión no tiene checksum propio, así que se decide por coherencia: un
+    nivel entre 1 y 100, unos PS máximos que quepan en el juego y unos actuales
+    que no los pasen. Se prueba primero el estado del cuerpo, que es el caso
+    normal, y solo se cambia si ese no sale.
+    """
     cola = block[PK4_STORED_SIZE:]
-    return _crypt(cola, pid) if cifrado else cola
+    if not cola:
+        return cola
+    primera = _crypt(cola, pid) if cifrado else cola
+    if _extension_coherente(primera):
+        return primera
+    segunda = cola if cifrado else _crypt(cola, pid)
+    if _extension_coherente(segunda):
+        return segunda
+    raise Pk4Error(
+        "La extensión de combate del PK4 no se puede leer de ninguna de las dos "
+        "formas."
+    )
 
 
 def _con_extension(canonico, orden, pid, cifrado, extension) -> bytes:

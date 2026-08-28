@@ -58,32 +58,31 @@ _PROCESS_QUERY_INFORMATION = 0x0400
 # rollback no se confirma, no se reintenta nada y se avisa.
 INTENTOS_DE_ESCRITURA = 3
 
-# ESCRITURA CORTADA A PROPÓSITO — 28-08-2026
+# QUÉ SE EXIGE ANTES DE ESCRIBIR
 #
-# El bloque del guardado **se mueve dentro de la RAM**. Medido sobre la partida
-# del usuario: el equipo estuvo en `0x0227C304` y apareció después en
-# `0x0227C328`, treinta y seis bytes más allá, con el bloque entero coincidiendo
-# al 99,64 % con el archivo en la nueva posición y al 37 % en la vieja. Y hay
-# varias copias del bloque a la vez, no todas al día.
+# El bloque del guardado **se mueve dentro de la RAM** y hay varias copias a la
+# vez. El equipo estuvo en `0x0227C304` y apareció después treinta y seis bytes
+# más allá; escribir con la dirección vieja dejó un «Huevo malo» en la partida
+# del usuario, que es lo que el juego enseña cuando un Pokémon tiene el cuerpo
+# de uno y el checksum de otro.
 #
-# Con un ancla fija, una escritura puede caer junto a donde debía y dejar un
-# Pokémon con el cuerpo de uno y el checksum de otro. Eso es exactamente lo que
-# el juego enseña como **«Huevo malo»**, y le pasó al usuario.
+# Así que aquí no se escribe a menos que se cumplan las dos cosas:
 #
-# Leer con el ancla fija es tolerable —lo que no cuadre lo caza el checksum y la
-# lectura falla en vez de mentir—, pero escribir no lo es. Queda cortado hasta
-# que la dirección se localice de nuevo en cada operación en vez de darse por
-# sabida.
-ESCRITURA_HABILITADA = False
-
-
-def _escritura_permitida() -> None:
-    if not ESCRITURA_HABILITADA:
+# 1. Que el bloque esté **demostrado vivo**: localizado y comprobado que es el
+#    que el juego actualiza, viendo que cambia mientras los demás no.
+# 2. Que la dirección **siga valiendo justo antes de escribir**: se relee el
+#    equipo y tiene que ser byte a byte el que se leyó al abrir la transacción.
+#
+# Lo segundo cierra la ventana entre leer y escribir, que es donde se coló el
+# fallo: la lectura fue buena y para cuando llegó la escritura el bloque ya se
+# había movido.
+def _bloque_demostrado(lector) -> None:
+    """Se niega a escribir si no se sabe con certeza dónde está el bloque."""
+    if not getattr(lector, "block_is_live", False):
         raise HgssLiveError(
-            "La escritura en HeartGold está desactivada. El bloque del guardado "
-            "se mueve dentro de la RAM y una escritura con la dirección vieja "
-            "puede dejar un Pokémon como «Huevo malo». Se reactivará cuando la "
-            "dirección se localice en cada operación."
+            "No se ha podido demostrar cuál de los bloques del guardado usa el "
+            "juego, así que no se escribe nada. Suele bastar con que el juego "
+            "esté corriendo -no pausado- y volver a intentarlo."
         )
 
 if _KERNEL32 is not None:
@@ -126,7 +125,6 @@ class HgssMelonDSWriter:
 
     @staticmethod
     def _write_process_bytes(process_id: int, host_address: int, payload: bytes) -> None:
-        _escritura_permitida()
         if _KERNEL32 is None:
             raise HgssLiveError("melonDS en Windows es obligatorio.")
         handle = _KERNEL32.OpenProcess(
@@ -148,6 +146,26 @@ class HgssMelonDSWriter:
                 raise HgssLiveError("Escritura incompleta en HeartGold.")
         finally:
             _KERNEL32.CloseHandle(handle)
+
+    def _confirmar_direccion(self, antes: HgssPartyRead) -> None:
+        """Que el bloque siga donde estaba, justo antes de tocar nada.
+
+        Entre leer y escribir puede moverse, y escribir en la dirección vieja es
+        exactamente lo que dejó un «Huevo malo». Se relee el equipo y tiene que
+        salir byte a byte el mismo.
+        """
+        _bloque_demostrado(self.reader)
+        ahora = self.reader.read_party()
+        if (
+            ahora.process_id != antes.process_id
+            or ahora.allocation_base != antes.allocation_base
+            or ahora.count != antes.count
+            or ahora.raw != antes.raw
+        ):
+            raise HgssLiveError(
+                "El equipo cambió entre la lectura y la escritura; no se ha "
+                "tocado nada. Vuelve a intentarlo."
+            )
 
     def _party_host(self, lectura: HgssPartyRead) -> int:
         return lectura.allocation_base + (self.memory.party_data - DS_RAM_BASE)
@@ -211,6 +229,7 @@ class HgssMelonDSWriter:
                 )
 
         def intentar() -> HgssPartyRead:
+            self._confirmar_direccion(antes)
             self._write_process_bytes(antes.process_id, destino, bytes(crudo_nuevo))
             despues = self.reader.read_party()
             if despues.count != antes.count or despues.raw != bytes(crudo_nuevo):
@@ -453,6 +472,7 @@ class HgssMelonDSWriter:
                 )
 
         try:
+            self._confirmar_direccion(party_read)
             escribir(nuevos)
             despues = self.reader.read_bag(party_read)
             for bolsillo in tocados:
@@ -496,6 +516,7 @@ class HgssMelonDSWriter:
                 )
 
         try:
+            self._confirmar_direccion(party_read)
             self._write_process_bytes(party_read.process_id, destino, nuevo)
             despues = self.reader.read_trainer(party_read)
             if despues.money != cantidad:
@@ -604,6 +625,7 @@ class HgssMelonDSWriter:
                 )
 
         try:
+            self._confirmar_direccion(antes_equipo)
             self._write_process_bytes(
                 antes_equipo.process_id, destino_equipo, bytes(equipo_nuevo),
             )
@@ -696,6 +718,7 @@ class HgssMelonDSWriter:
                 )
 
         try:
+            self._confirmar_direccion(antes_equipo)
             for offset, contenido in huecos.items():
                 self._write_process_bytes(
                     antes_equipo.process_id, destino_pc + offset, contenido,

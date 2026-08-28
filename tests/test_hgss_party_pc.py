@@ -52,6 +52,7 @@ class _Emulador:
 
     def __init__(self, miembros: int = 3, guardados=((0, 1, 1, 10),)) -> None:
         self.memory = HGSS
+        self.block_is_live = True
         self.process_id = 4242
         self.count = miembros
         self.party = bytearray(

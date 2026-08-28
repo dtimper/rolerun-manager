@@ -26,7 +26,7 @@ from ..boxed_metadata import (
 from ..gen4_memory import MONEY_MAX, PC_BOX_STRIDE
 from ..gen4_memory import GEN4_MEMORY, Gen4Memory
 from ..hgss_live import (
-    PC_BOX_SLOT_COUNT, HgssLiveError, HgssMelonDSReader,
+    FIRMA_LARGO, FIRMA_OFFSET, PC_BOX_SLOT_COUNT, HgssLiveError, HgssMelonDSReader,
 )
 from ..hgss_tm_service import build_tm_profile
 from ..hgss_write import HgssMelonDSWriter, HgssRoleWrite
@@ -78,13 +78,19 @@ class HgssRealTimeAdapter(RealTimeGameAdapter):
 
     def __init__(
         self, reader=None, role_layout_getter=None, rom_getter=None,
-        memory: Gen4Memory | None = None,
+        memory: Gen4Memory | None = None, save_path_getter=None,
     ) -> None:
         descriptor = memory or (
             getattr(reader, "memory", None) or GEN4_MEMORY["hgss"]
         )
         self.memory = descriptor
-        self.reader = reader or HgssMelonDSReader(descriptor)
+        # Con qué se reconoce el bloque del guardado dentro de la RAM: el
+        # nombre del entrenador y sus identificadores, que no cambian jugando.
+        # Sin esto no se puede localizar, y la dirección no es fija.
+        self.save_path_getter = save_path_getter or (lambda: None)
+        self.reader = reader or HgssMelonDSReader(
+            descriptor, firma_getter=self._firma_del_entrenador,
+        )
         self.writer = HgssMelonDSWriter(self.reader)
         self.role_layout_getter = role_layout_getter or (lambda: 2)
         # Datos de juego leídos de la ROM que melonDS tiene cargada.
@@ -115,6 +121,19 @@ class HgssRealTimeAdapter(RealTimeGameAdapter):
             }
         except Exception:
             self.move_base_pp = {}
+
+    def _firma_del_entrenador(self) -> bytes | None:
+        """Los veinte bytes con los que se reconoce el bloque del guardado."""
+        ruta = self.save_path_getter()
+        if not ruta:
+            return None
+        try:
+            with Path(ruta).open("rb") as archivo:
+                archivo.seek(FIRMA_OFFSET)
+                firma = archivo.read(FIRMA_LARGO)
+        except OSError:
+            return None
+        return firma if len(firma) == FIRMA_LARGO else None
 
     # ------------------------------------------------------------------
     # Identidad
@@ -770,10 +789,10 @@ class HgssRealTimeAdapter(RealTimeGameAdapter):
             "adapter": self.key,
             "game": self.game_key,
             "anchor": f"0x{self.memory.party_data:08X}",
-            "block_base": f"0x{self.memory.block_base:08X}",
-            # Solo roles y curación: lo demás sigue sin writer demostrado.
+            "block_base": f"0x{self.reader.memory.block_base:08X}",
+            "block_is_live": bool(getattr(self.reader, "block_is_live", False)),
             "writes_enabled": True,
-            "writers": ("roles", "heal"),
+            "writers": ("roles", "heal", "moves", "tm", "bag", "party-pc"),
         }
 
     def reset_runtime_state(self) -> None:

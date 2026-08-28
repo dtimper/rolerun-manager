@@ -37,13 +37,15 @@ import struct
 import threading
 import time
 from ctypes import wintypes
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 
 from . import perf
 from .gen4_memory import (
     BAG_MAX_COUNT,
+    SAVE_PARTY_COUNT,
+    SAVE_PARTY_DATA,
     BAG_SLOT_SIZE,
     GEN4_MEMORY,
     PC_BOX_COUNT,
@@ -335,6 +337,57 @@ def set_bag_quantity(crudo: bytes, bolsillo: HgssBagPocket, item_id: int, cantid
     return bytes(nuevo)
 
 
+# --------------------------------------------------------------------------
+# Dónde está el bloque del guardado, que no siempre está en el mismo sitio
+# --------------------------------------------------------------------------
+
+# Firma con la que se reconoce un bloque: el nombre del entrenador y sus
+# identificadores, que no cambian mientras se juega.
+FIRMA_OFFSET = 0x64
+FIRMA_LARGO = 0x14
+# Marca que cuarta generación pone al final del bloque general, con su tamaño.
+MARCA_OFFSET = 0xF620
+MARCA = 0x20060623
+TAMANO_BLOQUE = 0xF628
+# Cuántas muestras se toman para ver cuál de los bloques se mueve.
+MUESTRAS_DE_VIDA = 12
+ESPERA_ENTRE_MUESTRAS = 0.01
+
+
+@dataclass(frozen=True, slots=True)
+class HgssBloque:
+    """Un bloque del guardado localizado dentro de la RAM del DS."""
+
+    address: int
+    live: bool
+
+
+def bloques_del_guardado(ram: bytes, firma: bytes) -> tuple[int, ...]:
+    """Dónde empieza cada bloque del guardado dentro de un volcado de RAM.
+
+    Se reconocen por dos cosas a la vez: la firma del entrenador al principio y
+    la marca ``0x20060623`` que cuarta pone al final del bloque general. Con la
+    firma sola aparecían cuatro en la partida del usuario; con la marca, dos.
+    """
+    if len(firma) != FIRMA_LARGO:
+        raise HgssLiveError("La firma del entrenador no mide lo que debe.")
+    salida: list[int] = []
+    desde = 0
+    while True:
+        indice = ram.find(firma, desde)
+        if indice < 0:
+            return tuple(salida)
+        desde = indice + 1
+        principio = indice - FIRMA_OFFSET
+        if principio < 0 or principio % 4:
+            continue
+        if principio + TAMANO_BLOQUE > len(ram):
+            continue
+        marca = struct.unpack_from("<I", ram, principio + MARCA_OFFSET)[0]
+        if marca == MARCA:
+            salida.append(principio)
+
+
 def parse_party_block(crudo: bytes, cuantos: int) -> tuple[Pk4Pokemon, ...]:
     """Interpreta el bloque de equipo, o falla sin publicar nada.
 
@@ -394,8 +447,19 @@ def parse_pc_matrix(crudo: bytes) -> tuple[int, tuple[Pk4Pokemon, ...]]:
 class HgssMelonDSReader:
     """Lector cerrado del equipo, el PC y el entrenador de HeartGold."""
 
-    def __init__(self, memory: Gen4Memory | None = None) -> None:
-        self.memory = memory or GEN4_MEMORY["hgss"]
+    def __init__(
+        self, memory: Gen4Memory | None = None, firma_getter=None,
+    ) -> None:
+        # La dirección del bloque **no es fija**: se localiza. El descriptor
+        # base solo aporta los desplazamientos y una dirección de partida.
+        self._memoria_base = memory or GEN4_MEMORY["hgss"]
+        self._memoria_detectada: Gen4Memory | None = None
+        # Solo se marca cuando se ha demostrado que ese bloque es el que el
+        # juego actualiza. Sin eso no se escribe.
+        self._bloque_vivo = False
+        # Devuelve la firma del entrenador sacada del guardado; sin ella no se
+        # puede localizar nada y se trabaja con la dirección de partida.
+        self.firma_getter = firma_getter
         # Reentrante: quien lea el PC puede releer el equipo dentro.
         self._lock = threading.RLock()
         self._resolved: tuple[int, str, int] | None = None
@@ -542,6 +606,19 @@ class HgssMelonDSReader:
     @_serialized
     @perf.timed("hgss.read_party")
     def read_party(self) -> HgssPartyRead:
+        """Lee el equipo, relocalizando el bloque si hiciera falta.
+
+        El bloque del guardado se mueve dentro de la RAM, así que fallar una vez
+        no significa que no esté: significa que hay que volver a buscarlo.
+        """
+        try:
+            return self._read_party_ahora()
+        except HgssLiveError:
+            if not self._relocalizar(self._list_melonds_processes()):
+                raise
+            return self._read_party_ahora()
+
+    def _read_party_ahora(self) -> HgssPartyRead:
         if os.name != "nt":
             raise HgssLiveError("melonDS en Windows es obligatorio.")
         candidatos = self._list_melonds_processes()
@@ -582,6 +659,124 @@ class HgssMelonDSReader:
                     ultimo = str(exc)
         self.forget_resolved_base()
         raise HgssLiveError(ultimo)
+
+    # ------------------------------------------------------------------
+    # Localizar el bloque, que no siempre está en el mismo sitio
+    # ------------------------------------------------------------------
+
+    def _volcar_reserva(self, handle, base: int) -> bytes | None:
+        buffer = ctypes.create_string_buffer(TAMANO_RAM_DS)
+        recibido = ctypes.c_size_t()
+        ok = _KERNEL32.ReadProcessMemory(
+            handle, ctypes.c_void_p(base), buffer, TAMANO_RAM_DS,
+            ctypes.byref(recibido),
+        )
+        return buffer.raw if ok and recibido.value == TAMANO_RAM_DS else None
+
+    def _reservas(self, handle) -> list[int]:
+        direccion, vistas = 0, {}
+        while direccion < 0x7FFFFFFFFFFF:
+            mbi = _MBI()
+            if not _KERNEL32.VirtualQueryEx(
+                handle, ctypes.c_void_p(direccion), ctypes.byref(mbi),
+                ctypes.sizeof(mbi),
+            ):
+                break
+            base = int(mbi.BaseAddress or 0)
+            tamano = int(mbi.RegionSize or 0)
+            reserva = int(mbi.AllocationBase or 0)
+            if mbi.State == 0x1000 and reserva:
+                vistas[reserva] = vistas.get(reserva, 0) + tamano
+            direccion = base + max(tamano, 0x1000)
+        return [
+            reserva for reserva, tamano in sorted(vistas.items())
+            if TAMANO_RAM_DS <= tamano <= 0x40000000
+        ]
+
+    def _cual_se_mueve(self, handle, reserva: int, principios) -> int | None:
+        """De varios bloques, el que el juego está actualizando.
+
+        Medido el 28-08-2026 sobre la partida del usuario: en 30 muestras
+        tomadas en tres décimas de segundo, el bloque vivo cambió **nueve
+        veces** y la copia congelada **ninguna**. No hacía falta ni que
+        estuviera en combate.
+
+        Es la misma prueba de dos estados que localizó las filas de combate de
+        Blanco, y es la única que distingue de verdad: por dentro los dos
+        bloques se parecen tanto que tienen hasta el mismo pie.
+        """
+        if len(principios) == 1:
+            return principios[0]
+        vistos: dict[int, set[bytes]] = {p: set() for p in principios}
+        for _muestra in range(MUESTRAS_DE_VIDA):
+            for principio in principios:
+                crudo = self._leer_directo(
+                    handle, reserva + principio + SAVE_PARTY_COUNT,
+                    4 + MAX_PARTY * PK4_PARTY_SIZE,
+                )
+                if crudo is not None:
+                    vistos[principio].add(crudo)
+            time.sleep(ESPERA_ENTRE_MUESTRAS)
+        moviles = [p for p, contenidos in vistos.items() if len(contenidos) > 1]
+        return moviles[0] if len(moviles) == 1 else None
+
+    @staticmethod
+    def _leer_directo(handle, direccion: int, tamano: int) -> bytes | None:
+        buffer = ctypes.create_string_buffer(tamano)
+        recibido = ctypes.c_size_t()
+        ok = _KERNEL32.ReadProcessMemory(
+            handle, ctypes.c_void_p(direccion), buffer, tamano, ctypes.byref(recibido),
+        )
+        return buffer.raw if ok and recibido.value == tamano else None
+
+    def _relocalizar(self, candidatos) -> bool:
+        """Vuelve a buscar el bloque del guardado y actualiza las direcciones.
+
+        La dirección **no es fija**: el bloque del equipo estuvo en
+        `0x0227C304` y apareció después treinta y seis bytes más allá. Dar la
+        dirección por sabida fue lo que dejó un «Huevo malo» en la partida del
+        usuario, así que aquí se busca de verdad cada vez que hace falta.
+        """
+        firma = None
+        obtener = self.firma_getter
+        if callable(obtener):
+            try:
+                firma = obtener()
+            except Exception:
+                firma = None
+        if not firma or len(firma) != FIRMA_LARGO:
+            return False
+
+        for pid, _nombre in sorted(candidatos, reverse=True):
+            handle = _KERNEL32.OpenProcess(0x0400 | 0x0010, False, pid)
+            if not handle:
+                continue
+            try:
+                for reserva in self._reservas(handle):
+                    ram = self._volcar_reserva(handle, reserva)
+                    if ram is None or firma not in ram:
+                        continue
+                    principios = bloques_del_guardado(ram, firma)
+                    if not principios:
+                        continue
+                    elegido = self._cual_se_mueve(handle, reserva, principios)
+                    if elegido is None:
+                        # Varios bloques y ninguno se mueve: el juego está
+                        # parado. Se puede leer, pero no se marca como vivo, y
+                        # sin eso la escritura no se permite.
+                        elegido, vivo = principios[0], False
+                    else:
+                        vivo = True
+                    self._memoria_detectada = replace(
+                        self._memoria_base,
+                        party_data=DS_RAM_BASE + elegido + SAVE_PARTY_DATA,
+                    )
+                    self._bloque_vivo = vivo
+                    self.forget_resolved_base()
+                    return True
+            finally:
+                _KERNEL32.CloseHandle(handle)
+        return False
 
     def _abrir(self, party_read: HgssPartyRead, para: str):
         if _KERNEL32 is None:
@@ -683,6 +878,16 @@ class HgssMelonDSReader:
             return tabla
         finally:
             _KERNEL32.CloseHandle(handle)
+
+    @property
+    def memory(self) -> Gen4Memory:
+        """Las direcciones que valen ahora mismo, no las de la primera vez."""
+        return self._memoria_detectada or self._memoria_base
+
+    @property
+    def block_is_live(self) -> bool:
+        """Si se demostró que el bloque localizado es el que el juego actualiza."""
+        return bool(self._bloque_vivo)
 
     def _demostrada(self, direccion: int | None, capacidad: str) -> int:
         """Dirección de una capacidad, o un error claro si no se demostró.

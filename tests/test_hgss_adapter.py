@@ -250,14 +250,17 @@ def test_un_pc_vacio_no_publica_huecos(adaptador) -> None:
 # Estado del adaptador
 # --------------------------------------------------------------------------
 
-def test_el_estado_publica_el_ancla_y_que_writers_tiene(adaptador) -> None:
-    adapter, _lector = adaptador
+def test_el_estado_publica_donde_esta_el_bloque_y_si_esta_demostrado(adaptador) -> None:
+    adapter, lector = adaptador
+    lector.block_is_live = True
     estado = adapter.runtime_state()
     assert estado["game"] == "hgss"
-    assert estado["anchor"] == "0x0227C304"
-    # Solo roles y curación: declararlo evita que nadie suponga el resto.
+    # La dirección deja de ser un dato fijo: se publica la que vale ahora y si
+    # se demostró que es la que el juego actualiza.
+    assert estado["block_base"].startswith("0x")
+    assert estado["block_is_live"] is True
     assert estado["writes_enabled"] is True
-    assert estado["writers"] == ("roles", "heal")
+    assert "party-pc" in estado["writers"]
 
 
 def test_reiniciar_el_estado_olvida_la_base(adaptador) -> None:
@@ -304,12 +307,11 @@ def test_heartgold_entra_en_las_listas_que_le_tocan() -> None:
     for conjunto in (
         REALTIME_READ_GAME_KEYS, LIVE_PC_READ_GAME_KEYS,
         INSTANT_REALTIME_UI_GAME_KEYS, AUTOMATIC_BADGE_GAME_KEYS,
+        # Vuelve a escribir desde alpha.85, ahora que la dirección se localiza
+        # y se comprueba cuál de las copias usa el juego.
+        ROLE_EV_WRITER_GAME_KEYS,
     ):
         assert "hgss" in conjunto
-    # Pero NO en las de escritura: cortadas mientras el bloque del guardado se
-    # mueva dentro de la RAM. Escribir con la dirección vieja dejó un «Huevo
-    # malo» en la partida del usuario.
-    assert "hgss" not in ROLE_EV_WRITER_GAME_KEYS
 
 
 def test_la_ayuda_de_heartgold_no_promete_lo_que_no_tiene() -> None:
@@ -318,10 +320,12 @@ def test_la_ayuda_de_heartgold_no_promete_lo_que_no_tiene() -> None:
     texto = RoleRunManager._live_runtime_help_text("hgss")
     assert "medallas" in texto
     # Lo que sí hace…
-    assert "tiempo real" in texto
-    # …y lo que no, dicho con todas las letras.
-    assert "ESCRITURA está desactivada" in texto
-    assert "Huevo malo" in texto
+    assert "rollback" in texto
+    # …y lo que hay que saber de cuarta.
+    assert "se gastan" in texto
+    assert "se mueve dentro de" in texto
+    # …y lo que todavía no.
+    assert "combate todavía no está demostrado" in texto
 
 
 def test_el_pc_de_cuarta_declara_dieciocho_cajas() -> None:
@@ -491,8 +495,8 @@ def test_los_botones_de_escritura_no_salen_sin_writer_detras() -> None:
 
     fuente = inspect.getsource(RoleRunManager._live_party_heal_available)
     assert "MELONDS_WRITE_GAME_KEYS" in fuente
-    assert "hgss" not in MELONDS_WRITE_GAME_KEYS
-    assert {"b2w2", "bw"} <= MELONDS_WRITE_GAME_KEYS
+    # Un solo interruptor decide si cuarta escribe, y de él cuelgan los botones.
+    assert {"b2w2", "bw", "hgss"} <= MELONDS_WRITE_GAME_KEYS
 
 
 def test_cada_intento_de_escritura_viva_queda_registrado() -> None:

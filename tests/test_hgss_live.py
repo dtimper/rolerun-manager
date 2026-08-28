@@ -102,7 +102,9 @@ def test_un_hueco_vacio_no_se_acepta_como_miembro() -> None:
 
     vacio = empty_pk4_party()
     unshuffle_pk4(vacio)        # no lanza: el checksum de un hueco vacío cuadra
-    with pytest.raises(HgssLiveError, match="especie"):
+    # Lo caza antes la extensión, que a ceros no describe a nadie: nivel cero y
+    # sin PS máximos. Y si pasara, la especie cero lo pararía igual.
+    with pytest.raises(HgssLiveError, match="miembro 2"):
         parse_party_block(_equipo(1) + vacio, 2)
 
 
@@ -316,3 +318,56 @@ def test_la_busqueda_es_impaciente_y_la_base_conocida_no() -> None:
     assert INTENTOS_EN_LA_BUSQUEDA < INTENTOS_EN_LA_BASE_CONOCIDA
     assert INTENTOS_EN_LA_BASE_CONOCIDA >= 20
     assert INTENTOS_DE_RECORRIDO >= 2
+
+
+# --------------------------------------------------------------------------
+# Localizar el bloque, que no está siempre en el mismo sitio
+# --------------------------------------------------------------------------
+
+def _ram_con_bloques(*posiciones, firma: bytes) -> bytes:
+    """Una RAM de mentira con un bloque del guardado en cada posición."""
+    import struct
+
+    from app.hgss_live import FIRMA_OFFSET, MARCA, MARCA_OFFSET, TAMANO_BLOQUE
+
+    ram = bytearray(0x40000)
+    for posicion in posiciones:
+        ram[posicion + FIRMA_OFFSET:posicion + FIRMA_OFFSET + len(firma)] = firma
+        struct.pack_into("<I", ram, posicion + MARCA_OFFSET, MARCA)
+    assert max(posiciones) + TAMANO_BLOQUE <= len(ram)
+    return bytes(ram)
+
+
+def test_los_bloques_se_reconocen_por_la_firma_y_la_marca() -> None:
+    """Con la firma sola salían cuatro; con la marca, los dos de verdad."""
+    from app.hgss_live import FIRMA_LARGO, FIRMA_OFFSET, bloques_del_guardado
+
+    firma = bytes(range(FIRMA_LARGO))
+    ram = bytearray(_ram_con_bloques(0x1000, 0x20000, firma=firma))
+    # Un tercero con la firma pero sin la marca: no es un bloque.
+    ram[0x8000 + FIRMA_OFFSET:0x8000 + FIRMA_OFFSET + FIRMA_LARGO] = firma
+
+    assert bloques_del_guardado(bytes(ram), firma) == (0x1000, 0x20000)
+
+
+def test_una_firma_de_otro_tamano_se_rechaza() -> None:
+    from app.hgss_live import bloques_del_guardado
+
+    with pytest.raises(HgssLiveError, match="firma"):
+        bloques_del_guardado(b"\x00" * 100, b"corta")
+
+
+def test_sin_firma_no_se_puede_relocalizar() -> None:
+    """Sin el guardado delante no hay con qué reconocer el bloque."""
+    from app.hgss_live import HgssMelonDSReader
+
+    lector = HgssMelonDSReader(firma_getter=lambda: None)
+    assert lector._relocalizar([(1, "melonDS.exe")]) is False
+    assert lector.block_is_live is False
+
+
+def test_el_bloque_no_se_da_por_vivo_sin_demostrarlo() -> None:
+    """Escribir sin esa prueba fue lo que dejó un «Huevo malo»."""
+    from app.hgss_live import HgssMelonDSReader
+
+    assert HgssMelonDSReader().block_is_live is False
