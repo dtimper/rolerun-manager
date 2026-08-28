@@ -596,6 +596,7 @@ class UnifiedTeamPCView:
 
     def update_team_health(
         self, identity: str, hp_value: int | None, max_hp: int,
+        *, slot: int | None = None,
     ) -> bool:
         """Actualiza los PS de un miembro sin reconstruir la página.
 
@@ -628,9 +629,19 @@ class UnifiedTeamPCView:
         # firma quedaría mintiendo sobre lo que el usuario está viendo.
         index = entry.get("health_index")
         if isinstance(index, int) and 0 <= index < len(self._rendered_team_health):
-            slot = self._rendered_team_health[index][0]
+            # El slot físico se pasa cuando el que llama lo conoce. Conservar el
+            # de cuando se construyó la tarjeta era correcto mientras esto solo
+            # refrescaba PS de una vista recién hecha; desde que la tarjeta se
+            # actualiza entera sin reconstruirse, un equipo que llega reordenado
+            # dejaba la firma permutada -misma lista, rotada- y la barrera de
+            # arranque, que compara contra la party proyectada, no publicaba
+            # nunca.
+            fisico = (
+                int(slot) if slot is not None
+                else self._rendered_team_health[index][0]
+            )
             self._rendered_team_health[index] = (
-                slot, value if value is not None else -1, max_hp,
+                fisico, value if value is not None else -1, max_hp,
             )
         return True
 
@@ -690,7 +701,14 @@ class UnifiedTeamPCView:
 
             max_hp = int(getattr(pokemon, "max_hp", 0) or 0)
             current_hp = getattr(pokemon, "current_hp", None)
-            self.update_team_health(identity, current_hp, max_hp)
+            if not self.update_team_health(
+                identity, current_hp, max_hp,
+                slot=int(getattr(pokemon, "slot", 0) or 0),
+            ):
+                # Los PS son lo único que esta tarjeta no pinta por sí misma. Si
+                # no se pudieron poner, decirlo: seguir devolviendo «hecho»
+                # dejaría en pantalla los PS del Pokémon anterior.
+                return False
 
             stats = dict(getattr(pokemon, "stats", {}) or {})
             if max_hp > 0:

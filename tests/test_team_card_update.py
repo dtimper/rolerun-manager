@@ -97,7 +97,7 @@ def _vista():
         move_issues_for=None,
         support_damage_for=None,
         sprite_for=lambda pokemon, size: f"sprite:{pokemon.species}:{size}",
-        update_team_health=lambda ident, actual, maximo: True,
+        update_team_health=lambda ident, actual, maximo, slot=None: True,
         _configurar_si_cambia=UnifiedTeamPCView._configurar_si_cambia,
     )
     return yo, destino

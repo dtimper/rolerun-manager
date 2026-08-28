@@ -191,15 +191,19 @@ class _Vista:
     def __init__(self, identidades) -> None:
         self.identidades = frozenset(identidades)
         self.actualizaciones: list[tuple[str, int | None, int]] = []
+        self.posiciones: list[int | None] = []
         self.fallar_en: set[str] = set()
 
     def rendered_team_identities(self):
         return self.identidades
 
-    def update_team_health(self, identity, hp_value, max_hp) -> bool:
+    def update_team_health(
+        self, identity, hp_value, max_hp, *, slot: int | None = None,
+    ) -> bool:
         if identity in self.fallar_en:
             return False
         self.actualizaciones.append((identity, hp_value, max_hp))
+        self.posiciones.append(slot)
         return True
 
 
@@ -307,3 +311,22 @@ def test_la_ruta_incremental_cubre_las_dos_paginas_de_la_vista_unificada() -> No
 
         assert manager.renders == 0, pagina
         assert len(vista.actualizaciones) == 6, pagina
+
+
+def test_la_ruta_en_vivo_dice_de_que_posicion_fisica_son_los_ps() -> None:
+    """La comprobación de identidades es de conjunto: un reordenamiento pasa.
+
+    La firma de PS de la vista se ordena por posición física. Si la ruta
+    incremental no dice la posición de ahora, esa firma queda permutada aunque
+    cada barra sea la correcta, y las barreras que la comparan no cierran nunca:
+    fue lo que dejó el arranque de BDSP colgado en «Preparando Equipo y PC…».
+    """
+    party = [_mon(index, hp=40) for index in range(6)]
+    vista = _Vista(_identity(p) for p in party)
+    manager = _controlador(vista, party)
+
+    assert RoleRunManager._apply_live_health_incrementally(manager) is True
+    assert vista.posiciones == [int(getattr(p, "slot", 0) or 0) for p in party]
+    assert len(set(vista.posiciones)) == len(party), (
+        "si todas las posiciones fueran la misma, la firma no se podría ordenar"
+    )

@@ -9213,6 +9213,12 @@ class RoleRunManager(ctk.CTk):
                     identity,
                     getattr(member, "current_hp", None),
                     int(getattr(member, "max_hp", 0) or 0),
+                    # La comprobación de arriba es de conjunto, así que los
+                    # mismos seis reordenados llegan hasta aquí. La firma de PS
+                    # de la vista se ordena por posición física: sin decirle la
+                    # de ahora, quedaría permutada aunque cada barra sea la
+                    # correcta, y las barreras que la comparan no cerrarían.
+                    slot=int(getattr(member, "slot", 0) or 0),
                 ):
                     return False
         return True
@@ -13335,6 +13341,12 @@ class RoleRunManager(ctk.CTk):
         botones, unos límites de caja y un modo concretos que aquí no se
         rehacen, así que si alguno de ellos cambiaría, este camino no vale.
         """
+        if self._initial_shell_waiting:
+            # La barrera de arranque no publica por timeout: compara la
+            # evidencia de lo que la vista materializó y espera indefinidamente
+            # si no cuadra. Ahí hay que reconstruir, que es lo que esa
+            # comprobación sabe verificar.
+            return False
         vista = getattr(self, "_team_pc_view", None)
         if vista is None or vista is not getattr(self, "_presented_team_pc_view", None):
             return False

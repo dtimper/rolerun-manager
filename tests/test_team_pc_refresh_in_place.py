@@ -53,6 +53,7 @@ def _gestor(vista: _VistaFalsa):
     yo = types.SimpleNamespace(
         _team_pc_view=vista,
         _presented_team_pc_view=vista,
+        _initial_shell_waiting=False,
         current_game=object(),
         _faint_replacement_mode=None,
         _pc_page_box=3,
@@ -196,3 +197,19 @@ def test_el_camino_rapido_se_salta_el_body_nuevo() -> None:
             f"`render_page()` hace {fuera_del_body} fuera del doble buffer y "
             "el camino rápido se lo salta"
         )
+
+
+def test_mientras_arranca_no_se_actualiza_en_sitio() -> None:
+    """La barrera de arranque no publica por timeout: espera indefinidamente.
+
+    Compara la evidencia de lo que la vista materializo -los PS por posicion
+    fisica- contra la party proyectada. Actualizar en sitio deja esa evidencia
+    correcta solo si nada mas se movio; reconstruir es lo que esa comprobacion
+    sabe verificar. Un arranque colgado para siempre es mucho peor que 300 ms.
+    """
+    vista = _VistaFalsa()
+    yo, _datos = _gestor(vista)
+    yo._initial_shell_waiting = True
+
+    assert _refrescar(yo) is False
+    assert vista.refrescos == []

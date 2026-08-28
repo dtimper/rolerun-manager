@@ -1,6 +1,59 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.104 — BDSP colgado en «Preparando Equipo y PC…»
+
+Lo rompí yo en la alpha.100. El trazado de la barrera de arranque lo dijo exacto,
+sin necesidad de suponer nada:
+
+```
+esperado    [67,67] [66,66] [58,58] [58,58] [70,70] [74,74]
+renderizado [74,74] [67,67] [66,66] [58,58] [58,58] [70,70]
+```
+
+No era un dato viejo. Era la **misma lista rotada una posición**.
+
+## Qué pasaba
+
+`rendered_team_health_signature` ordena por la posición física del Pokémon,
+porque las tarjetas se presentan por rol y el reader publica por posición. Esa
+firma es la evidencia que la barrera de arranque compara contra la party
+proyectada antes de publicar la primera página.
+
+`update_team_health` reescribía los PS **conservando la posición de cuando se
+construyó la tarjeta**. Era correcto mientras solo refrescaba barras de una vista
+recién hecha. Desde que la tarjeta se actualiza entera sin reconstruirse, esa
+posición se queda obsoleta en cuanto el equipo llega reordenado: cada tarjeta
+enseña lo suyo, pero la firma sale permutada.
+
+Y la barrera de arranque no publica por timeout **a propósito** —«el fallo no se
+disfraza como una UI utilizable»—, así que se quedaba esperando para siempre.
+
+## Los tres arreglos
+
+1. **La tarjeta apunta la posición de ahora** junto a los PS de ahora.
+2. **La ruta de PS en vivo, también.** Estaba el mismo fallo latente desde antes:
+   comprueba las identidades **como conjunto**, así que los mismos seis
+   reordenados pasan el filtro y llegan a actualizar barras. Hasta ahora nadie lo
+   había disparado.
+3. **El camino rápido no entra mientras la barrera de arranque espera.** Esa
+   comprobación verifica evidencia de lo que la vista materializó; ahí hay que
+   reconstruir, que es lo que sabe validar. Un arranque colgado para siempre es
+   mucho peor que 300 ms.
+
+De paso: si los PS no se pueden poner, la tarjeta ya no dice que sí. Es lo único
+que no pinta por sí misma, y devolver «hecho» dejaba en pantalla los PS del
+Pokémon anterior.
+
+## Pruebas
+
+`test_firma_de_ps_sigue_al_equipo.py` reconstruye las dos filas del trazado con
+sus cifras: con la posición de ahora sale la lista correcta, y sin ella sale la
+rotación exacta que colgó el arranque. Esa segunda prueba existe para que la
+primera tenga dientes.
+
+1848 passed, 1 skipped.
+
 # v0.2.6-alpha.103 — el mismo hallazgo, en los otros 29 sitios
 
 En Equipo y PC, comparar antes de escribir bajó un refresco de 376 ms a 37, y
