@@ -1,6 +1,47 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.102 — medir los 4-5 segundos antes de tocarlos
+
+Con el repintado ya en 37 ms, mover un Pokémon del equipo al PC sigue tardando
+4-5 segundos. Eso no es repintado, así que **no** se toca nada hasta saber dónde
+están esos segundos, y el único sitio donde se puede saber es en la máquina del
+usuario con su juego.
+
+`app/perf.py` ya existía y sigue apagado salvo con `ROLERUN_PERF=1`. Lo que
+faltaba eran las marcas del camino de soltar:
+
+- el instante exacto en que se suelta, con origen y destino;
+- qué operación se decidió (`party-to-box`, `move-box-slot`, …);
+- cuánto tarda la parte síncrona;
+- **cada vez que la escritura viva se reprograma**, y por qué —hay un bucle de
+  220 ms que espera a que termine otra escritura, una sincronización, el
+  monitor o la carga de MT—;
+- cuánto tarda la escritura y cuánto su cierre;
+- cada cambio del rótulo de estado, que es donde el usuario para el reloj;
+- si un repintado tomó el camino rápido o reconstruyó.
+
+## Cómo se usa
+
+1. `medir_lentitud.bat` — abre RoleRun midiendo. Hacer justo lo que va lento.
+2. Cerrar RoleRun.
+3. `ver_lentitud.bat` — imprime la línea de tiempo de **cada** vez que se soltó
+   un Pokémon, con los milisegundos desde el instante de soltar, y el reparto
+   por operación de toda la sesión.
+
+Ninguno de los dos cambia nada de la Run: solo miden y leen.
+
+## Por qué el resumidor tiene pruebas
+
+Se ejecuta **una sola vez**, después de una sesión entera midiendo. Si revienta
+ahí se pierde esa sesión y hay que volver a pedir que se reproduzca lo lento.
+Las dos formas concretas de romperse están fijadas: la consola de un `.bat` es
+cp1252 —un carácter fuera de esa tabla no sale mal, corta la salida entera— y el
+JSONL puede acabar con una línea a medias, porque lo vuelca un hilo demonio cada
+segundo y cerrar el programa puede cortarla.
+
+1840 passed, 1 skipped.
+
 # v0.2.6-alpha.101 — escribir cuesta, comparar no
 
 La versión anterior dio por hecho que lo caro era **crear** widgets. Medido de

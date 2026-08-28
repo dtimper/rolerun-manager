@@ -1327,6 +1327,7 @@ class RoleRunManager(ctk.CTk):
         except Exception:
             pass
 
+    @perf.timed("ui.drop.mover_rol")
     def _move_pokemon_to_role_by_drag(
         self, source: SavePokemon, target_role: str, context: str = "main",
         libero_assignments: dict[str, tuple[str, ...]] | None = None,
@@ -5704,6 +5705,8 @@ class RoleRunManager(ctk.CTk):
         store = getattr(self, "operation_status_store", None)
         if store is None:
             return
+        # El reloj del usuario para cuando el rótulo deja de decir «aplicando».
+        perf.mark("ui.estado", estado=str(kind), titulo=str(title)[:60])
         message = store.publish(
             kind, title, detail, actions=actions, persistent=persistent,
         )
@@ -8033,6 +8036,7 @@ class RoleRunManager(ctk.CTk):
     def _stop_oras_live_auto_apply_for(self, changes) -> None:
         self._oras_live_auto_apply_ids.difference_update(id(change) for change in changes)
 
+    @perf.timed("ui.live.flush_auto")
     def _flush_oras_live_auto_apply(self, generation: int, project_slug: str) -> None:
         self._oras_live_auto_apply_after_id = None
         if (
@@ -8067,6 +8071,15 @@ class RoleRunManager(ctk.CTk):
             or self._oras_live_monitor_in_progress
             or getattr(self, "_sm_tm_inventory_load_in_progress", False)
         ):
+            # Cada reprogramación son 220 ms de espera. Si se encadenan varias,
+            # el usuario las cuenta como parte de los segundos que tarda.
+            perf.mark(
+                "ui.live.reprogramado",
+                escritura=bool(self._live_write_in_progress),
+                sincronizacion=bool(self._live_sync_in_progress),
+                monitor=bool(self._oras_live_monitor_in_progress),
+                mts=bool(getattr(self, "_sm_tm_inventory_load_in_progress", False)),
+            )
             self._schedule_oras_live_auto_apply(220)
             return
 
@@ -11125,6 +11138,7 @@ class RoleRunManager(ctk.CTk):
         """Fija en el writer el perfil validado durante toda la transacción."""
         writer.personal_for = profile.personal_for
 
+    @perf.timed("ui.live.finalizar_escritura")
     def _finish_oras_live_write(
         self, generation: int, project_slug: str, changes, result, error: str | None, automatic: bool = False,
     ) -> None:
@@ -12022,6 +12036,7 @@ class RoleRunManager(ctk.CTk):
             and self._shell_built
             and self._refrescar_team_pc_en_sitio()
         ):
+            perf.mark("ui.render.en_sitio", pagina=str(self.active_page))
             # Lo que `render_page()` hace fuera del body: no está en el doble
             # buffer, así que aquí se hace igual que allí.
             self._render_sidebar()
@@ -13905,6 +13920,7 @@ class RoleRunManager(ctk.CTk):
             return None
         return candidate
 
+    @perf.timed("ui.drop.ejecutar_cambio")
     def _team_pc_execute_change(
         self,
         incoming: SavePokemon,
@@ -13995,6 +14011,7 @@ class RoleRunManager(ctk.CTk):
             self._request_oras_live_auto_apply_since(pending_before)
         return True
 
+    @perf.timed("ui.drop.sincrono")
     def _team_pc_drop(
         self,
         source_context: str,
@@ -14002,6 +14019,10 @@ class RoleRunManager(ctk.CTk):
         target_context: str,
         target: dict[str, object],
     ) -> None:
+        # El usuario cuenta desde que suelta el ratón. La parte síncrona de este
+        # método suele ser corta; lo que hay que poder medir es el hueco hasta
+        # que el estado llega a su forma final.
+        perf.mark("ui.drop.soltado", origen=source_context, destino=target_context)
         target_pokemon = target.get("pokemon")
         if source_context == target_context == "team":
             target_role = str(target.get("slot_role") or "")
@@ -14014,6 +14035,7 @@ class RoleRunManager(ctk.CTk):
             target_occupied=target_pokemon is not None,
             team_count=len(self._projected_party()),
         )
+        perf.mark("ui.drop.operacion", operacion=str(intent.operation or "ninguna"))
         if intent.operation is None:
             self._set_operation_status(
                 "warning",
@@ -16766,6 +16788,7 @@ class RoleRunManager(ctk.CTk):
             target=worker, daemon=True, name="RoleRunLivePCSelector",
         ).start()
 
+    @perf.timed("ui.drop.enviar_al_pc")
     def send_pokemon_to_pc(
         self,
         pokemon: SavePokemon,
