@@ -1,6 +1,50 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.114 — un latido, para que el congelado se pueda datar
+
+El problema de fondo al investigar el congelado no era la falta de hipótesis:
+era que **la traza no podía ver un juego parado**. Tras la escritura de la MT
+siguió leyendo con normalidad 68 segundos, porque un juego congelado se ve
+exactamente igual desde fuera —proceso vivo, memoria legible— y con el personaje
+quieto ni los PS ni el equipo cambian.
+
+## Lo que se encontró leyendo
+
+`buscar_latido_bdsp.bat` lee tres veces `PlayerWork._saveData` con pausas y
+señala qué avanza solo. Con el personaje quieto en el mapa, de 16.384 bytes
+**cambió uno**. Ese:
+
+| | | |
+|---|---|---|
+| `SaveData+0x118` | u16 | horas (`0x000A` = 10) |
+| `SaveData+0x11A` | u8 | minutos (`0x28` → `0x29` al pasar de 59 s) |
+| `SaveData+0x11B` | u8 | segundos: 39, 41, 43 … 59, **0**, 2, 4 |
+
+Es el reloj del juego. Da la vuelta en 59, sube el minuto al hacerlo, y **solo
+avanza si el juego está corriendo de verdad**.
+
+## Dónde queda
+
+En **cada captura** y en **cada escritura**. Si el reloj se repite entre dos
+capturas, el juego está parado, y la traza dirá el segundo exacto. Si se para
+justo en la escritura, la escritura es la culpable; si sigue un rato y se para
+después, hay que buscar en lo que el juego hizo luego.
+
+La lectura nunca propaga: es una señal de diagnóstico y no puede tumbar una
+captura real. Un `None` en la traza significa «no se pudo leer», que ya es
+información.
+
+## Las dos hipótesis caídas hasta ahora
+
+- **La mochila.** RoleRun solo escribe la cantidad, así que al gastar la última
+  MT el registro queda con cantidad 0 conservando su orden. La partida ya tiene
+  **siete** registros así: los hace el juego.
+- **Los PP.** `_set_move` escribe el movimiento, PP Ups a 0 y los PP al valor
+  base, que es exactamente lo que hace `CoreParam.SetWaza`.
+
+1880 passed, 1 skipped.
+
 # v0.2.6-alpha.113 — el juego se congela al enseñar una MT: qué se descartó
 
 El usuario enseña una MT desde RoleRun y **el juego se queda congelado**, hay que

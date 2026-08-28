@@ -70,6 +70,14 @@ BDSP_GENERAL_ITEM_IDS = (
 # usa la misma representación en FlagWork8b. En SP 1.3.0 físico, el campo
 # PlayerWork+0x30 resolvió un único bool[1000] estable y sus ocho valores
 # coincidieron con el save y con MYSTATUS.badge. Véase el proof alpha.77.
+# PlayerWork._saveData.playTime. Demostrado leyendo la partida viva con el
+# personaje quieto en el mapa: el byte de 0x11B sube solo y da la vuelta en 59,
+# y al hacerlo incrementa el de 0x11A. Es el unico campo conocido que avanza sin
+# que el jugador haga nada, asi que sirve de latido: si deja de moverse, el juego
+# se ha parado. Sin el, un congelado es indistinguible de estarse quieto.
+BDSP_SP_130_PLAYTIME_POINTER = (0x4E7BE98, 0xB8, 0x10, 0x118)
+BDSP_PLAYTIME_SIZE = 4
+
 BDSP_SP_130_SYSTEM_FLAGS_POINTER = (0x4E7BE98, 0xB8, 0x10, 0x30, 0x20)
 BDSP_SYSTEM_FLAG_COUNT = 1000
 BDSP_BADGE_SYSTEM_FLAG_INDICES = tuple(range(124, 132))
@@ -132,6 +140,22 @@ BDSP_SP_130_HOST_PROFILE = RyujinxHostProfile(
 
 class BDSPLiveError(RuntimeError):
     pass
+
+
+def read_bdsp_play_time(client) -> tuple[int, int, int] | None:
+    """Horas, minutos y segundos del reloj del juego, o ``None`` si no se pudo.
+
+    Nunca propaga: es una señal de diagnóstico y no puede tumbar una captura
+    real. Un ``None`` en la traza significa «no se pudo leer», que ya es
+    información.
+    """
+    try:
+        direccion = client.resolve_main_pointer(BDSP_SP_130_PLAYTIME_POINTER)
+        crudo = client.read_memory(int(direccion), BDSP_PLAYTIME_SIZE)
+    except Exception:
+        return None
+    horas = int(struct.unpack_from("<H", crudo, 0)[0])
+    return (horas, int(crudo[2]), int(crudo[3]))
 
 
 @dataclass(frozen=True, slots=True)

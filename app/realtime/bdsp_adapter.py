@@ -24,6 +24,7 @@ from ..bdsp_live import (
     BDSPWriteMemoryWatch,
     calculate_bdsp_stats,
 )
+from ..bdsp_live import read_bdsp_play_time
 from ..bdsp_tm_service import BDSPTMProfile, discover_personal_masterdatas, load_bdsp_tm_profile
 from ..boxed_metadata import ability_name, item_name, level_for_experience, species_name
 from ..config import APP_VERSION
@@ -469,6 +470,9 @@ class BDSPRealTimeAdapter(RealTimeGameAdapter):
             game.raw["live_write"] = True
             self._trace({
                 "event": "write-verified",
+                # Antes y después de escribir. Si el reloj se para justo aquí,
+                # la escritura es la culpable; si sigue, hay que buscar después.
+                "reloj": read_bdsp_play_time(client),
                 "applied_count": int(receipt.applied_count),
                 "already_applied": bool(receipt.already_applied),
                 # Qué se pidió escribir, no solo cuántos bytes. Tras un
@@ -842,6 +846,9 @@ class BDSPRealTimeAdapter(RealTimeGameAdapter):
             "event": "snapshot",
             "sequence": int(sequence),
             "process_id": int(session.process.pid),
+            # El reloj del juego. Es lo único que avanza sin que el jugador haga
+            # nada, así que si se repite entre capturas el juego está parado.
+            "reloj": read_bdsp_play_time(client),
             "battle_state": battle.state,
             "badges": badges,
             "badge_source": badge_source,
