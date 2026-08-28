@@ -1,6 +1,57 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.115 — el latido no vale sin saber quién tiene la ventana
+
+Con el reloj ya puesto, el usuario enseñó otra MT y **no se congeló**. La traza
+registró esto alrededor de la escritura:
+
+```
+16:41:09.5   reloj 10:52:21
+16:41:12.0   ESCRITURA        reloj 10:52:21
+16:41:16.0   reloj 10:52:21     ← 6,5 s sin avanzar
+16:41:16.8   reloj 10:52:22     ← se reanuda
+```
+
+Parecía un hallazgo. No lo era: mirando la sesión entera, el reloj llevaba
+parado **24,5 segundos**, desde las 16:40:52 —antes incluso de que RoleRun leyera
+las MT— y se reanudó al volver el usuario al juego.
+
+**El reloj también se para cuando el emulador pierde el foco.** Como latido, eso
+lo inutiliza: no distingue un juego colgado de alguien mirando otra ventana, que
+es exactamente la pregunta.
+
+## El discriminador
+
+Cada captura anota ahora también **qué proceso tiene la ventana activa**. Con las
+dos señales el tramo deja de ser ambiguo:
+
+| reloj | foco | qué es |
+|---|---|---|
+| parado | del juego | **colgado** |
+| parado | de otra ventana | normal: el emulador está en pausa |
+| parado | no se sabe | no se puede decir, y decirlo **es** la respuesta |
+
+Esa tercera fila es deliberada. Las trazas anteriores a esta versión no anotaban
+el foco, y darlas por pausas normales sería inventarse el resultado.
+
+`app/ventana_activa.py` solo le pregunta a Windows por la ventana de primer
+plano y de qué proceso es: no abre ningún handle ni lee memoria.
+
+## Cómo se usa
+
+`ver_congelados_bdsp.bat` lee la traza y dice si hubo algún tramo parado **con el
+juego delante**, cuánto duró y en qué segundo se quedó el reloj, además de listar
+las escrituras con su reloj, su foco y qué se escribió.
+
+## Lo que sabemos del congelado
+
+Es **intermitente**: la misma operación, sin haber cambiado nada de la escritura,
+unas veces cuelga el juego y otras no. Eso descarta un dato mal formado —eso
+fallaría siempre— y apunta a una carrera con el hilo del juego.
+
+1887 passed, 2 skipped.
+
 # v0.2.6-alpha.114 — un latido, para que el congelado se pueda datar
 
 El problema de fondo al investigar el congelado no era la falta de hipótesis:

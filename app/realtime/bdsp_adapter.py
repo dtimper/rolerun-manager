@@ -25,6 +25,7 @@ from ..bdsp_live import (
     calculate_bdsp_stats,
 )
 from ..bdsp_live import read_bdsp_play_time
+from ..ventana_activa import tiene_el_foco
 from ..bdsp_tm_service import BDSPTMProfile, discover_personal_masterdatas, load_bdsp_tm_profile
 from ..boxed_metadata import ability_name, item_name, level_for_experience, species_name
 from ..config import APP_VERSION
@@ -473,6 +474,7 @@ class BDSPRealTimeAdapter(RealTimeGameAdapter):
                 # Antes y después de escribir. Si el reloj se para justo aquí,
                 # la escritura es la culpable; si sigue, hay que buscar después.
                 "reloj": read_bdsp_play_time(client),
+                "foco": tiene_el_foco(int(client.session.process.pid)),
                 "applied_count": int(receipt.applied_count),
                 "already_applied": bool(receipt.already_applied),
                 # Qué se pidió escribir, no solo cuántos bytes. Tras un
@@ -846,9 +848,13 @@ class BDSPRealTimeAdapter(RealTimeGameAdapter):
             "event": "snapshot",
             "sequence": int(sequence),
             "process_id": int(session.process.pid),
-            # El reloj del juego. Es lo único que avanza sin que el jugador haga
-            # nada, así que si se repite entre capturas el juego está parado.
+            # El reloj del juego. Es lo único que avanza sin que el jugador
+            # haga nada, así que si se repite entre capturas el juego está
+            # parado. Pero también se para al perder el foco el emulador -24,5 s
+            # medidos solo por abrir RoleRun-, así que sin saber quién tiene la
+            # ventana un reloj quieto no dice nada. Parado CON foco es colgado.
             "reloj": read_bdsp_play_time(client),
+            "foco": tiene_el_foco(int(session.process.pid)),
             "battle_state": battle.state,
             "badges": badges,
             "badge_source": badge_source,
