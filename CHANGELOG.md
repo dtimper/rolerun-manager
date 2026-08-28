@@ -1,6 +1,43 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.89 — la escritura de cuarta se apaga hasta demostrar el mecanismo
+
+Tercer «Huevo malo» en la partida del usuario al pulsar CURAR. Lo que se sabe
+con certeza, y lo que no.
+
+## Lo que descarta este intento
+
+El huevo salió en **Totodile, hueco 3**: el único Pokémon que la curación tenía
+que tocar —estaba a 18/42 y los otros cinco al máximo—. Hueco correcto, Pokémon
+correcto, dirección correcta. Y el codificador está probado: los seis registros
+de la partida real se deshacen y se rehacen **byte a byte idénticos**.
+
+Así que no es el formato, ni el hueco, ni la copia equivocada del bloque.
+
+## La hipótesis que queda
+
+La misma competencia con el hilo del emulador que parte las **lecturas** —medido
+en alpha.88: hasta un 33 % de lecturas partidas en el peor hueco— parte también
+las **escrituras**. Una ficha mitad nuestra y mitad del juego es exactamente un
+registro incoherente, que es lo que el juego enseña como «Huevo malo».
+
+Encaja con todo lo que ninguna hipótesis anterior explicaba: por qué la escritura
+se verificaba bien y el readback cuadraba —los dos leen lo que acabamos de
+escribir— y aun así el juego enseñaba un huevo al volver a mirar la ficha.
+
+Está **sin demostrar**. Y no se demuestra sobre la partida del usuario.
+
+## Qué se hace
+
+`MELONDS_GEN4_ESCRIBE = False`, y no se vuelve a encender sin que el usuario lo
+diga. Leer sigue funcionando, y desde alpha.88 sin lecturas partidas.
+
+Queda la captura `huevo_malo_3.bin` con las tres copias del bloque tal y como
+estaban tras el fallo.
+
+Suite completa: **1791**.
+
 # v0.2.6-alpha.88 — la causa raíz: `ReadProcessMemory` devuelve lecturas partidas
 
 La prueba del usuario cerró la primera pregunta: de las copias del bloque, **la
