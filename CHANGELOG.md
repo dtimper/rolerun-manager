@@ -1,6 +1,63 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.87 — tres copias del guardado, y se escribía en la que no era
+
+«No cura», y el mensaje era «el rollback de curación no se pudo confirmar; no
+guardes». Buscando el motivo se midió mal y se llegó a una conclusión falsa —que
+el juego reescribe las fichas solo— que costó un segundo «Huevo malo» en la
+partida del usuario. Lo que sigue es lo que de verdad hay, medido.
+
+## Lo que se midió
+
+- **Conviven tres copias del bloque del guardado**: 0x0227C2DC, 0x02376864 y
+  0x02399884, las tres con los mismos seis Pokémon.
+- **Una copia sola es estable**: 200 lecturas seguidas a dirección fija dieron
+  **un único contenido**, siempre cifrado, en los seis huecos.
+- Lo que parecía «el equipo se reescribe solo» —once contenidos crudos distintos
+  en veinte lecturas— era el localizador **saltando entre copias**.
+- El codificador de PK4 es correcto: los seis registros de la partida real se
+  deshacen y se rehacen **byte a byte idénticos**.
+
+Como las tres copias dan el mismo equipo al interpretarlas, **comparar por
+contenido no las distingue**. Por eso una escritura podía verificarse «bien» y
+dejar un «Huevo malo».
+
+## Los dos fallos reales
+
+**1. La dirección del bloque podía moverse sin que nadie lo notara.** El bloque
+cambia de sitio dentro de la misma reserva —se le vio en 0x0227C26C, 0x0227C290,
+0x0227C2FC y 0x0227C2DC—. La comprobación previa miraba proceso, reserva y
+bytes, pero **no la dirección del bloque**. Ahora se apunta al leer y se exige
+que sea la misma al escribir.
+
+**2. El rollback se ejecutaba aunque no se hubiera escrito nada.** Si la
+comprobación previa se negaba, el `except` llamaba igual a `deshacer`, que
+escribía con la dirección vieja. Eso no deshace: mete una ficha donde no va, que
+es exactamente lo que el juego enseña como «Huevo malo». En las cinco
+transacciones, confirmar la dirección va ahora **fuera del `try`**.
+
+## Además
+
+- **Se escribe solo la ficha que cambia**, no el bloque entero. Curar un Pokémon
+  volcaba 1416 bytes; ahora son 236.
+- **La extensión de combate se valida por las seis estadísticas**, no solo por
+  nivel y PS. En la partida real un Wooper de nivel 6 y 23 PS colaba leído al
+  revés y salía con AtEsp 28801 y DefEsp 43367. Leerlo mal es malo; **mutar esa
+  ficha habría escrito esa basura en la partida**.
+
+## La escritura de cuarta queda apagada
+
+`MELONDS_GEN4_ESCRIBE = False` hasta demostrar **cuál de las tres copias lee el
+juego**. El criterio de ahora —«la que cambia»— no lo demuestra, y con el
+emulador pausado no cambia ninguna.
+
+Para eso está `que_copia_lee_heartgold.bat`: pide cambiar de sitio dos Pokémon
+dentro del juego y mira cuál de las copias sigue al cambio. No escribe ni un
+byte.
+
+Suite completa: **1788**.
+
 # v0.2.6-alpha.86 — decir cuál es el Pokémon que no se puede leer
 
 La localización de alpha.85 funciona: encuentra el bloque, demuestra cuál manda y

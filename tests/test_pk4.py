@@ -16,6 +16,7 @@ guarda, sale del PID— estuvieran mal leídos, los números no cuadrarían.
 """
 
 import json
+import struct
 from pathlib import Path
 
 import pytest
@@ -310,3 +311,46 @@ def test_escribir_sobre_uno_en_claro_lo_devuelve_en_claro() -> None:
     assert cifrado is False
     leido = parse_pk4_party(curado, 0)
     assert leido.current_hp == leido.max_hp
+
+
+# --------------------------------------------------------------------------
+# La extensión de combate leída en el estado equivocado
+# --------------------------------------------------------------------------
+
+def test_una_extension_con_estadisticas_imposibles_no_cuela() -> None:
+    """El caso que se midió sobre la partida viva, con el juego en el menú.
+
+    Un Wooper de nivel 6 y 23 PS pasaba el filtro viejo -que solo miraba nivel y
+    PS- y salía publicado con AtEsp 28801 y DefEsp 43367, porque esos dos
+    números venían de la extensión leída al revés. Mirar las seis estadísticas
+    lo corta. Y no es un detalle de lectura: mutar una ficha cuya extensión se
+    leyó mal escribiría esa basura en la partida.
+    """
+    from app.pk4 import (
+        PK4_CURRENT_HP, PK4_LEVEL, PK4_STATS, _extension_coherente,
+    )
+
+    cola = bytearray(100)
+    cola[PK4_LEVEL - PK4_STORED_SIZE] = 6
+    struct.pack_into("<H", cola, PK4_CURRENT_HP - PK4_STORED_SIZE, 23)
+
+    struct.pack_into("<6H", cola, PK4_STATS - PK4_STORED_SIZE,
+                     23, 10, 13, 7, 28801, 43367)
+    assert not _extension_coherente(bytes(cola))
+
+    struct.pack_into("<6H", cola, PK4_STATS - PK4_STORED_SIZE, 23, 10, 13, 7, 8, 8)
+    assert _extension_coherente(bytes(cola))
+
+
+def test_los_ps_actuales_no_pueden_pasar_de_los_maximos() -> None:
+    from app.pk4 import (
+        PK4_CURRENT_HP, PK4_LEVEL, PK4_STATS, _extension_coherente,
+    )
+
+    cola = bytearray(100)
+    cola[PK4_LEVEL - PK4_STORED_SIZE] = 20
+    struct.pack_into("<6H", cola, PK4_STATS - PK4_STORED_SIZE, 50, 30, 30, 30, 30, 30)
+    struct.pack_into("<H", cola, PK4_CURRENT_HP - PK4_STORED_SIZE, 50)
+    assert _extension_coherente(bytes(cola))
+    struct.pack_into("<H", cola, PK4_CURRENT_HP - PK4_STORED_SIZE, 51)
+    assert not _extension_coherente(bytes(cola))

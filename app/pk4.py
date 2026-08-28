@@ -195,10 +195,17 @@ def reshuffle_pk4(
     return bytes(cabecera) + (_crypt(cuerpo, checksum) if cifrado else cuerpo)
 
 
-# Un nivel va de 1 a 100 y ningún Pokémon de cuarta pasa de 999 PS: con eso se
-# distingue una extensión bien leída de una leída en el estado equivocado.
+# CÓMO SE SABE QUE LA EXTENSIÓN SE HA LEÍDO BIEN
+#
+# Un nivel va de 1 a 100 y en cuarta ninguna estadística llega a 999 -la más
+# alta posible son los 714 PS de Blissey-. Mirar **las seis** y no solo los PS
+# es lo que hace fiable la distinción: se midió sobre la partida viva un Wooper
+# que pasaba el filtro viejo -nivel 6, 23 PS- y traía AtEsp 28801 y DefEsp
+# 43367, porque nivel y PS habían caído por casualidad en rango. Con las seis,
+# que un estado equivocado cuele exige que doce bytes al azar salgan todos por
+# debajo de 999, que es una entre setenta mil millones.
 _NIVEL_MAXIMO = 100
-_PS_MAXIMOS = 999
+_ESTADISTICA_MAXIMA = 999
 
 
 def _extension_coherente(cola: bytes) -> bool:
@@ -206,11 +213,12 @@ def _extension_coherente(cola: bytes) -> bool:
     if len(cola) < 0x14:
         return False
     nivel = cola[PK4_LEVEL - PK4_STORED_SIZE]
-    actual, maximo = struct.unpack_from("<2H", cola, PK4_CURRENT_HP - PK4_STORED_SIZE)
+    actual = struct.unpack_from("<H", cola, PK4_CURRENT_HP - PK4_STORED_SIZE)[0]
+    estadisticas = struct.unpack_from("<6H", cola, PK4_STATS - PK4_STORED_SIZE)
     return (
         1 <= nivel <= _NIVEL_MAXIMO
-        and 0 < maximo <= _PS_MAXIMOS
-        and actual <= maximo
+        and all(1 <= valor <= _ESTADISTICA_MAXIMA for valor in estadisticas)
+        and actual <= estadisticas[0]
     )
 
 

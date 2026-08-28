@@ -294,6 +294,7 @@ def test_heartgold_entra_en_las_listas_que_le_tocan() -> None:
         AUTOMATIC_BADGE_GAME_KEYS,
         INSTANT_REALTIME_UI_GAME_KEYS,
         LIVE_PC_READ_GAME_KEYS,
+        MELONDS_GEN4_ESCRIBE,
         MELONDS_GEN4_REALTIME_GAME_KEYS,
         MELONDS_GEN5_REALTIME_GAME_KEYS,
         MELONDS_REALTIME_GAME_KEYS,
@@ -307,11 +308,11 @@ def test_heartgold_entra_en_las_listas_que_le_tocan() -> None:
     for conjunto in (
         REALTIME_READ_GAME_KEYS, LIVE_PC_READ_GAME_KEYS,
         INSTANT_REALTIME_UI_GAME_KEYS, AUTOMATIC_BADGE_GAME_KEYS,
-        # Vuelve a escribir desde alpha.85, ahora que la dirección se localiza
-        # y se comprueba cuál de las copias usa el juego.
-        ROLE_EV_WRITER_GAME_KEYS,
     ):
         assert "hgss" in conjunto
+    # Leer es seguro siempre; escribir cuelga de un solo interruptor. Está
+    # apagado hasta demostrar cuál de las tres copias del bloque lee el juego.
+    assert ("hgss" in ROLE_EV_WRITER_GAME_KEYS) is MELONDS_GEN4_ESCRIBE
 
 
 def test_la_ayuda_de_heartgold_no_promete_lo_que_no_tiene() -> None:
@@ -491,12 +492,15 @@ def test_los_botones_de_escritura_no_salen_sin_writer_detras() -> None:
     """
     import inspect
 
-    from app.ui import MELONDS_WRITE_GAME_KEYS, RoleRunManager
+    from app.ui import (
+        MELONDS_GEN4_ESCRIBE, MELONDS_WRITE_GAME_KEYS, RoleRunManager,
+    )
 
     fuente = inspect.getsource(RoleRunManager._live_party_heal_available)
     assert "MELONDS_WRITE_GAME_KEYS" in fuente
+    assert {"b2w2", "bw"} <= MELONDS_WRITE_GAME_KEYS
     # Un solo interruptor decide si cuarta escribe, y de él cuelgan los botones.
-    assert {"b2w2", "bw", "hgss"} <= MELONDS_WRITE_GAME_KEYS
+    assert ("hgss" in MELONDS_WRITE_GAME_KEYS) is MELONDS_GEN4_ESCRIBE
 
 
 def test_cada_intento_de_escritura_viva_queda_registrado() -> None:

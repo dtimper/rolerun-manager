@@ -18,7 +18,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.boxed_metadata import base_stats_for  # noqa: E402
-from app.hgss_live import HgssLiveError, HgssPartyRead, parse_party_block  # noqa: E402
+from app.hgss_live import (  # noqa: E402
+    DS_RAM_BASE, HgssLiveError, HgssPartyRead, parse_party_block,
+)
 from app.hgss_write import HgssMelonDSWriter, HgssRoleWrite  # noqa: E402
 from app.pk4 import (  # noqa: E402
     PK4_PARTY_SIZE,
@@ -222,6 +224,28 @@ def test_no_se_cura_con_unos_pp_inventados() -> None:
 # El contrato transaccional
 # --------------------------------------------------------------------------
 
+def _del_reves(bloque: bytes) -> bytes:
+    """La misma ficha guardada al revés: cifrada si estaba en claro, y al revés.
+
+    Es lo que el juego hace solo. Cambia los 236 bytes enteros y no cambia ni un
+    dato del Pokémon.
+    """
+    from app.pk4 import (
+        PK4_STORED_SIZE, _con_extension, _extension, unshuffle_pk4,
+    )
+
+    pid, orden, canonico, cifrado = unshuffle_pk4(bloque[:PK4_STORED_SIZE])
+    return _con_extension(
+        canonico, orden, pid, not cifrado, _extension(bloque, pid, cifrado),
+    )
+
+
+def test_la_misma_ficha_del_reves_es_el_mismo_pokemon() -> None:
+    bloque = _bloque(2)
+    assert _del_reves(bloque) != bloque, "no ha cambiado de estado"
+    assert parse_pk4_party(_del_reves(bloque), 0) == parse_pk4_party(bloque, 0)
+
+
 class _MelonDSFalso:
     """Un búfer que se comporta como el bloque de equipo del emulador."""
 
@@ -236,10 +260,19 @@ class _MelonDSFalso:
             b"".join(_bloque(indice) for indice in range(cuantos))
         )
         self.escrituras: list[bytes] = []
+        self.mueve_el_bloque = False
         self.original = bytes(self.raw)
         self.process_id = 4242
 
     def read_party(self) -> HgssPartyRead:
+        if self.mueve_el_bloque:
+            # El bloque del guardado cambia de sitio: se vio pasar de
+            # 0x0227C26C a 0x0227C290, y luego a 0x0227C2FC y a 0x0227C2DC.
+            from dataclasses import replace
+
+            self.memory = replace(
+                self.memory, party_data=self.memory.party_data + 36,
+            )
         crudo = bytes(self.raw)
         return HgssPartyRead(
             self.process_id, "melonDS.exe", 0x1000, self.count, crudo,
@@ -264,21 +297,29 @@ class _WriterDePrueba(HgssMelonDSWriter):
         self.escrituras_reales = 0
 
     def _write_process_bytes(self, process_id, host_address, payload) -> None:
+        # El writer real escribe **solo las fichas que cambian**, cada una en su
+        # dirección. El doble tiene que respetar eso: si sustituyera el búfer
+        # entero por lo que le llega, escribir un miembro dejaría el equipo en
+        # 236 bytes y las pruebas medirían otra cosa.
         self.emulador.escrituras.append(bytes(payload))
-        restaurando = bytes(payload) == bytes(self.emulador.original)
-        if restaurando:
+        base = 0x1000 + (self.emulador.memory.party_data - DS_RAM_BASE)
+        desde = int(host_address) - base
+        trozo = bytes(payload)
+
+        if trozo == bytes(self.emulador.original[desde:desde + len(trozo)]):
             if self.rollback_roto:
                 return      # el rollback no llega a la memoria
-            self.emulador.raw = bytearray(payload)
-            return
-        self.escrituras_reales += 1
-        if self.escrituras_reales <= self.corrompe:
-            # Se escribe otra cosa: simula que la escritura no llegó entera.
-            self.emulador.raw = bytearray(
-                _bloque(5) + bytes(payload)[PK4_PARTY_SIZE:]
-            )
-            return
-        self.emulador.raw = bytearray(payload)
+        else:
+            self.escrituras_reales += 1
+            if self.escrituras_reales <= self.corrompe:
+                # En el hueco queda otra ficha, válida pero distinta: simula la
+                # escritura que no llegó como se pidió. Tiene que cazarla el
+                # readback, que es lo que se está probando.
+                trozo = _bloque(5)
+
+        memoria = bytearray(self.emulador.raw)
+        memoria[desde:desde + len(trozo)] = trozo
+        self.emulador.raw = memoria
 
 
 def _peticion(emulador: _MelonDSFalso, hueco: int, *, evs=None, marcas=None) -> HgssRoleWrite:
@@ -408,7 +449,11 @@ def test_curar_el_equipo_entero_es_una_sola_transaccion() -> None:
 
     despues = writer.write_party_heal(lectura, objetivos, base_pp_for=_pp_fijo)
 
-    assert len(emulador.escrituras) == 1
+    # Una escritura por ficha tocada -no un volcado del bloque entero, que
+    # devolvería a los demás miembros a un estado que el juego ya cambió- y
+    # todas dentro de la misma transacción.
+    assert len(emulador.escrituras) == len(objetivos)
+    assert {len(e) for e in emulador.escrituras} == {PK4_PARTY_SIZE}
     for miembro in despues.pokemon:
         assert miembro.current_hp == miembro.max_hp
         assert miembro.status_condition == 0
@@ -611,3 +656,29 @@ def test_ensenar_una_mt_gasta_el_objeto() -> None:
     assert "set_bag_quantity" in fuente
     assert "no se descontó de la mochila" in fuente
     assert "deshacer()" in fuente
+
+
+def test_si_el_bloque_se_mueve_entre_leer_y_escribir_no_se_escribe() -> None:
+    """Lo que dejó dos «Huevo malo» en la partida del usuario.
+
+    En la RAM conviven **tres copias** del bloque del guardado -medido:
+    0x0227C2DC, 0x02376864 y 0x02399884, las tres con los mismos seis Pokémon- y
+    además el bloque cambia de sitio. Escribir con la dirección vieja mete la
+    ficha donde no va, y el juego enseña un «Huevo malo».
+
+    Como las tres copias dan el mismo equipo al interpretarlas, comparar por
+    contenido **no las distingue**: hay que comparar la dirección y los bytes.
+    """
+    emulador = _MelonDSFalso()
+    writer = _WriterDePrueba(emulador)
+    lectura = emulador.read_party()
+    emulador.mueve_el_bloque = True
+
+    with pytest.raises(HgssLiveError, match="se movió"):
+        writer.write_party_heal(
+            lectura,
+            [(p.slot, (p.pid, p.tid, p.sid)) for p in lectura.pokemon],
+            base_pp_for=_pp_fijo,
+        )
+    assert emulador.escrituras == [], "no se escribe ni un byte"
+    assert bytes(emulador.raw) == emulador.original

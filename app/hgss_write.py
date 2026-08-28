@@ -35,7 +35,8 @@ from dataclasses import dataclass
 from .gen4_memory import MONEY_MAX, SAVE_MONEY_SIZE
 from .hgss_live import (
     _KERNEL32, DS_RAM_BASE, MAX_PARTY, HgssBagRead, HgssLiveError, HgssMelonDSReader,
-    HgssPartyRead, bag_pocket_for, parse_bag_pocket, set_bag_quantity,
+    HgssPartyRead, bag_pocket_for, parse_bag_pocket, parse_party_block,
+    set_bag_quantity,
 )
 from .gen4_memory import PC_BOX_COUNT, PC_BOX_SLOT_COUNT, PC_BOX_STRIDE
 from .pk4 import (
@@ -71,7 +72,8 @@ INTENTOS_DE_ESCRITURA = 3
 # 1. Que el bloque esté **demostrado vivo**: localizado y comprobado que es el
 #    que el juego actualiza, viendo que cambia mientras los demás no.
 # 2. Que la dirección **siga valiendo justo antes de escribir**: se relee el
-#    equipo y tiene que ser byte a byte el que se leyó al abrir la transacción.
+#    equipo y tienen que seguir estando los mismos, uno por uno. No byte a
+#    byte: el juego reescribe las fichas solo, sin cambiar nada de la partida.
 #
 # Lo segundo cierra la ventana entre leer y escribir, que es donde se coló el
 # fallo: la lectura fue buena y para cuando llegó la escritura el bloque ya se
@@ -147,15 +149,38 @@ class HgssMelonDSWriter:
         finally:
             _KERNEL32.CloseHandle(handle)
 
-    def _confirmar_direccion(self, antes: HgssPartyRead) -> None:
-        """Que el bloque siga donde estaba, justo antes de tocar nada.
+    def _confirmar_direccion(
+        self, antes: HgssPartyRead, base_al_leer: int | None = None,
+    ) -> None:
+        """Que se vaya a escribir en el mismo sitio del que se leyó.
 
-        Entre leer y escribir puede moverse, y escribir en la dirección vieja es
-        exactamente lo que dejó un «Huevo malo». Se relee el equipo y tiene que
-        salir byte a byte el mismo.
+        LO QUE DE VERDAD PASA, MEDIDO
+
+        En la RAM conviven **tres copias** del bloque del guardado -medido:
+        0x0227C2DC, 0x02376864 y 0x02399884, las tres con los mismos seis
+        Pokémon-, y el bloque además cambia de sitio entre partidas. Una sola
+        copia, leída a dirección fija, es perfectamente estable: 200 lecturas
+        seguidas dieron **un único contenido**, siempre cifrado.
+
+        Lo que parecía «el equipo se reescribe solo» -once contenidos crudos
+        distintos en veinte lecturas- era el localizador saltando entre copias.
+        Las tres dan el mismo equipo al interpretarlas, así que comparar por
+        contenido **no distingue una copia de otra**: por eso una escritura pudo
+        salir «bien» verificada y dejar un «Huevo malo» en la partida.
+
+        Así que aquí se exige lo estricto, que es lo que protegía antes:
+
+        - el mismo proceso y la misma reserva,
+        - **la misma dirección de bloque** -esto es lo que faltaba-,
+        - y los mismos bytes, no solo los mismos Pokémon.
         """
         _bloque_demostrado(self.reader)
         ahora = self.reader.read_party()
+        if base_al_leer is not None and self.memory.block_base != base_al_leer:
+            raise HgssLiveError(
+                "El bloque del guardado se movió entre la lectura y la "
+                "escritura; no se ha tocado nada. Vuelve a intentarlo."
+            )
         if (
             ahora.process_id != antes.process_id
             or ahora.allocation_base != antes.allocation_base
@@ -188,6 +213,7 @@ class HgssMelonDSWriter:
             raise HgssLiveError(f"No hay ningún {que} de HeartGold que escribir.")
 
         antes = self.reader.read_party()
+        base_al_leer = self.memory.block_base
         if antes.process_id != party_read.process_id:
             raise HgssLiveError(f"melonDS cambió antes de escribir {que} en HeartGold.")
 
@@ -219,20 +245,41 @@ class HgssMelonDSWriter:
             return antes
 
         destino = self._party_host(antes)
+        # Solo se escriben las fichas que cambian. Volcar el bloque entero
+        # devolvía a los demás miembros al estado -cifrado o en claro- que
+        # tenían cuando se leyó, y el juego los va cambiando por su cuenta:
+        # eran 1180 bytes de riesgo por cada curación de un solo Pokémon.
+        tocados = sorted(vistos)
+
+        def escribir(origen: bytes) -> None:
+            for hueco in tocados:
+                desde = hueco * PK4_PARTY_SIZE
+                self._write_process_bytes(
+                    antes.process_id, destino + desde,
+                    bytes(origen[desde:desde + PK4_PARTY_SIZE]),
+                )
+
+        # Cómo tiene que quedar el equipo una vez interpretado. Los bytes no se
+        # pueden comparar -el juego los reescribe solo, ver `_confirmar_direccion`-
+        # pero el contenido sí, y es lo que de verdad importa.
+        esperados = parse_party_block(bytes(crudo_nuevo), antes.count)
 
         def deshacer() -> None:
-            self._write_process_bytes(antes.process_id, destino, crudo_viejo)
+            escribir(crudo_viejo)
             restaurado = self.reader.read_party()
-            if restaurado.raw != crudo_viejo:
+            if restaurado.raw != crudo_viejo or restaurado.pokemon != antes.pokemon:
                 raise HgssLiveError(
                     f"El rollback de {que} en HeartGold no se pudo confirmar; no guardes."
                 )
 
         def intentar() -> HgssPartyRead:
-            self._confirmar_direccion(antes)
-            self._write_process_bytes(antes.process_id, destino, bytes(crudo_nuevo))
+            escribir(bytes(crudo_nuevo))
             despues = self.reader.read_party()
-            if despues.count != antes.count or despues.raw != bytes(crudo_nuevo):
+            if (
+                despues.count != antes.count
+                or despues.raw != bytes(crudo_nuevo)
+                or despues.pokemon != esperados
+            ):
                 raise HgssLiveError(f"El readback de {que} en HeartGold no coincide.")
             for hueco, identidad in vistos.items():
                 verificado = despues.pokemon[hueco]
@@ -242,6 +289,9 @@ class HgssMelonDSWriter:
             return despues
 
         for intento in range(INTENTOS_DE_ESCRITURA):
+            # Fuera del `try`, por lo mismo: si el bloque se ha movido no se ha
+            # escrito nada y deshacer con la dirección vieja sería el destrozo.
+            self._confirmar_direccion(antes, base_al_leer)
             try:
                 return intentar()
             except Exception:
@@ -437,6 +487,7 @@ class HgssMelonDSWriter:
                 raise HgssLiveError(f"Dos cambios sobre el objeto #{item_id}.")
             vistos.add(item_id)
 
+        base_al_leer = self.memory.block_base
         antes = self.reader.read_bag(party_read)
         nuevos = dict(antes.raw)
         esperado: dict[int, int] = {}
@@ -471,8 +522,12 @@ class HgssMelonDSWriter:
                     "no guardes."
                 )
 
+        # Confirmar la dirección va **fuera** del `try`. Si se niega no ha
+        # salido ni un byte, y `deshacer` escribiría con la dirección vieja:
+        # eso no deshace nada, mete una ficha donde no va. Es lo que deja un
+        # «Huevo malo».
+        self._confirmar_direccion(party_read, base_al_leer)
         try:
-            self._confirmar_direccion(party_read)
             escribir(nuevos)
             despues = self.reader.read_bag(party_read)
             for bolsillo in tocados:
@@ -498,6 +553,7 @@ class HgssMelonDSWriter:
         cantidad = int(cantidad)
         if not 0 <= cantidad <= MONEY_MAX:
             raise HgssLiveError(f"HeartGold admite como máximo {MONEY_MAX} ₽.")
+        base_al_leer = self.memory.block_base
         antes = self.reader.read_trainer(party_read)
         if antes.money == cantidad:
             return antes.money
@@ -515,8 +571,12 @@ class HgssMelonDSWriter:
                     "no guardes."
                 )
 
+        # Confirmar la dirección va **fuera** del `try`. Si se niega no ha
+        # salido ni un byte, y `deshacer` escribiría con la dirección vieja:
+        # eso no deshace nada, mete una ficha donde no va. Es lo que deja un
+        # «Huevo malo».
+        self._confirmar_direccion(party_read, base_al_leer)
         try:
-            self._confirmar_direccion(party_read)
             self._write_process_bytes(party_read.process_id, destino, nuevo)
             despues = self.reader.read_trainer(party_read)
             if despues.money != cantidad:
@@ -550,6 +610,7 @@ class HgssMelonDSWriter:
             raise HgssLiveError("No hay ninguna MT de HeartGold que enseñar.")
 
         antes_equipo = self.reader.read_party()
+        base_al_leer = self.memory.block_base
         if antes_equipo.process_id != party_read.process_id:
             raise HgssLiveError("melonDS cambió antes de enseñar la MT.")
         antes_bolsa = self.reader.read_bag(antes_equipo)
@@ -610,10 +671,17 @@ class HgssMelonDSWriter:
                     origen[bolsillo.key],
                 )
 
+        def escribir_equipo(origen: bytes) -> None:
+            # Igual que en `_transaccion_de_equipo`: solo las fichas que cambian.
+            for hueco_equipo in sorted(esperados):
+                desde = hueco_equipo * PK4_PARTY_SIZE
+                self._write_process_bytes(
+                    antes_equipo.process_id, destino_equipo + desde,
+                    bytes(origen[desde:desde + PK4_PARTY_SIZE]),
+                )
+
         def deshacer() -> None:
-            self._write_process_bytes(
-                antes_equipo.process_id, destino_equipo, antes_equipo.raw,
-            )
+            escribir_equipo(antes_equipo.raw)
             escribir_bolsa(antes_bolsa.raw)
             if self.reader.read_party().raw != antes_equipo.raw:
                 raise HgssLiveError(
@@ -624,11 +692,13 @@ class HgssMelonDSWriter:
                     "El rollback de la MT no se pudo confirmar en la mochila; no guardes."
                 )
 
+        # Confirmar la dirección va **fuera** del `try`. Si se niega no ha
+        # salido ni un byte, y `deshacer` escribiría con la dirección vieja:
+        # eso no deshace nada, mete una ficha donde no va. Es lo que deja un
+        # «Huevo malo».
+        self._confirmar_direccion(antes_equipo, base_al_leer)
         try:
-            self._confirmar_direccion(antes_equipo)
-            self._write_process_bytes(
-                antes_equipo.process_id, destino_equipo, bytes(equipo_nuevo),
-            )
+            escribir_equipo(bytes(equipo_nuevo))
             escribir_bolsa(bolsa_nueva)
 
             despues_equipo = self.reader.read_party()
@@ -681,6 +751,7 @@ class HgssMelonDSWriter:
         entero en memoria, el juego no debe verlo declarado.
         """
         antes_equipo = self.reader.read_party()
+        base_al_leer = self.memory.block_base
         if antes_equipo.process_id != party_read.process_id:
             raise HgssLiveError(f"melonDS cambió antes de {que} en HeartGold.")
         antes_pc = self.reader.read_pc(antes_equipo)
@@ -717,8 +788,12 @@ class HgssMelonDSWriter:
                     f"El rollback de {que} dejó el PC distinto; no guardes."
                 )
 
+        # Confirmar la dirección va **fuera** del `try`. Si se niega no ha
+        # salido ni un byte, y `deshacer` escribiría con la dirección vieja:
+        # eso no deshace nada, mete una ficha donde no va. Es lo que deja un
+        # «Huevo malo».
+        self._confirmar_direccion(antes_equipo, base_al_leer)
         try:
-            self._confirmar_direccion(antes_equipo)
             for offset, contenido in huecos.items():
                 self._write_process_bytes(
                     antes_equipo.process_id, destino_pc + offset, contenido,
