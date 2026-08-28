@@ -1,6 +1,73 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.0-alpha.15 — el arranque deja de componer seis veces lo que se ve una
+
+Del log de rendimiento del usuario (`perf_2026-08-28.jsonl`, sesión de las
+16:19), los primeros dieciséis segundos:
+
+```
+  +seg  operacion                         ms
+  7,74  ui.team_pc.construir_vista      2675
+  8,93  ui.team_pc.construir_vista       616
+ 11,17  ui.team_pc.construir_vista       525
+ 12,24  ui.team_pc.construir_vista       661
+ 13,20  ui.team_pc.construir_vista       577
+ 16,05  ui.team_pc.construir_vista      1049
+```
+
+**Seis reconstrucciones completas de Equipo y PC, y cinco de ellas nadie las
+llegó a ver**: la barrera de arranque las tapaba todas y solo se publica la
+última. Cada aviso que iba llegando —la captura viva, las cajas del PC, los
+sprites— pedía la suya.
+
+Sumando las ocho sesiones del día, los motivos anotados lo dicen sin margen:
+**40 de las 75 reconstrucciones fueron por «arrancando»**.
+
+Y no es que preparar los datos cueste nada:
+
+```
+ui.team_pc.construir_vista        96 veces    76352 ms
+  ui.team_pc.party_proyectada     96 veces        6 ms
+  ui.team_pc.casillas_fijas       96 veces        5 ms
+  ui.team_pc.datos_del_pc         96 veces        6 ms
+  ui.team_pc.miembros_de_la_caja  96 veces        8 ms
+```
+
+**26 ms de 76 352.** El 100% del precio es volver a crear los widgets.
+
+Ahora, mientras la barrera tapa la pantalla, un repintado se **guarda** en vez
+de hacerse, y se ejecuta —completo, una sola vez— en cuanto dejan de llegar
+datos. Las tres cosas que aún pueden cambiar son exactamente las que la barrera
+ya espera para publicar: el primer enlace en vivo, la carga de las cajas y los
+sprites de la party.
+
+## Por qué esto no puede colgar el arranque
+
+Es la zona que ya se quedó bloqueada una vez, así que la seguridad va por
+construcción, no por confianza:
+
+- **Aplazar solo mientras la barrera tampoco podría publicar.** Si esas
+  condiciones no llegan, hoy tampoco se publicaba nada. Lo que se evita es el
+  trabajo intermedio, jamás el final.
+- **Tope de 4 segundos.** Si algo no termina, el repintado se hace igualmente.
+  El peor caso admisible es el comportamiento de siempre, no un cuelgue nuevo.
+- **Quien suelta es la propia barrera**, que se resondea cada 35–45 ms pase lo
+  que pase mientras espera. No hay ningún temporizador nuevo que pueda morirse.
+- **Al publicar se suelta lo que quede**, que si no dejaría la página vieja.
+- **Las navegaciones nunca se aplazan**: traen su propia barrera encima y nadie
+  más sabe retirarla.
+
+`test_arranque_no_repinta_de_mas.py` monta los métodos reales sobre un doble y
+cubre los tres caminos peligrosos: aplazar y perder el trabajo, aplazar para
+siempre, y que soltar se aplace a sí mismo.
+
+## Y seis pruebas de la barrera que montaban un doble
+
+`test_design_evolution_phase_a.py` construía la barrera con `SimpleNamespace`.
+Ahora se le monta el método real de soltar, para que estas pruebas sigan
+midiendo la barrera y no una copia que pueda diverger de ella.
+
 # v0.3.0-alpha.14 — el menú se despega solo, sin esperar al sondeo
 
 > *«lo cierra, pero va un poco a destiempo. ¿No se podría hacer que el menú esté

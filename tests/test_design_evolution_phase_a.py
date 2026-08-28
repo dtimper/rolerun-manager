@@ -36,6 +36,22 @@ from app.ui_state.team_pc_state import (
 from app.ui_state.spatial_navigation import SpatialSelection, SpatialTarget
 
 
+
+def _preparar_barrera(manager) -> None:
+    """Monta en el doble lo que la barrera necesita para soltar lo aplazado.
+
+    Durante el arranque los repintados se guardan en vez de hacerse (seis
+    reconstrucciones medidas que nadie llegaba a ver). Quien las suelta es esta
+    misma barrera, asi que se le monta el metodo **real** y sin nada guardado:
+    estas pruebas siguen midiendo la barrera de verdad y no un doble que podria
+    diverger de ella.
+    """
+    manager._arranque_repintado_aplazado = None
+    manager._soltando_repintado_de_arranque = False
+    manager._soltar_el_repintado_aplazado = lambda: (
+        RoleRunManager._soltar_el_repintado_aplazado(manager)
+    )
+
 def test_oras_role_ev_change_requires_personal_profile_before_live_write() -> None:
     role_change = PendingRoleChange(
         2, "Houndoom", "Houndoom", "Asesino", "Mago",
@@ -1545,6 +1561,7 @@ def test_initial_shell_barrier_requires_pc_layout_and_first_live_probe() -> None
         RoleRunManager._retire_initial_shell_when_ready(manager, attempt)
     )
 
+    _preparar_barrera(manager)
     RoleRunManager._retire_initial_shell_when_ready(manager)
     assert hidden == []
     assert callbacks
@@ -1624,6 +1641,7 @@ def test_initial_shell_rejects_a_composed_view_with_stale_health() -> None:
         after=lambda _delay, callback: callbacks.append(callback),
     )
 
+    _preparar_barrera(manager)
     RoleRunManager._retire_initial_shell_when_ready(manager)
 
     assert hidden == []
@@ -1666,6 +1684,7 @@ def test_initial_shell_compares_the_projected_party_after_pending_faints() -> No
         after=lambda _delay, callback: callbacks.append(callback),
     )
 
+    _preparar_barrera(manager)
     RoleRunManager._retire_initial_shell_when_ready(manager)
 
     assert manager._initial_shell_reveal_phase == "mapping"
@@ -1701,6 +1720,7 @@ def test_sm_initial_shell_waits_for_the_proven_live_pc_matrix() -> None:
         after=lambda _delay, callback: callbacks.append(callback),
     )
 
+    _preparar_barrera(manager)
     RoleRunManager._retire_initial_shell_when_ready(manager)
 
     assert manager._initial_shell_reveal_phase == "hidden"
@@ -1739,6 +1759,7 @@ def test_initial_shell_rejects_a_composed_live_view_not_yet_presented() -> None:
         after=lambda _delay, callback: callbacks.append(callback),
     )
 
+    _preparar_barrera(manager)
     RoleRunManager._retire_initial_shell_when_ready(manager)
 
     assert hidden == []
@@ -1773,6 +1794,7 @@ def test_initial_shell_waits_for_party_sprites_and_their_final_refresh() -> None
         after=lambda _delay, callback: callbacks.append(callback),
     )
 
+    _preparar_barrera(manager)
     RoleRunManager._retire_initial_shell_when_ready(manager)
 
     assert manager._initial_shell_reveal_phase == "hidden"

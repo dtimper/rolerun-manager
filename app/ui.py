@@ -679,6 +679,10 @@ class RoleRunManager(ctk.CTk):
         self._initial_shell_waiting = False
         self._initial_shell_live_probe_complete = True
         self._initial_shell_pc_data: SavePCData | None = None
+        # Repintado pedido mientras la barrera de arranque tapa la pantalla:
+        # (preserve_scroll, reset_scroll, cuando se pidio).
+        self._arranque_repintado_aplazado: tuple[bool, bool, float] | None = None
+        self._soltando_repintado_de_arranque = False
         self._presented_team_pc_view = None
         self._initial_shell_gate_trace_state = None
         self._initial_shell_reveal_phase = "idle"
@@ -12457,6 +12461,11 @@ class RoleRunManager(ctk.CTk):
         # para Ctrl+Z/Ctrl+Shift+Z. Navegar sin editar no genera pasos fantasma.
         self._record_edit_transition()
 
+        if self._aplazar_repintado_de_arranque(
+            preserve_scroll, reset_scroll, _prepared_navigation_overlay,
+        ):
+            return
+
         # Un refresco interno de Equipo y PC que no cambia la forma de la página
         # no necesita un body nuevo: cambiar los datos cuesta decenas de
         # milisegundos y reconstruirlo, cientos. Las navegaciones y los
@@ -22329,10 +22338,92 @@ class RoleRunManager(ctk.CTk):
                 generation, loading_overlay, "No se pudo abrir la Run", str(exc)
             )
 
+    #: Cuánto se puede posponer un repintado durante el arranque antes de
+    #: hacerlo igualmente. La barrera no publica por timeout a propósito, así
+    #: que este tope no enseña nada a medias: solo garantiza que aplazar no
+    #: pueda convertirse en no hacerlo nunca.
+    ARRANQUE_APLAZA_COMO_MUCHO_S = 4.0
+
+    def _aplazar_repintado_de_arranque(
+        self, preserve_scroll: bool, reset_scroll: bool, overlay,
+    ) -> bool:
+        """Mientras la barrera tapa la pantalla, repintar de más es tirar tiempo.
+
+        Medido en el arranque real del usuario: **seis** reconstrucciones
+        completas de Equipo y PC entre el segundo 7,7 y el 16,0, de 2675, 616,
+        525, 661, 577 y 1049 ms. Cada aviso que iba llegando —la captura viva,
+        las cajas del PC, los sprites— pedía la suya, y **ninguna de las
+        intermedias llegó a verse**: la barrera las tapaba todas y solo se
+        publica la última.
+
+        Y no es que los datos cuesten: los cuatro trozos medidos de
+        ``construir_vista`` suman 26 ms en 96 construcciones. El 100% del precio
+        es volver a crear los widgets.
+
+        Aplazar es seguro porque la barrera **ya exige esas mismas condiciones**
+        para publicar: si no llegan, hoy tampoco se publicaba nada. Lo que se
+        evita es el trabajo intermedio, nunca el final. Aun asi hay tope de
+        tiempo, porque el peor caso admisible es el comportamiento de siempre.
+        """
+        if not self._initial_shell_waiting or self._soltando_repintado_de_arranque:
+            return False
+        # Una navegación trae su propia barrera y nadie más sabe retirarla.
+        if overlay is not None:
+            return False
+        if not self._arranque_todavia_esta_recibiendo_datos():
+            return False
+        anterior = self._arranque_repintado_aplazado
+        self._arranque_repintado_aplazado = (
+            bool(preserve_scroll or (anterior and anterior[0])),
+            bool(reset_scroll or (anterior and anterior[1])),
+            anterior[2] if anterior else time.monotonic(),
+        )
+        perf.mark("ui.render.aplazado_por_arranque")
+        return True
+
+    def _arranque_todavia_esta_recibiendo_datos(self) -> bool:
+        """Las tres cosas que la barrera espera y que aún pueden cambiar.
+
+        Repintar antes de que lleguen es repintar con datos que van a quedarse
+        viejos dentro de un segundo.
+        """
+        return bool(
+            not self._initial_shell_live_probe_complete
+            or self._team_pc_pc_loading
+            or self._sprite_refresh_scheduled
+        )
+
+    def _soltar_el_repintado_aplazado(self) -> None:
+        """Ejecuta el repintado guardado en cuanto deja de llegar trabajo."""
+        pendiente = self._arranque_repintado_aplazado
+        if pendiente is None or self._soltando_repintado_de_arranque:
+            return
+        preserve_scroll, reset_scroll, desde = pendiente
+        vencido = (time.monotonic() - float(desde)) >= self.ARRANQUE_APLAZA_COMO_MUCHO_S
+        if (
+            self._initial_shell_waiting
+            and not vencido
+            and self._arranque_todavia_esta_recibiendo_datos()
+        ):
+            return
+        self._arranque_repintado_aplazado = None
+        # Repintar vuelve a pasar por aqui: sin esta marca se aplazaria a si mismo.
+        self._soltando_repintado_de_arranque = True
+        try:
+            self._smooth_render_page(
+                preserve_scroll=bool(preserve_scroll), reset_scroll=bool(reset_scroll),
+            )
+        finally:
+            self._soltando_repintado_de_arranque = False
+
     def _retire_initial_shell_when_ready(self, attempt: int = 0) -> None:
         """Publica la primera página solo después de sus fronteras reales."""
         if not self._initial_shell_waiting:
+            self._soltar_el_repintado_aplazado()
             return
+        # Esta es la unica rueda que gira sola durante el arranque (cada 35-45
+        # ms), asi que es la que tiene que soltar lo aplazado.
+        self._soltar_el_repintado_aplazado()
         indicator = getattr(self, "_busy_indicator", None)
         if self._widget_alive(indicator):
             # Una activación de Ryujinx o un relayout de la raíz no puede dejar
@@ -22446,6 +22537,9 @@ class RoleRunManager(ctk.CTk):
             self._initial_shell_pc_data = None
             self._initial_shell_reveal_phase = "published"
             self._publish_initial_shell(indicator)
+            # Publicar con un repintado todavia guardado dejaria la pagina
+            # vieja en pantalla. Aqui ya no hay barrera: sale de inmediato.
+            self._soltar_el_repintado_aplazado()
             return
         gate_state = (
             expected_health,
