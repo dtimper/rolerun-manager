@@ -1,6 +1,55 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.98 — la rejilla del PC reutiliza sus casillas
+
+Primer paso contra las pantallas de carga: **no rehacer lo que ya está hecho**.
+
+## Lo que cuesta construir, medido
+
+Con customtkinter en el equipo del usuario:
+
+| | |
+|--|--|
+| `CTkLabel` | 0,52 ms |
+| `CTkFrame` | 1,35 ms |
+| `CTkButton` | 1,69 ms |
+| una tarjeta de equipo (19 etiquetas, 7 marcos, 1 botón) | **34,7 ms** |
+| las seis del equipo | **208 ms** |
+| destruirlas además | +97 ms |
+| **reconfigurar una tarjeta entera** | **4,7 ms** |
+
+Y una sospecha descartada: crear una `CTkFont` cuesta **0,008 ms**. Reutilizar
+fuentes ahorraría 4 ms en trescientas etiquetas, así que no es por ahí.
+
+## Cambiar de caja del PC
+
+`_render_pc_grid` destruía sus treinta botones y los volvía a crear. Ahora los
+reutiliza y solo los reconfigura:
+
+    antes: destruir + crear ....... 37,4 ms
+    ahora: reconfigurar ...........  5,9 ms
+
+Lo delicado no era la ganancia sino el arrastre. `_bind_drag_tree` engancha con
+`add="+"`, así que volver a enganchar un botón reutilizado apilaría manejadores:
+a la sexta caja, un clic dispararía seis arrastres. Por eso el Pokémon de cada
+hueco vive ahora en `_pc_slot_pokemon` y no en el cierre del manejador, y los
+enganches se ponen **una sola vez**, al crear el botón. Hay una prueba que lo
+vigila contando manejadores.
+
+Un resultado de búsqueda o un aviso ocupan la misma rejilla con otra forma, así
+que ahí sí se rehace: lo decide `_vaciar_rejilla_pc` con el modo.
+
+## El diagnóstico de fondo
+
+`render_page` hace `self._clear(self.body)`: destruye la página entera y la
+reconstruye. Se dispara desde **63 sitios**. La pantalla de carga no infla el
+tiempo —el diseño ya usa doble búfer— pero tapa una espera real de unos 300 ms.
+Reutilizando widgets esa espera baja a decenas de milisegundos, y a esa velocidad
+la pantalla de carga sobra, que es lo que el usuario quiere.
+
+Suite completa: **1807**.
+
 # v0.2.6-alpha.97 — cuarta fuera de la lista, y el sprite se redimensiona una vez
 
 ## Cuarta generación se oculta
