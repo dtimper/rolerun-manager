@@ -1,6 +1,48 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.0-alpha.14 — el menú se despega solo, sin esperar al sondeo
+
+> *«lo cierra, pero va un poco a destiempo. ¿No se podría hacer que el menú esté
+> pegado a la aplicación y que, si cambias de app, se queda enganchado a la
+> pantalla anterior?»*
+
+Sí, y es mejor idea que la de la alpha.13. El retraso venía de que la decisión la
+tomaba un sondeo cada 500 ms, cuando Windows ya sabe apilar ventanas y lo hace
+en el mismo gesto del clic.
+
+Lo que ataba las manos era el `-topmost` del menú: una ventana marcada como
+«siempre delante» **no se deja tapar por nada**, así que la única forma de
+quitarla de en medio era retirarla nosotros, y por eso llegaba tarde.
+
+Ahora el `-topmost` dura solo mientras el menú es lo que se está mirando:
+
+- **`<FocusOut>`** —cambias de aplicación— lo despega. La ventana nueva se le
+  pone encima ella sola, al instante, sin que nadie lo decida.
+- **`<FocusIn>`** —vuelves al menú— lo devuelve al frente.
+
+Tk manda `FocusOut` también cuando el foco salta a un botón de dentro del propio
+menú, así que se comprueba en Win32 quién tiene de verdad el primer plano antes
+de despegar nada.
+
+Con dos monitores esto además sale gratis: pinchar en la otra pantalla no pone
+nada encima del juego, así que el menú se queda a la vista sin ninguna regla
+especial. Es la misma respuesta que daba la geometría, pero sin preguntar.
+
+El sondeo de la alpha.13 sigue ahí y sigue haciendo falta —minimizar RoleRun para
+que no desaparezca de la barra de tareas, soltar el emulador, traer el menú de
+vuelta cuando el juego se despeja—, pero ya solo hace el trabajo que no se ve. Y
+los cambios de foco lo adelantan en vez de esperar al siguiente turno.
+
+## Lo que no se ha hecho, y por qué
+
+«Pegado a la aplicación» tiene una versión literal: hacer el menú **ventana
+propiedad** de la de Ryujinx (`GWLP_HWNDPARENT`), y entonces sube y baja con ella
+sin que RoleRun intervenga. Se ha descartado a propósito: encadenar la propiedad
+de una ventana entre dos procesos **une sus colas de entrada**, y con eso un
+cuelgue del emulador se lleva a RoleRun por delante. Habiendo congelaciones sin
+explicar todavía, no toca meter eso.
+
 # v0.3.0-alpha.13 — el menú flotante deja de pintarse sobre otras aplicaciones
 
 > *«cuando lo pongo en menú (que se pausa) y luego cambio de aplicación, se queda

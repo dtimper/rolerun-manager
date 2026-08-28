@@ -210,3 +210,80 @@ def test_cerrar_el_menu_escondido_no_saca_la_barra_encima_del_estorbo() -> None:
     assert "self._barra_oculta_por_tapado = True" in fuente, (
         "sin marcarla, el sondeo no la traería de vuelta al despejarse el juego"
     )
+
+
+class ManagerConFoco(ManagerFalso):
+    """Lo justo para los dos manejadores de foco."""
+
+    _menu_flotante_pierde_el_foco = RoleRunManager._menu_flotante_pierde_el_foco
+    _menu_flotante_recupera_el_foco = RoleRunManager._menu_flotante_recupera_el_foco
+
+    def __init__(self, menu: MenuFalso | None, *, propio: bool) -> None:
+        super().__init__(menu, tapado=False)
+        self._propio = propio
+        self._floating_bar_poll_id = None
+        self.adelantos = 0
+
+    def _foreground_belongs_to_this_process(self) -> bool:
+        return self._propio
+
+    def _sondear_la_barra_ya(self) -> None:
+        self.adelantos += 1
+
+
+def test_cambiar_de_aplicacion_lo_despega_al_instante() -> None:
+    """Windows apila mejor que un sondeo cada medio segundo."""
+    menu = MenuFalso()
+    app = ManagerConFoco(menu, propio=False)
+
+    app._menu_flotante_pierde_el_foco()
+
+    assert menu.encima is False, "sigue por delante de la aplicación nueva"
+    assert app.adelantos == 1, "el resto del trabajo no puede esperar 500 ms"
+
+
+def test_pulsar_un_boton_del_propio_menu_no_lo_despega() -> None:
+    """Tk manda ``FocusOut`` también cuando el foco salta dentro de la ventana."""
+    menu = MenuFalso()
+    app = ManagerConFoco(menu, propio=True)
+
+    app._menu_flotante_pierde_el_foco()
+
+    assert menu.encima is True
+    assert app.adelantos == 0
+
+
+def test_volver_al_menu_lo_pone_otra_vez_delante() -> None:
+    menu = MenuFalso()
+    app = ManagerConFoco(menu, propio=False)
+    app._menu_flotante_pierde_el_foco()
+
+    app._propio = True
+    app._menu_flotante_recupera_el_foco()
+
+    assert menu.encima is True
+
+
+def test_sin_menu_abierto_el_foco_no_hace_nada() -> None:
+    app = ManagerConFoco(None, propio=False)
+
+    app._menu_flotante_pierde_el_foco()
+    app._menu_flotante_recupera_el_foco()
+
+    assert app.adelantos == 0
+
+
+def test_el_menu_se_engancha_a_los_dos_eventos_de_foco() -> None:
+    fuente = inspect.getsource(RoleRunManager._toggle_floating_launcher)
+
+    assert '"<FocusOut>", self._menu_flotante_pierde_el_foco' in fuente
+    assert '"<FocusIn>", self._menu_flotante_recupera_el_foco' in fuente
+    assert 'add="+"' in fuente, "sin esto se pisarían otros enganches del menú"
+
+
+def test_adelantar_el_sondeo_no_deja_dos_en_marcha() -> None:
+    """Dos sondeos encadenados se van duplicando en cada cambio de foco."""
+    fuente = inspect.getsource(RoleRunManager._sondear_la_barra_ya)
+
+    assert "after_cancel" in fuente
+    assert "self.after(1, self._poll_floating_bar)" in fuente

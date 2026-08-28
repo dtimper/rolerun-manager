@@ -3010,6 +3010,11 @@ class RoleRunManager(ctk.CTk):
         except Exception:
             pass
         launcher.focus_force()
+        # Windows sabe apilar ventanas mucho mejor que un sondeo cada medio
+        # segundo: en cuanto el menu deja de ir por delante de todo, la
+        # aplicacion a la que se cambia lo tapa ella sola, al instante.
+        launcher.bind("<FocusOut>", self._menu_flotante_pierde_el_foco, add="+")
+        launcher.bind("<FocusIn>", self._menu_flotante_recupera_el_foco, add="+")
         # El sondeo lo reprograma el repintado de la barra, y la barra acaba
         # de retirarse: sin esto el menu se queda sin nadie que lo vigile.
         self._menu_oculto_por_tapado = False
@@ -3472,6 +3477,55 @@ class RoleRunManager(ctk.CTk):
         # Las ventanas de RoleRun están encima del juego por diseño: la barra
         # flotante es exactamente eso.
         return mayor_tapadura(juego, {os.getpid()}) >= self.JUEGO_TAPADO
+
+    def _menu_flotante_pierde_el_foco(self, _evento=None) -> None:
+        """Deja de ir por delante de todo en cuanto se cambia de aplicacion.
+
+        El sondeo tarda hasta medio segundo en enterarse y se nota. Windows no:
+        una ventana normal se queda donde estaba y la aplicacion nueva se le
+        pone encima sola, en el mismo gesto. El `-topmost` solo hace falta
+        mientras el menu es lo que se esta mirando.
+
+        Con dos monitores esto ademas sale gratis: pinchar en la otra pantalla
+        no pone nada encima del juego, asi que el menu se queda a la vista sin
+        que nadie tenga que decidirlo.
+        """
+        launcher = self._floating_launcher
+        if not self._widget_alive(launcher):
+            return
+        # Tk tambien manda `FocusOut` cuando el foco salta a un boton de dentro
+        # del propio menu. Eso no es cambiar de aplicacion.
+        if self._foreground_belongs_to_this_process():
+            return
+        try:
+            launcher.attributes("-topmost", False)
+        except Exception:
+            pass
+        self._sondear_la_barra_ya()
+
+    def _menu_flotante_recupera_el_foco(self, _evento=None) -> None:
+        launcher = self._floating_launcher
+        if not self._widget_alive(launcher):
+            return
+        try:
+            launcher.attributes("-topmost", True)
+            launcher.lift()
+        except Exception:
+            pass
+        self._sondear_la_barra_ya()
+
+    def _sondear_la_barra_ya(self) -> None:
+        """Adelanta el sondeo en vez de esperar al siguiente turno de 500 ms."""
+        if self._floating_bar_poll_id:
+            try:
+                self.after_cancel(self._floating_bar_poll_id)
+            except Exception:
+                pass
+            self._floating_bar_poll_id = None
+        try:
+            self._floating_bar_poll_id = self.after(1, self._poll_floating_bar)
+        except Exception:
+            self._floating_bar_poll_id = None
 
     def _vigilar_el_menu_flotante(self) -> bool:
         """Retira el menu flotante cuando el juego deja de verse.
