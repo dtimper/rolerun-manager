@@ -234,7 +234,10 @@ class UnifiedTeamPCView:
         # basta con que el controlador haya entregado un modelo live: la
         # barrera inicial debe comprobar los valores que esta superficie llegó
         # realmente a convertir en widgets antes de exponerla.
-        self._rendered_team_health: list[tuple[int, int, int]] = []
+        # Los PS que cada casilla materializo, por indice de casilla. Era una
+        # lista y se anadia una fila por tarjeta; repintar una casilla suelta
+        # anadia en vez de sustituir, y la firma quedaba con siete filas.
+        self._rendered_team_health: dict[int, tuple[int, int, int]] = {}
         # Referencias a la barra y la etiqueta de PS de cada miembro, para poder
         # actualizarlas sin reconstruir la página. Medido en Windows: una
         # reconstrucción completa cuesta 845 ms de hilo Tk.
@@ -353,7 +356,7 @@ class UnifiedTeamPCView:
         # misma identidad semántica sin confundir ambos órdenes.
         return tuple(
             (current_hp, max_hp)
-            for _slot, current_hp, max_hp in sorted(self._rendered_team_health)
+            for _slot, current_hp, max_hp in sorted(self._rendered_team_health.values())
         )
 
     def _bind_viewport_resize(self) -> None:
@@ -511,60 +514,135 @@ class UnifiedTeamPCView:
         # En el modo de baja la banda contextual reduce la altura disponible.
         # Las seis casillas siguen siendo visibles incluso en 1100x720 sin
         # reducir las fuentes funcionales por debajo de sus mínimos.
-        card_height = 42 if self.mode_banner else 102
+        self._team_slots_container = slots
         for index, slot in enumerate(self.team_slots):
             slots.grid_rowconfigure(index, weight=1, uniform="team_slots")
-            pokemon = slot.get("pokemon")
-            slot_role = str(slot.get("slot_role") or "SIN ROL")
-            preparation = slot.get("state") == "preparation"
-            identity = self.identity_for(pokemon) if pokemon is not None else f"empty:{slot_role}"
-            card = ctk.CTkFrame(
-                slots,
-                height=card_height,
-                fg_color="#202020",
-                corner_radius=12,
-                border_width=1,
-                border_color=PREPARATION if preparation else "#383838",
-            )
-            card.grid(
-                row=index,
-                column=0,
-                sticky="nsew",
-                pady=1 if self.mode_banner else 3,
-            )
-            card.grid_propagate(False)
-            card.grid_columnconfigure(0, weight=1)
-            card.grid_rowconfigure(0, weight=1)
-            self.team_frames[identity] = card
-            self._team_card_pokemon[identity] = pokemon
-            destino = {"slot_role": slot_role, "pokemon": pokemon}
-            self.drop_targets.append((card, "team", destino))
-            self._team_card_targets[identity] = destino
-            if preparation:
-                self.team_preparation.add(identity)
+            self._pintar_casilla(index, slot)
 
-            if pokemon is not None:
-                self._render_team_card(
-                    card, pokemon, slot_role, identity,
-                    preparation=preparation,
-                )
-            else:
-                empty = ctk.CTkFrame(card, fg_color="transparent", corner_radius=0)
-                empty.pack(fill="both", expand=True, padx=8, pady=6)
-                ctk.CTkLabel(
-                    empty,
-                    text=slot_role.upper(),
-                    text_color=GOLD,
-                    anchor="w",
-                    font=ctk.CTkFont("Segoe UI", 12, "bold"),
-                ).pack(anchor="w", padx=6, pady=((2, 0) if self.mode_banner else (8, 2)))
-                ctk.CTkLabel(
-                    empty,
-                    text="CASILLA LIBRE",
-                    text_color=MUTED,
-                    anchor="w",
-                    font=ctk.CTkFont("Segoe UI", 12),
-                ).pack(anchor="w", padx=6, pady=(0, 2) if self.mode_banner else 0)
+    #: Alto de una casilla. En modo baja la banda contextual come sitio, y las
+    #: seis tienen que seguir cabiendo en 1100x720.
+    def _alto_de_casilla(self) -> int:
+        return 42 if self.mode_banner else 102
+
+    @staticmethod
+    def firma_de_casilla(slot: dict[str, Any], identity_for) -> tuple:
+        """Lo que obliga a rehacer una casilla en vez de solo cambiarle datos.
+
+        El rol decide el icono, el rótulo y qué movimientos se marcan; el estado
+        decide el marco de preparación; el ocupante decide todo lo demás.
+        """
+        pokemon = slot.get("pokemon")
+        return (
+            str(slot.get("slot_role") or "SIN ROL"),
+            str(slot.get("state") or ""),
+            identity_for(pokemon) if pokemon is not None else None,
+        )
+
+    def _olvidar_casilla(self, identity: str) -> None:
+        """Suelta todo lo que una identidad dejó registrado en su casilla.
+
+        Lo recorren después el arrastre, los estilos de selección y la barrera
+        inicial: un registro que sobreviva a su widget apunta a un árbol muerto.
+        """
+        self.team_frames.pop(identity, None)
+        self._team_health_widgets.pop(identity, None)
+        self._team_card_widgets.pop(identity, None)
+        self._team_card_pokemon.pop(identity, None)
+        self._team_card_targets.pop(identity, None)
+        self.role_info_buttons.pop(identity, None)
+        self.team_preparation.discard(identity)
+
+    def _pintar_casilla(self, index: int, slot: dict[str, Any]) -> None:
+        """Crea la casilla `index` entera. Cuesta 34,71 ms; la página, 700."""
+        slots = self._team_slots_container
+        pokemon = slot.get("pokemon")
+        slot_role = str(slot.get("slot_role") or "SIN ROL")
+        preparation = slot.get("state") == "preparation"
+        identity = self.identity_for(pokemon) if pokemon is not None else f"empty:{slot_role}"
+        card = ctk.CTkFrame(
+            slots,
+            height=self._alto_de_casilla(),
+            fg_color="#202020",
+            corner_radius=12,
+            border_width=1,
+            border_color=PREPARATION if preparation else "#383838",
+        )
+        card.grid(
+            row=index,
+            column=0,
+            sticky="nsew",
+            pady=1 if self.mode_banner else 3,
+        )
+        card.grid_propagate(False)
+        card.grid_columnconfigure(0, weight=1)
+        card.grid_rowconfigure(0, weight=1)
+        self.team_frames[identity] = card
+        self._team_card_pokemon[identity] = pokemon
+        destino = {"slot_role": slot_role, "pokemon": pokemon}
+        self.drop_targets.append((card, "team", destino))
+        self._team_card_targets[identity] = destino
+        if preparation:
+            self.team_preparation.add(identity)
+
+        if pokemon is not None:
+            self._render_team_card(
+                card, pokemon, slot_role, identity,
+                preparation=preparation, indice=index,
+            )
+        else:
+            self._rendered_team_health.pop(index, None)
+            empty = ctk.CTkFrame(card, fg_color="transparent", corner_radius=0)
+            empty.pack(fill="both", expand=True, padx=8, pady=6)
+            ctk.CTkLabel(
+                empty,
+                text=slot_role.upper(),
+                text_color=GOLD,
+                anchor="w",
+                font=ctk.CTkFont("Segoe UI", 12, "bold"),
+            ).pack(anchor="w", padx=6, pady=((2, 0) if self.mode_banner else (8, 2)))
+            ctk.CTkLabel(
+                empty,
+                text="CASILLA LIBRE",
+                text_color=MUTED,
+                anchor="w",
+                font=ctk.CTkFont("Segoe UI", 12),
+            ).pack(anchor="w", padx=6, pady=(0, 2) if self.mode_banner else 0)
+
+    @staticmethod
+    def _clave_de_casilla(firma: tuple) -> str:
+        """Con qué nombre está registrada una casilla: su ocupante, o su rol."""
+        return firma[2] if firma[2] is not None else f"empty:{firma[0]}"
+
+    def repintar_casillas_cambiadas(self, team_slots: list[dict[str, Any]]) -> bool:
+        """Rehace solo las casillas cuya terna haya cambiado.
+
+        Sacar un Pokémon del equipo mueve una casilla, a veces dos si los roles
+        se recolocan: 35 ms por casilla contra los 700 de rehacer la página.
+        """
+        if not self._widget_vivo(getattr(self, "_team_slots_container", None)):
+            return False
+        antes = [self.firma_de_casilla(s, self.identity_for) for s in self.team_slots]
+        ahora = [self.firma_de_casilla(s, self.identity_for) for s in team_slots]
+        try:
+            for index, (viejo, nuevo) in enumerate(zip(antes, ahora)):
+                if viejo == nuevo:
+                    continue
+                clave = self._clave_de_casilla(viejo)
+                marco = self.team_frames.get(clave)
+                self._olvidar_casilla(clave)
+                if marco is not None and self._widget_vivo(marco):
+                    marco.destroy()
+                self.team_slots[index] = team_slots[index]
+                self._pintar_casilla(index, team_slots[index])
+            # Un destino de soltar que apunte a un marco destruido no se puede
+            # resolver: se cae con el marco.
+            self.drop_targets = [
+                destino for destino in self.drop_targets
+                if destino[1] != "team" or self._widget_vivo(destino[0])
+            ]
+        except Exception:
+            return False
+        return True
 
     @staticmethod
     def _health_presentation(
@@ -628,7 +706,7 @@ class UnifiedTeamPCView:
         # verdad. Si actualizamos los widgets sin actualizar esa evidencia, la
         # firma quedaría mintiendo sobre lo que el usuario está viendo.
         index = entry.get("health_index")
-        if isinstance(index, int) and 0 <= index < len(self._rendered_team_health):
+        if isinstance(index, int) and index in self._rendered_team_health:
             # El slot físico se pasa cuando el que llama lo conoce. Conservar el
             # de cuando se construyó la tarjeta era correcto mientras esto solo
             # refrescaba PS de una vista recién hecha; desde que la tarjeta se
@@ -799,18 +877,10 @@ class UnifiedTeamPCView:
         """
         if self.mode_banner or len(team_slots) != len(self.team_slots):
             return False
-        nueva = tuple(
-            (
-                str(slot.get("slot_role") or ""),
-                str(slot.get("state") or ""),
-                (
-                    self.identity_for(slot["pokemon"])
-                    if slot.get("pokemon") is not None else None
-                ),
-            )
-            for slot in team_slots
-        )
-        if nueva != self.team_structure():
+        # Una casilla que cambia de rol, de estado o de ocupante se rehace
+        # entera -35 ms-; el resto solo cambia de datos. Antes bastaba con que
+        # una sola cambiara para rehacer la página, que son 700.
+        if not self.repintar_casillas_cambiadas(team_slots):
             return False
         for slot in team_slots:
             pokemon = slot.get("pokemon")
@@ -837,7 +907,8 @@ class UnifiedTeamPCView:
         return True
 
     def _render_team_card(
-        self, card, pokemon: Any, slot_role: str, identity: str, *, preparation: bool,
+        self, card, pokemon: Any, slot_role: str, identity: str, *,
+        preparation: bool, indice: int,
     ) -> None:
         content = ctk.CTkFrame(card, fg_color="transparent", corner_radius=0)
         content.grid(row=0, column=0, sticky="nsew", padx=8, pady=5)
@@ -851,12 +922,12 @@ class UnifiedTeamPCView:
         max_hp = int(getattr(pokemon, "max_hp", 0) or 0)
         hp_value = int(current_hp) if current_hp is not None else None
         _fraction, _color, hp_text = self._health_presentation(hp_value, max_hp)
-        self._rendered_team_health.append((
+        self._rendered_team_health[indice] = (
             int(getattr(pokemon, "slot", 0) or 0),
             int(hp_value) if hp_value is not None else -1,
             int(max_hp),
-        ))
-        health_index = len(self._rendered_team_health) - 1
+        )
+        health_index = indice
         role_heading = slot_role.upper()
         if preparation:
             role_heading += " · PREPARACIÓN"

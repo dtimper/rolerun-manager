@@ -77,12 +77,14 @@ def _vista(equipo: list[_Mono]):
     """Una vista ya construida con el equipo en el orden en que llegó."""
     yo = types.SimpleNamespace(
         _team_health_widgets={},
-        _rendered_team_health=[],
+        # Por índice de casilla: repintar una suelta tiene que sustituir su
+        # fila, no añadir una séptima.
+        _rendered_team_health={},
         _health_presentation=UnifiedTeamPCView._health_presentation,
         _configurar_si_cambia=UnifiedTeamPCView._configurar_si_cambia,
     )
     for indice, mono in enumerate(equipo):
-        yo._rendered_team_health.append((mono.slot, mono.current_hp, mono.max_hp))
+        yo._rendered_team_health[indice] = (mono.slot, mono.current_hp, mono.max_hp)
         yo._team_health_widgets[f"id{indice}"] = {
             "bar": _Barra(), "label": _Etiqueta(), "health_index": indice,
         }

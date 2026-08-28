@@ -53,6 +53,11 @@ def _gestor(vista: _VistaFalsa):
     yo = types.SimpleNamespace(
         _team_pc_view=vista,
         _body_swap_in_progress=False,
+        _pc_forma_conocida=None,
+        _team_pc_pc_loading=False,
+        _ensure_live_pc_matrix_loaded=lambda: None,
+        after=lambda ms, callback: None,
+        _start_team_pc_load=lambda: None,
         _initial_shell_waiting=False,
         _team_focus_identity=None,
         active_page="team",
@@ -70,6 +75,10 @@ def _gestor(vista: _VistaFalsa):
         _pokemon_identity=lambda pokemon: pokemon.nombre,
         _team_pc_box_members=lambda data, box: {1: _Mono("GASTLY")},
         _party_health_signature=lambda party: "firma",
+    )
+    yo._forma_del_pc = lambda datos: RoleRunManager._forma_del_pc(yo, datos)
+    yo._asegurar_lectura_del_pc = (
+        lambda datos: RoleRunManager._asegurar_lectura_del_pc(yo, datos)
     )
     yo._motivo_para_reconstruir_team_pc = (
         lambda overlay=None, reset_scroll=False:
@@ -157,14 +166,52 @@ def test_si_cambian_los_limites_del_pc_hay_que_repintar() -> None:
     assert _refrescar(yo) is False
 
 
-def test_sin_datos_del_pc_todavia_hay_que_repintar() -> None:
-    """La caja aún se está leyendo: la página cambia de forma al llegar."""
+def test_sin_contenido_del_pc_la_forma_no_se_encoge() -> None:
+    """El numero de cajas es del juego, no de la lectura.
+
+    Escribir invalida el contenido en cache a proposito. Si ademas se diera por
+    hecho que el PC pasa a tener una sola caja, la pagina se rehace al perder los
+    datos y otra vez al recuperarlos: 915 + 753 ms medidos por cada arrastre.
+    """
+    vista = _VistaFalsa()
+    yo, _datos = _gestor(vista)
+    yo._pc_forma_conocida = (18, 30)           # ya se habia leido antes
+    yo._team_pc_cached_data = lambda: None     # y ahora se esta releyendo
+    yo._team_pc_pc_loading = True
+
+    assert _motivo(yo) is None
+    assert _refrescar(yo) is True
+
+
+def test_la_forma_se_recuerda_al_leer_el_pc() -> None:
+    vista = _VistaFalsa()
+    yo, datos = _gestor(vista)
+
+    assert RoleRunManager._forma_del_pc(yo, datos) == (18, 30)
+    assert yo._pc_forma_conocida == (18, 30)
+    assert RoleRunManager._forma_del_pc(yo, None) == (18, 30)
+
+
+def test_sin_haber_leido_nunca_el_pc_se_asume_una_caja() -> None:
+    vista = _VistaFalsa()
+    yo, _datos = _gestor(vista)
+
+    cajas, _huecos = RoleRunManager._forma_del_pc(yo, None)
+    assert cajas == 1
+
+
+def test_el_camino_rapido_pide_las_cajas_igual_que_el_completo() -> None:
+    """Atajar sin pedirlas dejaria el PC sin cargarse nunca."""
+    pedidas = []
     vista = _VistaFalsa()
     yo, _datos = _gestor(vista)
     yo._team_pc_cached_data = lambda: None
+    yo._team_pc_pc_loading = False
+    yo.after = lambda ms, callback: pedidas.append(ms)
 
-    assert _motivo(yo) == "sin datos del PC"
-    assert _refrescar(yo) is False
+    RoleRunManager._asegurar_lectura_del_pc(yo, None)
+
+    assert pedidas == [20]
 
 
 def test_al_estrecharse_la_ventana_hay_que_repintar() -> None:

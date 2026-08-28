@@ -737,6 +737,11 @@ class RoleRunManager(ctk.CTk):
         self._last_role_conflict_signature: tuple | None = None
         self._pc_cache: SavePCData | None = None
         self._pc_cache_signature: tuple[int, int] | None = None
+        # Cuántas cajas tiene el PC y de qué tamaño. Es del juego, no de la
+        # lectura: escribir invalida el contenido en caché, pero el PC sigue
+        # teniendo las mismas cajas. Sin esto la página se rehacía con una sola
+        # caja durante la reescritura y otra vez al volver los datos.
+        self._pc_forma_conocida: tuple[int, int] | None = None
         self._pc_page_box: int | None = None
         self._team_pc_selection = TeamPCSelectionState()
         self._team_pc_view: UnifiedTeamPCView | None = None
@@ -13424,15 +13429,12 @@ class RoleRunManager(ctk.CTk):
         if not vista.is_fully_composed(vista.pc_box_count):
             return "vista a medio componer"
 
-        pc_data = self._team_pc_cached_data()
-        if pc_data is None:
-            # Sin datos del PC la página no solo cambia de forma: además es
-            # `_render_team_pc_unified_page` quien programa la lectura de las
-            # cajas. Atajar aquí dejaría el PC sin cargarse nunca.
-            return "sin datos del PC"
-        if int(pc_data.box_count) != vista.pc_box_count:
+        # La forma se calcula igual que la calcularía el repintado completo,
+        # con la misma función, para que no puedan discrepar.
+        cajas, huecos = self._forma_del_pc(self._team_pc_cached_data())
+        if cajas != vista.pc_box_count:
             return "otro numero de cajas"
-        if int(pc_data.box_slot_count) != vista.pc_slot_count:
+        if huecos != vista.pc_slot_count:
             return "otro tamano de caja"
         if bool(vista.compact) != (self.winfo_width() <= 1160):
             return "cambio el modo compacto"
@@ -13448,17 +13450,21 @@ class RoleRunManager(ctk.CTk):
         """Pone los datos de ahora en la vista ya construida."""
         vista = self._team_pc_view
         pc_data = self._team_pc_cached_data()
+        cajas, _huecos = self._forma_del_pc(pc_data)
         projected_party = list(self._projected_party())
         team_slots = build_fixed_team_slots(
             projected_party,
             lambda pokemon: self._effective_role(pokemon)[0],
             self._pokemon_identity,
         )
-        box_number = max(1, min(int(self._pc_page_box or 1), int(pc_data.box_count)))
+        box_number = max(1, min(int(self._pc_page_box or 1), cajas))
         members = self._team_pc_box_members(pc_data, box_number)
         if not vista.refrescar_en_sitio(team_slots, members, box_number):
             perf.mark("ui.render.reconstruye", motivo="otra forma de equipo")
             return False
+        # Lo mismo que hace el repintado completo al terminar: si no, atajar
+        # dejaría el PC sin pedirse.
+        self._asegurar_lectura_del_pc(pc_data)
 
         self._pc_page_box = box_number
         # La barrera inicial compara contra lo que la vista compuso de verdad.
@@ -13487,8 +13493,7 @@ class RoleRunManager(ctk.CTk):
         with perf.span("ui.team_pc.datos_del_pc") as medida:
             pc_data = self._team_pc_cached_data()
             medida.add(hay_datos=pc_data is not None)
-        box_count = int(pc_data.box_count) if pc_data is not None else 1
-        slot_count = int(pc_data.box_slot_count) if pc_data is not None else ORAS_PC_BOX_SLOT_COUNT
+        box_count, slot_count = self._forma_del_pc(pc_data)
         requested_box = int(self._pc_page_box or (pc_data.current_box if pc_data is not None else 1) or 1)
         faint_mode = self._faint_replacement_mode
         if faint_mode is not None and requested_box == ORAS_GRAVEYARD_BOX:
@@ -13569,10 +13574,7 @@ class RoleRunManager(ctk.CTk):
         )
         self._set_navigation_owner(self._team_pc_view)
 
-        if pc_data is None and not self._team_pc_pc_loading:
-            self.after(20, self._start_team_pc_load)
-        else:
-            self._ensure_live_pc_matrix_loaded()
+        self._asegurar_lectura_del_pc(pc_data)
 
     def _team_pc_base_stats(self, pokemon) -> dict[str, int]:
         """Lee la tabla Personal efectiva; nunca reconstruye stats raciales."""
@@ -13791,6 +13793,31 @@ class RoleRunManager(ctk.CTk):
             actions=("Reintentar", "Ver detalle"),
             persistent=True,
         )
+
+    def _forma_del_pc(self, pc_data: SavePCData | None) -> tuple[int, int]:
+        """Cuántas cajas y de qué tamaño, aunque el contenido no esté ahora.
+
+        Lo usan por igual el repintado completo y la comprobación del refresco
+        en sitio: si cada uno calculara lo suyo, la comprobación podría decir
+        «misma forma» sobre una página que se va a construir con otra.
+        """
+        if pc_data is not None:
+            forma = (int(pc_data.box_count), int(pc_data.box_slot_count))
+            self._pc_forma_conocida = forma
+            return forma
+        return self._pc_forma_conocida or (1, ORAS_PC_BOX_SLOT_COUNT)
+
+    def _asegurar_lectura_del_pc(self, pc_data: SavePCData | None) -> None:
+        """Pide las cajas si no las tiene nadie pedidas ya.
+
+        Vive aparte porque la programa el repintado completo, y el refresco en
+        sitio tiene que hacer exactamente lo mismo: si no, atajar dejaría el PC
+        sin cargarse nunca.
+        """
+        if pc_data is None and not self._team_pc_pc_loading:
+            self.after(20, self._start_team_pc_load)
+        else:
+            self._ensure_live_pc_matrix_loaded()
 
     def _team_pc_box_members(
         self, pc_data: SavePCData | None, box_number: int,

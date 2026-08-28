@@ -1,6 +1,59 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.110 — repintar la casilla, no la página
+
+Tras cortar la cascada, el arrastre bajó de 4,5 s a 3,4. Las tres
+reconstrucciones que quedaban tenían **la misma raíz**, y son dos cosas:
+
+## 1. El PC no tiene una sola caja porque se esté releyendo
+
+Escribir en el juego invalida el PC en caché —a propósito: lo que había ya no es
+de fiar—. Pero la página se dibujaba entonces con **una** caja en vez de
+dieciocho, y al volver la lectura cambiaba de forma otra vez. Dos
+reconstrucciones por eso: «sin datos del PC» y «otro numero de cajas».
+
+Cuántas cajas tiene el PC y de qué tamaño es del **juego**, no de la lectura.
+Ahora se recuerda, así que la navegación de cajas no se encoge y se estira, y la
+forma queda estable.
+
+La negativa existía además porque es el repintado completo quien **programa** la
+lectura de las cajas: atajar ahí dejaría el PC sin cargarse nunca. Esa cola pasa
+a una función que llaman los dos caminos, así que ya no puede divergir.
+
+## 2. Cambiar de equipo repinta la casilla, no la página
+
+`refrescar_en_sitio` solo sabía cambiar datos: en cuanto la forma del equipo era
+otra devolvía `False`. Y sacar un Pokémon del equipo **siempre** cambia la forma.
+
+Ahora se rehacen solo las casillas cuya terna —rol, estado, ocupante— haya
+cambiado. Medido con Tk de verdad:
+
+| | |
+|---|---|
+| reconstruir la página | 456–987 ms |
+| **sacar un miembro del equipo** | **35 ms** |
+| volver a meterlo | 77 ms |
+| un refresco que no cambia nada | 16 ms |
+
+## Lo delicado no era la ganancia
+
+Una casilla repintada tiene que soltar **todo** lo que la identidad anterior dejó
+registrado —marco, barra de PS, widgets de la tarjeta, destino de soltar, botón
+de rol, marca de preparación—, porque esos registros los recorren después el
+arrastre, los estilos de selección y la barrera de arranque. Un registro que
+sobreviva a su widget apunta a un árbol muerto.
+
+Y la evidencia de PS pasa de lista a diccionario por casilla: en una lista,
+repintar una casilla suelta **añadía** una fila en vez de sustituirla, y la firma
+acababa con siete. Hay una prueba que repinta ocho veces y exige que sigan siendo
+seis.
+
+Siete pruebas nuevas sobre la vista real bajo Tk comprueban que no quede ningún
+marco huérfano ni ningún destino de soltar apuntando a un widget destruido.
+
+1870 passed, 1 skipped.
+
 # v0.2.6-alpha.109 — un resumen, una sesión
 
 El JSONL de tiempos es uno por día y se abre en modo añadir, así que un día de
