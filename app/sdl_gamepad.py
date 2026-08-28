@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -147,6 +148,45 @@ class SDLGamepad:
         except Exception:
             return None
         return None
+
+
+#: Cada cuánto se relee la configuración de Ryujinx, en segundos. El usuario
+#: puede cambiar la opción sin cerrar nada, y esto se consulta en cada sondeo del
+#: mando —sesenta veces por segundo—, así que leer el JSON cada vez sería absurdo.
+_RELECTURA_DE_CONFIG = 5.0
+_config_en_cache: tuple[float, bool] | None = None
+
+
+def ryujinx_ignora_el_mando_sin_foco() -> bool:
+    """Si Ryujinx ya está configurado para no leer el mando sin el foco.
+
+    Es la opción `disable_input_when_out_of_focus` de su `Config.json`. Cuando
+    está puesta, el emulador se protege solo y RoleRun no tiene ninguna razón
+    para retenerlo: puede navegar sus menús con el mando sin que el flanco llegue
+    también al personaje, y el juego sigue corriendo —con su música— mientras
+    tanto.
+
+    Ante la duda devuelve ``False``, que es el comportamiento conservador: se
+    retiene. Dar por hecho que el emulador se protege cuando no lo hace dejaría
+    que los botones se colaran a la partida.
+    """
+    global _config_en_cache
+    import time
+
+    ahora = time.monotonic()
+    if _config_en_cache is not None and ahora - _config_en_cache[0] < _RELECTURA_DE_CONFIG:
+        return _config_en_cache[1]
+    valor = False
+    try:
+        base = os.environ.get("APPDATA", "")
+        ruta = Path(base) / "Ryujinx" / "Config.json" if base else None
+        if ruta is not None and ruta.is_file():
+            crudo = json.loads(ruta.read_text(encoding="utf-8-sig"))
+            valor = bool(crudo.get("disable_input_when_out_of_focus", False))
+    except Exception:
+        valor = False
+    _config_en_cache = (ahora, valor)
+    return valor
 
 
 class RyujinxInputGate:

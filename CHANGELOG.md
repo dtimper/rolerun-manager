@@ -1,6 +1,43 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.0-alpha.12 — que no lea el mando el emulador, en vez de pararlo
+
+El usuario preguntó lo correcto: *¿no se podría hacer esa protección sin parar
+todo el juego? Que simplemente no funcione la detección de botones… del
+emulador.*
+
+Sí. Y estaba en su `Config.json` de Ryujinx:
+
+```
+disable_input_when_out_of_focus = False
+focus_lost_action_type = DoNothing
+```
+
+Esa primera opción es exactamente eso: **que el emulador no lea el mando cuando
+no tiene el foco**. Con ella puesta, RoleRun puede navegar sus menús con el mando
+sin que el flanco llegue también al personaje, y el juego **sigue corriendo, con
+su música**. Estaba desactivada, y por eso RoleRun recurría a suspenderlo.
+
+La segunda confirma de paso lo que ya decían las medidas: Ryujinx no se pausa al
+perder el foco. Nunca fue eso.
+
+## RoleRun ahora lo consulta
+
+Lee esa opción del `Config.json` de Ryujinx —cada cinco segundos, no en cada
+sondeo del mando— y **si el emulador ya se protege solo, no lo retiene**.
+
+Ante la duda retiene, que es lo conservador: dar por hecho que el emulador se
+protege cuando no lo hace dejaría que los botones se colaran a la partida.
+
+## Lo que hay que hacer
+
+En Ryujinx, marcar **«disable input when out of focus»** en los ajustes de
+entrada. A partir de ahí RoleRun deja de suspender nada, y da igual si hay mando
+conectado o no.
+
+1971 passed, 1 skipped.
+
 # v0.3.0-alpha.11 — era RoleRun, y lo hacía a propósito
 
 La tabla del usuario lo cerró:

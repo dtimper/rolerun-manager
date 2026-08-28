@@ -237,3 +237,75 @@ def test_sin_mando_conectado_no_se_retiene_el_emulador() -> None:
 
     assert gate.acquires == 0, "se paro el juego sin que hubiera nada que proteger"
     assert gate.active is False
+
+
+def test_si_el_emulador_se_protege_solo_no_se_le_para() -> None:
+    """Ryujinx tiene `disable_input_when_out_of_focus`, y es la solucion buena.
+
+    Con esa opcion puesta, el emulador no lee el mando sin el foco: RoleRun puede
+    navegar sus menus con el mando sin que el flanco llegue al personaje, y el
+    juego sigue corriendo -con su musica- mientras tanto. Suspenderlo ademas
+    seria pararlo por nada.
+    """
+    import app.ui as ui
+
+    class Gate:
+        def __init__(self) -> None:
+            self.active = False
+            self.acquires = 0
+
+        def acquire(self) -> bool:
+            self.acquires += 1
+            self.active = True
+            return True
+
+        def release(self, *, all_levels: bool = False) -> bool:
+            self.active = False
+            return True
+
+    gate = Gate()
+    manager = SimpleNamespace(
+        save_engine=SimpleNamespace(key="bdsp"),
+        current_game=object(),
+        _ryujinx_input_gate=gate,
+        _role_run_foreground_gate_held=False,
+        _gamepad_reserved_buttons=set(),
+        _floating_launcher=None,
+        _hay_mando=True,
+        _foreground_belongs_to_this_process=lambda: True,
+        _widget_alive=lambda _widget: False,
+    )
+
+    anterior = ui.ryujinx_ignora_el_mando_sin_foco
+    try:
+        ui.ryujinx_ignora_el_mando_sin_foco = lambda: True
+        RoleRunManager._sync_role_run_foreground_input_gate(manager)
+        assert gate.acquires == 0, "se paro el juego pudiendo no pararlo"
+
+        ui.ryujinx_ignora_el_mando_sin_foco = lambda: False
+        RoleRunManager._sync_role_run_foreground_input_gate(manager)
+        assert gate.acquires == 1, "sin esa opcion la proteccion si hace falta"
+    finally:
+        ui.ryujinx_ignora_el_mando_sin_foco = anterior
+
+
+def test_ante_la_duda_se_protege() -> None:
+    """Dar por hecho que el emulador se protege dejaria colarse los botones."""
+    import json
+
+    from app.sdl_gamepad import ryujinx_ignora_el_mando_sin_foco
+    import app.sdl_gamepad as sdl
+
+    sdl._config_en_cache = None
+    assert ryujinx_ignora_el_mando_sin_foco() in (True, False)
+
+    # Sin APPDATA no hay config que leer, y la respuesta conservadora es False.
+    import os
+    previo = os.environ.pop("APPDATA", None)
+    try:
+        sdl._config_en_cache = None
+        assert ryujinx_ignora_el_mando_sin_foco() is False
+    finally:
+        if previo is not None:
+            os.environ["APPDATA"] = previo
+        sdl._config_en_cache = None

@@ -60,7 +60,12 @@ from .game_source_service import GameSourceProfile, GameSourceProfileService
 from .reporte_de_bugs import BUGS_DIR, guardar_reporte, informes
 from .ventana_activa import mayor_tapadura
 from .win_hotkeys import WindowsHotkeyManager
-from .sdl_gamepad import BUTTON_NAMES, RyujinxInputGate, SDLGamepad
+from .sdl_gamepad import (
+    BUTTON_NAMES,
+    RyujinxInputGate,
+    SDLGamepad,
+    ryujinx_ignora_el_mando_sin_foco,
+)
 from .obs_sync import ObsSyncService, SaveFileWatcher
 from .bdsp_tm_service import (
     BDSPTMProfile, discover_personal_masterdatas, load_bdsp_tm_profile, remember_source,
@@ -1657,6 +1662,12 @@ class RoleRunManager(ctk.CTk):
             getattr(getattr(self, "save_engine", None), "key", "") == "bdsp"
             and getattr(self, "current_game", None) is not None
             and getattr(self, "_hay_mando", False)
+            # Y solo si el emulador no se protege ya solo. Ryujinx tiene la
+            # opción `disable_input_when_out_of_focus`: con ella puesta no lee el
+            # mando sin el foco, así que RoleRun puede navegar sus menús sin que
+            # el flanco llegue al personaje **y sin parar el juego**. Es la
+            # solución buena, y la que hay que preferir sobre suspender nada.
+            and not ryujinx_ignora_el_mando_sin_foco()
             and self._foreground_belongs_to_this_process()
         )
         gate = self._ryujinx_input_gate
