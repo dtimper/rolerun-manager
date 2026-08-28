@@ -50,7 +50,7 @@ Es **intermitente**: la misma operación, sin haber cambiado nada de la escritur
 unas veces cuelga el juego y otras no. Eso descarta un dato mal formado —eso
 fallaría siempre— y apunta a una carrera con el hilo del juego.
 
-1887 passed, 2 skipped.
+1888 passed, 1 skipped.
 
 # v0.2.6-alpha.114 — un latido, para que el congelado se pueda datar
 
