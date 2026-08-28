@@ -129,8 +129,9 @@ def test_las_estadisticas_cuadran_con_la_tabla_personal(caso):
 @CASOS
 def test_volver_a_barajar_devuelve_los_mismos_bytes(caso):
     almacenado = bytes.fromhex(caso["boxed_hex"])
-    pid, orden, canonico = unshuffle_pk4(almacenado)
-    assert reshuffle_pk4(pid, orden, canonico) == almacenado
+    pid, orden, canonico, cifrado = unshuffle_pk4(almacenado)
+    assert cifrado, "PKHeX los genera cifrados"
+    assert reshuffle_pk4(pid, orden, canonico, cifrado=cifrado) == almacenado
 
 
 def test_un_checksum_que_no_cuadra_se_rechaza():
@@ -247,3 +248,65 @@ def test_las_estadisticas_de_la_partida_real_cuadran_con_la_tabla_personal() -> 
         assert tuple(calculadas[clave] for clave in STAT_ORDER_ROLERUN) == leido.stats, (
             f"{leido.nickname} (#{leido.species_id})"
         )
+
+
+# --------------------------------------------------------------------------
+# Los dos estados de un PK4 en memoria
+# --------------------------------------------------------------------------
+
+def _en_claro(cifrado: bytes) -> bytes:
+    """El mismo PK4 tal y como el juego lo deja cuando trabaja con él.
+
+    Medido sobre la partida real: el Hoothoot del usuario estaba así, con
+    `sanity` a 4 y el cuerpo sin cifrar. Los otros cuatro miembros, cifrados.
+    """
+    import struct
+
+    from app.pk4 import PK4_STORED_SIZE, _crypt
+
+    pid, _sanity, checksum = struct.unpack_from("<IHH", cifrado, 0)
+    cabecera = bytearray(cifrado[:8])
+    struct.pack_into("<H", cabecera, 4, 4)          # el sanity que deja el juego
+    cuerpo = _crypt(cifrado[8:PK4_STORED_SIZE], checksum)
+    cola = cifrado[PK4_STORED_SIZE:]
+    return bytes(cabecera) + cuerpo + (_crypt(cola, pid) if cola else b"")
+
+
+@CASOS
+def test_un_pk4_en_claro_se_lee_igual_que_uno_cifrado(caso):
+    """Era lo que hacía fallar la lectura del equipo una y otra vez."""
+    cifrado = bytes.fromhex(caso["party_hex"])
+    claro = _en_claro(cifrado)
+    assert claro != cifrado
+
+    uno = parse_pk4_party(cifrado, 0)
+    otro = parse_pk4_party(claro, 0)
+    assert otro.species_id == uno.species_id
+    assert otro.nickname == uno.nickname
+    assert otro.level == uno.level
+    assert otro.stats == uno.stats
+    assert otro.move_ids == uno.move_ids
+
+
+@CASOS
+def test_el_estado_se_reconoce_solo_con_el_checksum(caso):
+    # No se mira el `sanity`: se prueba a leerlo de las dos formas y manda la
+    # que cuadre.
+    almacenado = bytes.fromhex(caso["boxed_hex"])
+    _pid, _orden, _canonico, cifrado = unshuffle_pk4(almacenado)
+    assert cifrado is True
+    _pid, _orden, _canonico, cifrado = unshuffle_pk4(_en_claro(almacenado))
+    assert cifrado is False
+
+
+def test_escribir_sobre_uno_en_claro_lo_devuelve_en_claro() -> None:
+    """Devolverlo cifrado dejaría ese Pokémon ilegible para el juego."""
+    from app.pk4 import pk4_party_healed
+
+    claro = _en_claro(bytes.fromhex(_CASOS[0]["party_hex"]))
+    curado = pk4_party_healed(claro, base_pp_for=lambda _m: 20)
+
+    _pid, _orden, _canonico, cifrado = unshuffle_pk4(curado[:PK4_STORED_SIZE])
+    assert cifrado is False
+    leido = parse_pk4_party(curado, 0)
+    assert leido.current_hp == leido.max_hp

@@ -129,25 +129,58 @@ def _crypt(data: bytes, seed: int) -> bytes:
     return bytes(out)
 
 
-def unshuffle_pk4(block: bytes) -> tuple[int, tuple[int, ...], bytearray]:
-    """Descifra y desbaraja un PK4, devolviendo (pid, disposición, canónico)."""
+def unshuffle_pk4(block: bytes):
+    """Desbaraja un PK4 y dice si estaba cifrado.
+
+    HAY DOS ESTADOS, Y HAY QUE RESPETAR EL QUE HAYA
+
+    Un PK4 vive en memoria **cifrado o en claro**, y el juego pasa de uno a otro
+    cuando trabaja con ese Pokémon. Medido el 28-08-2026 sobre la partida del
+    usuario: de sus cinco miembros, cuatro estaban cifrados y el Hoothoot en
+    claro, con `sanity` a 4 en vez de a 0. Leyéndolo descifrado daba la especie
+    2288 y un mote de basura; leyéndolo tal cual, la especie 163 y «HOOTHOOT».
+
+    Eso era lo que hacía fallar la lectura entera una y otra vez: no era una RAM
+    inquieta, era un miembro en el otro estado.
+
+    El estado **no se deduce del `sanity`**: se demuestra con el checksum, que es
+    la prueba que ya se usa para todo lo demás. Si la suma del cuerpo tal cual
+    cuadra, está en claro; si cuadra al descifrarlo, está cifrado; si no cuadra
+    de ninguna forma, el bloque no vale.
+
+    Todo el registro va en el mismo estado, extensión de combate incluida.
+
+    Devuelve ``(pid, disposición, canónico, cifrado)``.
+    """
     if len(block) < PK4_STORED_SIZE:
         raise Pk4Error("El bloque PK4 no llega a 136 bytes.")
     pid = struct.unpack_from("<I", block, 0)[0]
     checksum = struct.unpack_from("<H", block, 6)[0]
-    body = _crypt(block[8:PK4_STORED_SIZE], checksum)
-    if sum(struct.unpack("<64H", body)) & 0xFFFF != checksum:
-        raise Pk4Error("Checksum PK4 inválido.")
+    claro = block[8:PK4_STORED_SIZE]
+    if sum(struct.unpack("<64H", claro)) & 0xFFFF == checksum:
+        cuerpo, cifrado = claro, False
+    else:
+        cuerpo = _crypt(claro, checksum)
+        if sum(struct.unpack("<64H", cuerpo)) & 0xFFFF != checksum:
+            raise Pk4Error("Checksum PK4 inválido.")
+        cifrado = True
     revueltos = [
-        body[indice * PK4_BLOCK_SIZE:(indice + 1) * PK4_BLOCK_SIZE] for indice in range(4)
+        cuerpo[indice * PK4_BLOCK_SIZE:(indice + 1) * PK4_BLOCK_SIZE]
+        for indice in range(4)
     ]
     orden = _PERMUTATIONS[((pid >> 13) & 31) % 24]
     canonico = bytearray(block[:8] + b"".join(revueltos[indice] for indice in orden))
-    return pid, orden, canonico
+    return pid, orden, canonico, cifrado
 
 
-def reshuffle_pk4(pid: int, orden: tuple[int, ...], canonico: bytearray) -> bytes:
-    """Vuelve a barajar y cifrar los 136 bytes almacenados, con checksum nuevo."""
+def reshuffle_pk4(
+    pid: int, orden, canonico: bytearray, *, cifrado: bool = True,
+) -> bytes:
+    """Vuelve a barajar los 136 bytes almacenados, con checksum nuevo.
+
+    ``cifrado`` tiene que ser el estado en el que se leyó: devolver cifrado un
+    bloque que el juego tenía en claro lo dejaría ilegible para él.
+    """
     bloques = [
         bytes(canonico[8 + indice * PK4_BLOCK_SIZE:8 + (indice + 1) * PK4_BLOCK_SIZE])
         for indice in range(4)
@@ -159,7 +192,22 @@ def reshuffle_pk4(pid: int, orden: tuple[int, ...], canonico: bytearray) -> byte
     checksum = sum(struct.unpack("<64H", cuerpo)) & 0xFFFF
     cabecera = bytearray(canonico[:8])
     struct.pack_into("<H", cabecera, 6, checksum)
-    return bytes(cabecera) + _crypt(cuerpo, checksum)
+    return bytes(cabecera) + (_crypt(cuerpo, checksum) if cifrado else cuerpo)
+
+
+def _extension(block: bytes, pid: int, cifrado: bool) -> bytes:
+    """La extensión de combate, en claro. Va en el mismo estado que el cuerpo."""
+    cola = block[PK4_STORED_SIZE:]
+    return _crypt(cola, pid) if cifrado else cola
+
+
+def _con_extension(canonico, orden, pid, cifrado, extension) -> bytes:
+    """Rearma el registro de combate en el mismo estado en que se leyó."""
+    cola = bytes(extension)
+    return (
+        reshuffle_pk4(pid, orden, canonico, cifrado=cifrado)
+        + (_crypt(cola, pid) if cifrado else cola)
+    )
 
 
 def empty_pk4_stored() -> bytes:
@@ -255,9 +303,8 @@ def parse_pk4_party(data: bytes, slot: int) -> Pk4Pokemon:
     """Interpreta los 236 bytes de un miembro del equipo."""
     if len(data) != PK4_PARTY_SIZE:
         raise Pk4Error(f"Un PK4 de combate mide {PK4_PARTY_SIZE} bytes.")
-    pid, _orden, canonico = unshuffle_pk4(data[:PK4_STORED_SIZE])
-    extension = _crypt(data[PK4_STORED_SIZE:], pid)
-    bloque = bytes(canonico) + extension
+    pid, _orden, canonico, cifrado = unshuffle_pk4(data[:PK4_STORED_SIZE])
+    bloque = bytes(canonico) + _extension(data, pid, cifrado)
 
     especie = struct.unpack_from("<H", bloque, PK4_SPECIES)[0]
     palabra_iv = struct.unpack_from("<I", bloque, PK4_IV32)[0]
@@ -310,7 +357,7 @@ def parse_pk4_boxed(data: bytes, slot: int) -> Pk4Pokemon | None:
         raise Pk4Error(f"Un PK4 almacenado mide {PK4_STORED_SIZE} bytes.")
     if not any(data):
         return None
-    pid, _orden, canonico = unshuffle_pk4(data)
+    pid, _orden, canonico, _cifrado = unshuffle_pk4(data)
     bloque = bytes(canonico)
     especie = struct.unpack_from("<H", bloque, PK4_SPECIES)[0]
     if especie == 0:
@@ -383,7 +430,7 @@ def pk4_party_with_role(
     if sum(valores_ev) > 510:
         raise Pk4Error("Los EV PK4 no pueden sumar más de 510.")
 
-    pid, orden, canonico = unshuffle_pk4(block[:PK4_STORED_SIZE])
+    pid, orden, canonico, cifrado = unshuffle_pk4(block[:PK4_STORED_SIZE])
     canonico[PK4_MARKINGS] = sum(
         1 << indice for indice, marcado in enumerate(marcas) if marcado
     )
@@ -393,7 +440,7 @@ def pk4_party_with_role(
 
     palabra_iv = struct.unpack_from("<I", canonico, PK4_IV32)[0]
     iv_por_clave = _ivs_from_word(palabra_iv)
-    extension = bytearray(_crypt(block[PK4_STORED_SIZE:], pid))
+    extension = bytearray(_extension(block, pid, cifrado))
     nivel = extension[PK4_LEVEL - PK4_STORED_SIZE]
     ps_actual, ps_maximo = struct.unpack_from(
         "<2H", extension, PK4_CURRENT_HP - PK4_STORED_SIZE,
@@ -415,7 +462,7 @@ def pk4_party_with_role(
         finales["attack"], finales["defense"], finales["speed"],
         finales["sp_attack"], finales["sp_defense"],
     )
-    return reshuffle_pk4(pid, orden, canonico) + _crypt(bytes(extension), pid)
+    return _con_extension(canonico, orden, pid, cifrado, extension)
 
 
 def pk4_party_healed(block: bytes, *, base_pp_for) -> bytes:
@@ -427,8 +474,8 @@ def pk4_party_healed(block: bytes, *, base_pp_for) -> bytes:
     """
     if len(block) != PK4_PARTY_SIZE:
         raise Pk4Error(f"El bloque PK4 de combate no mide {PK4_PARTY_SIZE} bytes.")
-    pid, orden, canonico = unshuffle_pk4(block[:PK4_STORED_SIZE])
-    extension = bytearray(_crypt(block[PK4_STORED_SIZE:], pid))
+    pid, orden, canonico, cifrado = unshuffle_pk4(block[:PK4_STORED_SIZE])
+    extension = bytearray(_extension(block, pid, cifrado))
 
     # El estado ocupa los cuatro bytes que abren la extensión.
     struct.pack_into("<I", extension, PK4_STATUS - PK4_STORED_SIZE, 0)
@@ -453,7 +500,7 @@ def pk4_party_healed(block: bytes, *, base_pp_for) -> bytes:
             raise Pk4Error("El PK4 declara unos Más PP fuera de rango.")
         canonico[PK4_MOVE_PP + indice] = min(255, base * (5 + mas_pp) // 5)
 
-    return reshuffle_pk4(pid, orden, canonico) + _crypt(bytes(extension), pid)
+    return _con_extension(canonico, orden, pid, cifrado, extension)
 
 
 # Cuarta generación llega hasta Ataque Aéreo (#467). Un identificador mayor no
@@ -482,7 +529,7 @@ def pk4_party_with_move(
     if not 1 <= move_id <= MOVE_ID_MAX:
         raise Pk4Error(f"El movimiento #{move_id} no existe en cuarta generación.")
 
-    pid, orden, canonico = unshuffle_pk4(block[:PK4_STORED_SIZE])
+    pid, orden, canonico, cifrado = unshuffle_pk4(block[:PK4_STORED_SIZE])
     indice = move_slot - 1
     actuales = struct.unpack_from("<4H", canonico, PK4_MOVES)
     # Incluido el propio hueco: el juego tampoco deja enseñar un movimiento que
@@ -506,7 +553,10 @@ def pk4_party_with_move(
     struct.pack_into("<H", canonico, PK4_MOVES + indice * 2, move_id)
     canonico[PK4_MOVE_PP + indice] = base
     canonico[PK4_MOVE_PP_UPS + indice] = 0
-    return reshuffle_pk4(pid, orden, canonico) + block[PK4_STORED_SIZE:]
+    return (
+        reshuffle_pk4(pid, orden, canonico, cifrado=cifrado)
+        + block[PK4_STORED_SIZE:]
+    )
 
 
 def pk4_party_without_moves(block: bytes, huecos) -> bytes:
@@ -524,7 +574,7 @@ def pk4_party_without_moves(block: bytes, huecos) -> bytes:
         if not 1 <= posicion <= 4:
             raise Pk4Error("El hueco de movimiento tiene que estar entre 1 y 4.")
 
-    pid, orden, canonico = unshuffle_pk4(block[:PK4_STORED_SIZE])
+    pid, orden, canonico, cifrado = unshuffle_pk4(block[:PK4_STORED_SIZE])
     for posicion in posiciones:
         indice = posicion - 1
         if struct.unpack_from("<H", canonico, PK4_MOVES + indice * 2)[0] == 0:
@@ -540,7 +590,10 @@ def pk4_party_without_moves(block: bytes, huecos) -> bytes:
         struct.pack_into("<H", canonico, PK4_MOVES + 3 * 2, 0)
         canonico[PK4_MOVE_PP + 3] = 0
         canonico[PK4_MOVE_PP_UPS + 3] = 0
-    return reshuffle_pk4(pid, orden, canonico) + block[PK4_STORED_SIZE:]
+    return (
+        reshuffle_pk4(pid, orden, canonico, cifrado=cifrado)
+        + block[PK4_STORED_SIZE:]
+    )
 
 
 def pk4_party_block(stored: bytes, *, pid: int, level: int, stats) -> bytes:
@@ -554,6 +607,9 @@ def pk4_party_block(stored: bytes, *, pid: int, level: int, stats) -> bytes:
     """
     if len(stored) != PK4_STORED_SIZE:
         raise Pk4Error(f"Un PK4 almacenado mide {PK4_STORED_SIZE} bytes.")
+    # La extensión va en el mismo estado que el cuerpo: si el juego tenía ese
+    # Pokémon en claro, cifrar solo la cola lo dejaría ilegible para él.
+    _pid, _orden, _canonico, cifrado = unshuffle_pk4(stored)
     level = int(level)
     if not 1 <= level <= 100:
         raise Pk4Error("El nivel del PK4 que entra al equipo está fuera de rango.")
@@ -567,4 +623,5 @@ def pk4_party_block(stored: bytes, *, pid: int, level: int, stats) -> bytes:
         valores[0], valores[0], valores[1], valores[2],
         valores[5], valores[3], valores[4],
     )
-    return stored + _crypt(bytes(extension), int(pid))
+    cola = bytes(extension)
+    return stored + (_crypt(cola, int(pid)) if cifrado else cola)

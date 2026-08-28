@@ -1,6 +1,38 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.82 — un Pokémon puede estar **sin cifrar**, y ahí estaba el fallo
+
+No era una RAM inquieta. Era esto.
+
+Un PK4 vive en memoria **cifrado o en claro**, y el juego pasa de un estado a
+otro cuando trabaja con ese Pokémon. Medido sobre la partida del usuario: de sus
+cinco miembros, cuatro estaban cifrados y **el Hoothoot en claro**, con `sanity`
+a 4 en vez de a 0. Leyéndolo descifrado daba la especie 2288 y un mote de
+basura; leyéndolo tal cual, la especie **163** y **«HOOTHOOT»**. Su nivel y sus
+PS en claro salían 5 y 25/25, exactamente los de la pantalla.
+
+Como el lector siempre descifraba, ese miembro **nunca** pasaba su checksum
+—0 de 40 lecturas— y con él caía el equipo entero. De ahí venían «no se localizó
+la RAM DS validada», el PC que no abría y la operación Equipo↔PC que falló.
+
+**El estado no se deduce del `sanity`: se demuestra con el checksum.** Si la suma
+del cuerpo tal cual cuadra, está en claro; si cuadra al descifrarlo, está
+cifrado; si no cuadra de ninguna forma, el bloque no vale. Es la misma prueba que
+ya se usaba para todo lo demás.
+
+Y al escribir **se devuelve en el estado en que se leyó**: cifrar un bloque que
+el juego tenía en claro lo dejaría ilegible para él. Todo el registro va en el
+mismo estado, extensión de combate incluida.
+
+Medido después: 60 de 60 lecturas de equipo, PC y entrenador seguidas.
+
+**Además: la operación Equipo↔PC del usuario sí había funcionado.** Su Spinarak
+estaba en la caja 1 hueco 2 y el equipo compactado a cinco. Lo que falló fue la
+verificación posterior, por este mismo motivo.
+
+Suite completa: **1777**.
+
 # v0.2.6-alpha.81 — Equipo ↔ PC en HeartGold
 
 Las cinco operaciones: mover dentro del PC, depositar, retirar, intercambiar y
