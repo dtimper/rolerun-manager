@@ -2158,9 +2158,6 @@ class UnifiedTeamPCView:
             if source is not None and target is not None and self.on_drop is not None:
                 source_context, pokemon = source
                 target_context, target_data = target
-                self.volar_pokemon(
-                    pokemon, origen, self._ultimo_destino_widget,
-                )
                 self.sonar("seleccion")
                 self.on_drop(source_context, pokemon, target_context, target_data)
             else:

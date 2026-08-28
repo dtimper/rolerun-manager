@@ -1,6 +1,48 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.0-alpha.10 — fuera la animación, y una herramienta para el sonido
+
+## Fuera la animación
+
+Al usuario no le gustó, así que el Pokémon ya no vuela al soltarlo. Igual que
+con los sonidos: un adorno que molesta es peor que no tenerlo.
+
+`app/animacion.py` se queda —está probado y aislado, y el cofre del drafteo
+tendrá que moverse de algún modo—, pero ya no lo llama nadie desde el arrastre.
+
+## Y una herramienta, porque mi explicación era falsa
+
+El usuario precisó: el sonido del juego se corta **justo cuando RoleRun tiene el
+foco**, y vuelve al pulsar **cualquier** otra aplicación, no solo el emulador.
+
+Eso tira abajo lo que yo había dicho. Si fuera Ryujinx pausándose al perder el
+foco, con el navegador delante tampoco lo tendría y el sonido tampoco volvería.
+Quedan tres explicaciones y no hay con qué elegir entre ellas:
+
+1. Ryujinx se pausa por algo que RoleRun hace solo mientras está delante.
+2. RoleRun le quita CPU al emulador justo en esa situación.
+3. Es cosa de Windows y RoleRun solo coincide.
+
+`quien_para_el_juego.bat` las separa. Cada segundo, durante treinta, apunta
+cuatro cosas **a la vez**:
+
+| | |
+|---|---|
+| reloj del juego | si avanza, corre; si se repite, está parado |
+| ventana activa | qué proceso tiene el foco en ese instante |
+| CPU de RoleRun | cuánto gasta |
+| CPU de Ryujinx | cuánto gasta |
+
+Con eso la correlación se ve sola: si el reloj se para **solo** en las filas
+donde el foco es RoleRun, es RoleRun; si además su CPU se dispara ahí, le está
+quitando el sitio; y si se para con cualquier ventana delante, no es RoleRun.
+
+Descartado por el camino: SDL solo inicializa el subsistema de mando
+(`SDL_INIT_GAMECONTROLLER`), así que RoleRun no toca el dispositivo de audio.
+
+1970 passed, 1 skipped.
+
 # v0.3.0-alpha.9 — la tarjeta se forma mientras viaja
 
 Antes volaba un sprite suelto de tamaño fijo. Ahora vuela **un marco con el
