@@ -13392,11 +13392,11 @@ class RoleRunManager(ctk.CTk):
             # si no cuadra. Ahí hay que reconstruir, que es lo que esa
             # comprobación sabe verificar.
             return "arrancando"
+        if self._body_swap_in_progress:
+            return "cambiando de superficie"
         vista = getattr(self, "_team_pc_view", None)
         if vista is None:
             return "sin vista"
-        if vista is not getattr(self, "_presented_team_pc_view", None):
-            return "vista no publicada"
         if not self.current_game:
             return "sin partida"
         if self._faint_replacement_mode is not None:
@@ -13405,12 +13405,26 @@ class RoleRunManager(ctk.CTk):
             return "modo banner"
         if not self._widget_alive(getattr(vista, "frame", None)):
             return "vista destruida"
+        # Esta es la comprobación de «está en pantalla»: exige que el marco y
+        # los tres paneles existan, estén mapeados y tengan tamaño.
+        #
+        # Antes se exigía además `_presented_team_pc_view`, la marca que pone
+        # `retire_old_body` con `after(70, …)` porque destruir el body anterior
+        # en el mismo callback deja un parpadeo. Eso convertía cada
+        # reconstrucción en una ventana de 70 ms durante la cual el siguiente
+        # refresco tenía que reconstruir también, abriendo otra ventana: en la
+        # medición los refrescos llegaban a los 8 ms y se encadenaban dos
+        # reconstrucciones de 836 y 826 ms por cada arrastre. Esa marca es la
+        # frontera que necesita la barrera de arranque —excluida aquí por el
+        # motivo «arrancando»—, no esta.
         if not vista.is_fully_composed(vista.pc_box_count):
             return "vista a medio componer"
 
         pc_data = self._team_pc_cached_data()
         if pc_data is None:
-            # La caja aún se está leyendo: la página cambia de forma al llegar.
+            # Sin datos del PC la página no solo cambia de forma: además es
+            # `_render_team_pc_unified_page` quien programa la lectura de las
+            # cajas. Atajar aquí dejaría el PC sin cargarse nunca.
             return "sin datos del PC"
         if int(pc_data.box_count) != vista.pc_box_count:
             return "otro numero de cajas"

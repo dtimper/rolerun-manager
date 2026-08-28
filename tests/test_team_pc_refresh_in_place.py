@@ -52,7 +52,7 @@ def _gestor(vista: _VistaFalsa):
     datos = types.SimpleNamespace(box_count=18, box_slot_count=30, current_box=1)
     yo = types.SimpleNamespace(
         _team_pc_view=vista,
-        _presented_team_pc_view=vista,
+        _body_swap_in_progress=False,
         _initial_shell_waiting=False,
         _team_focus_identity=None,
         active_page="team",
@@ -103,14 +103,34 @@ def test_con_todo_igual_se_refresca_en_sitio() -> None:
     assert vista._source_health_signature == "firma"
 
 
-def test_una_vista_construida_pero_no_presentada_no_vale() -> None:
-    """Hasta que Windows la enseña, la superficie de verdad es la anterior."""
+def test_una_reconstruccion_no_obliga_a_la_siguiente() -> None:
+    """Era una cascada: cada reconstruccion forzaba la siguiente.
+
+    `_presented_team_pc_view` lo pone `retire_old_body`, que va con
+    `after(70, ...)` porque destruir el body anterior en el mismo callback deja
+    un parpadeo. Exigir esa marca para actualizar en sitio convertia cada
+    reconstruccion en una ventana de 70 ms durante la cual el siguiente refresco
+    tenia que reconstruir tambien, abriendo otra ventana. En la medicion los
+    refrescos llegaban a los 8 ms: dos reconstrucciones encadenadas de 836 y 826
+    ms por cada arrastre.
+
+    Lo que hace falta comprobar es que la vista este en pantalla, y de eso ya se
+    encarga `is_fully_composed`.
+    """
     vista = _VistaFalsa()
     yo, _datos = _gestor(vista)
-    yo._presented_team_pc_view = _VistaFalsa()
+    yo._presented_team_pc_view = None          # aun no ha corrido el after(70)
 
-    assert _motivo(yo) == "vista no publicada"
-    assert _refrescar(yo) is False
+    assert _motivo(yo) is None
+    assert _refrescar(yo) is True
+
+
+def test_a_mitad_de_un_cambio_de_superficie_no_se_toca_nada() -> None:
+    vista = _VistaFalsa()
+    yo, _datos = _gestor(vista)
+    yo._body_swap_in_progress = True
+
+    assert _motivo(yo) == "cambiando de superficie"
     assert vista.refrescos == []
 
 

@@ -1,6 +1,55 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.108 — una reconstrucción obligaba a la siguiente
+
+Con los motivos completos, el arrastre queda explicado entero. Del equipo al PC,
+en BDSP:
+
+| desde que sueltas | | |
+|---|---|---|
+| 0 ms | sueltas | |
+| 33 ms | reconstruye — «sin datos del PC» | 983 ms |
+| 1464 ms | **el juego confirma** | **419 ms** |
+| 1718 ms | reconstruye — «sin datos del PC» | 1078 ms |
+| 2804 ms | reconstruye — «vista no publicada» | 836 ms |
+| 3644 ms | reconstruye — «vista no publicada» | 826 ms |
+| 4471 ms | fin | |
+
+**4,5 segundos, de los que 3,7 son cuatro reconstrucciones.** Escribir en el
+juego son 419 ms.
+
+## La cascada
+
+Las dos últimas —1,66 s— eran culpa mía y de nadie más.
+
+`_presented_team_pc_view` lo pone `retire_old_body`, que va con `after(70, …)`
+porque destruir el body anterior en el mismo callback deja un parpadeo. Yo exigí
+esa marca para poder actualizar en sitio. Resultado: **durante 70 ms después de
+cada reconstrucción, la vista recién construida «no está publicada»**, así que el
+siguiente refresco reconstruía también… y abría otra ventana de 70 ms. En la
+medición los refrescos llegan a los **8 ms**.
+
+Cada reconstrucción se obligaba a sí misma a tener una detrás.
+
+Lo que de verdad hay que comprobar es que la vista esté en pantalla, y de eso ya
+se encarga `is_fully_composed`: exige que el marco y los tres paneles existan,
+estén mapeados y tengan tamaño. La marca de `retire_old_body` es la frontera que
+necesita la **barrera de arranque** —excluida aquí por el motivo «arrancando»—,
+no esta.
+
+## Lo que queda, y por qué no se toca todavía
+
+Las dos primeras reconstrucciones **sí** están justificadas: el equipo pasa de
+seis miembros a cinco y de cinco a cuatro, y el camino en sitio solo sabe cambiar
+datos, no composición.
+
+Y «sin datos del PC» seguirá refusando aunque la forma coincida, porque es
+`_render_team_pc_unified_page` quien programa la lectura de las cajas: atajar ahí
+dejaría el PC sin cargarse nunca. Queda anotado en el código.
+
+1857 passed, 1 skipped.
+
 # v0.2.6-alpha.107 — 30 reconstrucciones, 8 motivos
 
 La medición trajo el número que faltaba y, de paso, un fallo mío de método:
