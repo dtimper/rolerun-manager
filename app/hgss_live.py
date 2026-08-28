@@ -350,6 +350,14 @@ MARCA_OFFSET = 0xF620
 MARCA = 0x20060623
 TAMANO_BLOQUE = 0xF628
 # Cuántas muestras se toman para ver cuál de los bloques se mueve.
+# Cuántas veces tiene que salir el mismo contenido para creérselo.
+#
+# `ReadProcessMemory` devuelve registros partidos: el contenido bueno sale entre
+# el 66 % y el 99 % de las veces según el hueco, y cada variante partida es una
+# rareza suelta. Con tres votos, el bueno gana la carrera muy holgadamente y una
+# variante necesitaría repetirse tres veces antes que él.
+VOTOS_PARA_CREERSELO = 3
+
 MUESTRAS_DE_VIDA = 12
 ESPERA_ENTRE_MUESTRAS = 0.01
 
@@ -504,18 +512,40 @@ class HgssMelonDSReader:
     def _capture_nominal_candidate(self, leer, allocation: int, *, intentos: int = 1):
         """Captura el equipo de una reserva, o ``None`` si no lo hay.
 
-        Se reintenta ``intentos`` veces todo lo que puede ser transitorio —el
-        contador moviéndose, o un PK4 que no pasa su checksum porque la lectura
-        pilló al juego escribiendo—. Lo único que se rechaza a la primera es un
-        contador imposible, porque eso no cambia por esperar y hay 365 reservas
-        que recorrer.
+        UNA LECTURA SOLA NO VALE
+
+        `ReadProcessMemory` compite con el hilo del emulador y devuelve registros
+        **partidos**: medio de un instante y medio de otro. Medido sobre la
+        partida viva, 300 lecturas seguidas de cada miembro a dirección fija:
+
+            hueco 1: 288 iguales de 300      hueco 4: 286 de 300
+            hueco 2: 199 iguales de 300      hueco 5: 292 de 300
+            hueco 3: 297 iguales de 300      hueco 6: 293 de 300
+
+        y las variantes siempre difieren en **tramos contiguos que acaban en
+        0x87 o en 0xEB**, que son justo la frontera cuerpo/extensión y el final
+        del registro. Es una lectura pillada a medias, no un cambio del juego.
+
+        Lo peligroso es que **la extensión de combate no tiene checksum**, así
+        que una lectura partida ahí pasa todas las validaciones: se vio publicar
+        un Wooper con AtEsp 28801 y DefEsp 43367. Y si esa lectura se usa de base
+        para escribir, lo que se escribe es un registro incoherente: eso es
+        exactamente lo que el juego enseña como «Huevo malo».
+
+        Por eso aquí no gana la primera lectura que cuadre, sino **la primera que
+        se repita tres veces**. El contenido de verdad es mayoría abrumadora, así
+        que llega a tres mucho antes que cualquier variante partida.
+
+        Lo único que se rechaza a la primera es un contador imposible, porque eso
+        no cambia por esperar y hay 365 reservas que recorrer.
         """
         direccion_contador = int(allocation) + (self.memory.party_count - DS_RAM_BASE)
         direccion_datos = int(allocation) + (self.memory.party_data - DS_RAM_BASE)
         contador = leer(direccion_contador, 1)[0]
         if not 1 <= contador <= MAX_PARTY:
             return None
-        for _intento in range(max(1, int(intentos))):
+        veces: dict[bytes, int] = {}
+        for _intento in range(max(VOTOS_PARA_CREERSELO, int(intentos))):
             crudo = leer(direccion_datos, contador * PK4_PARTY_SIZE)
             despues = leer(direccion_contador, 1)[0]
             if despues != contador:
@@ -525,11 +555,17 @@ class HgssMelonDSReader:
                 contador = despues
                 if not 1 <= contador <= MAX_PARTY:
                     return None
+                veces.clear()
+                continue
+            veces[crudo] = veces.get(crudo, 0) + 1
+            if veces[crudo] < VOTOS_PARA_CREERSELO:
                 continue
             try:
                 return contador, crudo, parse_party_block(crudo, contador)
             except HgssLiveError:
-                continue
+                # Un contenido estable que no se puede leer no mejora repitiendo:
+                # que no vuelva a ganar la votación.
+                veces[crudo] = -10 ** 6
         return None
 
     def _read_process(

@@ -1,6 +1,50 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.88 — la causa raíz: `ReadProcessMemory` devuelve lecturas partidas
+
+La prueba del usuario cerró la primera pregunta: de las copias del bloque, **la
+que el juego usa es 0x0227C2DC**. Cambió dos Pokémon de sitio dentro del juego y
+solo esa copia lo siguió; la otra ni se inmutó. Y buscando el equipo por toda la
+RAM aparece **tres veces, siempre cifrado**: no hay ninguna copia en claro, así
+que el juego lee de ahí. Una de las tres, 0x02376864, está caducada —tiene a
+Totodile a Nv14 37/40—.
+
+## Lo que fallaba de verdad
+
+`ReadProcessMemory` compite con el hilo del emulador y devuelve registros
+**pillados a medias**. Medido, 300 lecturas de cada miembro a dirección fija:
+
+| hueco | iguales | hueco | iguales |
+|-------|---------|-------|---------|
+| 1 | 288/300 | 4 | 286/300 |
+| 2 | 199/300 | 5 | 292/300 |
+| 3 | 297/300 | 6 | 293/300 |
+
+Y las variantes difieren siempre en **tramos contiguos que acaban en 0x87 o en
+0xEB**: la frontera cuerpo/extensión y el final del registro. No es el juego
+cambiando nada; es la lectura partida por la mitad.
+
+Lo peligroso es que **la extensión de combate no tiene checksum**, así que una
+lectura partida ahí pasa todas las validaciones. De ahí el Wooper publicado con
+AtEsp 28801 y DefEsp 43367. Y si esa lectura sirve de base para escribir, lo que
+se escribe es un registro incoherente: **eso es el «Huevo malo»**.
+
+## El arreglo
+
+Una lectura sola no vale. Gana **el primer contenido que salga tres veces**. El
+bueno es mayoría abrumadora, así que llega a tres mucho antes que cualquier
+variante partida; y si nunca se repite nada, no se publica nada.
+
+Comprobado en la partida real: **60 lecturas seguidas, 0 fallos, un solo
+equipo**, 17,9 ms de media. Antes fallaba a ratos y publicaba estadísticas
+imposibles.
+
+La escritura de cuarta vuelve a estar encendida. La detección de la copia viva
+coincide con lo que demostró la prueba del usuario: 0x0227C2DC, 5 de 5.
+
+Suite completa: **1791**.
+
 # v0.2.6-alpha.87 — tres copias del guardado, y se escribía en la que no era
 
 «No cura», y el mensaje era «el rollback de curación no se pudo confirmar; no

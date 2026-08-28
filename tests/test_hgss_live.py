@@ -399,3 +399,107 @@ def test_la_reserva_localizada_sobrevive_al_fallo_de_lectura() -> None:
     fuente = inspect.getsource(HgssMelonDSReader._explicar_el_bloque)
     assert "_reserva_localizada" in fuente
     assert "_resolved" not in fuente
+
+
+# --------------------------------------------------------------------------
+# Las lecturas partidas: una sola no vale
+# --------------------------------------------------------------------------
+
+class _RamQueSePilla:
+    """Una RAM que a veces devuelve el registro pillado a medias.
+
+    Es lo que hace `ReadProcessMemory` de verdad: compite con el hilo del
+    emulador. Medido sobre la partida viva, 300 lecturas de cada miembro a
+    dirección fija dieron entre 199 y 297 iguales, y las variantes difieren
+    siempre en tramos que acaban en 0x87 o 0xEB —la frontera cuerpo/extensión y
+    el final del registro—.
+    """
+
+    def __init__(self, bueno: bytes, partido: bytes, patron: str) -> None:
+        self.bueno = bueno
+        self.partido = partido
+        self.patron = patron          # 'B' bueno, 'P' partido
+        self.vuelta = 0
+        self.lecturas_de_datos = 0
+
+    def __call__(self, direccion: int, tamano: int) -> bytes:
+        if tamano == 1:
+            return bytes((len(self.bueno) // PK4_PARTY_SIZE,))
+        letra = self.patron[min(self.vuelta, len(self.patron) - 1)]
+        self.vuelta += 1
+        self.lecturas_de_datos += 1
+        return self.bueno if letra == "B" else self.partido
+
+
+def _lector_desnudo():
+    from app.hgss_live import HgssMelonDSReader
+
+    return HgssMelonDSReader.__new__(HgssMelonDSReader)
+
+
+def _capturar(ram, intentos: int = 25):
+    from app.hgss_live import HgssMelonDSReader
+
+    lector = _lector_desnudo()
+    lector._memoria_detectada = None
+    lector._memoria_base = HGSS
+    return HgssMelonDSReader._capture_nominal_candidate(
+        lector, ram, 0, intentos=intentos,
+    )
+
+
+def test_una_lectura_partida_no_se_publica() -> None:
+    """El «Huevo malo», en una prueba.
+
+    La extensión de combate **no tiene checksum**, así que un registro pillado a
+    medias ahí pasa todas las validaciones: se publicó un Wooper con AtEsp 28801.
+    Y si esa lectura sirve de base para escribir, lo que se escribe es un
+    registro incoherente, que es lo que el juego enseña como «Huevo malo».
+    """
+    bueno = _equipo(2)
+    # Media extensión de otro instante: el cuerpo cuadra, el checksum también.
+    partido = bytearray(bueno)
+    partido[PK4_PARTY_SIZE + PK4_STORED_SIZE:] = bytes(
+        len(bueno) - PK4_PARTY_SIZE - PK4_STORED_SIZE
+    )
+    partido = bytes(partido)
+
+    # La partida sale primero, pero la buena es mayoría: gana la buena.
+    ram = _RamQueSePilla(bueno, partido, "PBPBBB")
+    capturado = _capturar(ram)
+    assert capturado is not None
+    assert capturado[1] == bueno, "se publicó una lectura pillada a medias"
+
+
+def test_hacen_falta_tres_lecturas_iguales() -> None:
+    from app.hgss_live import VOTOS_PARA_CREERSELO
+
+    assert VOTOS_PARA_CREERSELO == 3
+    ram = _RamQueSePilla(_equipo(2), _equipo(2), "B")
+    capturado = _capturar(ram)
+    assert capturado is not None
+    assert ram.lecturas_de_datos >= VOTOS_PARA_CREERSELO
+
+
+def test_si_nunca_se_repite_nada_no_se_publica_nada() -> None:
+    """Sin un contenido estable no hay equipo que dar, y decirlo es lo correcto."""
+    bueno = _equipo(2)
+    distintas = [bytearray(bueno) for _ in range(30)]
+    for indice, variante in enumerate(distintas):
+        variante[PK4_PARTY_SIZE + PK4_STORED_SIZE] = indice + 1
+
+    lector = _lector_desnudo()
+    lector._memoria_detectada = None
+    lector._memoria_base = HGSS
+    from app.hgss_live import HgssMelonDSReader
+
+    turnos = iter(distintas)
+
+    def leer(direccion: int, tamano: int) -> bytes:
+        if tamano == 1:
+            return bytes((2,))
+        return bytes(next(turnos))
+
+    assert HgssMelonDSReader._capture_nominal_candidate(
+        lector, leer, 0, intentos=25,
+    ) is None
