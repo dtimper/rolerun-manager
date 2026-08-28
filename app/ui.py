@@ -85,6 +85,7 @@ from .gen4_rom_service import (
 )
 from .boxed_metadata import clear_personal_override, set_personal_override
 from .xy_rom_service import XYRomProfileError, load_xy_rom_tm_profile
+from .sonido import Sonidos
 from .sm_rom_service import SMRomProfileError, load_sm_rom_tm_profile
 from .usum_rom_service import USUMRomProfileError, load_usum_rom_tm_profile
 from .live_review import inverse_oras_live_change
@@ -640,6 +641,10 @@ class RoleRunManager(ctk.CTk):
             active_predicate=self._foreground_is_supported_emulator,
         )
         self.hotkey_registration_errors: list[str] = []
+        # Los efectos se sintetizan la primera vez en Documentos\RoleRun
+        # Manager\Sonidos. Dejar ahi un WAV con el mismo nombre lo sustituye.
+        self.sonidos = Sonidos()
+        self._ultimo_aviso_sonado: tuple[str, float] | None = None
         self.selected_game_key: str | None = None
         self._shell_built = False
         self.content = None
@@ -5823,6 +5828,7 @@ class RoleRunManager(ctk.CTk):
             return
         # El reloj del usuario para cuando el rótulo deja de decir «aplicando».
         perf.mark("ui.estado", estado=str(kind), titulo=str(title)[:60])
+        self._sonar_por_el_estado(str(kind), str(title))
         message = store.publish(
             kind, title, detail, actions=actions, persistent=persistent,
         )
@@ -13519,6 +13525,39 @@ class RoleRunManager(ctk.CTk):
             initial_move_id=int(entry["move_id"]), return_page="tms",
         )
 
+    #: Estados que merecen un sonido, y cuál.
+    SONIDO_DEL_ESTADO = {
+        "done": "confirmacion",
+        "confirmed": "confirmacion",
+        "prepared": "confirmacion",
+        "failed": "error",
+        "warning": "error",
+    }
+
+    #: Segundos que un mismo aviso no vuelve a sonar. Un solo movimiento pasa
+    #: por «confirmado» tres veces —al preparar, al escribir y al releer el PC—
+    #: y sonar tres campanitas por arrastre sería insufrible.
+    SILENCIO_ENTRE_AVISOS = 2.0
+
+    def _sonar_por_el_estado(self, kind: str, title: str) -> None:
+        efecto = self.SONIDO_DEL_ESTADO.get(kind)
+        if efecto is None:
+            self._ultimo_aviso_sonado = None
+            return
+        ahora = time.monotonic()
+        anterior = getattr(self, "_ultimo_aviso_sonado", None)
+        if anterior and anterior[0] == efecto and ahora - anterior[1] < self.SILENCIO_ENTRE_AVISOS:
+            return
+        self._ultimo_aviso_sonado = (efecto, ahora)
+        self.sonar(efecto)
+
+    def sonar(self, nombre: str) -> None:
+        """Un efecto de interfaz. Nunca puede estorbar a lo que se estaba haciendo."""
+        try:
+            self.sonidos.reproducir(str(nombre))
+        except Exception:
+            pass
+
     @staticmethod
     def _anotar_de_la_vista(evento: str, **campos: object) -> None:
         """Recoge lo que la vista quiera dejar anotado en la medición."""
@@ -13729,6 +13768,10 @@ class RoleRunManager(ctk.CTk):
             on_edge_accept=self._accept_sidebar_from_content,
         )
         self._team_pc_view.anotar = self._anotar_de_la_vista
+        # Un sprite volando vive en la ventana principal, no en los paneles:
+        # tienen scroll y recortarian el vuelo al salir de ellos.
+        self._team_pc_view._raiz_para_animar = self
+        self._team_pc_view.sonar = self.sonar
         perf.record(
             "ui.team_pc.construir_vista",
             (time.perf_counter() - _inicio_de_la_vista) * 1000.0,

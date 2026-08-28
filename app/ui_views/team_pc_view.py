@@ -8,6 +8,7 @@ import tkinter as tk
 
 from app.config import DANGER, GOLD, MUTED, PANEL, PANEL_ALT, SUCCESS, TEXT
 from app.ui_components.repintado import configurar_si_cambia
+from app.animacion import Vuelo, centro_en_la_raiz
 from app.pc_browser import pokemon_matches_pc_query
 from app.pokemon_stats import STAT_KEYS, STAT_LABELS
 from app.ui_state.spatial_navigation import event_targets_text_input, keypress_sequences
@@ -147,6 +148,9 @@ class UnifiedTeamPCView:
         # El controlador engancha aquí su cuaderno de tiempos. La vista no sabe
         # de medición: solo avisa, y si nadie escucha no pasa nada.
         self.anotar: Callable[..., None] = lambda *_a, **_k: None
+        # El controlador engancha aquí sus efectos. La vista no sabe de audio:
+        # solo dice qué ha pasado, y si nadie escucha no pasa nada.
+        self.sonar: Callable[[str], None] = lambda _nombre: None
         self.identity_for = identity_for
         self.role_for = role_for
         self.sprite_for = sprite_for
@@ -205,6 +209,14 @@ class UnifiedTeamPCView:
         # una tarjeta movería al Pokémon de antes.
         self._team_card_pokemon: dict[str, Any] = {}
         self._team_card_targets: dict[str, dict[str, Any]] = {}
+        # Un sprite volando vive en la ventana, no en los paneles: los paneles
+        # tienen scroll y recortarían el vuelo al salir de ellos.
+        self._raiz_para_animar: Any = None
+        self._vuelos: set[Vuelo] = set()
+        self._ultimo_destino_widget: Any = None
+        # El roce de una tarjeta suena al entrar, no en cada píxel: el enganche
+        # se reparte por todos sus hijos y `<Enter>` llega muchas veces.
+        self._ultima_tarjeta_rozada: str | None = None
         self.pc_occupied_slots: set[int] = set()
         self.drop_targets: list[tuple[Any, str, dict[str, Any]]] = []
         self._drag_origin: tuple[int, int] | None = None
@@ -1375,6 +1387,15 @@ class UnifiedTeamPCView:
                 button, "pc", None,
                 pokemon_getter=lambda s=slot: self._pc_slot_pokemon.get(s),
             )
+            # Una sola vez, como el arrastre: `add="+"` apilaría el sonido y
+            # una caja recorrida sonaría seis veces por casilla.
+            button.bind(
+                "<Enter>",
+                lambda _evento, s=slot: (
+                    self.sonar("raton") if self._pc_slot_pokemon.get(s) else None
+                ),
+                add="+",
+            )
 
         # Se dice las dos cosas, no solo una: con las casillas reutilizadas, un
         # hueco que se queda vacío tiene que salir del conjunto aunque quien
@@ -1888,6 +1909,9 @@ class UnifiedTeamPCView:
         self._apply_selection_styles()
 
     def _team_hover(self, card, identity: str) -> None:
+        if identity != self._ultima_tarjeta_rozada:
+            self._ultima_tarjeta_rozada = identity
+            self.sonar("raton")
         selected = (
             self.selection.context == "team"
             and self.selection.selected_identity == identity
@@ -2102,6 +2126,7 @@ class UnifiedTeamPCView:
     def _end_drag(self, event) -> str | None:
         moved = self._drag_started
         source = self._drag_source
+        origen = self._drag_source_widget
         target = self._drop_target_at(int(event.x_root), int(event.y_root)) if moved else None
         self._clear_drag_visuals()
         self._drag_origin = None
@@ -2114,6 +2139,10 @@ class UnifiedTeamPCView:
             if source is not None and target is not None and self.on_drop is not None:
                 source_context, pokemon = source
                 target_context, target_data = target
+                self.volar_pokemon(
+                    pokemon, origen, self._ultimo_destino_widget,
+                )
+                self.sonar("seleccion")
                 self.on_drop(source_context, pokemon, target_context, target_data)
             else:
                 # Se movió el ratón con algo cogido y no llegó a soltarse en
@@ -2127,6 +2156,48 @@ class UnifiedTeamPCView:
             return "break"
         self._suppress_click_once = False
         return None
+
+    def volar_pokemon(self, pokemon: Any, origen: Any, destino: Any) -> bool:
+        """Lleva el sprite de donde estaba a donde va. Devuelve si llegó a volar.
+
+        Es un adorno: si falta el sprite, alguno de los dos extremos o la
+        posición, no vuela y el movimiento ocurre igual. Nada de esto puede
+        impedir que se mueva un Pokémon.
+        """
+        if origen is None or destino is None or pokemon is None:
+            return False
+        raiz = getattr(self, "_raiz_para_animar", None)
+        if raiz is None:
+            return False
+        desde = centro_en_la_raiz(origen, raiz)
+        hasta = centro_en_la_raiz(destino, raiz)
+        if desde is None or hasta is None or desde == hasta:
+            return False
+        imagen = self.sprite_for(pokemon, (56, 56))
+        if imagen is None:
+            return False
+        try:
+            movil = ctk.CTkLabel(raiz, text="", image=imagen, fg_color="transparent")
+        except Exception:
+            return False
+        self.detener_vuelos()
+        # El arco crece con la distancia: entre paneles se nota, entre dos
+        # casillas vecinas apenas, que es lo que se quiere.
+        salto = abs(hasta[0] - desde[0]) + abs(hasta[1] - desde[1])
+        vuelo = Vuelo(
+            raiz, movil, desde, hasta,
+            arco=min(90.0, salto * 0.12),
+            al_terminar=lambda: self._vuelos.discard(vuelo),
+        )
+        self._vuelos.add(vuelo)
+        vuelo.empezar()
+        return True
+
+    def detener_vuelos(self) -> None:
+        """Retira cualquier sprite en el aire. Uno huérfano se queda pegado."""
+        for vuelo in tuple(self._vuelos):
+            vuelo.parar()
+        self._vuelos.clear()
 
     def _cancel_drag(self) -> None:
         self._clear_drag_visuals()
@@ -2146,7 +2217,11 @@ class UnifiedTeamPCView:
         self._drag_ghost = None
         self._restore_target_border()
 
-    def _drop_target_at(self, x_root: int, y_root: int) -> tuple[str, dict[str, Any]] | None:
+    def _drop_target_at(
+        self, x_root: int, y_root: int,
+    ) -> tuple[str, dict[str, Any]] | None:
+        """Qué hay bajo el cursor. De paso apunta el widget, para el vuelo."""
+        self._ultimo_destino_widget = None
         for widget, context, target in list(self.drop_targets):
             try:
                 if (
@@ -2154,6 +2229,7 @@ class UnifiedTeamPCView:
                     and widget.winfo_rootx() <= x_root <= widget.winfo_rootx() + widget.winfo_width()
                     and widget.winfo_rooty() <= y_root <= widget.winfo_rooty() + widget.winfo_height()
                 ):
+                    self._ultimo_destino_widget = widget
                     return context, target
             except Exception:
                 continue

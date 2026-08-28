@@ -1,6 +1,58 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.0-alpha.1 — empieza la 0.3: que se vea y que se oiga
+
+La 0.2.6 se fue en velocidad y en pruebas. La 0.3 empieza por lo contrario: que
+mover un Pokémon **se vea moverse** y que la interfaz responda con algo más que
+un cambio de píxeles.
+
+## El Pokémon vuela
+
+Mover uno entre el equipo y el PC cambiaba en seco: desaparecía de un sitio y
+aparecía en otro. Sin nada que seguir con la vista, hay que reconstruir
+mentalmente qué ha pasado.
+
+Ahora el sprite recorre el camino en **300 ms**, con arranque suave, frenada al
+llegar y un arco que crece con la distancia —entre paneles se nota, entre dos
+casillas vecinas apenas—. Vuela sobre la ventana y no dentro de los paneles,
+porque tienen scroll y recortarían el recorrido.
+
+Esos 300 ms no se suman a la espera: **la tapan**. La parte inmediata del
+movimiento son 90 ms y la escritura al juego unos 400, así que el vuelo ocurre
+mientras se escribe.
+
+Se anima la **posición y nunca el aspecto**: mover un widget es barato, pero
+reconfigurar colores cuesta 0,8–1,4 ms medidos y a sesenta fotogramas por
+segundo eso no cabe. Y todo vuelo se puede parar: un sprite huérfano se quedaría
+pegado en mitad de la pantalla.
+
+## Suena
+
+Seis efectos —roce, selección, confirmación, error, y dos para el drafteo— que
+**se sintetizan solos** la primera vez en `Documentos\RoleRun Manager\Sonidos`.
+No hacen falta archivos ni licencias, y suenan desde el primer arranque.
+
+Y son sustituibles: **si dejas ahí un WAV con el mismo nombre, se usa el tuyo**.
+Los generados no se vuelven a escribir si el archivo ya existe.
+
+Dos frenos que no son opcionales:
+
+- **el ratón**: una caja del PC son treinta casillas y se recorren en menos de un
+  segundo. Sin un mínimo de 60 ms entre sonidos, eso es una ametralladora.
+- **los avisos**: un solo movimiento pasa por «confirmado» **tres veces** —al
+  preparar, al escribir y al releer el PC—. Sin freno serían tres campanitas por
+  arrastre.
+
+Suenan en un hilo aparte: `winsound` bloquea al llamante, y el llamante sería el
+hilo de Tk. Un tirón en cada paso del ratón por la caja del PC se notaría justo
+donde más.
+
+Nada de esto puede estorbar: un sonido que no se puede reproducir se traga en
+silencio, y un vuelo que no se puede hacer no impide el movimiento.
+
+1931 passed, 1 skipped.
+
 # v0.2.6-alpha.117 — mirar la pila, no quién tiene el foco
 
 Dos fallos de la versión anterior, y el segundo era de fondo.
