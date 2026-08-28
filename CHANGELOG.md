@@ -1,6 +1,49 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.107 — 30 reconstrucciones, 8 motivos
+
+La medición trajo el número que faltaba y, de paso, un fallo mío de método:
+
+```
+actualizadas en sitio ......... 3
+reconstruidas ................. 30   (mediana 721 ms, total 26,5 s)
+
+    5 x  arrancando
+    2 x  sin datos del PC
+    1 x  vista no publicada
+```
+
+**Ocho motivos para treinta reconstrucciones.** Las otras veintidós se negaron en
+las cinco condiciones que estaban escritas en línea dentro del `if`, y Python
+cortocircuita el `and`: nunca llegaban a la función que anota. Veintidós
+reconstrucciones —unos quince segundos— sin poder atribuirlas a nada.
+
+Las cinco pasan a la misma función que las nueve interiores: un solo sitio
+decide y un solo sitio anota. Y una prueba lee el código fuente y falla si alguna
+vuelve a escribirse en línea, porque el error no se ve —el programa funciona
+igual, solo deja de explicarse—.
+
+## El reparto de esa sesión
+
+| operación | veces | mediana | total |
+|---|---|---|---|
+| `ui.smooth_render_page` | 30 | 1005 ms | **27,0 s** |
+| `ui.render_page` | 30 | 721 ms | 26,5 s |
+| `ui.team_pc.construir_vista` | 28 | 711 ms | 22,7 s |
+| `ui.finish_team_pc_load` | 8 | 1016 ms | 7,1 s |
+| `ui.finalize_live_changes` | 5 | 1209 ms | 6,1 s |
+| `realtime.apply_changes` | 5 | 351 ms | 1,2 s |
+| `ui.save_live_changes` | 5 | 25 ms | 0,1 s |
+
+Escribir en el juego —las dos últimas filas— es **1,3 segundos de los 27**.
+
+Y `ui.smooth_render_page` cuesta 284 ms más que el `render_page` que envuelve:
+es el doble buffer, que resuelve la geometría del árbol nuevo y restaura el
+scroll con varios `update_idletasks` sobre 642 widgets recién creados.
+
+1856 passed, 1 skipped.
+
 # v0.2.6-alpha.106 — los 4-5 segundos son 21 reconstrucciones
 
 Ya está medido en la máquina del usuario, con BDSP. Soltando un Pokémon del

@@ -12041,16 +12041,16 @@ class RoleRunManager(ctk.CTk):
 
         # Un refresco interno de Equipo y PC que no cambia la forma de la página
         # no necesita un body nuevo: cambiar los datos cuesta decenas de
-        # milisegundos y reconstruirlos, cientos. Las navegaciones y los
+        # milisegundos y reconstruirlo, cientos. Las navegaciones y los
         # refrescos que piden volver arriba o enfocar a alguien siguen por el
         # camino de siempre, que es el que mueve el scroll.
-        if (
-            _prepared_navigation_overlay is None
-            and not reset_scroll
-            and not self._team_focus_identity
-            and self.active_page in TEAM_PC_PAGES
-            and self._shell_built
-            and self._refrescar_team_pc_en_sitio()
+        #
+        # La decisión NO se escribe aquí en línea: Python cortocircuita el `and`,
+        # así que una condición temprana dejaba la reconstrucción sin motivo
+        # anotado. Con 30 reconstrucciones medidas y 8 motivos, 22 quedaron sin
+        # explicar. Un solo sitio decide y un solo sitio anota.
+        if self._refrescar_team_pc_en_sitio(
+            _prepared_navigation_overlay, bool(reset_scroll),
         ):
             perf.mark("ui.render.en_sitio", pagina=str(self.active_page))
             # Lo que `render_page()` hace fuera del body: no está en el doble
@@ -13346,7 +13346,9 @@ class RoleRunManager(ctk.CTk):
             initial_move_id=int(entry["move_id"]), return_page="tms",
         )
 
-    def _refrescar_team_pc_en_sitio(self) -> bool:
+    def _refrescar_team_pc_en_sitio(
+        self, overlay=None, reset_scroll: bool = False,
+    ) -> bool:
         """Cambia los datos de Equipo y PC sin reconstruir la página.
 
         Devuelve si pudo. Un ``False`` significa que hay que repintar de verdad,
@@ -13358,14 +13360,32 @@ class RoleRunManager(ctk.CTk):
         ms medidos —30.255 llamadas a Tcl—, así que saber cuál de las nueve
         condiciones lo impidió es la diferencia entre arreglarlo y adivinar.
         """
-        motivo = self._motivo_para_reconstruir_team_pc()
+        motivo = self._motivo_para_reconstruir_team_pc(overlay, reset_scroll)
         if motivo is not None:
             perf.mark("ui.render.reconstruye", motivo=motivo)
             return False
         return self._aplicar_refresco_team_pc_en_sitio()
 
-    def _motivo_para_reconstruir_team_pc(self) -> str | None:
-        """Qué impide actualizar en sitio, o ``None`` si no lo impide nada."""
+    def _motivo_para_reconstruir_team_pc(
+        self, overlay=None, reset_scroll: bool = False,
+    ) -> str | None:
+        """Qué impide actualizar en sitio, o ``None`` si no lo impide nada.
+
+        Aquí están **todas** las condiciones, incluidas las que antes vivían en
+        el `if` del que llama: si alguna se queda fuera, su reconstrucción no
+        aparece en la medición y no hay forma de saber qué arreglar.
+        """
+        if overlay is not None:
+            # Esa barrera la retira el camino largo; nadie más sabe hacerlo.
+            return "navegacion con barrera"
+        if reset_scroll:
+            return "pide volver arriba"
+        if self._team_focus_identity:
+            return "pide enfocar a un miembro"
+        if self.active_page not in TEAM_PC_PAGES:
+            return f"pagina {self.active_page}"
+        if not self._shell_built:
+            return "shell sin construir"
         if self._initial_shell_waiting:
             # La barrera de arranque no publica por timeout: compara la
             # evidencia de lo que la vista materializó y espera indefinidamente

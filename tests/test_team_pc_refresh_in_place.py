@@ -54,6 +54,9 @@ def _gestor(vista: _VistaFalsa):
         _team_pc_view=vista,
         _presented_team_pc_view=vista,
         _initial_shell_waiting=False,
+        _team_focus_identity=None,
+        active_page="team",
+        _shell_built=True,
         current_game=object(),
         _faint_replacement_mode=None,
         _pc_page_box=3,
@@ -69,7 +72,8 @@ def _gestor(vista: _VistaFalsa):
         _party_health_signature=lambda party: "firma",
     )
     yo._motivo_para_reconstruir_team_pc = (
-        lambda: RoleRunManager._motivo_para_reconstruir_team_pc(yo)
+        lambda overlay=None, reset_scroll=False:
+        RoleRunManager._motivo_para_reconstruir_team_pc(yo, overlay, reset_scroll)
     )
     yo._aplicar_refresco_team_pc_en_sitio = (
         lambda: RoleRunManager._aplicar_refresco_team_pc_en_sitio(yo)
@@ -81,9 +85,9 @@ def _refrescar(yo) -> bool:
     return RoleRunManager._refrescar_team_pc_en_sitio(yo)
 
 
-def _motivo(yo) -> str | None:
-    """Qué impide actualizar en sitio. Reconstruir cuesta 733 ms de mediana."""
-    return RoleRunManager._motivo_para_reconstruir_team_pc(yo)
+def _motivo(yo, overlay=None, reset_scroll: bool = False) -> str | None:
+    """Qué impide actualizar en sitio. Reconstruir cuesta 721 ms de mediana."""
+    return RoleRunManager._motivo_para_reconstruir_team_pc(yo, overlay, reset_scroll)
 
 
 def test_con_todo_igual_se_refresca_en_sitio() -> None:
@@ -193,21 +197,9 @@ def test_la_caja_pedida_se_recorta_al_limite_real() -> None:
 def test_el_camino_rapido_se_salta_el_body_nuevo() -> None:
     """Si no volviera antes del doble buffer, no ahorraría nada."""
     fuente = inspect.getsource(RoleRunManager._smooth_render_page)
-    rapido = fuente.index("_refrescar_team_pc_en_sitio()")
+    rapido = fuente.index("_refrescar_team_pc_en_sitio(")
     buffer = fuente.index("old_body = self.body")
     assert rapido < buffer, "el camino rápido llega después de construir el body"
-
-    cabeza = fuente[:rapido]
-    assert "_prepared_navigation_overlay is None" in cabeza, (
-        "una navegación con barrera preparada no puede tomar el camino rápido: "
-        "nadie retiraría esa barrera"
-    )
-    assert "not reset_scroll" in cabeza, (
-        "quien pide volver arriba necesita el render que mueve el scroll"
-    )
-    assert "not self._team_focus_identity" in cabeza, (
-        "quien pide enfocar a alguien necesita el render que mueve el scroll"
-    )
 
     cola = fuente[rapido:buffer]
     for fuera_del_body in ("_render_sidebar", "_update_top_status", "_render_context_navigation"):
@@ -215,6 +207,48 @@ def test_el_camino_rapido_se_salta_el_body_nuevo() -> None:
             f"`render_page()` hace {fuera_del_body} fuera del doble buffer y "
             "el camino rápido se lo salta"
         )
+
+
+def test_ninguna_condicion_decide_fuera_de_la_funcion_que_anota() -> None:
+    """30 reconstrucciones medidas y solo 8 motivos: 22 sin explicar.
+
+    Las condiciones estaban escritas en línea dentro del `if`, y Python
+    cortocircuita el `and`: una condición temprana se negaba sin llegar nunca a
+    la función que anota. Reconstruir cuesta 721 ms de mediana, así que una
+    reconstrucción sin motivo es medio segundo que no se puede atribuir.
+    """
+    fuente = inspect.getsource(RoleRunManager._smooth_render_page)
+    cabeza = fuente[:fuente.index("_refrescar_team_pc_en_sitio(")]
+    for en_linea in (
+        "_prepared_navigation_overlay is None",
+        "not reset_scroll",
+        "self._team_focus_identity",
+        "self.active_page in TEAM_PC_PAGES",
+        "self._shell_built",
+    ):
+        assert en_linea not in cabeza.split("if self._body_swap_in_progress")[-1], (
+            f"«{en_linea}» decide fuera de `_motivo_para_reconstruir_team_pc`: "
+            "esa reconstrucción no aparecerá en la medición"
+        )
+
+
+def test_las_condiciones_exteriores_tambien_dicen_su_motivo() -> None:
+    vista = _VistaFalsa()
+    yo, _datos = _gestor(vista)
+
+    assert _motivo(yo, overlay=object()) == "navegacion con barrera"
+    assert _motivo(yo, reset_scroll=True) == "pide volver arriba"
+
+    yo._team_focus_identity = "id-1"
+    assert _motivo(yo) == "pide enfocar a un miembro"
+    yo._team_focus_identity = None
+
+    yo.active_page = "tms"
+    assert _motivo(yo) == "pagina tms"
+    yo.active_page = "team"
+
+    yo._shell_built = False
+    assert _motivo(yo) == "shell sin construir"
 
 
 def test_mientras_arranca_no_se_actualiza_en_sitio() -> None:
