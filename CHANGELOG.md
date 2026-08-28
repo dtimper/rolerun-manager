@@ -1,6 +1,44 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.112 — la casilla se destruía y luego reventaba
+
+`build_fixed_team_slots` devuelve una **tupla**. El repintado por casillas hacía
+`self.team_slots[index] = team_slots[index]`, que en una tupla lanza
+`TypeError`… justo **después** de haber olvidado y destruido la tarjeta anterior.
+
+Resultado en la máquina del usuario: al sacar un Pokémon del equipo, su casilla
+**desaparecía** junto con su destino de soltar. Arrastrar otro desde el PC hasta
+ese hueco no encontraba dónde soltarlo. La reconstrucción que venía detrás lo
+arreglaba, y de ahí el «al probar varias veces, al final una sí que me ha
+dejado».
+
+En la medición salía tres veces como «no se pudo repintar una casilla», porque
+un `except Exception` se la tragaba sin decir cuál.
+
+## Tres arreglos
+
+1. La vista guarda sus casillas en una **lista**, que es lo que un repintado por
+   casillas necesita.
+2. **El destrozo no puede preceder al fallo.** La casilla nueva se apunta antes
+   de destruir la vieja, para que un error a mitad no deje un hueco.
+3. La excepción deja de ser muda: se anota con su tipo y su mensaje.
+
+## Y las pruebas pasan tuplas
+
+Usaban listas. Por eso pasaban con el código roto. Ahora `_equipo()` devuelve una
+tupla, igual que el programa: con el código anterior, **seis** de las doce
+pruebas de casillas fallan.
+
+## Lo que no es un fallo
+
+Mover un Pokémon de una posición del PC a otra en Perla Reluciente dice «DESTINO
+NO HABILITADO», y está bien: RoleRun no tiene una escritura PC→PC demostrada
+para ese juego y **no escribe lo que no ha demostrado**. Los intentos anotados
+como `pc -> pc` en la medición eran eso, no arrastres fallidos.
+
+1875 passed, 1 skipped.
+
 # v0.2.6-alpha.111 — otra cascada, y el arrastre deja rastro
 
 La medición del usuario tras el repintado por casillas:

@@ -55,15 +55,21 @@ class _Mono:
         self.box_slot = indice
 
 
-def _equipo(cuantos: int = 6) -> list[dict]:
-    return [
+def _equipo(cuantos: int = 6) -> tuple[dict, ...]:
+    """Una **tupla**, que es lo que devuelve `build_fixed_team_slots`.
+
+    Las pruebas usaban una lista y por eso no vieron que repintar una casilla
+    hacía `self.team_slots[index] = ...` sobre una tupla: reventaba, y encima
+    después de haber destruido la tarjeta anterior.
+    """
+    return tuple(
         {
             "slot_role": ROLES[indice],
             "state": "",
             "pokemon": _Mono(indice + 1) if indice < cuantos else None,
         }
         for indice in range(6)
-    ]
+    )
 
 
 _CAJA = {hueco: _Mono(hueco) for hueco in range(1, 31)}
@@ -193,7 +199,7 @@ def test_cambiar_de_rol_una_casilla_la_rehace(vista) -> None:
     root, superficie = vista
     antes = superficie.team_frames["id:101"]
 
-    otro = _equipo(6)
+    otro = [dict(casilla) for casilla in _equipo(6)]
     otro[0]["slot_role"] = "MURO"
     assert superficie.refrescar_en_sitio(otro, _CAJA, 1) is None
     root.update_idletasks()
@@ -271,3 +277,43 @@ def test_un_arrastre_que_no_empieza_deja_rastro(vista) -> None:
 
     assert anotado and anotado[0][0] == "arrastre.no_empieza"
     assert anotado[0][1]["hueco_vacio"] is True
+
+
+def test_una_casilla_nunca_se_destruye_antes_de_saber_que_puede_sustituirse(vista) -> None:
+    """Fue el fallo real: destruir, y reventar despues.
+
+    `build_fixed_team_slots` devuelve una tupla, y el repintado hacia
+    `self.team_slots[index] = ...`. El TypeError llegaba con la tarjeta ya
+    destruida y olvidada: la casilla desaparecia del equipo con su destino de
+    soltar, y arrastrar ahi desde el PC no encontraba donde soltar.
+    """
+    root, superficie = vista
+    anotado = []
+    superficie.anotar = lambda evento, **campos: anotado.append(evento)
+
+    assert superficie.refrescar_en_sitio(_equipo(5), _CAJA, 1) is None
+    root.update_idletasks()
+
+    assert "casillas.reventaron" not in anotado
+    assert len(superficie.team_frames) == 6, "quedo un hueco en el equipo"
+    assert all(
+        superficie._widget_vivo(marco) for marco in superficie.team_frames.values()
+    )
+    assert sum(1 for d in superficie.drop_targets if d[1] == "team") == 6
+
+
+def test_si_el_repintado_revienta_se_dice_con_que(vista) -> None:
+    """Muda, esa excepcion costo tres reconstrucciones por movimiento."""
+    _root, superficie = vista
+    anotado = []
+    superficie.anotar = lambda evento, **campos: anotado.append((evento, campos))
+
+    def _revienta(*_a, **_k):
+        raise RuntimeError("algo se rompio")
+
+    superficie._pintar_casilla = _revienta
+    assert superficie.repintar_casillas_cambiadas(_equipo(5)) is False
+
+    assert anotado[-1][0] == "casillas.reventaron"
+    assert anotado[-1][1]["error"] == "RuntimeError"
+    assert "algo se rompio" in anotado[-1][1]["detalle"]

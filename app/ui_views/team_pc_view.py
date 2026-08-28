@@ -136,7 +136,9 @@ class UnifiedTeamPCView:
         on_edge_accept: Callable[[], bool] | None = None,
     ) -> None:
         self.master = master
-        self.team_slots = team_slots
+        # Lista, no tupla: las casillas se repintan una a una y hay que poder
+        # sustituir la que cambia. `build_fixed_team_slots` devuelve una tupla.
+        self.team_slots = list(team_slots)
         self.pc_members = dict(pc_members)
         self.pc_box = int(pc_box)
         self.pc_box_count = max(1, int(pc_box_count))
@@ -616,34 +618,47 @@ class UnifiedTeamPCView:
         """Con qué nombre está registrada una casilla: su ocupante, o su rol."""
         return firma[2] if firma[2] is not None else f"empty:{firma[0]}"
 
-    def repintar_casillas_cambiadas(self, team_slots: list[dict[str, Any]]) -> bool:
+    def repintar_casillas_cambiadas(self, team_slots) -> bool:
         """Rehace solo las casillas cuya terna haya cambiado.
 
         Sacar un Pokémon del equipo mueve una casilla, a veces dos si los roles
         se recolocan: 35 ms por casilla contra los 700 de rehacer la página.
         """
         if not self._widget_vivo(getattr(self, "_team_slots_container", None)):
+            self.anotar("casillas.sin_contenedor")
             return False
+        nuevas = list(team_slots)
         antes = [self.firma_de_casilla(s, self.identity_for) for s in self.team_slots]
-        ahora = [self.firma_de_casilla(s, self.identity_for) for s in team_slots]
+        ahora = [self.firma_de_casilla(s, self.identity_for) for s in nuevas]
         try:
             for index, (viejo, nuevo) in enumerate(zip(antes, ahora)):
                 if viejo == nuevo:
                     continue
+                # Se apunta la casilla nueva ANTES de destruir la vieja. Al
+                # revés, un fallo a mitad dejaba la casilla destruida y sin
+                # registrar: un hueco en el equipo sin destino donde soltar, y
+                # arrastrar ahí desde el PC no encontraba nada.
+                self.team_slots[index] = nuevas[index]
                 clave = self._clave_de_casilla(viejo)
                 marco = self.team_frames.get(clave)
                 self._olvidar_casilla(clave)
                 if marco is not None and self._widget_vivo(marco):
                     marco.destroy()
-                self.team_slots[index] = team_slots[index]
-                self._pintar_casilla(index, team_slots[index])
+                self._pintar_casilla(index, nuevas[index])
             # Un destino de soltar que apunte a un marco destruido no se puede
             # resolver: se cae con el marco.
             self.drop_targets = [
                 destino for destino in self.drop_targets
                 if destino[1] != "team" or self._widget_vivo(destino[0])
             ]
-        except Exception:
+        except Exception as error:
+            # Muda, esta excepción costó tres reconstrucciones por movimiento y
+            # dejó el equipo con un hueco donde no se podía soltar nada.
+            self.anotar(
+                "casillas.reventaron",
+                error=type(error).__name__,
+                detalle=str(error)[:80],
+            )
             return False
         return True
 
@@ -917,7 +932,7 @@ class UnifiedTeamPCView:
                 str(slot.get("slot_role") or "SIN ROL"),
             ):
                 return "una tarjeta no se pudo actualizar"
-        self.team_slots = team_slots
+        self.team_slots = list(team_slots)
 
         try:
             self.pc_box = int(pc_box)
