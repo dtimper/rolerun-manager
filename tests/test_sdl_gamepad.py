@@ -132,6 +132,9 @@ def test_bdsp_foreground_gate_is_idempotent_and_releases_on_focus_loss() -> None
         _role_run_foreground_gate_held=False,
         _gamepad_reserved_buttons=set(),
         _floating_launcher=None,
+        # Con un mando enchufado: sin el no hay ningun flanco que pueda
+        # alcanzar al emulador y retenerlo seria coste puro.
+        _hay_mando=True,
         _foreground=True,
         _foreground_belongs_to_this_process=lambda: manager._foreground,
         _widget_alive=lambda _widget: False,
@@ -193,3 +196,44 @@ def test_deliberate_gamepad_hold_repeats_only_after_450_ms() -> None:
     )
     assert pressed == button
     assert repeat_at["dpad right"] == 20.52
+
+
+def test_sin_mando_conectado_no_se_retiene_el_emulador() -> None:
+    """Retener a Ryujinx lo para entero: 0,0% de CPU, reloj parado, sin musica.
+
+    Medido en la maquina del usuario, era lo que le cortaba el sonido del juego
+    cada vez que pinchaba en RoleRun. La retencion existe por una razon buena
+    -Ryujinx acepta mando sin foco, asi que el flanco que navega RoleRun moveria
+    tambien al personaje- pero esa razon solo existe si hay un mando enchufado.
+    """
+    class Gate:
+        def __init__(self) -> None:
+            self.active = False
+            self.acquires = 0
+
+        def acquire(self) -> bool:
+            self.acquires += 1
+            self.active = True
+            return True
+
+        def release(self, *, all_levels: bool = False) -> bool:
+            self.active = False
+            return True
+
+    gate = Gate()
+    manager = SimpleNamespace(
+        save_engine=SimpleNamespace(key="bdsp"),
+        current_game=object(),
+        _ryujinx_input_gate=gate,
+        _role_run_foreground_gate_held=False,
+        _gamepad_reserved_buttons=set(),
+        _floating_launcher=None,
+        _hay_mando=False,
+        _foreground_belongs_to_this_process=lambda: True,
+        _widget_alive=lambda _widget: False,
+    )
+
+    RoleRunManager._sync_role_run_foreground_input_gate(manager)
+
+    assert gate.acquires == 0, "se paro el juego sin que hubiera nada que proteger"
+    assert gate.active is False

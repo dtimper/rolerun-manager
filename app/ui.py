@@ -720,6 +720,8 @@ class RoleRunManager(ctk.CTk):
         self._gamepad_capture_action: str | None = None
         self._gamepad_capture_callback = None
         self._ryujinx_input_gate = RyujinxInputGate()
+        # Si hay un mando de verdad conectado. Lo actualiza cada sondeo.
+        self._hay_mando = False
         # Propiedad independiente del menú flotante: mientras cualquier ventana
         # de RoleRun sea foreground, Ryujinx BDSP queda retenido para que el
         # teclado y el mando no ejecuten también el mismo input dentro del juego.
@@ -1642,9 +1644,19 @@ class RoleRunManager(ctk.CTk):
         control en Tk/SDL no evita por sí solo que el emulador lo consuma también;
         la frontera segura es retener su proceso durante la interacción con la UI.
         """
+        # Retener el emulador **para el juego entero**: 0,0% de CPU, el reloj
+        # parado y la música cortada. Medido en la máquina del usuario, era lo
+        # que cortaba el sonido cada vez que pinchaba en RoleRun.
+        #
+        # La retención existe por una razón buena —Ryujinx acepta mando sin
+        # foco, así que el flanco que navega RoleRun movería también al
+        # personaje— pero esa razón **solo existe si hay un mando enchufado**.
+        # Sin mando no hay flanco posible, y parar el juego es coste sin
+        # beneficio.
         should_hold = bool(
             getattr(getattr(self, "save_engine", None), "key", "") == "bdsp"
             and getattr(self, "current_game", None) is not None
+            and getattr(self, "_hay_mando", False)
             and self._foreground_belongs_to_this_process()
         )
         gate = self._ryujinx_input_gate
@@ -3107,6 +3119,10 @@ class RoleRunManager(ctk.CTk):
             if self._gamepad is None and self._gamepad_discovery_is_due():
                 self._gamepad = SDLGamepad.from_ryujinx_process()
             sample = self._gamepad.sample() if self._gamepad is not None else None
+            # Sin mando enchufado no hay ningún flanco que pueda alcanzar al
+            # emulador, y retenerlo sería coste puro. Se apunta aquí y lo lee la
+            # retención en el siguiente ciclo, 16 ms después.
+            self._hay_mando = bool(sample is not None and sample.connected)
             current = sample.pressed if sample and sample.connected else frozenset()
             previous = self._gamepad_previous_buttons
             pressed = current - previous

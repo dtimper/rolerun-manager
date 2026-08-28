@@ -1,6 +1,48 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.0-alpha.11 — era RoleRun, y lo hacía a propósito
+
+La tabla del usuario lo cerró:
+
+```
+seg  juego   ventana activa   CPU RoleRun  CPU Ryujinx
+  1  PARADO  python.exe            23.4%       0.0%
+  5  corre   brave.exe             10.9%     121.9%
+  7  corre   claude.exe             6.2%      95.3%
+ 12  PARADO  python.exe            48.4%       0.0%
+```
+
+**0,0% exacto**, no «poca». Un proceso a cero no está ocioso: está suspendido. Y
+no era contención —RoleRun gastaba entre un 3% y un 48%— ni era estar tapado: la
+columna añadida mostró a Ryujinx corriendo al 126% mientras otra ventana lo
+tapaba al 100%.
+
+Era RoleRun, y deliberadamente. `_sync_role_run_foreground_input_gate` **suspende
+el proceso entero de Ryujinx** mientras RoleRun tiene el primer plano en BDSP.
+
+## La razón era buena, pero incompleta
+
+Ryujinx acepta mando **sin foco**, así que el flanco que navega los menús de
+RoleRun movería también al personaje dentro del juego. Retener su proceso era
+«la frontera segura».
+
+Solo que esa razón **únicamente existe si hay un mando enchufado**. Sin mando no
+hay ningún flanco que pueda alcanzar al emulador, y pararlo entero —reloj, vídeo
+y música— es coste sin beneficio alguno.
+
+Ahora se comprueba: la retención sigue exactamente igual con un mando conectado,
+y no ocurre sin él.
+
+## Lo que queda dicho
+
+Con mando conectado el juego **se seguirá parando** mientras RoleRun esté
+delante, porque ahí la protección sí hace falta. Si eso molesta, el siguiente
+paso sería retener solo mientras se pulsa el mando —el código ya lo hace en el
+flanco de cada botón—, y eso es una decisión sobre qué se prefiere arriesgar.
+
+1971 passed, 1 skipped.
+
 # v0.3.0-alpha.10 — fuera la animación, y una herramienta para el sonido
 
 ## Fuera la animación
