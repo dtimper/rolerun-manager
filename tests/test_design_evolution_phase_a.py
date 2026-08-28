@@ -1984,9 +1984,13 @@ def test_operation_bar_types_larger_messages_progressively() -> None:
 def test_global_tm_is_a_real_primary_destination() -> None:
     assert normalize_navigation_target("tms") == "tms"
     assert primary_page_for("tms") == "tms"
+    # El reparto por página vive en `_render_page_body`, que salió de
+    # `render_page` para poder cronometrarse aparte.
     render = inspect.getsource(RoleRunManager.render_page)
-    assert 'elif self.active_page == "tms"' in render
-    assert "self._render_global_tm_page()" in render
+    assert "self._render_page_body()" in render
+    cuerpo = inspect.getsource(RoleRunManager._render_page_body)
+    assert 'elif self.active_page == "tms"' in cuerpo
+    assert "self._render_global_tm_page()" in cuerpo
 
 
 def test_global_tm_matrix_reuses_per_pokemon_validated_candidates() -> None:

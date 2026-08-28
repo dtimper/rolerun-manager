@@ -12268,8 +12268,10 @@ class RoleRunManager(ctk.CTk):
         self._main_role_drop_targets = []
         if self.active_page == "dashboard":
             self.active_page = DEFAULT_PAGE
-        self._render_sidebar()
-        self._update_top_status()
+        with perf.span("ui.render.sidebar"):
+            self._render_sidebar()
+        with perf.span("ui.render.estado_superior"):
+            self._update_top_status()
         titles = {
             "drafts": ("Drafteos", "Genera movimientos y añádelos como cambios pendientes."),
             "team": ("Equipo y PC", "Gestiona el equipo y las cajas en un mismo espacio."),
@@ -12289,8 +12291,19 @@ class RoleRunManager(ctk.CTk):
         else:
             self.page_subtitle.configure(text=subtitle)
             self.page_subtitle.grid()
-        self._render_context_navigation()
+        with perf.span("ui.render.navegacion_contextual"):
+            self._render_context_navigation()
         self._set_body_scrollbar_visible(self.active_page not in {"team", "tms", "pc", "moves", "drafts"})
+        with perf.span("ui.render.cuerpo", pagina=str(self.active_page)):
+            self._render_page_body()
+
+    def _render_page_body(self) -> None:
+        """Pinta solo el cuerpo de la página activa.
+
+        Sale de `render_page` para poder medirlo aparte: en el arranque de BDSP,
+        `render_page` cuesta 2585 ms medidos y construir la vista con Tk son 660,
+        así que casi dos segundos estaban sin explicar.
+        """
         if self.active_page == "drafts":
             self.render_workflow()
         elif self.active_page == "team":
@@ -13404,13 +13417,17 @@ class RoleRunManager(ctk.CTk):
             )
             return
 
-        projected_party = list(self._projected_party())
-        team_slots = build_fixed_team_slots(
-            projected_party,
-            lambda pokemon: self._effective_role(pokemon)[0],
-            self._pokemon_identity,
-        )
-        pc_data = self._team_pc_cached_data()
+        with perf.span("ui.team_pc.party_proyectada"):
+            projected_party = list(self._projected_party())
+        with perf.span("ui.team_pc.casillas_fijas"):
+            team_slots = build_fixed_team_slots(
+                projected_party,
+                lambda pokemon: self._effective_role(pokemon)[0],
+                self._pokemon_identity,
+            )
+        with perf.span("ui.team_pc.datos_del_pc") as medida:
+            pc_data = self._team_pc_cached_data()
+            medida.add(hay_datos=pc_data is not None)
         box_count = int(pc_data.box_count) if pc_data is not None else 1
         slot_count = int(pc_data.box_slot_count) if pc_data is not None else ORAS_PC_BOX_SLOT_COUNT
         requested_box = int(self._pc_page_box or (pc_data.current_box if pc_data is not None else 1) or 1)
@@ -13419,12 +13436,17 @@ class RoleRunManager(ctk.CTk):
             requested_box = 1 if box_count >= 1 else requested_box
         box_number = max(1, min(requested_box, box_count))
         self._pc_page_box = box_number
-        members = self._team_pc_box_members(pc_data, box_number)
+        with perf.span("ui.team_pc.miembros_de_la_caja") as medida:
+            members = self._team_pc_box_members(pc_data, box_number)
+            medida.add(cuantos=len(members or ()))
 
         # El estado inferior ya comunica la sustitución. El segundo aviso rojo
         # duplicaba la información y, además, activaba el layout compacto que
         # recortaba el botón de reemplazo de la ficha.
         mode_banner = None
+        # Se cronometra por fuera y no con un `with`: envolver la llamada
+        # obligaria a re-sangrar cuarenta lineas de argumentos para medirla.
+        _inicio_de_la_vista = time.perf_counter()
         self._team_pc_view = UnifiedTeamPCView(
             self.body,
             team_slots=team_slots,
@@ -13471,6 +13493,11 @@ class RoleRunManager(ctk.CTk):
             navigation_keys=self.project.menu_keys if self.project else None,
             on_left_edge=self._select_sidebar_from_content,
             on_edge_accept=self._accept_sidebar_from_content,
+        )
+        perf.record(
+            "ui.team_pc.construir_vista",
+            (time.perf_counter() - _inicio_de_la_vista) * 1000.0,
+            miembros=len(projected_party),
         )
         # La vista conserva la firma de los PS que realmente compuso. Durante
         # el arranque BDSP ``current_game`` puede recibir la party live mientras

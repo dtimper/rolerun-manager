@@ -1,6 +1,40 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.105 — partir los 2585 ms de un repintado
+
+La sesión de BDSP del usuario, sin llegar a arrastrar nada, ya dejó un hallazgo
+grande:
+
+| operación | veces | cada una |
+|---|---|---|
+| **`ui.render_page`** | 2 | **2585 ms** |
+| `realtime.capture_full` | 1 | 1193 ms |
+| `ui.smooth_render_page` | 4 | peor 820 ms |
+| `engine.run` | 5 | 188 ms |
+
+Construir la vista entera con Tk, medido aparte en este mismo equipo, son 660 ms.
+Faltaban casi dos segundos por explicar, y no se van a adivinar: `render_page`
+queda partido en fases con nombre —menú lateral, estado superior, navegación
+contextual y cuerpo— y el cuerpo de Equipo y PC en cinco más: party proyectada,
+casillas fijas, datos del PC, miembros de la caja y construcción de la vista.
+
+El reparto por página sale de `render_page` a `_render_page_body` para poder
+cronometrarlo solo a él.
+
+## El resumidor mezclaba peras con manzanas
+
+`ui.poll_gamepad` aparecía como la operación más cara de la sesión, 3832 ms.
+No lo es: corre a 60 Hz y se anota **resumido por ventana de un segundo**, así
+que su `ms` es el total de la ventana, no el de una llamada. Son 0,48 ms por
+llamada, 59 por segundo.
+
+Ahora las de alta frecuencia van en su propia tabla, con coste por llamada,
+llamadas por segundo y el peor pico. Ahí sí se ve algo: un pico de **116 ms** en
+el sondeo del mando.
+
+1849 passed, 1 skipped.
+
 # v0.2.6-alpha.104 — BDSP colgado en «Preparando Equipo y PC…»
 
 Lo rompí yo en la alpha.100. El trazado de la barrera de arranque lo dijo exacto,

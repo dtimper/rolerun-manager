@@ -120,3 +120,23 @@ def test_sin_mediciones_avisa_y_no_revienta(tmp_path, monkeypatch, capsys) -> No
 
     assert ver_lentitud.main() == 1
     assert "medir_lentitud.bat" in capsys.readouterr().out
+
+
+def test_el_sondeo_del_mando_no_se_cuela_entre_las_operaciones_caras(capsys) -> None:
+    """Corre a 60 Hz y se anota resumido: su `ms` es el total de una ventana.
+
+    Mezclado con el resto parecia la operacion mas cara de la sesion -3832 ms-
+    cuando en realidad son 0,48 ms por llamada.
+    """
+    ver_lentitud.reparto([
+        _r(0, "ui.render_page", 2585.0),
+        _r(1, "ui.poll_gamepad", 27.0, kind="aggregate",
+           count=56, max_ms=116.4, calls_per_s=59.0, avg_ms=0.48),
+    ])
+    salida = capsys.readouterr().out
+
+    cara, alta = salida.split("alta frecuencia")
+    assert "ui.render_page" in cara
+    assert "ui.poll_gamepad" not in cara, "el sondeo se coló entre las caras"
+    assert "ui.poll_gamepad" in alta
+    assert "116" in alta, "no se ve el pico"

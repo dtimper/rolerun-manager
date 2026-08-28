@@ -109,9 +109,21 @@ def lineas_de_tiempo(registros: list[dict]) -> None:
 
 
 def reparto(registros: list[dict]) -> None:
+    """Cuanto cuesta cada operacion. Solo tiempos individuales.
+
+    Las operaciones de alta frecuencia -el sondeo del mando corre a 60 Hz- se
+    anotan resumidas por ventana de un segundo, asi que su `ms` es el total de
+    la ventana y no el de una llamada. Mezclarlas con el resto hacia que el
+    sondeo del mando pareciera la operacion mas cara de la sesion.
+    """
     resumen: dict[str, list[float]] = {}
+    agregados: dict[str, list[dict]] = {}
     for registro in registros:
-        if registro.get("kind") == "mark":
+        clase = registro.get("kind")
+        if clase == "mark":
+            continue
+        if clase == "aggregate":
+            agregados.setdefault(str(registro.get("op", "?")), []).append(registro)
             continue
         ms = float(registro.get("ms", 0.0) or 0.0)
         resumen.setdefault(str(registro.get("op", "?")), []).append(ms)
@@ -131,6 +143,21 @@ def reparto(registros: list[dict]) -> None:
         if total < 20:
             continue
         print(f"  {total:8.0f}ms  {veces:6d}  {mediana:7.0f}ms  {peor:7.0f}ms   {op}")
+
+    if not agregados:
+        return
+    print()
+    print("  (alta frecuencia, resumido por ventana de un segundo)")
+    print(f"  {'por llamada':>12}  {'por segundo':>12}  {'peor':>8}   operacion")
+    for op, muestras in sorted(agregados.items()):
+        llamadas = sum(int(m.get("count", 0) or 0) for m in muestras)
+        total = sum(float(m.get("ms", 0.0) or 0.0) for m in muestras)
+        peor = max(float(m.get("max_ms", 0.0) or 0.0) for m in muestras)
+        por_segundo = sum(
+            float(m.get("calls_per_s", 0.0) or 0.0) for m in muestras
+        ) / max(1, len(muestras))
+        media = total / llamadas if llamadas else 0.0
+        print(f"  {media:11.2f}ms  {por_segundo:9.0f}/s  {peor:7.1f}ms   {op}")
 
 
 def main() -> int:
