@@ -682,6 +682,10 @@ class RoleRunManager(ctk.CTk):
         # widgets de la raíz oculta puede disparar <Map> y hacer desaparecer la barra.
         # Marcamos la vista principal como sucia y la reconstruimos solo al volver.
         self._main_ui_dirty_while_floating = False
+        # Para qué página está construido el body. Sin esto habría que deducirlo
+        # de `active_page`, que mientras se está en la barra flotante no habla
+        # del árbol que hay en la ventana principal.
+        self._pagina_del_body: str | None = None
         self.floating_bar_images: dict[str, ctk.CTkImage] = {}
         self._floating_bar_drag_origin: tuple[int, int, int, int] | None = None
         self._floating_bar_poll_id: str | None = None
@@ -2023,10 +2027,24 @@ class RoleRunManager(ctk.CTk):
             if self._last_main_page_before_floating in valid_pages
             else "dashboard"
         )
+        # Volver de la barra repintaba la página SIEMPRE, y eso cuesta 610 ms de
+        # mediana y hasta 2576 medidos, todos en el hilo de Tk. Es la ráfaga que
+        # el usuario oye como un corte de dos segundos en la música del juego:
+        # un núcleo a tope mientras el emulador también lo necesita.
+        #
+        # Mientras se estaba en la barra la ventana solo estaba retirada, no
+        # destruida: si nadie marcó la página como sucia y se vuelve a la misma,
+        # el árbol que hay ya es el bueno.
+        reutilizable = (
+            getattr(self, "_pagina_del_body", None) == str(self.active_page)
+            and self._widget_alive(getattr(self, "body", None))
+            and not self._main_ui_dirty_while_floating
+        )
         try:
-            # La raíz sigue withdrawn, por lo que aquí no necesitamos WM_SETREDRAW
-            # ni overlays: ningún estado intermedio puede llegar al usuario.
-            self.render_page()
+            if not reutilizable:
+                # La raíz sigue withdrawn, por lo que aquí no necesitamos WM_SETREDRAW
+                # ni overlays: ningún estado intermedio puede llegar al usuario.
+                self.render_page()
             self._main_ui_dirty_while_floating = False
             self.update_idletasks()
             self._reset_body_scroll()
@@ -2035,6 +2053,12 @@ class RoleRunManager(ctk.CTk):
             self._floating_role_reordered = False
 
         self._restore_main_window_maximized(settle_before_show=True)
+        if reutilizable:
+            # Red de seguridad barata: si alguna ruta olvidó marcar la página
+            # como sucia, esto pone los datos de ahora sin reconstruir nada. Se
+            # hace con la ventana ya visible porque exige los paneles mapeados,
+            # y cuesta 37 ms medidos frente a los 610 de repintar.
+            self.after(0, lambda: self._refrescar_team_pc_en_sitio())
         self._schedule_pending_faint_picker(700)
 
     def _shutdown_application(self) -> None:
@@ -12479,6 +12503,9 @@ class RoleRunManager(ctk.CTk):
         self._set_body_scrollbar_visible(self.active_page not in {"team", "tms", "pc", "moves", "drafts"})
         with perf.span("ui.render.cuerpo", pagina=str(self.active_page)):
             self._render_page_body()
+        # Para qué página es el árbol que hay ahora. Quien quiera reutilizarlo en
+        # vez de reconstruirlo tiene que poder comprobarlo, no deducirlo.
+        self._pagina_del_body = str(self.active_page)
 
     def _render_page_body(self) -> None:
         """Pinta solo el cuerpo de la página activa.

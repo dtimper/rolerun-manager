@@ -1,6 +1,54 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.0-alpha.4 — el corte de dos segundos en la música
+
+El usuario oye que la música del juego se para **dos segundos** al cargar RoleRun
+y otra vez al volver a la ventana principal desde la barra flotante.
+
+## De dónde sale
+
+De la medición, mirando **en qué hilo** corre cada cosa:
+
+| operación | veces | mediana | peor | hilo |
+|---|---|---|---|---|
+| `realtime.read_pc` | 430 | 123 ms | 1422 ms | worker |
+| `realtime.capture_monitor` | 1733 | 3 ms | 1317 ms | worker |
+| **`ui.render_page`** | 15 | **610 ms** | **2576 ms** | **tk** |
+
+Todo el trabajo pesado de memoria va en hilos aparte. **Lo único que corre en el
+hilo de Tk es repintar la página**, y son 30.255 llamadas a Tcl seguidas: un
+núcleo a tope justo cuando el emulador también lo necesita.
+
+Esos 2576 ms son exactamente los «dos segundos» que se oyen.
+
+## Lo que se arregla
+
+Volver a la ventana principal desde la barra repintaba **siempre**. Pero mientras
+se está en la barra la ventana solo está *retirada*, no destruida: si nadie marcó
+la página como sucia y se vuelve a la misma, el árbol que hay ya es el bueno.
+
+Ahora se reutiliza, con tres condiciones y una red de seguridad.
+
+La condición delicada era «¿es la misma página?». Deducirlo de `active_page` sería
+adivinar: la barra flotante y su menú cambian de página por su cuenta, así que ese
+valor no habla del árbol que quedó en la ventana retirada. Ahora `render_page`
+**apunta para qué página construyó el body** y se comprueba, no se deduce.
+
+La red de seguridad: si alguna ruta olvidó marcar la página como sucia, tras
+mostrar la ventana se hace un refresco en sitio —37 ms medidos frente a 610— que
+pone los datos de ahora sin reconstruir nada. Y si algo no cuadra, esa ruta se
+niega sola.
+
+## Lo que no es nuestro
+
+El usuario también reporta que **con RoleRun a pantalla completa el juego se para
+del todo, y se reanuda al hacer clic en el emulador**. Eso no es un corte: es
+Ryujinx pausando la emulación al perder el foco, y se quita en sus opciones. Es
+además lo que explica las pausas «sin foco» que salían en el trazado del reloj.
+
+1943 passed, 1 skipped.
+
 # v0.3.0-alpha.3 — sin sonidos
 
 Los efectos sintetizados sonaban a Windows, que es justo lo que el usuario no
