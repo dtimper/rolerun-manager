@@ -142,6 +142,9 @@ class UnifiedTeamPCView:
         self.pc_box_count = max(1, int(pc_box_count))
         self.pc_slot_count = max(1, int(pc_slot_count))
         self.selection = selection
+        # El controlador engancha aquí su cuaderno de tiempos. La vista no sabe
+        # de medición: solo avisa, y si nadie escucha no pasa nada.
+        self.anotar: Callable[..., None] = lambda *_a, **_k: None
         self.identity_for = identity_for
         self.role_for = role_for
         self.sprite_for = sprite_for
@@ -664,6 +667,27 @@ class UnifiedTeamPCView:
         color = DANGER if fraction <= 0.25 else (GOLD if fraction <= 0.5 else SUCCESS)
         return fraction, color, text
 
+    def puede_actualizarse_en_sitio(self) -> bool:
+        """Está en pantalla y con tamaño; no exige que la geometría esté quieta.
+
+        `is_fully_composed` sí lo exige, porque es la frontera que necesita la
+        barrera de arranque: allí importa que nada se siga recolocando antes de
+        publicar. Aquí no se construye nada, solo se cambian datos, y esperar a
+        que la escalera de composición termine convertía cada reconstrucción en
+        la siguiente: el refresco llegaba a los 4 ms de acabar la anterior.
+        """
+        try:
+            widgets = (
+                self.frame, self.team_panel, self.pc_panel, self.inspector_panel,
+            )
+            return bool(
+                len(self.pc_buttons) == self.pc_slot_count
+                and all(w.winfo_exists() and w.winfo_ismapped() for w in widgets)
+                and all(w.winfo_width() > 40 and w.winfo_height() > 80 for w in widgets)
+            )
+        except Exception:
+            return False
+
     def rendered_team_identities(self) -> frozenset[str]:
         """Identidades cuyas barras de PS existen ahora mismo en la superficie.
 
@@ -862,7 +886,7 @@ class UnifiedTeamPCView:
         team_slots: list[dict[str, Any]],
         pc_members: dict[int, Any],
         pc_box: int,
-    ) -> bool:
+    ) -> str | None:
         """Pone datos nuevos en toda la superficie sin reconstruirla.
 
         Refresca lo mismo que ya refrescaba cambiar de caja —rótulo, rejilla e
@@ -870,18 +894,19 @@ class UnifiedTeamPCView:
         podían rehacerse enteras: 208 ms de construcción contra 28 de
         reconfiguración.
 
-        Devuelve ``False`` en cuanto la forma del equipo no es la misma —otro
-        rol, otro ocupante, otro estado— o una tarjeta ya no existe, y entonces
-        el que llama debe repintar. La comprobación va antes de tocar el primer
-        widget: o se actualiza todo o no se toca nada.
+        Devuelve ``None`` si pudo, y si no **por qué** no: reconstruir cuesta
+        entre 371 y 987 ms medidos, así que un motivo sin nombre es medio
+        segundo que no se puede atribuir a nada.
         """
-        if self.mode_banner or len(team_slots) != len(self.team_slots):
-            return False
+        if self.mode_banner:
+            return "modo banner"
+        if len(team_slots) != len(self.team_slots):
+            return "otro numero de casillas"
         # Una casilla que cambia de rol, de estado o de ocupante se rehace
         # entera -35 ms-; el resto solo cambia de datos. Antes bastaba con que
         # una sola cambiara para rehacer la página, que son 700.
         if not self.repintar_casillas_cambiadas(team_slots):
-            return False
+            return "no se pudo repintar una casilla"
         for slot in team_slots:
             pokemon = slot.get("pokemon")
             if pokemon is None:
@@ -891,7 +916,7 @@ class UnifiedTeamPCView:
                 pokemon,
                 str(slot.get("slot_role") or "SIN ROL"),
             ):
-                return False
+                return "una tarjeta no se pudo actualizar"
         self.team_slots = team_slots
 
         try:
@@ -903,8 +928,8 @@ class UnifiedTeamPCView:
             self._render_inspector()
             self._apply_selection_styles()
         except Exception:
-            return False
-        return True
+            return "fallo al refrescar el PC o la ficha"
+        return None
 
     def _render_team_card(
         self, card, pokemon: Any, slot_role: str, identity: str, *,
@@ -1902,7 +1927,14 @@ class UnifiedTeamPCView:
         # Los huecos vacíos del PC también tienen el arrastre enganchado, porque
         # sus botones se reutilizan entre cajas y solo se enganchan al crearlos.
         if self.on_drop is None or pokemon is None:
+            self.anotar(
+                "arrastre.no_empieza",
+                origen=context,
+                sin_destino_posible=self.on_drop is None,
+                hueco_vacio=pokemon is None,
+            )
             return
+        self.anotar("arrastre.empieza", origen=context)
         self._cancel_drag()
         self._drag_origin = (int(event.x_root), int(event.y_root))
         self._drag_source = (str(context), pokemon)
@@ -2068,6 +2100,15 @@ class UnifiedTeamPCView:
                 source_context, pokemon = source
                 target_context, target_data = target
                 self.on_drop(source_context, pokemon, target_context, target_data)
+            else:
+                # Se movió el ratón con algo cogido y no llegó a soltarse en
+                # ningún sitio útil. Sin esto no queda rastro de un arrastre que
+                # el usuario cree haber hecho.
+                self.anotar(
+                    "arrastre.se_pierde",
+                    tenia_origen=source is not None,
+                    tenia_destino=target is not None,
+                )
             return "break"
         self._suppress_click_once = False
         return None

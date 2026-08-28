@@ -117,7 +117,7 @@ def _huerfanos(superficie) -> list[str]:
 def test_sacar_un_miembro_no_reconstruye_la_pagina(vista) -> None:
     root, superficie = vista
 
-    assert superficie.refrescar_en_sitio(_equipo(5), _CAJA, 1) is True
+    assert superficie.refrescar_en_sitio(_equipo(5), _CAJA, 1) is None
     root.update_idletasks()
 
     assert len(superficie.team_frames) == 6, "la casilla libre también es una casilla"
@@ -168,7 +168,7 @@ def test_volver_a_meterlo_deja_la_casilla_como_estaba(vista) -> None:
 
     superficie.refrescar_en_sitio(_equipo(5), _CAJA, 1)
     root.update_idletasks()
-    assert superficie.refrescar_en_sitio(_equipo(6), _CAJA, 1) is True
+    assert superficie.refrescar_en_sitio(_equipo(6), _CAJA, 1) is None
     root.update_idletasks()
 
     assert "empty:COMODIN" not in superficie.team_frames
@@ -195,7 +195,7 @@ def test_cambiar_de_rol_una_casilla_la_rehace(vista) -> None:
 
     otro = _equipo(6)
     otro[0]["slot_role"] = "MURO"
-    assert superficie.refrescar_en_sitio(otro, _CAJA, 1) is True
+    assert superficie.refrescar_en_sitio(otro, _CAJA, 1) is None
     root.update_idletasks()
 
     assert superficie.team_frames["id:101"] is not antes
@@ -213,3 +213,61 @@ def test_la_firma_de_ps_no_gana_filas_al_repintar_una_casilla(vista) -> None:
     root.update_idletasks()
 
     assert len(superficie.rendered_team_health_signature) == 6
+
+
+def test_actualizar_en_sitio_no_espera_a_que_la_geometria_se_pare() -> None:
+    """Otra cascada: cada reconstruccion forzaba la siguiente.
+
+    `is_fully_composed` exige que la geometria haya dejado de moverse, y la
+    escalera de composicion tarda un par de fotogramas. El refresco siguiente
+    llegaba a los 4 ms de terminar la reconstruccion, se encontraba la vista "a
+    medio componer" y reconstruia otra vez. Esa exigencia es de la barrera de
+    arranque -alli importa que nada se siga recolocando antes de publicar-, no
+    de cambiar unos datos.
+    """
+    import inspect
+
+    ligera = inspect.getsource(UnifiedTeamPCView.puede_actualizarse_en_sitio)
+    barrera = inspect.getsource(UnifiedTeamPCView.is_fully_composed)
+
+    assert "_layout_settled" not in ligera, (
+        "esperar a la escalera de composicion encadena reconstrucciones"
+    )
+    assert "_layout_settled" in barrera, (
+        "la barrera de arranque si necesita que la geometria este quieta"
+    )
+    for exigencia in ("winfo_ismapped", "winfo_width"):
+        assert exigencia in ligera, (
+            f"sin {exigencia} se actualizarian datos sobre algo que no esta en pantalla"
+        )
+
+
+def test_cada_negativa_del_refresco_dice_cual_fue(vista) -> None:
+    """Reconstruir cuesta hasta 987 ms: un motivo sin nombre no se puede atribuir."""
+    _root, superficie = vista
+
+    assert superficie.refrescar_en_sitio(_equipo(6)[:5], _CAJA, 1) == (
+        "otro numero de casillas"
+    )
+
+    superficie.mode_banner = {"algo": "asi"}
+    assert superficie.refrescar_en_sitio(_equipo(6), _CAJA, 1) == "modo banner"
+    superficie.mode_banner = None
+
+    superficie.update_team_card = lambda *_a: False
+    assert superficie.refrescar_en_sitio(_equipo(6), _CAJA, 1) == (
+        "una tarjeta no se pudo actualizar"
+    )
+
+
+def test_un_arrastre_que_no_empieza_deja_rastro(vista) -> None:
+    """El usuario dice que a veces no le deja arrastrar. Sin rastro, es su palabra."""
+    _root, superficie = vista
+    anotado = []
+    superficie.anotar = lambda evento, **campos: anotado.append((evento, campos))
+    superficie.on_drop = lambda *a: None
+
+    superficie._begin_drag(object(), "pc", None)      # hueco vacio del PC
+
+    assert anotado and anotado[0][0] == "arrastre.no_empieza"
+    assert anotado[0][1]["hueco_vacio"] is True

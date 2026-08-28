@@ -40,12 +40,12 @@ class _VistaFalsa:
         self.refrescos: list[tuple] = []
         self.compuesta = True
 
-    def is_fully_composed(self, expected_box_count: int) -> bool:
-        return self.compuesta and expected_box_count == self.pc_box_count
+    def puede_actualizarse_en_sitio(self) -> bool:
+        return self.compuesta
 
-    def refrescar_en_sitio(self, team_slots, pc_members, pc_box) -> bool:
+    def refrescar_en_sitio(self, team_slots, pc_members, pc_box) -> str | None:
         self.refrescos.append((team_slots, pc_members, pc_box))
-        return True
+        return None
 
 
 def _gestor(vista: _VistaFalsa):
@@ -244,7 +244,7 @@ def test_una_vista_a_medio_componer_no_se_toca() -> None:
 
 def test_si_la_vista_dice_que_no_puede_no_se_da_por_hecho() -> None:
     vista = _VistaFalsa()
-    vista.refrescar_en_sitio = lambda *_a: False
+    vista.refrescar_en_sitio = lambda *_a: "una tarjeta no se pudo actualizar"
     yo, _datos = _gestor(vista)
     yo._pc_page_box = 3
 

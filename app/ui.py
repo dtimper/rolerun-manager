@@ -13355,6 +13355,11 @@ class RoleRunManager(ctk.CTk):
             initial_move_id=int(entry["move_id"]), return_page="tms",
         )
 
+    @staticmethod
+    def _anotar_de_la_vista(evento: str, **campos: object) -> None:
+        """Recoge lo que la vista quiera dejar anotado en la medición."""
+        perf.mark(f"ui.{evento}", **campos)
+
     def _refrescar_team_pc_en_sitio(
         self, overlay=None, reset_scroll: bool = False,
     ) -> bool:
@@ -13426,7 +13431,7 @@ class RoleRunManager(ctk.CTk):
         # reconstrucciones de 836 y 826 ms por cada arrastre. Esa marca es la
         # frontera que necesita la barrera de arranque —excluida aquí por el
         # motivo «arrancando»—, no esta.
-        if not vista.is_fully_composed(vista.pc_box_count):
+        if not vista.puede_actualizarse_en_sitio():
             return "vista a medio componer"
 
         # La forma se calcula igual que la calcularía el repintado completo,
@@ -13459,8 +13464,9 @@ class RoleRunManager(ctk.CTk):
         )
         box_number = max(1, min(int(self._pc_page_box or 1), cajas))
         members = self._team_pc_box_members(pc_data, box_number)
-        if not vista.refrescar_en_sitio(team_slots, members, box_number):
-            perf.mark("ui.render.reconstruye", motivo="otra forma de equipo")
+        fallo = vista.refrescar_en_sitio(team_slots, members, box_number)
+        if fallo is not None:
+            perf.mark("ui.render.reconstruye", motivo=str(fallo))
             return False
         # Lo mismo que hace el repintado completo al terminar: si no, atajar
         # dejaría el PC sin pedirse.
@@ -13558,6 +13564,7 @@ class RoleRunManager(ctk.CTk):
             on_left_edge=self._select_sidebar_from_content,
             on_edge_accept=self._accept_sidebar_from_content,
         )
+        self._team_pc_view.anotar = self._anotar_de_la_vista
         perf.record(
             "ui.team_pc.construir_vista",
             (time.perf_counter() - _inicio_de_la_vista) * 1000.0,
@@ -14181,7 +14188,11 @@ class RoleRunManager(ctk.CTk):
             target_occupied=target_pokemon is not None,
             team_count=len(self._projected_party()),
         )
-        perf.mark("ui.drop.operacion", operacion=str(intent.operation or "ninguna"))
+        perf.mark(
+            "ui.drop.operacion",
+            operacion=str(intent.operation or "ninguna"),
+            motivo=str(intent.reason or "")[:70] or None,
+        )
         if intent.operation is None:
             self._set_operation_status(
                 "warning",

@@ -1,6 +1,52 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.111 — otra cascada, y el arrastre deja rastro
+
+La medición del usuario tras el repintado por casillas:
+
+```
+actualizadas en sitio ......... 24
+reconstruidas ................. 14
+
+    7 x  otra forma de equipo
+    5 x  arrancando
+    1 x  vista a medio componer
+```
+
+Antes eran **0 en sitio y 30 reconstrucciones**. Y la parte que se nota al
+soltar —lo que ocurre con la interfaz congelada— pasó de **1017 ms a 90**.
+
+## «Vista a medio componer» era otra cascada
+
+Igual que la anterior, y del mismo tipo. `is_fully_composed` exige que la
+geometría **haya dejado de moverse**, y la escalera de composición tarda un par
+de fotogramas. El refresco siguiente llegaba a los 4 ms de terminar la
+reconstrucción, se encontraba la vista «a medio componer» y reconstruía otra vez.
+
+Esa exigencia es de la **barrera de arranque** —allí importa que nada se siga
+recolocando antes de publicar la primera página—, no de cambiar unos datos.
+Ahora el refresco en sitio usa una comprobación más ligera: los cuatro paneles
+existen, están mapeados y tienen tamaño.
+
+## Siete motivos sin nombre
+
+«Otra forma de equipo» tapaba tres pasos distintos. `refrescar_en_sitio` pasa a
+devolver **cuál** falló —«no se pudo repintar una casilla», «una tarjeta no se
+pudo actualizar», «fallo al refrescar el PC o la ficha», «otro numero de
+casillas», «modo banner»— en vez de un `False`. Reconstruir cuesta hasta 987 ms:
+un motivo sin nombre es medio segundo que no se puede atribuir a nada.
+
+## El arrastre deja rastro
+
+El usuario dice que a veces no le deja arrastrar del PC al equipo. En la
+medición **sí funcionó** (`box-to-party`, SOLTAR #2) y en una simulación con Tk
+también, así que no hay nada que adivinar: ahora se anota cuándo un arrastre no
+llega a empezar y por qué, cuándo se pierde sin destino, y la razón exacta por la
+que un destino queda «no habilitado».
+
+1873 passed, 1 skipped.
+
 # v0.2.6-alpha.110 — repintar la casilla, no la página
 
 Tras cortar la cascada, el arrastre bajó de 4,5 s a 3,4. Las tres
