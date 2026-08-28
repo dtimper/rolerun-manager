@@ -1,6 +1,45 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.0-alpha.17 — el menú salía solo en Perla Reluciente
+
+> *«solo se ve cuando paso el ratón por encima del BDSP. Del resto, no sale
+> opción.»*
+
+Perla Reluciente es la última tarjeta del selector, y ahí estaba la pista.
+
+El fundido lo llevaban dos funciones definidas **dentro del bucle** que monta
+las tarjetas. Una encadenaba el siguiente fotograma llamándose a sí misma por su
+nombre, y la que lo arrancaba también la nombraba:
+
+```python
+for key, label, enabled in visibles:
+    def animar_fundido(...):
+        self.after(16, animar_fundido)      # <- nombre libre
+    def set_hover(...):
+        animar_fundido()                    # <- nombre libre
+```
+
+Python resuelve un nombre libre **cuando ejecuta la línea**, no cuando define la
+función. Al terminar el bucle, `animar_fundido` valía lo que valiera en la
+última vuelta: la de Perla Reluciente. Así que las siete tarjetas animaban esa,
+y pasar el ratón por Sol/Luna encendía el menú de otra tarjeta —la que estaba
+justo debajo del cursor no se enteraba de nada—.
+
+Los rótulos y las capas sí se pasaban como valor por defecto, que es la forma
+correcta de capturar dentro de un bucle. A estas dos se me pasó.
+
+Ahora el fundido es un objeto, `fundido_de_tarjeta.Fundido`, que se encadena a
+través de `self` —imposible confundirlo con el de otra tarjeta— y se le pasa a
+`set_hover` como valor. Además queda fuera de la interfaz y se puede probar
+entero: no sabe nada de Tk, solo recibe «pinta este paso» y «agenda el
+siguiente».
+
+La prueba que lo habría cazado monta los siete fundidos como los monta el
+selector, mueve el primero y comprueba que los otros seis no han pintado nada.
+
+Con esto se cierra la 0.3.0, que fue de velocidad y de arreglos.
+
 # v0.3.0-alpha.16 — banners nuevos y el menú de cada juego sale al pasar el ratón
 
 Los siete banners de la hoja que pasó el usuario sustituyen a las portadas del

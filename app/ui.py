@@ -4017,6 +4017,20 @@ class RoleRunManager(ctk.CTk):
             pass
         return ""
 
+    def _programar_fotograma(self, ms: int, funcion) -> bool:
+        """Agenda un fotograma de animación. Devuelve si lo consiguió.
+
+        No se apunta en `_welcome_animation_ids`, que solo se vacía al repintar
+        la pantalla: un fotograma por cada movimiento del ratón la llenaría sin
+        parar. Cada fundido se agota solo en diez fotogramas y cada uno
+        comprueba que su widget siga vivo.
+        """
+        try:
+            self.after(int(ms), funcion)
+            return True
+        except Exception:
+            return False
+
     def _colores_bajo_el_menu(self, image_path) -> tuple[str, ...]:
         """El color del banner justo debajo de cada rótulo del menú.
 
@@ -4442,8 +4456,6 @@ class RoleRunManager(ctk.CTk):
                  {"text_color": "#101010", "fg_color": GOLD}),
             )
 
-            estado_del_fundido = {"paso": 0, "hacia": 0, "id": None}
-
             def pintar_menu(paso: int, piezas=menu, capas=capas,
                             fondos=fondos, lienzo_label=image_label) -> None:
                 avance = paso / fundido_de_tarjeta.PASOS
@@ -4465,29 +4477,15 @@ class RoleRunManager(ctk.CTk):
                     })
                     widget.place(**sitio)
 
-            def animar_fundido(estado=estado_del_fundido, pintar=pintar_menu) -> None:
-                estado["id"] = None
-                siguiente = fundido_de_tarjeta.siguiente_paso(
-                    int(estado["paso"]), int(estado["hacia"]),
-                )
-                if siguiente == estado["paso"]:
-                    return
-                estado["paso"] = siguiente
-                pintar(siguiente)
-                if siguiente == estado["hacia"]:
-                    return
-                try:
-                    # Estos no se apuntan en `_welcome_animation_ids`: cada
-                    # fotograma añadiría uno y la lista solo se vacía al
-                    # repintar la pantalla. El fundido se para solo en diez
-                    # fotogramas y cada uno comprueba que su widget siga vivo.
-                    estado["id"] = self.after(
-                        fundido_de_tarjeta.FOTOGRAMA_MS, animar_fundido,
-                    )
-                except Exception:
-                    estado["id"] = None
+            # Un objeto por tarjeta, y se le pasa a `set_hover` como valor. Con
+            # funciones anidadas que se nombraban entre sí, Python resolvía esos
+            # nombres al ejecutarlas: al acabar el bucle las siete apuntaban a la
+            # última y el menú solo salía en Perla Reluciente.
+            animacion = fundido_de_tarjeta.Fundido(
+                pintar_menu, self._programar_fotograma,
+            )
 
-            def set_hover(active: bool, target=card, estado=estado_del_fundido) -> None:
+            def set_hover(active: bool, target=card, fundido=animacion) -> None:
                 try:
                     if not target.winfo_exists():
                         return
@@ -4498,9 +4496,7 @@ class RoleRunManager(ctk.CTk):
                     target.place_configure(y=-2 if active else 0)
                 except Exception:
                     pass
-                estado["hacia"] = fundido_de_tarjeta.PASOS if active else 0
-                if estado["id"] is None:
-                    animar_fundido()
+                fundido.ir(fundido_de_tarjeta.PASOS if active else 0)
 
             pintar_menu(0)
 

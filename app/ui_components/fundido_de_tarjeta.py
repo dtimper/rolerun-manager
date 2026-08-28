@@ -155,3 +155,57 @@ def siguiente_paso(actual: int, hacia: int, pasos: int = PASOS) -> int:
     if actual == destino:
         return actual
     return actual + (1 if destino > actual else -1)
+
+
+class Fundido:
+    """Lleva una tarjeta de un extremo al otro, fotograma a fotograma.
+
+    Esto vive aquí, y no como funciones anidadas dentro del bucle que monta las
+    tarjetas, por una razón concreta: **allí no funcionaba**.
+
+    El animador se llamaba a sí mismo por su nombre para encadenar el siguiente
+    fotograma, y quien lo arrancaba también lo nombraba. Python resuelve esos
+    nombres *cuando se ejecuta la línea*, no cuando se define la función, así que
+    al terminar el bucle los siete apuntaban al último. El menú solo salía en
+    Perla Reluciente —y salía aunque el ratón estuviera en cualquier otra—.
+
+    Un objeto no tiene ese problema: cada tarjeta tiene el suyo y se encadena a
+    través de ``self``, que no se puede confundir con el de otra.
+
+    ``programar(ms, funcion)`` devuelve algo verdadero si consiguió agendar el
+    fotograma. Así este objeto no sabe nada de Tk y se puede probar entero.
+    """
+
+    def __init__(
+        self,
+        pintar: Any,
+        programar: Any,
+        *,
+        pasos: int = PASOS,
+        fotograma_ms: int = FOTOGRAMA_MS,
+    ) -> None:
+        self.pintar = pintar
+        self.programar = programar
+        self.pasos = int(pasos)
+        self.fotograma_ms = int(fotograma_ms)
+        self.paso = 0
+        self.destino = 0
+        self.en_marcha = False
+
+    def ir(self, destino: int) -> None:
+        """Marca hacia dónde va y arranca si no estaba ya andando."""
+        self.destino = max(0, min(self.pasos, int(destino)))
+        if not self.en_marcha:
+            self.fotograma()
+
+    def fotograma(self) -> None:
+        self.en_marcha = False
+        siguiente = siguiente_paso(self.paso, self.destino, self.pasos)
+        if siguiente == self.paso:
+            return
+        self.paso = siguiente
+        self.pintar(siguiente)
+        if siguiente == self.destino:
+            return
+        if self.programar(self.fotograma_ms, self.fotograma):
+            self.en_marcha = True

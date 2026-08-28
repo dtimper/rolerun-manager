@@ -168,21 +168,103 @@ def test_el_menu_no_se_coloca_hasta_que_empieza_a_verse() -> None:
 
 def test_los_fotogramas_del_fundido_no_engordan_la_lista_de_animaciones() -> None:
     """Se vacia solo al repintar la pantalla: un fotograma por hover la llenaria."""
-    fuente = inspect.getsource(RoleRunManager._render_welcome)
-    trozo = fuente[fuente.index("def animar_fundido"):fuente.index("def set_hover")]
-    # Sin comentarios: ahi si se explica por que no se apuntan.
+    fuente = inspect.getsource(RoleRunManager._programar_fotograma)
     codigo = chr(10).join(
-        linea for linea in trozo.splitlines() if not linea.strip().startswith("#")
+        linea for linea in fuente.splitlines() if not linea.strip().startswith("#")
     )
 
-    assert "_welcome_animation_ids" not in codigo
+    assert "_welcome_animation_ids.append" not in codigo
+    assert "self.after(" in codigo
 
 
 def test_pasar_el_raton_arranca_el_fundido_en_los_dos_sentidos() -> None:
     fuente = inspect.getsource(RoleRunManager._render_welcome)
     trozo = fuente[fuente.index("def set_hover"):]
 
-    assert 'estado["hacia"] = fundido_de_tarjeta.PASOS if active else 0' in trozo
-    assert 'if estado["id"] is None:' in trozo, (
-        "sin esto, entrar y salir rapido deja dos animaciones peleandose"
+    assert "fundido.ir(fundido_de_tarjeta.PASOS if active else 0)" in trozo
+
+
+def test_cada_tarjeta_recibe_su_animacion_como_valor() -> None:
+    """El fallo real: el menu solo salia en Perla Reluciente.
+
+    El animador se llamaba a si mismo por su nombre y quien lo arrancaba
+    tambien lo nombraba. Python resuelve esos nombres al ejecutar la linea, no
+    al definir la funcion, asi que al acabar el bucle los siete apuntaban al
+    ultimo. Pasandolo como valor por defecto, cada `set_hover` se queda con el
+    suyo.
+    """
+    fuente = inspect.getsource(RoleRunManager._render_welcome)
+    firma = fuente[fuente.index("def set_hover"):]
+    firma = firma[:firma.index(")")]
+
+    assert "fundido=animacion" in firma
+    assert "def animar_fundido" not in fuente, (
+        "vuelve a haber un animador anidado que puede resolverse tarde"
     )
+
+
+def _fundido_de_prueba(pintados: list, agenda: list):
+    return fundido.Fundido(
+        pintados.append,
+        lambda ms, funcion: (agenda.append(funcion), True)[1],
+    )
+
+
+def test_siete_tarjetas_animan_cada_una_la_suya() -> None:
+    """Es exactamente lo que fallaba, montado como lo monta el selector."""
+    pintados = [[] for _ in JUEGOS_CON_BANNER]
+    agenda: list = []
+    fundidos = [_fundido_de_prueba(destino, agenda) for destino in pintados]
+
+    fundidos[0].ir(fundido.PASOS)
+    while agenda:
+        agenda.pop(0)()
+
+    assert pintados[0] == list(range(1, fundido.PASOS + 1))
+    assert all(not otros for otros in pintados[1:]), (
+        "una tarjeta ha animado la de otra"
+    )
+
+
+def test_salir_a_mitad_de_camino_vuelve_desde_donde_estaba() -> None:
+    pintados: list[int] = []
+    agenda: list = []
+    animacion = _fundido_de_prueba(pintados, agenda)
+
+    animacion.ir(fundido.PASOS)
+    for _dos_fotogramas in range(2):
+        agenda.pop(0)()
+    a_la_ida = animacion.paso
+
+    animacion.ir(0)
+    while agenda:
+        agenda.pop(0)()
+
+    assert a_la_ida == 3
+    assert animacion.paso == 0
+    assert pintados[-1] == 0
+    assert pintados == [1, 2, 3, 2, 1, 0], "el regreso no continua desde donde iba"
+
+
+def test_entrar_y_salir_deprisa_no_deja_dos_animaciones_peleandose() -> None:
+    pintados: list[int] = []
+    agenda: list = []
+    animacion = _fundido_de_prueba(pintados, agenda)
+
+    animacion.ir(fundido.PASOS)
+    animacion.ir(0)
+    animacion.ir(fundido.PASOS)
+
+    assert len(agenda) == 1, "hay mas de un fotograma agendado a la vez"
+
+
+def test_si_no_se_puede_agendar_el_fundido_no_se_queda_colgado() -> None:
+    """Sin esto, `en_marcha` se quedaria en cierto y no arrancaria nunca mas."""
+    pintados: list[int] = []
+    animacion = fundido.Fundido(pintados.append, lambda _ms, _funcion: False)
+
+    animacion.ir(fundido.PASOS)
+    assert animacion.en_marcha is False
+
+    animacion.ir(fundido.PASOS)
+    assert pintados == [1, 2]
