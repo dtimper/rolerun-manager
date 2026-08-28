@@ -945,6 +945,7 @@ def test_xy_pc_to_free_party_role_is_not_rejected_as_swap_only() -> None:
     incoming = SimpleNamespace(nickname="Budew", species="Budew")
     prepared: list[tuple[object, object, str | None, tuple[str, ...]]] = []
     statuses: list[tuple] = []
+    enviados: list[set] = []
     pending = object()
     run = SimpleNamespace(pending_changes=[])
 
@@ -966,6 +967,10 @@ def test_xy_pc_to_free_party_role_is_not_rejected_as_swap_only() -> None:
         _sync_live_layout=lambda: None,
         _smooth_render_page=lambda **_kwargs: None,
         _set_operation_status=lambda *args, **kwargs: statuses.append((*args, kwargs)),
+        # Sin esta llamada el cambio se prepara y nadie lo envía nunca: era el
+        # fallo que dejaba al Pokémon en el equipo proyectado y ausente del
+        # juego. Se comprueba abajo que se hace.
+        _request_oras_live_auto_apply_since=lambda previos: enviados.append(previos),
         active_page="team_pc",
     )
 
@@ -980,6 +985,9 @@ def test_xy_pc_to_free_party_role_is_not_rejected_as_swap_only() -> None:
     assert prepared == [(incoming, None, "Mago", ())]
     assert run.pending_changes == [pending]
     assert statuses[-1][0:2] == ("applying", "APLICANDO CAMBIO")
+    # Y de verdad se envía: decir «APLICANDO CAMBIO» sin enviarlo dejaba al
+    # Pokémon en el equipo proyectado y ausente del juego.
+    assert len(enviados) == 1
 
 
 def test_xy_role_change_updates_evs_and_live_stats_preserving_damage_and_status() -> None:

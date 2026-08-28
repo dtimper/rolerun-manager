@@ -333,3 +333,27 @@ def test_si_el_pc_no_recibe_la_escritura_se_deshace_todo() -> None:
     assert emu.count == 3
     assert bytes(emu.party) == emu.party_original
     assert bytes(emu.pc) == emu.pc_original
+
+
+# --------------------------------------------------------------------------
+# Que el cambio llegue a salir de la interfaz
+# --------------------------------------------------------------------------
+
+def test_preparar_un_cambio_equipo_pc_lo_envia_al_emulador() -> None:
+    """Preparar no es aplicar, y la pantalla decía «APLICANDO CAMBIO».
+
+    El cambio se creaba, se pintaba en el equipo proyectado y **nadie lo enviaba
+    nunca**: se quedaba en la cola. El Pokémon aparecía en el equipo con «PS no
+    disponible» y en el juego no estaba. Afectaba a todos los juegos, no solo a
+    HeartGold.
+    """
+    import inspect
+
+    from app.ui import RoleRunManager
+
+    fuente = inspect.getsource(RoleRunManager._team_pc_execute_change)
+    assert "_request_oras_live_auto_apply_since(pending_before)" in fuente
+    # Y va después de crear los cambios, no antes.
+    assert fuente.index("pending_before = {") < fuente.index(
+        "_request_oras_live_auto_apply_since(pending_before)"
+    )

@@ -13841,6 +13841,12 @@ class RoleRunManager(ctk.CTk):
                     else f"{incoming.nickname or incoming.species} está preparado para el flujo de guardado."
                 ),
             )
+            # Faltaba esto: el cambio se preparaba, la pantalla decía «APLICANDO
+            # CAMBIO» y nadie lo enviaba nunca al emulador. Se quedaba en la
+            # cola, el Pokémon aparecía en el equipo proyectado con «PS no
+            # disponible» y en el juego no estaba. Todas las demás acciones que
+            # crean cambios terminan con esta misma llamada.
+            self._request_oras_live_auto_apply_since(pending_before)
         return True
 
     def _team_pc_drop(

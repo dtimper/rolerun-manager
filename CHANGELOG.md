@@ -1,6 +1,26 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.83 — el cambio se preparaba y nadie lo enviaba
+
+Al sacar un Pokémon del PC, la pantalla decía «APLICANDO CAMBIO», el Pokémon
+aparecía en el equipo con **«PS no disponible»**… y en el juego no estaba. El
+registro de escrituras vivas no tenía ni una línea de ese intento: el cambio
+nunca salió de la interfaz.
+
+`_team_pc_execute_change` creaba los cambios, calculaba cuáles eran nuevos, los
+pintaba y ponía el cartel de «APLICANDO CAMBIO» —pero **no llamaba a
+`_request_oras_live_auto_apply_since`**, que es como termina cualquier otra
+acción que crea cambios. Se quedaban en la cola para siempre.
+
+No era cosa de cuarta generación: afectaba a **todos los juegos** por esa vía.
+
+Hay dos pruebas nuevas: una comprueba que la llamada está y va después de crear
+los cambios; la otra, en el flujo de X/Y, que decir «APLICANDO CAMBIO» y no
+enviar nada no vuelve a pasar.
+
+Suite completa: **1778**.
+
 # v0.2.6-alpha.82 — un Pokémon puede estar **sin cifrar**, y ahí estaba el fallo
 
 No era una RAM inquieta. Era esto.
