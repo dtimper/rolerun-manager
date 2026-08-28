@@ -4699,7 +4699,12 @@ class RoleRunManager(ctk.CTk):
 
     def _animate_sidebar_drawer(self, start_x: int, target_x: int, opening: bool) -> None:
         """Desplaza un drawer ya compuesto; nunca redimensiona sus descendientes."""
-        duration_ms = 260
+        # 260 ms no eran solo animación: al elegir destino desde el menú, la
+        # navegación no arranca hasta que el drawer termina de cerrarse -ver
+        # `navigate`, que guarda `_pending_sidebar_navigation` y sale-, así que
+        # se sumaban enteros al camino más usado para cambiar de sección. A 140
+        # el gesto sigue leyéndose como un deslizamiento y son 120 ms menos.
+        duration_ms = 140
         started = time.perf_counter()
         drawer = self.sidebar_drawer
 
@@ -4724,7 +4729,9 @@ class RoleRunManager(ctk.CTk):
                 # duplicaba el intervalo real hasta ~31 ms en Windows. Cuatro
                 # milisegundos mantienen varias posiciones disponibles por cada
                 # refresco de 60 Hz sin saturar el mainloop con ticks duplicados.
-                self.sidebar_animation_id = self.after(4, frame)
+                # Un fotograma. A 4 ms se encolaban ~65 callbacks que competían
+                # con la construcción de la página en el mismo hilo.
+                self.sidebar_animation_id = self.after(12, frame)
                 return
             self.sidebar_animation_id = None
             self.sidebar_drawer_x = target_x
@@ -5071,7 +5078,9 @@ class RoleRunManager(ctk.CTk):
             self._destroy_navigation_transition(overlay)
             return
         self._stop_navigation_spinner(overlay)
-        duration_ms = 150
+        # La curva es `(1 - progreso)²`, así que a mitad del fade ya solo queda
+        # el 25 % de la captura: 80 ms se leen como un fundido y no como espera.
+        duration_ms = 80
         started = time.perf_counter()
         try:
             start_alpha = float(overlay.attributes("-alpha"))
@@ -5119,8 +5128,10 @@ class RoleRunManager(ctk.CTk):
         except Exception:
             self._destroy_navigation_transition(overlay)
             return
+        # Tres fotogramas. El comentario de arriba pide «varios frames» y 120 ms
+        # son siete y medio: tiempo muerto con el destino ya compuesto debajo.
         after_id = self.after(
-            120, lambda: self._fade_navigation_transition(overlay, token),
+            48, lambda: self._fade_navigation_transition(overlay, token),
         )
         self._navigation_transition_after_ids.add(after_id)
 
@@ -5160,9 +5171,11 @@ class RoleRunManager(ctk.CTk):
             self._commit_page_navigation(page, previous_page, None, token)
             return
         # Devolvemos el control a Tk para que el Toplevel llegue al compositor
-        # antes del trabajo síncrono de construcción de widgets.
+        # antes del trabajo síncrono de construcción de widgets. Un fotograma es
+        # exactamente lo que hace falta para eso; los 34 ms de antes eran el
+        # doble, y se sumaban a los otros dos plazos fijos de la barrera.
         after_id = self.after(
-            34,
+            16,
             lambda: self._commit_page_navigation(page, previous_page, overlay, token),
         )
         self._navigation_transition_after_ids.add(after_id)
@@ -5206,7 +5219,9 @@ class RoleRunManager(ctk.CTk):
                 self, image=self._page_transition_image,
                 borderwidth=0, highlightthickness=0, background=BG,
             )
+            con_rueda = True
         except Exception:
+            con_rueda = False
             overlay = tk.Frame(self, background=BG, borderwidth=0)
             tk.Label(
                 overlay, text="CARGANDO…", background=BG, foreground=GOLD,
@@ -5221,11 +5236,28 @@ class RoleRunManager(ctk.CTk):
         # reconstruyendo la vista dos veces. Los idles bastan para mapear y pintar
         # esta superficie antes de comenzar el render síncrono.
         self.update_idletasks()
+        # LA RUEDA, QUE AQUÍ NO ESTABA
+        #
+        # De los sesenta y un repintados que pasan por `_smooth_render_page`,
+        # **uno solo** recibía la superficie de navegación con rueda; los demás
+        # recibían esta, que es una foto congelada y muda. De ahí la queja de
+        # que «muchas veces está repintando algo y no aparece»: aparecía, pero
+        # sin nada que se moviera, y una imagen quieta durante 300 ms se lee
+        # como que el programa se ha colgado, no como que está trabajando.
+        #
+        # El worker pinta por GDI sobre el HWND del propio Label, que es
+        # independiente del de la ventana -comprobado: son distintos-, así que
+        # sigue girando mientras Tk construye el árbol nuevo.
+        if con_rueda:
+            self._start_navigation_spinner(overlay, overlay)
         return overlay
 
     def _retire_page_transition_overlay(self, overlay) -> None:
         try:
             if overlay is not None and overlay.winfo_exists():
+                # Primero se para el worker: destruir el Label deja su HWND
+                # inválido y el hilo estaría pintando sobre nada.
+                self._stop_navigation_spinner(overlay)
                 overlay.destroy()
         except Exception:
             pass
@@ -11964,6 +11996,13 @@ class RoleRunManager(ctk.CTk):
                 bool(preserve_scroll or (requested and requested[0])),
                 bool(reset_scroll or (requested and requested[1])),
             )
+            # La barrera que traía esta llamada no la va a retirar nadie: el
+            # repintado se aplaza y su token se pierde aquí. Sin esto quedaba una
+            # ventana opaca encima de una aplicación que ya había terminado.
+            if _prepared_navigation_overlay is not None:
+                self._finish_navigation_transition(
+                    _prepared_navigation_overlay, _navigation_token or 0,
+                )
             return
 
         # Si el estado editable cambió, este render marca el límite de una acción
@@ -12077,8 +12116,13 @@ class RoleRunManager(ctk.CTk):
                 else:
                     # Los refrescos internos conservan su barrera local. Las
                     # navegaciones usan la superficie DWM externa preparada.
+                    #
+                    # 140 ms eran fijos y no dependían de nada: con la página ya
+                    # compuesta debajo, la barrera seguía tapándola. Dos
+                    # fotogramas bastan para que el destino haya llegado al
+                    # compositor, y son ~60 de los ~60 refrescos internos.
                     self.after(
-                        140,
+                        32,
                         lambda overlay=transition_overlay: self._retire_page_transition_overlay(overlay),
                     )
             if new_body is None:
@@ -16594,6 +16638,18 @@ class RoleRunManager(ctk.CTk):
                 generation != self._session_generation
                 or not self.project or self.project.slug != project_slug
             ):
+                # ABANDONADA, PERO HAY QUE SOLTAR LA CARGA IGUAL
+                #
+                # Este `return` dejaba `_team_pc_pc_loading` en True y la barrera
+                # «Cargando las cajas del PC…» puesta. Y como `_start_team_pc_load`
+                # se niega a empezar mientras esa bandera esté puesta, las cajas
+                # no se volvían a cargar en toda la sesión: una ventana opaca con
+                # rueda encima de un programa que por dentro ya no hacía nada.
+                #
+                # No se avisa del fallo -la sesión de la que venía ya no existe-,
+                # pero sí se suelta el estado, igual que hace la rama de disco.
+                self._team_pc_pc_loading = False
+                self._hide_busy_indicator("pc-load")
                 return
             if error or data is None:
                 self._record_bdsp_ui_event(
@@ -20964,6 +21020,7 @@ class RoleRunManager(ctk.CTk):
 
     def _poll_sprite_queue(self) -> None:
         faltantes: list[int] = []
+        llegados = 0
         try:
             while True:
                 slot, species_id, image = self.sprite_queue.get_nowait()
@@ -20979,11 +21036,20 @@ class RoleRunManager(ctk.CTk):
                 for clave in [c for c in self._sprite_image_cache if c[0] == species_id]:
                     self._sprite_image_cache.pop(clave, None)
                 self._apply_sprite(slot, image)
-                if self.project and self.current_game:
-                    self._sync_obs_state(self.current_game)
                 self._schedule_sprite_page_refresh()
+                llegados += 1
         except queue.Empty:
             pass
+        # UNA VEZ POR LOTE, NO UNA POR SPRITE
+        #
+        # `_sync_obs_state` no es un ajuste de widget: escribe el estado y las
+        # plantillas de OBS -state.json, slot.css, slot.js, seis HTML de rol,
+        # paladin.html e INSTRUCCIONES_OBS.txt, por carpeta y hasta dos
+        # carpetas-. Estaba dentro del bucle, así que abrir una Run con seis
+        # especies sin descargar disparaba esas escrituras seis veces, en el
+        # hilo de Tk, justo mientras construía la página.
+        if llegados and self.project and self.current_game:
+            self._sync_obs_state(self.current_game)
         if faltantes:
             self._notify_missing_sprites(faltantes)
         if self.winfo_exists():

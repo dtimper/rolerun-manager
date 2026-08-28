@@ -1,6 +1,72 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.99 — la rueda donde no estaba, y fuera los plazos fijos
+
+Cinco arreglos sobre el mismo síntoma, todos localizados leyendo el camino
+completo de repintado.
+
+## «Muchas veces está repintando algo y no aparece»
+
+Era literal. De los **61 repintados** que pasan por `_smooth_render_page`, **uno
+solo** recibía la superficie de navegación con rueda. Los otros sesenta recibían
+`_create_page_transition_overlay`, que es una foto congelada y **muda**: aparecía,
+pero sin nada moviéndose, y una imagen quieta trescientos milisegundos se lee
+como que el programa se ha colgado.
+
+Ahora esa superficie arranca la misma rueda. Y se para antes de destruirla, que
+si no el worker pintaría sobre un HWND inválido.
+
+*Hipótesis descartada por medición:* se sospechaba que poner `-alpha` convertía
+la ventana en *layered* y la rueda nunca llegaba a pantalla. Comprobado con
+`GetWindowLongW`: con alpha a 1.0 el exstyle pasa de `0x80` a `0x00`, sin
+`WS_EX_LAYERED`. No era eso.
+
+## «Se ve incompleta durante unos segundos»
+
+`UnifiedTeamPCView` recolocaba con una escalera de reloj —`for delay in (0, 80,
+180)`—: la página seguía moviéndose 180 ms después de estar pintada. Y como la
+barrera tenía que taparlo, no se podía acortar.
+
+Ahora los pases se encadenan a un fotograma y **paran en cuanto el alto medido
+se repite**: dos o tres pases de unos pocos milisegundos en el caso normal, con
+tope de ocho por si la geometría nunca se para. `is_fully_composed` pasa a
+mirar esa condición en vez de contar tres pases de reloj.
+
+## Los plazos fijos, que no dependían de nada
+
+| | antes | ahora |
+|--|-------|-------|
+| devolver el control a Tk | 34 ms | 16 (un fotograma) |
+| espera antes del fundido | 120 ms | 48 (tres) |
+| fundido | 150 ms | 80 |
+| **total por navegación** | **304 ms** | **144 ms** |
+| barrera de un refresco interno | 140 ms | 32 |
+| deslizamiento del menú lateral | 260 ms | 140 |
+
+El menú no era solo animación: al elegir destino desde ahí, la navegación **no
+arranca** hasta que el drawer termina de cerrarse. Y se animaba con un callback
+cada 4 ms —unos 65— compitiendo con la construcción en el mismo hilo; ahora uno
+cada 12.
+
+## OBS se sincronizaba una vez por sprite
+
+`_sync_obs_state` estaba **dentro** del bucle que vacía la cola de sprites. No es
+ajustar un widget: escribe `state.json`, `slot.css`, `slot.js`, seis HTML de rol,
+`paladin.html` e `INSTRUCCIONES_OBS.txt` por carpeta, y puede haber dos. Abrir una
+Run con seis especies sin descargar disparaba eso **seis veces**, en el hilo de
+Tk, justo mientras construía la página. Ahora una por lote, con prueba.
+
+## Dos pantallas de carga que se quedaban colgadas
+
+- La lectura viva del PC abandonada por cambio de sesión salía sin soltar
+  `_team_pc_pc_loading`. Como `_start_team_pc_load` se niega a empezar con esa
+  bandera puesta, **las cajas no volvían a cargarse en toda la sesión**: ventana
+  opaca con rueda encima de un programa que por dentro ya no hacía nada.
+- Un repintado que llegaba durante otro salía sin retirar la barrera que traía.
+
+Suite completa: **1809**.
+
 # v0.2.6-alpha.98 — la rejilla del PC reutiliza sus casillas
 
 Primer paso contra las pantallas de carga: **no rehacer lo que ya está hecho**.

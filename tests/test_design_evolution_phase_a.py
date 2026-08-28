@@ -1304,8 +1304,20 @@ def test_sidebar_uses_a_timed_slide_and_keeps_a_dedicated_toggle_rail() -> None:
     expansion = inspect.getsource(RoleRunManager._set_sidebar_expanded)
     layout = inspect.getsource(RoleRunManager._build_layout)
 
-    assert "duration_ms = 260" in animation
-    assert "self.after(4, frame)" in animation
+    # Se exige que el deslizamiento esté cronometrado y que se anime por
+    # fotogramas, no un número concreto. El 260 original no era solo animación:
+    # al elegir destino desde el menú, la navegación no arranca hasta que el
+    # drawer termina de cerrarse, así que se sumaba entero al camino más usado.
+    import re
+
+    duracion = re.search(r"duration_ms = (\d+)", animation)
+    assert duracion is not None, "el deslizamiento dejó de estar cronometrado"
+    assert 90 <= int(duracion.group(1)) <= 300, (
+        f"duración fuera de rango legible: {duracion.group(1)} ms"
+    )
+    fotograma = re.search(r"self\.after\((\d+), frame\)", animation)
+    assert fotograma is not None, "el deslizamiento dejó de animarse por fotogramas"
+    assert 4 <= int(fotograma.group(1)) <= 20
     assert "drawer.place_configure(x=x)" in animation
     assert "drawer.place_forget()" in animation
     assert "drawer.lift()" not in animation

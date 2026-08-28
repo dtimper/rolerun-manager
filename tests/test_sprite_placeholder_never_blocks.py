@@ -42,6 +42,10 @@ class _SpriteHarness:
         self.avisos: list[tuple[str, str, bool]] = []
         self.aplicados: list[tuple[int, Image.Image]] = []
         self.refrescos = 0
+        self.sincronizaciones_obs = 0
+
+    def _sync_obs_state(self, _game):
+        self.sincronizaciones_obs += 1
 
     def _apply_sprite(self, slot, image):
         self.aplicados.append((slot, image))
@@ -169,3 +173,40 @@ def test_una_peticion_en_vuelo_no_se_duplica() -> None:
 def test_la_descarga_tiene_un_limite_de_tiempo() -> None:
     """Sin timeout, una red no enrutada cuelga el hilo para siempre."""
     assert 0 < SPRITE_DOWNLOAD_TIMEOUT_SECONDS <= 30
+
+
+def test_obs_se_sincroniza_una_vez_por_lote_no_una_por_sprite() -> None:
+    """Escribir el estado de OBS no es ajustar un widget: son ficheros.
+
+    `obs_sync.sync` escribe `state.json`, `slot.css`, `slot.js`, seis HTML de
+    rol, `paladin.html` e `INSTRUCCIONES_OBS.txt` **por carpeta**, y puede haber
+    dos carpetas. Estaba dentro del bucle que vacía la cola, así que abrir una
+    Run con seis especies sin descargar disparaba esas escrituras seis veces
+    seguidas, en el hilo de Tk y justo mientras construía la página.
+    """
+    from PIL import Image as _Image
+
+    banco = _SpriteHarness()
+    banco.project = object()
+    banco.current_game = object()
+    for slot in range(6):
+        banco.sprite_queue.put(
+            (slot, 100 + slot, _Image.new("RGBA", (4, 4), (1, 2, 3, 255))),
+        )
+
+    _SpriteHarness._poll_sprite_queue(banco)
+
+    assert len(banco.aplicados) == 6, "no se procesaron los seis sprites"
+    assert banco.sincronizaciones_obs == 1, (
+        f"OBS se sincronizó {banco.sincronizaciones_obs} veces para un solo lote"
+    )
+
+
+def test_sin_sprites_no_se_toca_obs() -> None:
+    banco = _SpriteHarness()
+    banco.project = object()
+    banco.current_game = object()
+
+    _SpriteHarness._poll_sprite_queue(banco)
+
+    assert banco.sincronizaciones_obs == 0

@@ -213,6 +213,10 @@ class UnifiedTeamPCView:
         self.pc_columns = 3
         self._layout_passes_complete = 0
         self._composition_notified = False
+        # El alto medido en el pase anterior y si ya se ha parado de mover. La
+        # composición se declara por esto, no por haber gastado 180 ms de reloj.
+        self._layout_last_height: int | None = None
+        self._layout_settled = False
         self._inspector_render_after_id: str | None = None
         # Evidencia semántica de lo que las tarjetas han materializado. No
         # basta con que el controlador haya entregado un modelo live: la
@@ -265,8 +269,13 @@ class UnifiedTeamPCView:
         # El CTkScrollableFrame resuelve el alto de su canvas después de crear
         # sus hijos. Ajustamos entonces esta superficie al viewport final para
         # usar toda la pantalla sin fabricar overflow en el cuerpo general.
-        for delay in (0, 80, 180):
-            self.frame.after(delay, self._complete_layout_pass)
+        #
+        # Antes eran tres pases a 0, 80 y 180 ms de reloj: la página seguía
+        # recolocándose 180 ms después de estar pintada -que es justo lo que el
+        # usuario ve como «incompleta»- y la barrera de carga tenía que durar al
+        # menos eso aunque no quedara trabajo. Ahora se encadenan a un fotograma
+        # y paran en cuanto el alto se repite.
+        self.frame.after_idle(self._complete_layout_pass)
         self._bind_viewport_resize()
         self.frame.bind("<Destroy>", self._release_viewport_resize, add="+")
         self.frame.bind("<Destroy>", self._release_keyboard_navigation, add="+")
@@ -282,18 +291,30 @@ class UnifiedTeamPCView:
         except Exception:
             pass
 
+    # Cuántos pases como mucho antes de darse por compuesta igualmente. A un
+    # fotograma cada uno son ~130 ms en el peor caso, y el caso normal son dos.
+    PASES_DE_COMPOSICION = 8
+
     def _complete_layout_pass(self) -> None:
         self._fit_frame_to_viewport()
         try:
             self.frame.update_idletasks()
+            canvas = getattr(self.master, "_parent_canvas", None)
+            alto = int(canvas.winfo_height() or 0) if canvas is not None else 0
         except Exception:
             return
         self._layout_passes_complete += 1
-        if (
-            self._layout_passes_complete >= 3
-            and not self._composition_notified
-            and callable(self.on_composed)
-        ):
+        # Dos medidas iguales seguidas: la geometría ha dejado de moverse.
+        quieta = alto > 0 and alto == self._layout_last_height
+        self._layout_last_height = alto
+        if not quieta and self._layout_passes_complete < self.PASES_DE_COMPOSICION:
+            try:
+                self.frame.after(16, self._complete_layout_pass)
+            except Exception:
+                return
+            return
+        self._layout_settled = True
+        if not self._composition_notified and callable(self.on_composed):
             self._composition_notified = True
             self.on_composed(self)
 
@@ -304,7 +325,7 @@ class UnifiedTeamPCView:
                 self.frame, self.team_panel, self.pc_panel, self.inspector_panel,
             )
             return bool(
-                self._layout_passes_complete >= 3
+                self._layout_settled
                 and self.pc_box_count == int(expected_box_count)
                 and len(self.pc_buttons) == self.pc_slot_count
                 and all(widget.winfo_exists() and widget.winfo_ismapped() for widget in widgets)
