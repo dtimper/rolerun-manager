@@ -75,6 +75,23 @@ def _cuadra(registro: bytes) -> bool:
     return sum(struct.unpack("<64H", descifrado)) & 0xFFFF == checksum
 
 
+def _contenido(registro: bytes):
+    """Lo que dice la ficha, sin importar en qué estado está guardada.
+
+    El parpadeo cifrado/en claro cambia los 236 bytes y no cambia ni un dato:
+    filtrando por esto, la línea de tiempo se queda solo con lo que importa.
+    """
+    try:
+        pokemon = parse_pk4_party(registro, 0)
+    except Pk4Error as exc:
+        return ("ilegible", str(exc)[:40])
+    return (
+        pokemon.pid, pokemon.species_id, pokemon.nickname, pokemon.level,
+        pokemon.current_hp, pokemon.max_hp, pokemon.move_ids, pokemon.move_pp,
+        pokemon.evs, pokemon.markings, pokemon.stats,
+    )
+
+
 def _retrato(registro: bytes) -> str:
     """Una línea que describe en qué estado está esa ficha."""
     pid = struct.unpack_from("<I", registro, 0)[0]
@@ -172,14 +189,15 @@ def main() -> int:
 
         print()
         print("  1) Ten RoleRun abierto y con el equipo de HeartGold a la vista.")
-        print("  2) Cuando esto diga GRABANDO, pulsa CURAR EQUIPO en RoleRun.")
+        print("  2) Cuando esto diga GRABANDO, pulsa lo que quieras probar")
+        print("     en RoleRun: CURAR EQUIPO, FIJAR ROLES, lo que sea.")
         print(f"  3) Deja que pasen los {SEGUNDOS} segundos y luego mira el juego.")
         print()
         for queda in range(8, 0, -1):
             print(f"    empiezo en {queda}... ", end="", flush=True)
             time.sleep(1)
         print()
-        print("  >>> GRABANDO. PULSA CURAR EQUIPO EN ROLERUN AHORA. <<<", flush=True)
+        print("  >>> GRABANDO. PULSA EN ROLERUN AHORA. <<<", flush=True)
 
         # Solo se apuntan los CAMBIOS, que es lo que importa y lo que cabe.
         #
@@ -226,10 +244,32 @@ def main() -> int:
         print("  " + "=" * 62)
         print("  LINEA DE TIEMPO")
         print("  " + "=" * 62)
+        # Solo lo que CAMBIA de verdad. El parpadeo cifrado/en claro llena miles
+        # de lineas y no dice nada: el mismo Pokemon con los mismos datos.
+        partida = {}
+        for indice in range(cuantos):
+            partida[indice] = _contenido(
+                leer(SAVE_PARTY_DATA + indice * PK4_PARTY_SIZE, PK4_PARTY_SIZE)
+            )
+        ultimo = dict(partida)
+        interesantes = []
         for cuando, indice, registro in diario:
+            ahora = _contenido(registro)
+            if ahora == ultimo.get(indice):
+                continue
+            ultimo[indice] = ahora
+            interesantes.append((cuando, indice, registro))
+
+        print(f"  {len(diario)} cambios de bytes, de los cuales "
+              f"{len(interesantes)} cambian algo de verdad.")
+        print("  (el resto es la ficha alternando entre cifrada y en claro)")
+        print()
+        for cuando, indice, registro in interesantes[:120]:
             print(f"  {cuando:7.3f}s  hueco {indice + 1}: {_retrato(registro)}")
-        if not diario:
-            print("  Ningun cambio. Si no llegaste a pulsar CURAR, repitelo.")
+        if len(interesantes) > 120:
+            print(f"  ... y {len(interesantes) - 120} mas, en el archivo.")
+        if not interesantes:
+            print("  Nada cambio de contenido. Si no llegaste a pulsar, repitelo.")
         print()
     finally:
         _KERNEL32.CloseHandle(handle)

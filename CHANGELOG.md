@@ -1,6 +1,42 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.95 — la prueba: el juego reescribe encima de lo escrito
+
+Cuarto «Huevo malo», esta vez al pulsar FIJAR ROLES. Y por fin se capturó el
+registro dañado **con la partida todavía rota**, que es lo que faltaba.
+
+## Lo que dice la captura
+
+El registro del hueco 1, leído **en claro**, da **especie 158 = TOTODILE**, que
+es la correcta. Pero su mote es basura. Especie y mote viven en **bloques
+distintos** de los cuatro que componen el cuerpo.
+
+Es decir: unos bloques son los que escribió RoleRun y otros no. El registro es
+una **mezcla de dos escrituras**.
+
+Y el registro de escrituras vivas dice que la operación terminó **sin error, con
+los seis aplicados y verificados por readback**. O sea que la mezcla se produjo
+*después* de que RoleRun releyera y confirmara: **el juego vuelve a escribir esos
+registros encima**, desde otro sitio.
+
+El hueco 4 quedó peor: cuadra su propio checksum y aun así no da una especie
+válida con **ninguna de las 24 permutaciones** de bloques, así que su cuerpo es
+basura coherente, no un barajado equivocado.
+
+## Qué se hace
+
+`MELONDS_GEN4_ESCRIBE = False`. Escribir en cuarta con el juego corriendo no es
+seguro mientras no se sepa desde dónde reescribe el juego esos registros, y eso
+todavía no se sabe.
+
+Leer sigue intacto, y la grabadora `grabar_escritura_heartgold.bat` ahora filtra
+el parpadeo cifrado/en claro y enseña **solo los cambios de contenido**, que es
+lo que hace falta para ver quién escribe después de RoleRun. Antes eran miles de
+líneas ilegibles.
+
+Suite completa: **1796**.
+
 # v0.2.6-alpha.94 — el mismo criterio en los otros tres caminos
 
 **La curación funciona, confirmado por el usuario.** Y el fallo que la tenía

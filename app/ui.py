@@ -165,7 +165,7 @@ MELONDS_GEN4_REALTIME_GAME_KEYS = {"hgss"}
 # entrenador y la marca del bloque— y se comprueba cuál de las copias actualiza
 # el juego, mirando cuál se mueve; y antes de cada escritura se confirma que
 # sigue valiendo. Sin esas dos pruebas, el writer se niega.
-MELONDS_GEN4_ESCRIBE = True
+MELONDS_GEN4_ESCRIBE = False
 MELONDS_WRITE_GAME_KEYS = MELONDS_GEN5_REALTIME_GAME_KEYS | (
     MELONDS_GEN4_REALTIME_GAME_KEYS if MELONDS_GEN4_ESCRIBE else set()
 )
