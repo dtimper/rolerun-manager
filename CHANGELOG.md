@@ -1,6 +1,48 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.91 — grabar el momento de la escritura
+
+Se acabó lo que se puede demostrar leyendo antes y leyendo después. Todo sale
+bien y la partida se rompe igual, así que el fallo pasa **entre medias**.
+
+## Lo descartado en esta vuelta
+
+- **La ventana de reposo no lo explica.** Medido a 0,5 ms durante 6 s: cada
+  ficha sale de reposo unas 12 veces por segundo, pero un hueco normal está
+  fuera de reposo solo el **2 %** del tiempo. Acertar dentro tres veces seguidas
+  sería una entre cien mil, y las tres corrupciones fueron deterministas.
+- **La caché del ARM9 tampoco.** El JIT de melonDS del usuario ya estaba
+  apagado —`[JIT] Enable = false`— y su configuración no tiene ninguna opción de
+  emulación de caché.
+- **La dirección de escritura es correcta**, verificada seis de seis en seis
+  pasadas: coincide con dónde está de verdad cada registro, buscado por su PID
+  por toda la reserva.
+- **El orden de bloques es correcto**: `reshuffle_pk4` es el inverso exacto de
+  `unshuffle_pk4`, y la ida y vuelta sale byte a byte idéntica sobre el `.sav` y
+  sobre los registros de la RAM.
+
+De paso, un hallazgo lateral: el líder del equipo tiene una **cuarta copia** en
+RAM —Totodile en 0x022A1E68— que los demás no tienen. Es el Pokémon que sigue al
+jugador por el mapa. Habrá que actualizarla también cuando esto funcione.
+
+## La herramienta
+
+`grabar_escritura_heartgold.bat`. Muestrea las seis fichas a unas 2000 veces por
+segundo y apunta cada cambio de contenido con su hora, su checksum, el orden de
+sus bloques y si la marca de huevo está puesta, mientras el jugador pulsa CURAR
+en RoleRun. Deja la grabación en crudo en `Logs/grabacion_escritura_hgss.bin`.
+
+Un contenido **coherente** se apunta aunque dure una sola muestra: si algo se
+come la escritura en menos de un milisegundo, esa muestra es la prueba. Lo que
+no cuadra el checksum tiene que salir dos veces seguidas, para que el diario no
+se llene de lecturas partidas.
+
+La escritura de cuarta se enciende otra vez, a petición del usuario y solo para
+poder grabar el fallo.
+
+Suite completa: **1791**.
+
 # v0.2.6-alpha.90 — herramienta para ver cuándo la ficha está en reposo
 
 `cuando_se_puede_escribir_heartgold.bat`. Muestrea el bloque de equipo a 0,5 ms
