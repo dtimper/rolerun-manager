@@ -457,6 +457,10 @@ class HgssMelonDSReader:
         # Solo se marca cuando se ha demostrado que ese bloque es el que el
         # juego actualiza. Sin eso no se escribe.
         self._bloque_vivo = False
+        # La reserva donde se localizó el bloque. Se guarda aparte de la caché
+        # de lectura porque esa se olvida al fallar, y justo entonces es cuando
+        # hace falta para explicar por qué.
+        self._reserva_localizada: tuple[int, str, int] | None = None
         # Devuelve la firma del entrenador sacada del guardado; sin ella no se
         # puede localizar nada y se trabaja con la dirección de partida.
         self.firma_getter = firma_getter
@@ -616,7 +620,47 @@ class HgssMelonDSReader:
         except HgssLiveError:
             if not self._relocalizar(self._list_melonds_processes()):
                 raise
-            return self._read_party_ahora()
+            try:
+                return self._read_party_ahora()
+            except HgssLiveError:
+                # El bloque está localizado y aun así no se puede leer: el
+                # motivo de verdad está en el propio equipo, no en «no se
+                # encontró la RAM». Decirlo por su nombre es la diferencia
+                # entre saber qué pasa y no saberlo.
+                self._explicar_el_bloque()
+                raise
+
+    def _explicar_el_bloque(self) -> None:
+        """Lanza el motivo real por el que no se puede leer el equipo localizado.
+
+        Si un miembro está dañado —por ejemplo un «Huevo malo»—, el equipo entero
+        deja de poder leerse, y sin esto el mensaje culpaba a la búsqueda de la
+        RAM en vez de señalar al Pokémon.
+        """
+        recordada = self._reserva_localizada
+        if recordada is None or _KERNEL32 is None:
+            return
+        pid, _nombre, allocation = recordada
+        handle = _KERNEL32.OpenProcess(0x0400 | 0x0010, False, pid)
+        if not handle:
+            return
+        try:
+            contador = self._leer_directo(
+                handle, allocation + (self.memory.party_count - DS_RAM_BASE), 1,
+            )
+            if contador is None or not 1 <= contador[0] <= MAX_PARTY:
+                return
+            crudo = self._leer_directo(
+                handle, allocation + (self.memory.party_data - DS_RAM_BASE),
+                contador[0] * PK4_PARTY_SIZE,
+            )
+            if crudo is None:
+                return
+            # Si esto lanza, lanza con el motivo bueno; si no, no se dice nada y
+            # gana el error de arriba.
+            parse_party_block(crudo, contador[0])
+        finally:
+            _KERNEL32.CloseHandle(handle)
 
     def _read_party_ahora(self) -> HgssPartyRead:
         if os.name != "nt":
@@ -772,7 +816,13 @@ class HgssMelonDSReader:
                         party_data=DS_RAM_BASE + elegido + SAVE_PARTY_DATA,
                     )
                     self._bloque_vivo = vivo
-                    self.forget_resolved_base()
+                    # Y se recuerda la reserva: acabamos de demostrar cuál es,
+                    # así que la siguiente lectura debe ir directa y con toda la
+                    # paciencia, no recorrer otra vez las 365 con la justa.
+                    self._reserva_localizada = (pid, _nombre, reserva)
+                    self._resolved = (pid, _nombre, reserva)
+                    self._resolved_processes = tuple(sorted(candidatos))
+                    self._resolved_at = time.monotonic()
                     return True
             finally:
                 _KERNEL32.CloseHandle(handle)

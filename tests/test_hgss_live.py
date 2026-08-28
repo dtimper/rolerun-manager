@@ -371,3 +371,31 @@ def test_el_bloque_no_se_da_por_vivo_sin_demostrarlo() -> None:
     from app.hgss_live import HgssMelonDSReader
 
     assert HgssMelonDSReader().block_is_live is False
+
+
+def test_si_un_miembro_esta_danado_se_dice_cual() -> None:
+    """«No se localizó la RAM» culpaba a la búsqueda cuando el fallo era otro.
+
+    Con un Pokémon dañado en el equipo —un «Huevo malo»— el equipo entero deja
+    de poder leerse, y el mensaje anterior mandaba a buscar donde no había nada
+    que buscar. Ahora señala al miembro.
+    """
+    crudo = bytearray(_equipo(3))
+    crudo[PK4_PARTY_SIZE + 6] ^= 0xFF        # el segundo, con el checksum roto
+
+    with pytest.raises(HgssLiveError, match="miembro 2"):
+        parse_party_block(bytes(crudo), 3)
+
+
+def test_la_reserva_localizada_sobrevive_al_fallo_de_lectura() -> None:
+    """Se guarda aparte de la caché de lectura, que se olvida justo al fallar.
+
+    Sin eso no se puede explicar por qué falla, que es cuando más falta hace.
+    """
+    import inspect
+
+    from app.hgss_live import HgssMelonDSReader
+
+    fuente = inspect.getsource(HgssMelonDSReader._explicar_el_bloque)
+    assert "_reserva_localizada" in fuente
+    assert "_resolved" not in fuente

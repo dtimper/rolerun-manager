@@ -1,6 +1,26 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.86 — decir cuál es el Pokémon que no se puede leer
+
+La localización de alpha.85 funciona: encuentra el bloque, demuestra cuál manda y
+lo recuerda. Y aun así seguía saliendo «no se localizó la RAM DS validada».
+
+El motivo real era otro: **el segundo miembro del equipo está dañado**. Falla su
+checksum 40 de 40 veces —no es una lectura rota, es el Pokémon— y con un miembro
+ilegible el equipo entero deja de poder leerse. Es el «Huevo malo» que dejó la
+escritura de antes, que sigue en la partida.
+
+El mensaje mandaba a buscar donde no había nada que buscar. Ahora, cuando el
+bloque está localizado y aun así no se puede leer, se dice por su nombre:
+
+> El miembro 2 del equipo no es un PK4: Checksum PK4 inválido.
+
+Para eso la reserva localizada se guarda aparte de la caché de lectura, que se
+olvida justo al fallar —que es cuando más falta hace—.
+
+Suite completa: **1784**.
+
 # v0.2.6-alpha.85 — la dirección ya no se da por sabida: se busca
 
 HeartGold vuelve a escribir, con la causa del «Huevo malo» resuelta de raíz.
