@@ -641,9 +641,14 @@ class RoleRunManager(ctk.CTk):
             active_predicate=self._foreground_is_supported_emulator,
         )
         self.hotkey_registration_errors: list[str] = []
-        # Los efectos se sintetizan la primera vez en Documentos\RoleRun
-        # Manager\Sonidos. Dejar ahi un WAV con el mismo nombre lo sustituye.
-        self.sonidos = Sonidos()
+        # Apagados. Los efectos sintetizados no convencieron -suenan a Windows,
+        # que es justo lo que no queria el usuario- y un adorno que molesta es
+        # peor que no tenerlo. Apagado no abre hilos ni escribe en disco.
+        #
+        # La maquinaria se queda porque el dia que haya sonidos propios solo hay
+        # que traerlos: `Sonidos` usa el WAV que encuentre en la carpeta antes
+        # que el suyo, asi que basta con encenderlo aqui.
+        self.sonidos = Sonidos(activo=False)
         self._ultimo_aviso_sonado: tuple[str, float] | None = None
         self.selected_game_key: str | None = None
         self._shell_built = False

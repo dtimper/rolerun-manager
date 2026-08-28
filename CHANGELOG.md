@@ -1,6 +1,36 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.0-alpha.3 — sin sonidos
+
+Los efectos sintetizados sonaban a Windows, que es justo lo que el usuario no
+quería. Un adorno que molesta es peor que no tenerlo, así que quedan apagados.
+
+Apagado no es un maquillaje: no se abre ningún hilo, no se sintetiza nada y no
+se toca el disco. La carpeta `Documentos\RoleRun Manager\Sonidos` se puede
+borrar; no se vuelve a crear.
+
+La maquinaria se queda —está probada y aislada— porque el día que haya sonidos
+propios solo hay que traerlos: `Sonidos` usa el WAV que encuentre en la carpeta
+antes que el suyo. Una prueba comprueba que el programa se entrega mudo, para
+que no vuelva a encenderse solo.
+
+El vuelo del Pokémon entre el equipo y el PC se queda: eso no se objetó.
+
+## Contexto que puede importar
+
+El usuario reporta que Windows **no puede abrir el mezclador de volumen**, y que
+el juego se le bloqueó nada más abrir RoleRun. Eso no es un síntoma de RoleRun:
+es el servicio de audio de Windows atascado, y un emulador se cuelga así porque
+su hilo de audio se queda esperando.
+
+Los efectos reproducían con `winsound.PlaySound` **en un hilo por sonido**, y
+moverse por una caja del PC podía lanzar muchos seguidos. Apagarlos quita esa
+vía. No explica el primer congelado —fue con la escritura de una MT, mucho antes
+de que existieran los sonidos—, así que no se da por cerrado nada.
+
+1937 passed, 1 skipped.
+
 # v0.3.0-alpha.2 — el primer drafteo enciende los botones
 
 Con la pestaña de Drafteos abierta y cero drafteos, sumar uno dejaba una pantalla

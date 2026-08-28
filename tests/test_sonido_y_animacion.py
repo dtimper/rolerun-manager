@@ -270,3 +270,17 @@ def test_si_el_movil_muere_en_pleno_vuelo_se_recoge() -> None:
     raiz.correr()
 
     assert movil.destruido
+
+
+def test_el_programa_no_trae_sonido() -> None:
+    """Los sintetizados sonaban a Windows y se apagaron.
+
+    Un adorno que molesta es peor que no tenerlo. La maquinaria se queda para
+    cuando haya sonidos propios, pero no puede volver a encenderse sola.
+    """
+    import inspect
+
+    from app.ui import RoleRunManager
+
+    fuente = inspect.getsource(RoleRunManager.__init__)
+    assert "Sonidos(activo=False)" in fuente
