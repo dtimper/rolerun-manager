@@ -1,6 +1,50 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.0-alpha.5 — mover Pokémon dentro del PC en Perla Reluciente
+
+Arrastrar de un hueco del PC a otro decía «DESTINO NO HABILITADO». Ya no.
+
+## No es una escritura nueva
+
+Un movimiento dentro del PC son **exactamente las dos escrituras** que el writer
+de tamaño ya realiza sobre esta misma matriz de 1.200 slots:
+
+| | |
+|---|---|
+| `party-to-box` | mete un PB8 completo (344 bytes) en un hueco de caja |
+| `box-to-party` | deja el vacío canónico en el hueco que se libera |
+
+Aquí se aplican a **dos huecos de caja** en vez de a uno de caja y uno de party.
+La estructura, el tamaño del registro y el vacío canónico son los ya demostrados
+físicamente. No se ha inventado nada; se compone lo que ya estaba probado.
+
+## Lo que sigue bloqueado
+
+El **intercambio** entre dos huecos ocupados. Eso no son estas dos escrituras
+—necesita un tercer hueco o un contrato distinto— y no está demostrado. El
+destino tiene que estar vacío, y si no lo está se rechaza sin escribir un byte.
+
+## Las precondiciones
+
+Las mismas que el resto de writers vivos, más una que no es obvia: **la party no
+se toca, así que su captura sirve de testigo**. Si cambia durante la operación,
+algo más estaba escribiendo y se aborta.
+
+Además: doble captura de cajas comparada, el origen tiene que seguir conteniendo
+**ese** Pokémon —la caja pudo cambiar dentro del juego entre elegir y soltar—,
+nada de esto ocurre en combate, y al terminar se verifica que ningún otro hueco
+de las 1.200 posiciones cambió. Con rollback verificado si algo falla a medias.
+
+## Nota de estructura
+
+Este writer repite el bloque de transacción de los otros tres en vez de
+compartirlo. Extraerlo tocaría tres caminos de escritura viva ya demostrados, y
+eso es un trabajo aparte con su propio riesgo: aquí se ha seguido la forma de la
+casa —un writer autocontenido por operación—.
+
+1954 passed, 1 skipped.
+
 # v0.3.0-alpha.4 — el corte de dos segundos en la música
 
 El usuario oye que la música del juego se para **dos segundos** al cargar RoleRun

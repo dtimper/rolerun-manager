@@ -14459,7 +14459,7 @@ class RoleRunManager(ctk.CTk):
             return
         if intent.operation == "move-box-slot":
             if self._active_azahar_realtime_key() not in (
-                {"usum", "xy"} | MELONDS_REALTIME_GAME_KEYS
+                {"usum", "xy", "bdsp"} | MELONDS_REALTIME_GAME_KEYS
             ):
                 game_label = self._active_azahar_realtime_label()
                 self._set_operation_status(

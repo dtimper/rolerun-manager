@@ -1966,6 +1966,161 @@ class BDSPLiveWriter:
             if handle is not None:
                 transport.close(handle)
 
+    def _apply_box_move(self, change: PendingTeamChange) -> BDSPWriteReceipt:
+        """Mueve un Pokémon de un hueco de caja a otro hueco **vacío**.
+
+        No hay ninguna escritura nueva. Son las dos que el writer de tamaño ya
+        realiza sobre esta misma matriz de 1.200 slots: meter un PB8 completo en
+        un hueco de caja —lo que hace ``party-to-box``— y dejar el vacío canónico
+        en el que se libera —lo que hace ``box-to-party``—. Aquí se aplican a dos
+        huecos de caja en vez de a uno de caja y uno de party.
+
+        El **intercambio** entre dos huecos ocupados sigue bloqueado: eso no son
+        estas dos escrituras, y no está demostrado.
+        """
+        if change.operation != "move-box-slot":
+            raise BDSPLiveError("La operación no pertenece al writer de movimiento PC de BDSP.")
+        if change.box is None or change.box_slot is None:
+            raise BDSPLiveError("El movimiento no identifica su hueco de origen.")
+        if change.destination_box is None or change.destination_box_slot is None:
+            raise BDSPLiveError("El movimiento no identifica su hueco de destino.")
+        origen_pos = (int(change.box), int(change.box_slot))
+        destino_pos = (int(change.destination_box), int(change.destination_box_slot))
+        if origen_pos == destino_pos:
+            raise BDSPLiveError("El origen y el destino son el mismo hueco.")
+        if self.battle_reader_factory(self.client).read() is not None:
+            raise BDSPLiveError(
+                "No se reorganiza el PC durante un combate de BDSP. "
+                "Termina el combate y vuelve a intentarlo."
+            )
+
+        first_box = self.box_reader_factory(self.client).read()
+        second_box = self.box_reader_factory(self.client).read()
+        if not self._same_box(first_box, second_box):
+            raise BDSPLiveError("Las cajas cambiaron entre las dos capturas completas.")
+        if len(second_box.storage_slots) != 1200:
+            raise BDSPLiveError("La captura no conserva los 1.200 slots de caja.")
+        # La party no se toca, así que su captura sirve de testigo: si cambia
+        # durante la operación, algo más estaba escribiendo y hay que abortar.
+        first_party = self.party_reader_factory(self.client).read()
+        second_party = self.party_reader_factory(self.client).read()
+        if not self._same_party(first_party, second_party):
+            raise BDSPLiveError("La party cambió entre las dos capturas completas.")
+
+        origen = self._box_storage(second_box, *origen_pos)
+        destino = self._box_storage(second_box, *destino_pos)
+        movido = parse_bdsp_box_pokemon(
+            origen.encrypted, box=origen_pos[0], slot=origen_pos[1],
+        )
+        if movido is None:
+            raise BDSPLiveError("El hueco de origen ya no contiene ningún Pokémon.")
+        identidad = self._identity(movido)
+        esperada = str(change.incoming_identity or "")
+        if esperada and identidad != esperada:
+            raise BDSPLiveError(
+                "El Pokémon del hueco de origen ya no coincide con la selección."
+            )
+        if parse_bdsp_box_pokemon(
+            destino.encrypted, box=destino_pos[0], slot=destino_pos[1],
+        ) is not None:
+            raise BDSPLiveError("El hueco de destino ya no está vacío.")
+        empty = self._empty_pb8()
+        if bytes(destino.encrypted) != empty:
+            raise BDSPLiveError(
+                "El hueco de destino no contiene el vacío canónico demostrado."
+            )
+
+        destinations = (
+            (int(destino.data_pointer), empty, bytes(origen.encrypted), "caja destino"),
+            (int(origen.data_pointer), bytes(origen.encrypted), empty, "caja origen"),
+        )
+
+        session = self.client.session
+        if self.client.read_memory(
+            int(session.profile.guest_main), len(session.profile.main_witness),
+        ) != session.profile.main_witness:
+            raise BDSPLiveError("La huella principal de Ryujinx cambió antes de escribir.")
+        transport = self.transport_factory()
+        handle = None
+        attempted: list[tuple[int, bytes, str]] = []
+        try:
+            handle = transport.open(int(session.process.pid))
+            delta = int(session.guest_to_host_delta)
+            for guest, original, desired, label in destinations:
+                host = guest + delta
+                transport.assert_writable(handle, host, len(desired))
+                if self._stable_guest(
+                    self.client, guest, len(original), f"La precondición {label}",
+                ) != original:
+                    raise BDSPLiveError(f"La precondición guest de {label} cambió.")
+                if transport.read(handle, host, len(original)) != original:
+                    raise BDSPLiveError(f"La precondición host de {label} no coincide.")
+            for guest, original, desired, label in destinations:
+                host = guest + delta
+                attempted.append((host, original, label))
+                transport.write(handle, host, desired)
+                if (
+                    transport.read(handle, host, len(desired)) != desired
+                    or self.client.read_memory(guest, len(desired)) != desired
+                ):
+                    raise BDSPLiveError(f"El readback de {label} falló.")
+
+            verified_box = self.box_reader_factory(self.client).read()
+            if not self._box_unchanged_except(
+                second_box, verified_box, {origen_pos, destino_pos},
+            ):
+                raise BDSPLiveError("Un slot de caja no implicado cambió durante el movimiento.")
+            llegado = parse_bdsp_box_pokemon(
+                self._box_storage(verified_box, *destino_pos).encrypted,
+                box=destino_pos[0], slot=destino_pos[1],
+            )
+            if llegado is None or self._identity(llegado) != identidad:
+                raise BDSPLiveError("La verificación perdió el Pokémon movido.")
+            if bytes(self._box_storage(verified_box, *origen_pos).encrypted) != empty:
+                raise BDSPLiveError("El hueco de origen no quedó con el vacío canónico.")
+            verified_party = self.party_reader_factory(self.client).read()
+            if not self._same_party(second_party, verified_party):
+                raise BDSPLiveError("La party cambió durante un movimiento que no la toca.")
+
+            inventory = self.inventory_reader_factory(self.client).read()
+            return BDSPWriteReceipt(
+                party=verified_party, inventory=inventory, process=session.process,
+                attempts=2, applied_count=1,
+                memory_watches=tuple(
+                    BDSPWriteMemoryWatch(guest, desired)
+                    for guest, _old, desired, _label in destinations
+                ),
+            )
+        except Exception as exc:
+            rollback_errors: list[str] = []
+            if handle is not None:
+                for host, original, label in reversed(attempted):
+                    try:
+                        transport.write(handle, host, original)
+                        if transport.read(handle, host, len(original)) != original:
+                            rollback_errors.append(f"{label}: readback host distinto")
+                    except Exception as rollback_exc:
+                        rollback_errors.append(f"{label}: {rollback_exc}")
+            if attempted and not rollback_errors:
+                delta = int(session.guest_to_host_delta)
+                for host, original, label in attempted:
+                    if self.client.read_memory(int(host) - delta, len(original)) != original:
+                        rollback_errors.append(f"{label}: readback guest distinto")
+            if rollback_errors:
+                raise BDSPLiveError(
+                    f"Falló el movimiento en el PC y también su rollback: "
+                    f"{'; '.join(rollback_errors)}",
+                ) from exc
+            if attempted:
+                raise BDSPLiveError(
+                    f"Falló el movimiento en el PC; RoleRun restauró y verificó "
+                    f"los {len(destinations)} bloques. Causa: {exc}",
+                ) from exc
+            raise
+        finally:
+            if handle is not None:
+                transport.close(handle)
+
     def _apply_faint_replacement(self, change: PendingTeamChange) -> BDSPWriteReceipt:
         """Sustituye una baja sin cambiar el tamaño ni el orden de la party.
 
@@ -2650,6 +2805,8 @@ class BDSPLiveWriter:
                 return self._apply_party_box_swap(supported[0])
             if supported[0].operation in {"party-to-box", "box-to-party"}:
                 return self._apply_party_box_resize(supported[0])
+            if supported[0].operation == "move-box-slot":
+                return self._apply_box_move(supported[0])
             raise BDSPLiveError(
                 f"La operación Equipo↔PC '{supported[0].operation}' no está demostrada en BDSP.",
             )
