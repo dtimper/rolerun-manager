@@ -71,6 +71,9 @@ class RunProject:
         "toggle_support": "alt+6",
         "heal_party": "",
         "floating_menu": "",
+        # F8 sale de fabrica: durante un directo, un atajo que hay que
+        # configurar primero es un atajo que no se usa.
+        "reportar_bug": "f8",
     })
     controller_hotkeys: dict[str, str] = field(default_factory=lambda: {
         "floating_menu": "guide",
@@ -270,6 +273,9 @@ class RunProjectService:
                 "toggle_mago": "alt+3", "toggle_tanque": "alt+4",
                 "toggle_prisma": "alt+5", "toggle_support": "alt+6",
                 "heal_party": "", "floating_menu": "",
+                # F8 sale de fabrica: durante un directo, un atajo que hay que
+                # configurar primero es un atajo que no se usa.
+                "reportar_bug": "f8",
             }
             if had_default_role_hotkeys:
                 project.hotkeys.update({
@@ -317,6 +323,7 @@ class RunProjectService:
                 raw.setdefault("hotkeys", {}).setdefault("sync_live_game", "f5")
                 raw["hotkeys"].setdefault("heal_party", "")
                 raw["hotkeys"].setdefault("floating_menu", "")
+                raw["hotkeys"].setdefault("reportar_bug", "f8")
                 raw.setdefault("controller_hotkeys", {"floating_menu": "guide"})
                 raw.setdefault("menu_keys", {"accept": "z", "back": "x"})
                 raw.setdefault("controller_menu_buttons", {"accept": "a", "back": "b"})
@@ -341,6 +348,7 @@ class RunProjectService:
             raw.setdefault("hotkeys", {}).setdefault("sync_live_game", "f5")
             raw["hotkeys"].setdefault("heal_party", "")
             raw["hotkeys"].setdefault("floating_menu", "")
+            raw["hotkeys"].setdefault("reportar_bug", "f8")
             raw.setdefault("controller_hotkeys", {"floating_menu": "guide"})
             raw.setdefault("menu_keys", {"accept": "z", "back": "x"})
             raw.setdefault("controller_menu_buttons", {"accept": "a", "back": "b"})

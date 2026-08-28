@@ -1,6 +1,61 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.116 — guardar un fallo sin parar el directo
+
+Dos cosas para poder jugar en directo sin ir reportando sobre la marcha.
+
+## Un botón para guardar el fallo
+
+Contar un fallo al terminar el directo pierde justo lo que hace falta: la hora
+exacta, qué había en pantalla y qué estaba leyendo o escribiendo RoleRun en ese
+momento.
+
+**F8** —de fábrica, sin configurar nada— deja una carpeta con todo eso. No
+pregunta nada ni saca al usuario de lo que estaba haciendo:
+
+| | |
+|---|---|
+| `pantalla.png` | lo que se veía |
+| `contexto.json` | versión, juego, página, equipo con PS y movimientos, cambios pendientes |
+| `bdsp_trace.jsonl` | la cola de la traza del juego en vivo |
+| `tiempos.jsonl` | la cola de la medición de tiempos |
+| `nota.txt` | para escribir después, si apetece |
+
+Se acumulan en `Documentos\RoleRun Manager\Bugs`, y al terminar se entregan
+todas juntas.
+
+El atajo global es lo más orgánico mientras se juega: el emulador está delante y
+no hay que cambiar de ventana. El menú flotante lleva además un **GUARDAR
+FALLO** para cuando el fallo sea de RoleRun; ese cierra el menú primero, para que
+la captura recoja lo que había debajo y no el propio panel.
+
+**Nada de esto puede tumbar la partida.** Si una parte del informe falla —la
+captura, un registro, leer el equipo— se anota dentro del propio informe y las
+demás se guardan igual. Un informe incompleto sirve; perder lo que estabas
+haciendo por intentar guardarlo, no.
+
+## La barra flotante solo se retira si tapan el juego
+
+Cambiar de ventana no basta: con dos monitores, mirar el navegador en el segundo
+deja el juego a la vista y la barra sigue haciendo falta.
+
+La decisión se toma con la **geometría**, no con el foco. Las coordenadas de
+ventana son del escritorio completo, así que dos ventanas maximizadas en
+pantallas distintas no se solapan nunca. Si la ventana activa cubre **un cuarto
+o más** del juego, la barra se retira y RoleRun se queda como estaba; al volver
+al juego, vuelve sola.
+
+Ese umbral deja pasar una calculadora en una esquina (0,019) y no un navegador
+encima (0,781), ambos medidos.
+
+Se distingue de haberla cerrado a mano: volver a la ventana principal la retira a
+propósito y entonces no vuelve sola. Y el sondeo sigue vivo mientras está
+escondida, porque en modo flotante la ventana principal está retirada y nada más
+la traería de vuelta.
+
+1911 passed, 1 skipped.
+
 # v0.2.6-alpha.115 — el latido no vale sin saber quién tiene la ventana
 
 Con el reloj ya puesto, el usuario enseñó otra MT y **no se congeló**. La traza

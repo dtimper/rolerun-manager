@@ -57,6 +57,8 @@ from .game_engines import EngineFactory, GameEngineError
 from .save_service import SaveInfo, SaveService
 from .run_service import RunProject, RunProjectService
 from .game_source_service import GameSourceProfile, GameSourceProfileService
+from .reporte_de_bugs import BUGS_DIR, guardar_reporte, informes
+from .ventana_activa import fraccion_tapada, rectangulo, ventana_activa
 from .win_hotkeys import WindowsHotkeyManager
 from .sdl_gamepad import BUTTON_NAMES, RyujinxInputGate, SDLGamepad
 from .obs_sync import ObsSyncService, SaveFileWatcher
@@ -807,6 +809,10 @@ class RoleRunManager(ctk.CTk):
         # Cambio automático entre ventana principal y barra flotante. El guard evita
         # que withdraw/deiconify disparen recursivamente los eventos de minimizado.
         self._auto_floating_guard = False
+        # La barra se retira sola cuando algo tapa el juego en su misma
+        # pantalla. Hay que distinguirlo de haberla cerrado a mano: solo
+        # se trae de vuelta la que se retiró por esto.
+        self._barra_oculta_por_tapado = False
         self._floating_enabled = self._load_floating_enabled()
         self._floating_button_text = ctk.StringVar(
             value=f"BARRA FLOTANTE · {'ON' if self._floating_enabled else 'OFF'}"
@@ -2541,6 +2547,9 @@ class RoleRunManager(ctk.CTk):
 
     def restore_from_floating_bar(self) -> None:
         self._close_floating_launcher()
+        # Volver a la ventana principal retira la barra a propósito. Sin esto,
+        # el sondeo la confundiría con una barra tapada y la traería de vuelta.
+        self._barra_oculta_por_tapado = False
         self._save_floating_bar_position()
         if self._floating_bar_poll_id:
             try:
@@ -2956,6 +2965,17 @@ class RoleRunManager(ctk.CTk):
         )
         settings.place(relx=1.0, x=-18, y=18, anchor="ne")
         self._floating_menu_buttons.append(settings)
+        # Un fallo se apunta en el momento o se pierde. Cierra el menú primero
+        # para que la captura recoja lo que había debajo, no este panel.
+        reportar = ctk.CTkButton(
+            shell, text="⚑  GUARDAR FALLO", width=170, height=34, corner_radius=10,
+            fg_color="#2A1D1D", hover_color="#3A2222", border_width=1,
+            border_color=DANGER, text_color=DANGER,
+            font=ctk.CTkFont("Segoe UI", 12, "bold"),
+            command=self._reportar_bug_desde_el_menu,
+        )
+        reportar.place(relx=0.0, x=18, y=18, anchor="nw")
+        self._floating_menu_buttons.append(reportar)
         close = ctk.CTkButton(
             launcher, text="×", width=44, height=44, corner_radius=13,
             fg_color="#151515", hover_color=DANGER, border_width=1,
@@ -3249,6 +3269,11 @@ class RoleRunManager(ctk.CTk):
             self._floating_menu_buttons[self._floating_menu_index].invoke()
         return "break"
 
+    def _reportar_bug_desde_el_menu(self) -> None:
+        """Cierra el menú y guarda. La captura debe recoger el juego, no el menú."""
+        self._close_floating_launcher()
+        self.after(120, self.reportar_bug)
+
     def _open_settings_from_floating_launcher(self) -> None:
         """Cierra la capa de juego y abre Configuración en la ventana principal."""
         self._last_main_page_before_floating = "settings"
@@ -3331,11 +3356,72 @@ class RoleRunManager(ctk.CTk):
                 pass
         self._floating_bar_poll_id = self.after(500, self._poll_floating_bar)
 
+    #: Cuánto del juego tiene que tapar otra ventana para retirar la barra. Un
+    #: cuarto deja pasar una calculadora en una esquina y no un navegador encima.
+    JUEGO_TAPADO = 0.25
+
+    def _el_juego_esta_tapado(self) -> bool:
+        """Si la ventana activa se le ha puesto encima al juego, en su pantalla.
+
+        Cambiar a otra aplicación **no** basta: con dos monitores, mirar el
+        navegador en el segundo deja el juego a la vista y la barra sigue
+        haciendo falta. Lo que la estorba es que algo la tape de verdad, y eso
+        se decide comparando los rectángulos en coordenadas de escritorio.
+        """
+        if os.name != "nt":
+            return False
+        activa = ventana_activa()
+        if not activa:
+            return False
+        try:
+            propias = {int(self.winfo_id())}
+            bar = self.floating_bar
+            if bar is not None and bar.winfo_exists():
+                propias.add(int(bar.winfo_id()))
+        except Exception:
+            propias = set()
+        if activa in propias or self._foreground_belongs_to_this_process():
+            return False
+        juego = int(getattr(self, "_last_supported_emulator_hwnd", 0) or 0)
+        if not juego or activa == juego:
+            return False
+        return fraccion_tapada(rectangulo(juego), rectangulo(activa)) >= self.JUEGO_TAPADO
+
     def _poll_floating_bar(self) -> None:
         self._floating_bar_poll_id = None
         bar = self.floating_bar
-        if not bar or not bar.winfo_exists() or str(bar.state()) == "withdrawn":
+        if not bar or not bar.winfo_exists():
+            self._barra_oculta_por_tapado = False
             return
+        oculta = str(bar.state()) == "withdrawn"
+        if oculta and not self._barra_oculta_por_tapado:
+            # La retiró otra cosa —volver a la ventana principal, un diálogo—.
+            # Ese gesto se respeta.
+            return
+
+        if self._el_juego_esta_tapado():
+            if not oculta:
+                try:
+                    self._save_floating_bar_position()
+                    bar.withdraw()
+                except Exception:
+                    pass
+                self._barra_oculta_por_tapado = True
+            # El sondeo sigue vivo aunque la barra no se vea: en modo flotante la
+            # ventana principal está retirada, así que nada más la traería de
+            # vuelta cuando el juego vuelva a quedar despejado.
+            try:
+                self._floating_bar_poll_id = self.after(500, self._poll_floating_bar)
+            except Exception:
+                self._floating_bar_poll_id = None
+            return
+
+        if oculta:
+            try:
+                bar.deiconify()
+            except Exception:
+                pass
+            self._barra_oculta_por_tapado = False
         self._render_floating_bar(force=False)
 
     def _clear_floating_bar_render_children(self, bar) -> None:
@@ -7312,6 +7398,9 @@ class RoleRunManager(ctk.CTk):
         # ejecutar ninguna acción después de volver a RoleRun u otra aplicación.
         if not self._foreground_is_supported_emulator():
             return
+        if action == "reportar_bug":
+            self.after(0, self.reportar_bug)
+            return
         if action in {"heal_party", "floating_menu"}:
             if action == "heal_party":
                 self.after(0, self._heal_bdsp_party)
@@ -7342,6 +7431,67 @@ class RoleRunManager(ctk.CTk):
             return
         key = self.project.hotkeys.get(action, "") if self.project else ""
         self.after(0, lambda: self.adjust_run_counter(counter, delta, source=f"atajo {key}"))
+
+    def reportar_bug(self) -> Path | None:
+        """Guarda lo que hay alrededor de este instante. Una pulsación, nada más.
+
+        Durante un directo no se puede parar a escribir qué ha pasado, así que
+        esto no pregunta nada: deja la carpeta y avisa. La captura de pantalla
+        es lo primero que se mira después y lo que menos hay que explicar.
+        """
+        try:
+            carpeta = guardar_reporte(self._contexto_para_un_bug)
+        except Exception as error:
+            self._set_operation_status(
+                "failed", "NO SE PUDO GUARDAR EL FALLO", str(error), persistent=True,
+            )
+            return None
+        cuantos = len(informes())
+        self._set_operation_status(
+            "done",
+            "FALLO GUARDADO",
+            f"{carpeta.name} · {cuantos} guardado{'s' if cuantos != 1 else ''} "
+            "en Documentos\\RoleRun Manager\\Bugs.",
+        )
+        return carpeta
+
+    def _contexto_para_un_bug(self) -> dict[str, object]:
+        """Lo que RoleRun sabe de sí mismo ahora mismo.
+
+        Cada campo va por separado y protegido: si uno no se puede leer, el
+        informe se guarda igual sin él. Un informe incompleto sirve.
+        """
+        datos: dict[str, object] = {}
+
+        def anotar(nombre: str, obtener) -> None:
+            try:
+                datos[nombre] = obtener()
+            except Exception as error:
+                datos[nombre] = f"<no se pudo: {type(error).__name__}>"
+
+        anotar("pagina", lambda: str(self.active_page))
+        anotar("run", lambda: self.project.name if self.project else None)
+        anotar("juego", lambda: self._active_azahar_realtime_label())
+        anotar("juego_clave", lambda: self._active_azahar_realtime_key())
+        anotar("estado_sync", lambda: str(self.sync_status))
+        anotar("cambios_pendientes", lambda: len(self.run.pending_changes))
+        anotar("barra_flotante", lambda: bool(self._floating_bar_is_visible()))
+        anotar(
+            "equipo",
+            lambda: [
+                {
+                    "slot": int(getattr(p, "slot", 0) or 0),
+                    "especie": str(getattr(p, "species", "")),
+                    "mote": str(getattr(p, "nickname", "")),
+                    "nivel": int(getattr(p, "level", 0) or 0),
+                    "ps": f"{getattr(p, 'current_hp', '?')}/{getattr(p, 'max_hp', '?')}",
+                    "rol": str(getattr(p, "role", "")),
+                    "movimientos": list(getattr(p, "moves", None) or []),
+                }
+                for p in self._projected_party()
+            ],
+        )
+        return datos
 
     def _show_live_sync_toast(self, title: str, detail: str, success: bool) -> None:
         """Traduce los avisos heredados al estado persistente de la shell."""
@@ -20839,6 +20989,7 @@ class RoleRunManager(ctk.CTk):
             ("sync_live_game", "Resincronizar juego desde Azahar"),
             ("heal_party", "Curar por completo el equipo"),
             ("floating_menu", "Abrir/cerrar menú flotante"),
+            ("reportar_bug", "Guardar un fallo para revisarlo después"),
             ("vidas_mas", "Sumar vida"), ("vidas_menos", "Restar vida"),
             ("pociones_mas", "Sumar curación"), ("pociones_menos", "Restar curación"),
             ("drafteos_mas", "Sumar drafteo"), ("drafteos_menos", "Restar drafteo"),
