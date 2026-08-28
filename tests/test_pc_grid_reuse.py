@@ -36,6 +36,9 @@ class _BotonFalso:
         self.opciones.update(kwargs)
         self.reconfiguraciones += 1
 
+    def cget(self, clave):
+        return self.opciones[clave]
+
     def grid(self, **_kwargs) -> None:
         pass
 
@@ -80,6 +83,7 @@ def _vista(monkeypatch):
         _end_drag=lambda event: None,
     )
     yo._widget_vivo = UnifiedTeamPCView._widget_vivo
+    yo._configurar_si_cambia = UnifiedTeamPCView._configurar_si_cambia
     yo._bind_drag_tree = types.MethodType(UnifiedTeamPCView._bind_drag_tree, yo)
     return yo, arrastres
 
@@ -93,13 +97,26 @@ def test_cambiar_de_caja_reutiliza_el_mismo_boton(monkeypatch) -> None:
     yo, _arrastres = _vista(monkeypatch)
 
     primero = _pintar(yo, 1, _Mono("WOOPER"))
-    creaciones = 1
     for _caja in range(5):                       # cinco cambios de caja
         otro = _pintar(yo, 1, _Mono("GASTLY"))
         assert otro is primero, "se creó un botón nuevo en vez de reutilizar"
 
-    assert primero.reconfiguraciones == 5
-    assert creaciones == 1
+    # Ninguna de las cinco cambia el aspecto de la casilla -mismo número, misma
+    # marca de ocupada, mismo sprite ausente-, y un `configure` con colores
+    # repinta el canvas de customtkinter valga o no la pena: 0,844 ms medidos.
+    assert primero.reconfiguraciones == 0
+
+
+def test_una_casilla_que_si_cambia_de_aspecto_se_escribe(monkeypatch) -> None:
+    """Ahorrar escrituras no puede convertirse en no escribir cuando toca."""
+    yo, _arrastres = _vista(monkeypatch)
+
+    boton = _pintar(yo, 4, _Mono("WOOPER"))
+    escrituras = boton.reconfiguraciones
+    _pintar(yo, 4, None)                         # se queda vacía: otro fondo
+
+    assert boton.reconfiguraciones == escrituras + 1
+    assert boton.opciones["fg_color"] == "#161616"
 
 
 def test_el_hueco_vacio_tambien_reutiliza(monkeypatch) -> None:

@@ -41,6 +41,9 @@ class _Etiqueta:
         self.opciones.update(kwargs)
         self.veces += 1
 
+    def cget(self, clave):
+        return self.opciones[clave]
+
     def winfo_exists(self) -> bool:
         return True
 
@@ -95,6 +98,7 @@ def _vista():
         support_damage_for=None,
         sprite_for=lambda pokemon, size: f"sprite:{pokemon.species}:{size}",
         update_team_health=lambda ident, actual, maximo: True,
+        _configurar_si_cambia=UnifiedTeamPCView._configurar_si_cambia,
     )
     return yo, destino
 

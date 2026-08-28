@@ -616,9 +616,10 @@ class UnifiedTeamPCView:
             max_hp = int(max_hp or 0)
             value = int(hp_value) if hp_value is not None else None
             fraction, color, text = self._health_presentation(value, max_hp)
-            bar.configure(progress_color=color)
-            bar.set(fraction)
-            label.configure(text=f"PS {text}")
+            self._configurar_si_cambia(bar, progress_color=color)
+            if abs(float(bar.get()) - fraction) > 1e-9:
+                bar.set(fraction)
+            self._configurar_si_cambia(label, text=f"PS {text}")
         except Exception:
             return False
         # La barrera inicial comprueba lo que esta superficie materializó de
@@ -675,13 +676,14 @@ class UnifiedTeamPCView:
             # se recorta por posición al repintar el PC y añadirle cosas la
             # descuadraría.
             registro["imagen"] = imagen
-            registro["sprite"].configure(image=imagen)
+            self._configurar_si_cambia(registro["sprite"], image=imagen)
 
             mote = str(
                 getattr(pokemon, "nickname", "")
                 or getattr(pokemon, "species", "Pokémon")
             )
-            registro["titulo"].configure(
+            self._configurar_si_cambia(
+                registro["titulo"],
                 text=f"{mote}  ·  Nv. {getattr(pokemon, 'level', '—')}",
             )
 
@@ -698,17 +700,23 @@ class UnifiedTeamPCView:
                 color = DANGER if key == increased else (
                     SELECTED if key == decreased else GOLD
                 )
-                registro["stats_nombre"][index].configure(
+                self._configurar_si_cambia(
+                    registro["stats_nombre"][index],
                     text=STAT_LABELS[key], text_color=color,
                 )
-                registro["stats_valor"][index].configure(
+                self._configurar_si_cambia(
+                    registro["stats_valor"][index],
                     text=str(stats.get(key, "—")),
                 )
 
             ability = str(getattr(pokemon, "ability", "") or "No disponible")
             item = str(getattr(pokemon, "held_item", "") or "Ninguno")
-            registro["meta"][0].configure(text=f"HABILIDAD · {ability}")
-            registro["meta"][1].configure(text=f"OBJETO · {item}")
+            self._configurar_si_cambia(
+                registro["meta"][0], text=f"HABILIDAD · {ability}",
+            )
+            self._configurar_si_cambia(
+                registro["meta"][1], text=f"OBJETO · {item}",
+            )
 
             moves = list(getattr(pokemon, "moves", None) or [])[:4]
             while len(moves) < 4:
@@ -723,7 +731,8 @@ class UnifiedTeamPCView:
                 issue = issue_by_slot.get(index + 1)
                 elegible = (index + 1) in support_slots and not issue
                 marcado = bool(issue) or elegible
-                registro["celdas_mov"][index].configure(
+                self._configurar_si_cambia(
+                    registro["celdas_mov"][index],
                     height=18 if marcado else 16,
                     fg_color=(
                         "#341A1A" if issue else ("#292315" if elegible else "#292929")
@@ -731,7 +740,8 @@ class UnifiedTeamPCView:
                     border_width=1 if marcado else 0,
                     border_color=DANGER if issue else (GOLD if elegible else "#292929"),
                 )
-                registro["textos_mov"][index].configure(
+                self._configurar_si_cambia(
+                    registro["textos_mov"][index],
                     text=str(move),
                     text_color=(
                         DANGER if issue
@@ -1203,8 +1213,10 @@ class UnifiedTeamPCView:
 
         button = self.pc_buttons.get(slot)
         if button is not None and self._widget_vivo(button):
-            # Reutilizar: 0,3 ms contra los 1,69 de crear uno nuevo.
-            button.configure(**aspecto)
+            # Reutilizar, y además solo escribir lo que cambia: al pasar de caja
+            # la mayoría de las casillas se quedan igual, y un `configure` con
+            # colores repinta el canvas aunque el valor sea el mismo.
+            self._configurar_si_cambia(button, **aspecto)
         else:
             button = ctk.CTkButton(
                 self.pc_grid,
@@ -1695,7 +1707,11 @@ class UnifiedTeamPCView:
             selected = identity == selected_identity
             preparation = identity in self.team_preparation
             try:
-                card.configure(
+                # Se llama en cada `<Leave>` de cada tarjeta: repintar las seis
+                # del equipo y las treinta del PC costaba 135 ms para mover un
+                # único borde.
+                self._configurar_si_cambia(
+                    card,
                     fg_color="#2A2417" if selected else "#202020",
                     border_width=3 if selected else 1,
                     border_color="#F2C45E" if selected else (PREPARATION if preparation else "#383838"),
@@ -1713,7 +1729,8 @@ class UnifiedTeamPCView:
             selected = slot == selected_slot
             occupied = slot in self.pc_occupied_slots
             try:
-                button.configure(
+                self._configurar_si_cambia(
+                    button,
                     fg_color="#2A2417" if selected else ("#202020" if occupied else "#161616"),
                     border_width=3 if selected else 1,
                     border_color="#F2C45E" if selected else "#303030",
@@ -1727,7 +1744,8 @@ class UnifiedTeamPCView:
         )
         for action, button in self._inspector_action_buttons.items():
             try:
-                button.configure(
+                self._configurar_si_cambia(
+                    button,
                     border_width=3 if action == active_action else 1,
                     border_color="#F7D47D" if action == active_action else GOLD,
                 )
@@ -2104,6 +2122,31 @@ class UnifiedTeamPCView:
             if child not in excluded:
                 child.bind("<Enter>", on_enter, add="+")
                 child.bind("<Leave>", on_leave, add="+")
+
+    @staticmethod
+    def _configurar_si_cambia(widget, **opciones) -> None:
+        """``configure`` solo con lo que de verdad cambia.
+
+        Medido con customtkinter en el equipo del usuario:
+
+            configure de un CTkFrame con 4 colores ..... 1,445 ms
+            configure de un CTkButton con 5 opciones ... 0,844 ms
+            configure(text=) a secas ................... 0,047 ms
+            leer esas mismas opciones con cget .........  0,001 ms
+
+        Cualquier opción de color obliga a customtkinter a repintar el canvas
+        entero, cambie o no el valor. Comparar antes es mil veces más barato que
+        escribir, y en un refresco normal casi nada ha cambiado.
+        """
+        cambios = {}
+        for clave, valor in opciones.items():
+            try:
+                if widget.cget(clave) != valor:
+                    cambios[clave] = valor
+            except Exception:
+                cambios[clave] = valor
+        if cambios:
+            widget.configure(**cambios)
 
     @staticmethod
     def _widget_vivo(widget) -> bool:

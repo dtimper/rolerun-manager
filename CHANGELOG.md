@@ -1,6 +1,67 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.2.6-alpha.101 — escribir cuesta, comparar no
+
+La versión anterior dio por hecho que lo caro era **crear** widgets. Medido de
+punta a punta sobre la vista real, con los seis miembros y una caja entera
+cambiando de datos, resultó ser menos de la mitad de la historia:
+
+| | antes | ahora |
+|---|---|---|
+| destruir y reconstruir la vista | 660 ms | — |
+| refrescar en sitio | 376 ms | **37 ms** |
+
+Los 376 ms se repartían así: 86 las seis tarjetas, **183 la rejilla del PC** y
+**135 los estilos de selección**. Y la rejilla del PC ya reutilizaba sus
+casillas, así que ahí no se estaba creando nada.
+
+## Dónde estaba
+
+En `configure`. Medido con customtkinter en el equipo del usuario:
+
+| operación | coste |
+|---|---|
+| `configure` de un CTkFrame con 4 colores | 1,445 ms |
+| `configure` de un CTkButton con 5 opciones | 0,844 ms |
+| `configure(text=…)` a secas | 0,047 ms |
+| leer esas mismas opciones con `cget` | **0,001 ms** |
+
+Cualquier opción de color obliga a customtkinter a repintar el canvas entero,
+**cambie o no el valor**. Y en un refresco normal casi nada ha cambiado.
+
+Ahora hay un `_configurar_si_cambia` que compara primero y solo envía las claves
+distintas. Comparar sale mil veces más barato que escribir, así que el peor caso
+—que haya cambiado todo— cuesta lo mismo que antes, y el caso normal, nada.
+
+## El peor caso medido no era un repintado
+
+Era pasar el ratón. `_apply_selection_styles` reconfigura las seis tarjetas del
+equipo y las treinta casillas del PC para mover un único borde, y está enganchado
+al `<Leave>` de cada tarjeta. **135 ms cada vez que el cursor sale de una
+tarjeta.** Con la comparación delante, solo se repintan las dos casillas que de
+verdad cambian de borde.
+
+Es, con diferencia, lo que más se va a notar: no hacía falta ni pulsar nada.
+
+## Alcance
+
+El ayudante se usa en los cuatro sitios que se repiten muchas veces por
+operación: las tarjetas del equipo, los PS, las casillas del PC y los estilos de
+selección. Lo que se pinta una sola vez sigue como estaba.
+
+Queda la ficha del inspector, que se rehace entera —15 ms— y ahora es la pieza
+más grande de los 37 que cuesta un refresco.
+
+## Pruebas
+
+`tests/test_solo_se_escribe_lo_que_cambia.py` fija las dos mitades: que lo igual
+no se escriba y que lo distinto sí, porque quedarse corto dejaría un dato viejo
+en pantalla. La prueba de la rejilla del PC pasa de exigir cinco reconfiguraciones
+a exigir **cero** cuando el aspecto no cambia, y una cuando sí.
+
+1833 passed, 1 skipped.
+
 # v0.2.6-alpha.100 — las tarjetas del equipo se actualizan, no se rehacen
 
 Medido con customtkinter en el equipo del usuario, para una tarjeta del equipo:
