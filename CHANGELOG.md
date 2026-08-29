@@ -1,6 +1,36 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.1-alpha.7 — un .bat que podía vaciar las reglas de rol
+
+Iba a limpiar `moves_legacy.json` por estar en desuso y resultó no estar en
+desuso, sino en algo peor.
+
+`preparar_motor.bat` tenía tres pasos, y el tercero ejecutaba
+`tools_migrate_moves.py`, que **reescribe `data/moves.json`** a partir de
+`moves_legacy.json`. Esa migración es de la v0.4.2 y el legacy se quedó
+congelado ahí; `moves.json` ha crecido mucho desde entonces:
+
+```
+                              moves.json   moves_legacy.json
+defensa_ataque_fisico              147              0
+support_ataque_estado               49              0
+defensa_recuperacion_pasiva          3              2   (sin Drenadoras)
+```
+
+Un doble clic en ese `.bat` —el que se usa para preparar el motor— habría
+regenerado `moves.json` sin esos dos conjuntos enteros y sin Drenadoras. Sin
+error, sin aviso: reglas de rol vaciadas y un programa que a partir de ahí
+declara ilegales movimientos que sí lo son.
+
+Se retiran los tres: el paso 3 del `.bat`, el script y el legacy. `moves.json`
+pasa a ser lo que en realidad es desde hace tiempo, **fuente de verdad que se
+edita a mano y no se regenera desde nada**, y así queda escrito en
+`docs/ARCHITECTURE.md`.
+
+`test_bats_apuntan_a_algo.py` gana una prueba que recorre todos los `.bat` del
+repo y falla si alguno vuelve a invocar una regeneración de las reglas.
+
 # v0.3.1-alpha.6 — Drenadoras entra en Tanque y Prisma
 
 Cambio de formato, decidido por el usuario tras ver la lista completa de
