@@ -1,6 +1,74 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.1-alpha.13 — abrir una partida con el juego cerrado
+
+Cuatro de las cinco cosas reportadas. Todas resultaron ser la misma familia:
+**repetir una operación que no cambia nada**. Publicar el mismo mensaje,
+reaplicar la misma geometría, reconfigurar la misma altura. Tk no distingue «lo
+mismo otra vez» de «algo nuevo»: repinta igual.
+
+## El mensaje que no llegaba a leerse
+
+La barra escribe el detalle **letra a letra**, 14 ms por letra. Y la rama del
+aviso de sincronización lo republicaba en **cada ciclo del monitor** —sus tres
+hermanas comprueban antes si ya está puesto; esa no—. Cada publicación reinicia
+el tecleo desde la primera letra, así que un aviso de 120 caracteres **nunca
+terminaba de escribirse**: lo que se veía era un texto cortado reiniciándose.
+
+Dos capas: la rama comprueba antes, y `OperationStatusStore.publish` ignora una
+publicación idéntica a la que ya está en pantalla. Lo segundo protege también de
+cualquier otro llamador que caiga en lo mismo.
+
+## Cerrar la ficha de un rol repintaba la página
+
+No lo repintaba la ficha: lo repintaba el `<Configure>` que dispara al cerrarse.
+`_fit_frame_to_viewport` llamaba a `configure(height=…)` **siempre**, cambiara o
+no. Medido en esta máquina:
+
+```
+configure(height=700) x200 con el mismo valor : 292,8 ms   (1,464 ms cada una)
+   veces que se redibujó el marco             : 200 de 200
+configurar_si_cambia  x200                    :   0,1 ms   (0,001 ms cada una)
+   veces que se redibujó el marco             : 0 de 200
+```
+
+Mil cuatrocientas veces más caro, y un redibujado completo del marco de Equipo y
+PC por cada evento. Corregido en las tres vistas que lo hacían.
+
+## La rueda de carga que se reiniciaba sola
+
+La rueda no la dibuja Tk: la pinta un worker por GDI sobre el HWND del snapshot,
+precisamente para que siga girando mientras el hilo de Tk construye la página.
+`_sync_activity_overlay_geometry` reaplicaba la **misma** geometría cada 35 ms
+durante toda la barrera de arranque, y cada una fuerza a Tk a repintar ese Label
+— borrando el dibujo. Ahora solo se escribe cuando la geometría cambia de verdad.
+
+## La barra flotante sin ningún juego abierto
+
+> *«en casa de un amigo, al no tener ningún juego abierto y cambiar de pestaña,
+> aparecía la barra flotante»*
+
+`_foreground_is_supported_emulator` comparaba sus tokens —`ryujinx`, `azahar`,
+`melonds`, `citra`…— contra el nombre del proceso **y contra el título de la
+ventana**. Cualquier ventana que dijera «Ryujinx» —una pestaña del navegador, una
+carpeta, un vídeo— pasaba por emulador en primer plano y RoleRun abría la barra.
+Cambiar de pestaña cambia el título: por eso pasaba justo ahí.
+
+El token se compara ahora con el **nombre del proceso**. El título solo cuenta
+cuando no se pudo leer el proceso, que es el único caso en que no hay nada mejor.
+
+## Lo que NO es un fallo: las estadísticas y los EV/IV
+
+Con el juego cerrado no se muestran, y no es un despiste: `save_engine_client.py`
+lo dice desde que existe —*«Solo se rellenan en lecturas vivas de party. Los
+backends que aún no los demuestran dejan estos campos vacíos y la UI los
+identifica como no disponibles.»*—. El motor C# **no publica** ni IV, ni EV, ni
+naturaleza, ni estadísticas: la lectura del archivo nunca los ha traído.
+
+Se puede hacer, y PKHeX.Core ya los tiene. Pero es ampliar el motor y volver a
+compilarlo, no un arreglo. Queda propuesto, no hecho.
+
 # v0.3.1-alpha.12 — «No se pudo abrir la Run», y el mando en Configuración
 
 Dos cosas reportadas al probar la tanda anterior. La primera la destapé yo con

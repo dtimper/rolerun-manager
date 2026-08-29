@@ -79,7 +79,7 @@ class OperationStatusStore:
         actions: tuple[str, ...] = (),
         persistent: bool | None = None,
     ) -> OperationMessage:
-        self._message = OperationMessage(
+        propuesto = OperationMessage(
             kind=kind,
             title=str(title).strip() or "ROLERUN",
             detail=str(detail).strip(),
@@ -87,6 +87,21 @@ class OperationStatusStore:
             persistent=persistent,
             revision=self._message.revision + 1,
         )
+        # Publicar dos veces lo mismo no es publicar: es hacer que la barra
+        # empiece a escribirlo otra vez desde la primera letra. Con un aviso que
+        # se republica en cada ciclo del monitor —«Azahar no responde por RPC»,
+        # 120 caracteres a 14 ms por letra— el mensaje NUNCA llega a terminar de
+        # escribirse. El usuario ve un texto cortado que se reinicia sin parar.
+        actual = self._message
+        if (
+            propuesto.kind == actual.kind
+            and propuesto.title == actual.title
+            and propuesto.detail == actual.detail
+            and propuesto.actions == actual.actions
+            and propuesto.persistent == actual.persistent
+        ):
+            return actual
+        self._message = propuesto
         for listener in tuple(self._listeners):
             listener(self._message)
         return self._message

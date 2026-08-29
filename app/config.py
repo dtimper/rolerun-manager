@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "RoleRun Manager"
-APP_VERSION = "0.3.1-alpha.12"
+APP_VERSION = "0.3.1-alpha.13"
 GOLD = "#C29C58"
 BG = "#111111"
 PANEL = "#1B1B1B"

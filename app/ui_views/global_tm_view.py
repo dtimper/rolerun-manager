@@ -128,7 +128,11 @@ class GlobalTMView:
         self._render_team()
         if canvas is not None:
             self._viewport_binding = canvas.bind(
-                "<Configure>", lambda event: self.frame.configure(height=max(480, int(event.height))), add="+")
+                "<Configure>",
+                lambda event: configurar_si_cambia(
+                    self.frame, height=max(480, int(event.height)),
+                ),
+                add="+")
         for delay in (0, 80, 180, 400):
             self.frame.after(delay, self._fit_to_viewport)
 
@@ -139,7 +143,7 @@ class GlobalTMView:
         try:
             height = int(canvas.winfo_height() or 0) if canvas is not None else 0
             if height >= 480:
-                self.frame.configure(height=height)
+                configurar_si_cambia(self.frame, height=height)
         except Exception:
             pass
 

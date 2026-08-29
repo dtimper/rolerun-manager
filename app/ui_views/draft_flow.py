@@ -144,7 +144,7 @@ class IntegratedDraftFlow:
             viewport = int(canvas.winfo_height() or 0) if canvas is not None else 0
             if viewport >= 460 and self.frame.winfo_exists():
                 logical_height = int(self.frame._reverse_widget_scaling(viewport - 8))
-                self.frame.configure(height=max(460, logical_height))
+                configurar_si_cambia(self.frame, height=max(460, logical_height))
         except Exception:
             pass
 

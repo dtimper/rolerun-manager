@@ -319,7 +319,12 @@ class UnifiedTeamPCView:
             viewport = int(canvas.winfo_height() or 0) if canvas is not None else 0
             if viewport >= 460 and self.frame.winfo_exists():
                 logical_height = int(self.frame._reverse_widget_scaling(viewport - 8))
-                self.frame.configure(height=max(460, logical_height))
+                # Medido: `configure(height=)` con el MISMO valor redibuja el
+                # marco entero, 1,46 ms por llamada. Esto corre en cada
+                # `<Configure>` —redimensionar, cerrar un panel superpuesto,
+                # scroll—, así que cerrar la ficha de un rol repintaba la página
+                # entera sin que hubiera cambiado nada.
+                configurar_si_cambia(self.frame, height=max(460, logical_height))
         except Exception:
             pass
 

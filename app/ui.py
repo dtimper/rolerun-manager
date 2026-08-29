@@ -1765,7 +1765,16 @@ class RoleRunManager(ctk.CTk):
         process_l = process_name.lower()
         title_l = title.lower()
         for token in self._configured_emulator_process_tokens():
-            if token and (token in process_l or token in title_l):
+            if not token:
+                continue
+            # El token se compara contra el NOMBRE DEL PROCESO. Compararlo también
+            # contra el título de la ventana convertía cualquier ventana que
+            # dijera «Ryujinx» —una pestaña del navegador, una carpeta, un vídeo—
+            # en un emulador en primer plano, y RoleRun abría la barra flotante
+            # sin que hubiera ningún juego. El título solo vale cuando no se pudo
+            # leer el nombre del proceso, que es el único caso en que no hay nada
+            # mejor.
+            if token in process_l or (not process_l and token in title_l):
                 if foreground_hwnd:
                     self._last_supported_emulator_hwnd = foreground_hwnd
                 return True
@@ -6327,10 +6336,14 @@ class RoleRunManager(ctk.CTk):
         pending = len(self.run.pending_changes)
         sync_text = str(self.sync_status or "")
         if sync_text.startswith("⚠"):
-            self._set_operation_status(
-                "warning", "REVISIÓN NECESARIA", sync_text.lstrip("⚠ "),
-                actions=("Ver detalle",),
-            )
+            # Las otras ramas comprueban antes si ya está puesto; esta no, y por
+            # eso republicaba el mismo aviso en cada ciclo del monitor.
+            detalle = sync_text.lstrip("⚠ ")
+            if current.kind != "warning" or current.detail != detalle:
+                self._set_operation_status(
+                    "warning", "REVISIÓN NECESARIA", detalle,
+                    actions=("Ver detalle",),
+                )
         elif pending and current.kind not in {"pending", "prepared"}:
             self._set_operation_status(
                 "pending",
@@ -22159,8 +22172,13 @@ class RoleRunManager(ctk.CTk):
             root_x = int(surface.winfo_rootx())
             root_y = int(surface.winfo_rooty())
             geometry = f"{width}x{height}+{root_x}+{root_y}"
-            overlay.geometry(geometry)
-            overlay._rolerun_surface_geometry = geometry
+            # La barrera de arranque llama a esto cada 35 ms. Reaplicar la misma
+            # geometría fuerza a Tk a repintar el `Label` del snapshot, y sobre
+            # ese HWND es donde el worker dibuja la rueda por GDI: cada repintado
+            # la borraba y parecía que la animación se reiniciaba sola.
+            if geometry != getattr(overlay, "_rolerun_surface_geometry", None):
+                overlay.geometry(geometry)
+                overlay._rolerun_surface_geometry = geometry
             overlay.lift()
             return True
         except Exception:

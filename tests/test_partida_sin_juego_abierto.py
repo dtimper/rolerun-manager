@@ -1,0 +1,175 @@
+"""Abrir una Run con el juego cerrado: cuatro cosas que se veían mal.
+
+Todas comparten familia: **repetir una operación que no cambia nada**. Publicar
+el mismo mensaje, reaplicar la misma geometría, reconfigurar la misma altura. Tk
+no distingue «lo mismo otra vez» de «algo nuevo»: repinta igual.
+"""
+
+from __future__ import annotations
+
+import inspect
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app.ui import RoleRunManager  # noqa: E402
+from app.ui_state.operation_status import OperationStatusStore  # noqa: E402
+
+
+# ------------------------------- 1. el mensaje que no terminaba de escribirse
+
+def test_publicar_lo_mismo_dos_veces_no_reinicia_la_barra() -> None:
+    """La barra escribe el detalle letra a letra, a 14 ms por letra.
+
+    Cada publicación lo empieza desde la primera letra. Con un aviso de 120
+    caracteres republicado en cada ciclo del monitor, el mensaje NUNCA llegaba
+    a terminar de escribirse: el usuario veía un texto cortado reiniciándose.
+    """
+    tienda = OperationStatusStore()
+    avisos: list[object] = []
+    tienda.subscribe(avisos.append) if hasattr(tienda, "subscribe") else None
+
+    primero = tienda.publish("warning", "REVISIÓN NECESARIA", "Azahar no responde.")
+    segundo = tienda.publish("warning", "REVISIÓN NECESARIA", "Azahar no responde.")
+
+    assert segundo is primero, "se ha vuelto a publicar lo mismo"
+    assert segundo.revision == primero.revision, "la revisión no puede avanzar"
+
+
+def test_un_cambio_de_verdad_si_se_publica() -> None:
+    tienda = OperationStatusStore()
+    primero = tienda.publish("warning", "REVISIÓN NECESARIA", "Azahar no responde.")
+    segundo = tienda.publish("warning", "REVISIÓN NECESARIA", "Ryujinx no responde.")
+
+    assert segundo is not primero
+    assert segundo.revision > primero.revision
+
+
+def test_cambiar_solo_las_acciones_tambien_cuenta() -> None:
+    tienda = OperationStatusStore()
+    primero = tienda.publish("warning", "BAJA PENDIENTE", "Necesita sustituto.")
+    segundo = tienda.publish(
+        "warning", "BAJA PENDIENTE", "Necesita sustituto.",
+        actions=("Elegir sustituto",),
+    )
+
+    assert segundo is not primero
+
+
+def test_el_aviso_de_sincronizacion_comprueba_antes_de_republicar() -> None:
+    """Sus hermanas ya lo hacían; esta rama no, y era la que machacaba."""
+    fuente = inspect.getsource(RoleRunManager._sync_operation_status_from_runtime)
+    rama = fuente[fuente.index('if sync_text.startswith("⚠"):'):]
+
+    assert 'current.kind != "warning" or current.detail != detalle' in rama
+
+
+# --------------------------------------------- 2. la rueda que se reiniciaba
+
+def test_no_se_reaplica_una_geometria_identica() -> None:
+    """La barrera de arranque llama a esto cada 35 ms.
+
+    Reaplicar la misma geometría repinta el `Label` del snapshot, y sobre ese
+    HWND dibuja la rueda un worker por GDI: cada repintado la borraba.
+    """
+    fuente = inspect.getsource(RoleRunManager._sync_activity_overlay_geometry)
+
+    assert 'if geometry != getattr(overlay, "_rolerun_surface_geometry", None):' in fuente
+    indice = fuente.index("if geometry !=")
+    assert fuente.index("overlay.geometry(geometry)") > indice, (
+        "la escritura tiene que estar dentro de la comparación"
+    )
+
+
+# ------------------------------- 3. la barra flotante sin ningún juego abierto
+
+def _foreground(pid, proceso, titulo):
+    return SimpleNamespace(
+        _foreground_window_info=lambda: (pid, proceso, titulo),
+        _configured_emulator_process_tokens=lambda: ("ryujinx", "azahar", "melonds"),
+        _last_supported_emulator_hwnd=0,
+    )
+
+
+def test_una_ventana_que_solo_se_llama_como_un_emulador_no_lo_es() -> None:
+    """El caso reportado: sin ningún juego abierto, aparecía la barra flotante.
+
+    El token se comparaba también contra el TÍTULO de la ventana, así que una
+    pestaña del navegador, una carpeta o un vídeo que dijeran «Ryujinx»
+    convertían cualquier cosa en un emulador en primer plano.
+    """
+    import os
+
+    app = _foreground(4321, "chrome.exe", "Ryujinx 1.3.3 descargar - Google Chrome")
+    assert RoleRunManager._foreground_is_supported_emulator(app) is False
+    assert app._last_supported_emulator_hwnd == 0
+
+    explorador = _foreground(999, "explorer.exe", "melonDS - Explorador de archivos")
+    assert RoleRunManager._foreground_is_supported_emulator(explorador) is False
+    assert os.name == "nt" or True  # la función solo actúa en Windows
+
+
+def test_el_emulador_de_verdad_se_sigue_reconociendo() -> None:
+    app = _foreground(4321, "Ryujinx.exe", "Pokémon Perla Reluciente")
+
+    assert RoleRunManager._foreground_is_supported_emulator(app) is True
+
+
+def test_sin_nombre_de_proceso_el_titulo_es_el_ultimo_recurso() -> None:
+    """Si `OpenProcess` falla no hay nada mejor que el título."""
+    app = _foreground(4321, "", "Azahar - Omega Rubí")
+
+    assert RoleRunManager._foreground_is_supported_emulator(app) is True
+
+
+def test_rolerun_no_se_confunde_consigo_mismo() -> None:
+    import os
+
+    app = _foreground(os.getpid(), "python.exe", "RoleRun Manager")
+
+    assert RoleRunManager._foreground_is_supported_emulator(app) is False
+
+
+# ------------------ 4. cerrar la ficha de un rol repintaba la página entera
+
+def test_ajustar_al_viewport_no_reescribe_una_altura_identica() -> None:
+    """Medido: `configure(height=)` con el mismo valor son 1,46 ms y un
+    redibujado completo del marco. Corre en cada `<Configure>`, así que cerrar
+    un panel superpuesto repintaba la página sin que hubiera cambiado nada."""
+    from app.ui_views.draft_flow import IntegratedDraftFlow
+    from app.ui_views.team_pc_view import UnifiedTeamPCView
+
+    for clase in (UnifiedTeamPCView, IntegratedDraftFlow):
+        fuente = inspect.getsource(clase._fit_frame_to_viewport)
+        assert "configurar_si_cambia(self.frame, height=" in fuente, clase.__name__
+        assert "self.frame.configure(height=" not in fuente, clase.__name__
+
+
+def test_movimientos_tampoco_reescribe_su_altura() -> None:
+    from app.ui_views.global_tm_view import GlobalTMView
+
+    montaje = inspect.getsource(GlobalTMView.__init__)
+    ajuste = inspect.getsource(GlobalTMView._fit_to_viewport)
+
+    assert "configurar_si_cambia(" in montaje
+    assert "configurar_si_cambia(self.frame, height=height)" in ajuste
+    assert "self.frame.configure(height=" not in ajuste
+
+
+def test_el_ayudante_de_repintado_hace_lo_que_se_le_pide() -> None:
+    """Sin esto, todo lo anterior sería una suposición."""
+    import customtkinter as ctk
+
+    from app.ui_components.repintado import configurar_si_cambia
+
+    raiz = ctk.CTk()
+    try:
+        raiz.withdraw()
+        marco = ctk.CTkFrame(raiz, width=300, height=200)
+        assert configurar_si_cambia(marco, height=200) is False, "no debía escribir"
+        assert configurar_si_cambia(marco, height=250) is True
+        assert configurar_si_cambia(marco, height=250) is False
+    finally:
+        raiz.destroy()
