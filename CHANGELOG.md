@@ -1,6 +1,73 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.1-alpha.8 — lo que la auditoría encontró destruyendo datos
+
+Los tres primeros hallazgos del informe del 29-08-2026, que son los únicos que
+destruyen algo irrecuperable. Ninguno tenía una sola prueba que lo cubriera.
+
+## El historial se borraba entero ante un fallo de lectura de un instante
+
+`history()` capturaba `OSError` además de `JSONDecodeError` y devolvía `[]`. Los
+**seis** escritores leían con ella y reescribían el archivo completo. Un
+`OSError` pasajero —OneDrive, el antivirus— y el siguiente evento se llevaba la
+partida entera. Basta con que muera un Pokémon.
+
+Reproducido con archivos de verdad, código viejo contra código nuevo:
+
+```
+VIEJO  historial con 40 eventos
+VIEJO  tras una muerte: 1 eventos          <- 40 perdidos, sin aviso
+VIEJO  copias del roto: 0
+
+NUEVO  historial con 40 eventos
+NUEVO  tras una muerte: 2 eventos, el primero avisa: history_unreadable
+NUEVO  el roto se guarda aparte: history-ilegible-20260829-153206.json
+NUEVO  y conserva su contenido: '{ roto'
+```
+
+Ahora se distingue **«no existe»** de **«no puedo leerlo»**. Lo primero es una
+Run nueva; lo segundo es un accidente, y tratarlos igual era el fallo. Un
+archivo ilegible se aparta con su fecha —así se puede recuperar a mano— y el
+historial nuevo arranca con un evento que lo dice. Ni se pierde el registro en
+silencio, ni revienta el flujo que estaba guardando un evento legítimo.
+
+`history()` sigue existiendo para pintar la pantalla: nunca levanta y **nunca
+escribe nada**. Los escritores usan otra puerta, y hay una prueba que falla si
+alguno vuelve a la destructiva.
+
+## `config.json` se escribía truncando
+
+`write_text` vacía el archivo **antes** de escribir. Ahí vive todo el estado de
+la Run —contadores, roles, bajas pendientes, Cementerio, drafteos guardados,
+atajos— y se reescribe decenas o cientos de veces por sesión. Un corte dentro de
+esa ventana dejaba la Run imposible de abrir, y como el slug se recalcula igual,
+cada intento se estrellaba otra vez.
+
+Ahora se escribe a un lateral y se renombra encima: el archivo bueno solo deja de
+existir en el instante en que ya existe el nuevo. El patrón ya estaba en
+`game_source_service.py`, en este mismo repo; aquí faltaba. Se aplica igual a las
+siete escrituras de `config.json` e `history.json`.
+
+## Ctrl+Z regalaba drafteos y resucitaba vidas
+
+El snapshot de deshacer copiaba `counters` pero **no** `saved_drafts`. Guardar
+una tirada cuesta un drafteo; Ctrl+Z devolvía el contador y dejaba el movimiento
+en MOVIMIENTOS. Repetible sin límite. Ninguna mitad de un cobro puede viajar
+sola, así que ahora viajan también `saved_drafts`, `pending_faints` y
+`graveyard_pokemon`.
+
+Y la otra mitad del defecto: **lo que hace el juego no es un paso tuyo**. Una
+muerte detectada en vivo o una medalla que el juego acaba de conceder entraban en
+la pila igual, así que el primer Ctrl+Z que pulsaras después —para deshacer
+cualquier otra cosa— devolvía la vida y dejaba la baja pidiendo sustituto, con su
+evento en el historial diciendo 4→3. La contradicción se escribía en disco.
+`_asumir_estado_del_juego()` mueve el punto de referencia sin vaciar la pila: los
+pasos legítimos anteriores siguen ahí.
+
+`tests/test_no_se_pierde_la_run.py`, trece pruebas. Una de ellas comprueba que
+todo lo que se captura se restaura, para que no vuelva a quedarse una mitad.
+
 # v0.3.1-alpha.7 — un .bat que podía vaciar las reglas de rol
 
 Iba a limpiar `moves_legacy.json` por estar en desuso y resultó no estar en

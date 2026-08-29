@@ -886,17 +886,42 @@ class RoleRunManager(ctk.CTk):
         ``pending_changes`` y la previsualización se reconstruye a partir del save base.
         Los contadores y preferencias de Run que sí se persisten al instante se incluyen
         para que Ctrl+Z también pueda devolverlas a su valor anterior.
+
+        **Ninguna mitad de un cobro puede viajar sola.** `counters` estaba aquí y
+        `saved_drafts` no, así que guardar una tirada costaba un drafteo y Ctrl+Z
+        devolvía el contador **dejando el movimiento en MOVIMIENTOS**: drafteos
+        infinitos, repetible sin límite. Lo mismo con `pending_faints` y
+        `graveyard_pokemon`, que son la contrapartida de las vidas.
         """
         project = self.project
         return {
             "pending_changes": copy.deepcopy(self.run.pending_changes),
             "role_rules_activation_pending": bool(self.run.role_rules_activation_pending),
             "counters": copy.deepcopy(project.counters) if project else {},
+            "saved_drafts": copy.deepcopy(project.saved_drafts) if project else [],
+            "pending_faints": copy.deepcopy(project.pending_faints) if project else [],
+            "graveyard_pokemon": copy.deepcopy(project.graveyard_pokemon) if project else [],
             "role_overrides": copy.deepcopy(project.role_overrides) if project else {},
             "managed_pokemon_roles": copy.deepcopy(project.managed_pokemon_roles) if project else {},
             "hidden_roles": copy.deepcopy(project.hidden_roles) if project else {},
             "role_rules_active": bool(project.role_rules_active) if project else False,
         }
+
+    def _asumir_estado_del_juego(self) -> None:
+        """Da por bueno el estado actual sin convertirlo en un paso deshacible.
+
+        Ctrl+Z deshace **lo que hizo el usuario**. Una muerte detectada en la
+        partida o una medalla que el juego acaba de conceder no son decisiones
+        suyas, y sin esto entraban en la pila igual: el primer Ctrl+Z que
+        pulsara después —para deshacer cualquier otra cosa— le devolvía la vida
+        y dejaba la baja registrada pidiendo sustituto, con su evento en el
+        historial diciendo 4→3. La contradicción se escribía en disco.
+
+        No se vacía la pila: los pasos legítimos anteriores siguen ahí. Solo se
+        mueve el punto de referencia, para que el siguiente cambio se compare
+        contra lo que hay ahora.
+        """
+        self._edit_last_snapshot = self._capture_edit_snapshot()
 
     def _reset_edit_history(self) -> None:
         self._edit_undo_stack.clear()
@@ -933,6 +958,12 @@ class RoleRunManager(ctk.CTk):
             self.run.pending_changes = copy.deepcopy(snapshot.get("pending_changes", []))
             self.run.role_rules_activation_pending = bool(snapshot.get("role_rules_activation_pending", False))
             self.project.counters = copy.deepcopy(snapshot.get("counters", self.project.counters))
+            self.project.saved_drafts = copy.deepcopy(
+                snapshot.get("saved_drafts", self.project.saved_drafts))
+            self.project.pending_faints = copy.deepcopy(
+                snapshot.get("pending_faints", self.project.pending_faints))
+            self.project.graveyard_pokemon = copy.deepcopy(
+                snapshot.get("graveyard_pokemon", self.project.graveyard_pokemon))
             self.project.role_overrides = copy.deepcopy(snapshot.get("role_overrides", self.project.role_overrides))
             self.project.managed_pokemon_roles = copy.deepcopy(snapshot.get("managed_pokemon_roles", self.project.managed_pokemon_roles))
             self.project.hidden_roles = copy.deepcopy(snapshot.get("hidden_roles", self.project.hidden_roles))
@@ -7477,6 +7508,10 @@ class RoleRunManager(ctk.CTk):
         self.project_service.adjust_counter(self.project, counter, delta, source=source)
         self.project = self.project_service.load(self.project.slug) or self.project
         current_value = int(self.project.counters.get(counter, 0))
+        if self._counter_is_automatic(counter):
+            # Solo el juego mueve este contador, y llegar aquí ya demuestra que
+            # la fuente es la viva. No es un paso que el usuario pueda deshacer.
+            self._asumir_estado_del_juego()
         self._sync_obs_state(self.current_game)
         if self.active_page == "dashboard":
             self._refresh_dashboard_counter(counter)
@@ -9470,6 +9505,8 @@ class RoleRunManager(ctk.CTk):
         # MISMA proyección que Dashboard/Equipo/Barra: el Pokémon pendiente de
         # sustitución ya no está disponible aunque ORAS conserve todavía su PK6.
         self.run.history = self.project_service.history(self.project)
+        # La muerte la ha decidido el juego, no el usuario.
+        self._asumir_estado_del_juego()
         self._sync_live_layout(refresh_floating=False)
         self._refresh_dashboard_counter("vidas")
         self._floating_bar_last_signature = None

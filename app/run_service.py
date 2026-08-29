@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 from dataclasses import asdict, dataclass, field
@@ -9,6 +10,48 @@ from pathlib import Path
 from typing import Any
 
 from . import perf
+
+
+class HistorialIlegible(RuntimeError):
+    """El archivo de historial existe pero no se puede leer.
+
+    Se distingue a propósito de «no existe». Un historial que no existe es una
+    Run nueva; uno que no se puede leer es un accidente, y tratarlos igual era
+    exactamente el fallo: ante un ``OSError`` de un instante —OneDrive, el
+    antivirus— la lectura devolvía una lista vacía y el siguiente evento
+    reescribía el archivo entero con ese único evento. La Run perdía su registro
+    completo y nada lo decía.
+    """
+
+
+def escribir_json_atomico(path: Path, datos: Any) -> None:
+    """Escribe un JSON sin dejar nunca el archivo a medias.
+
+    ``write_text`` trunca el archivo a cero **antes** de escribir. Un corte de
+    luz, un cierre forzado o un disco lleno dentro de esa ventana dejan un
+    archivo vacío o partido, y en el caso de ``config.json`` eso significa una
+    Run que ya no se puede abrir: el estado entero de la partida —contadores,
+    roles, bajas, Cementerio, drafteos guardados, atajos— vive solo ahí.
+
+    Escribiendo a un lateral y renombrando encima, el archivo bueno solo deja de
+    existir en el instante en que ya existe el nuevo. ``os.replace`` es atómico
+    también en Windows mientras origen y destino compartan volumen, y lo
+    comparten: el lateral se crea al lado.
+
+    Este patrón ya estaba en ``game_source_service.py``; aquí faltaba.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lateral = path.with_name(path.name + ".tmp")
+    texto = json.dumps(datos, ensure_ascii=False, indent=2) + "\n"
+    try:
+        lateral.write_text(texto, encoding="utf-8")
+        os.replace(lateral, path)
+    except Exception:
+        try:
+            lateral.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 @dataclass(slots=True)
@@ -367,39 +410,87 @@ class RunProjectService:
 
     def save(self, project: RunProject) -> None:
         project.updated_at = datetime.now().isoformat(timespec="seconds")
-        path = self.folder(project) / "config.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(asdict(project), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        # `config.json` guarda TODO el estado de la Run y se reescribe decenas
+        # o cientos de veces por sesión. Truncarlo antes de escribir era
+        # jugarse la Run entera en cada guardado.
+        escribir_json_atomico(self.folder(project) / "config.json", asdict(project))
         self._write_obs_placeholders(project)
 
-    def history(self, project: RunProject) -> list[dict[str, Any]]:
+    def _leer_historial(self, project: RunProject) -> list[dict[str, Any]]:
+        """Los eventos guardados. Levanta `HistorialIlegible` si no puede leerlos."""
         path = self.folder(project) / "history.json"
         if not path.exists():
             return []
         try:
-            return json.loads(path.read_text(encoding="utf-8-sig"))
-        except (json.JSONDecodeError, OSError):
+            crudo = path.read_text(encoding="utf-8-sig")
+        except OSError as error:
+            raise HistorialIlegible(f"no se pudo leer: {error}") from error
+        try:
+            eventos = json.loads(crudo)
+        except json.JSONDecodeError as error:
+            raise HistorialIlegible(f"no es un JSON válido: {error}") from error
+        if not isinstance(eventos, list):
+            raise HistorialIlegible("el archivo no contiene una lista de eventos")
+        return eventos
+
+    def history(self, project: RunProject) -> list[dict[str, Any]]:
+        """Para mostrar. Nunca levanta y nunca escribe nada."""
+        try:
+            return self._leer_historial(project)
+        except HistorialIlegible:
             return []
+
+    def _apartar_historial_ilegible(self, project: RunProject) -> Path | None:
+        """Guarda a un lado el archivo que no se pudo leer, con su fecha."""
+        path = self.folder(project) / "history.json"
+        sello = datetime.now().strftime("%Y%m%d-%H%M%S")
+        destino = path.with_name(f"history-ilegible-{sello}.json")
+        try:
+            os.replace(path, destino)
+            return destino
+        except OSError:
+            return None
+
+    def _historial_para_escribir(self, project: RunProject) -> list[dict[str, Any]]:
+        """Los eventos actuales, o un historial nuevo si el archivo era ilegible.
+
+        Un archivo que no se puede leer **no se sobreescribe en silencio**: se
+        aparta con su fecha —así no se pierde y se puede recuperar a mano— y el
+        historial nuevo arranca diciendo que eso ha ocurrido. Ni se pierde el
+        registro sin dejar rastro, ni revienta el flujo que estaba guardando un
+        evento legítimo.
+        """
+        try:
+            return self._leer_historial(project)
+        except HistorialIlegible as motivo:
+            apartado = self._apartar_historial_ilegible(project)
+            return [{
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "type": "history_unreadable",
+                "label": "El historial anterior no se pudo leer",
+                "reason": str(motivo),
+                "backup": apartado.name if apartado is not None else "",
+            }]
+
+    def _escribir_historial(
+        self, project: RunProject, eventos: list[dict[str, Any]],
+    ) -> None:
+        escribir_json_atomico(self.folder(project) / "history.json", eventos)
 
     def append_history(self, project: RunProject, event: dict[str, Any]) -> None:
         # El coste crece con el historial: se reescribe entero en cada evento.
         # Se registra el numero de eventos para poder ver esa pendiente.
         with perf.span("run.append_history") as measure:
-            events = self.history(project)
+            events = self._historial_para_escribir(project)
             event = {"timestamp": datetime.now().isoformat(timespec="seconds"), **event}
             events.append(event)
             measure.add(events=len(events))
-            path = self.folder(project) / "history.json"
-            path.write_text(
-                json.dumps(events, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-            )
+            self._escribir_historial(project, events)
             self.save(project)
 
     def clear_history(self, project: RunProject) -> None:
         """Vacía el registro histórico sin alterar el estado actual de la Run."""
-        path = self.folder(project) / "history.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("[]\n", encoding="utf-8")
+        self._escribir_historial(project, [])
 
     def set_role_override(self, project: RunProject, pokemon_key: str, role: str) -> None:
         if role == "AUTO":
@@ -471,7 +562,9 @@ class RunProjectService:
         return {"changed": True, "label": label, "counter": counter, "value": new_value}
 
     def undo_last_counter_event(self, project: RunProject) -> dict[str, Any] | None:
-        events = self.history(project)
+        # Leer con `history()` aqui era la via destructiva: devuelve [] si el
+        # archivo no se puede leer, y estas funciones lo reescriben entero.
+        events = self._historial_para_escribir(project)
         for index in range(len(events) - 1, -1, -1):
             event = events[index]
             if event.get("type") not in {"counter_changed", "quick_action"}:
@@ -495,8 +588,7 @@ class RunProjectService:
                 "original_label": event.get("label") or event.get("source") or counter,
             }
             events.append(undo_event)
-            path = self.folder(project) / "history.json"
-            path.write_text(json.dumps(events, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            self._escribir_historial(project, events)
             self.save(project)
             return undo_event
         return None
@@ -552,7 +644,9 @@ class RunProjectService:
         new_value = max(0, old_value - 1)
         project.counters["vidas"] = new_value
 
-        events = self.history(project)
+        # Leer con `history()` aqui era la via destructiva: devuelve [] si el
+        # archivo no se puede leer, y estas funciones lo reescriben entero.
+        events = self._historial_para_escribir(project)
         events.append({
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "type": "pokemon_fainted_auto",
@@ -566,8 +660,7 @@ class RunProjectService:
             "delta": new_value - old_value,
             "source": str(event.get("source_label", "ORAS en vivo") or "ORAS en vivo"),
         })
-        path = self.folder(project) / "history.json"
-        path.write_text(json.dumps(events, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        self._escribir_historial(project, events)
         self.save(project)
         return True
 
@@ -678,7 +771,9 @@ class RunProjectService:
         ]
         if identity and identity not in project.graveyard_pokemon:
             project.graveyard_pokemon.append(identity)
-        events = self.history(project)
+        # Leer con `history()` aqui era la via destructiva: devuelve [] si el
+        # archivo no se puede leer, y estas funciones lo reescriben entero.
+        events = self._historial_para_escribir(project)
         events.append({
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "type": "pokemon_faint_resolved_external",
@@ -688,8 +783,7 @@ class RunProjectService:
             "source": str(pending.get("source_label", "ORAS en vivo") or "ORAS en vivo"),
             "reason": "ya no está en el equipo",
         })
-        path = self.folder(project) / "history.json"
-        path.write_text(json.dumps(events, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        self._escribir_historial(project, events)
         self.save(project)
         return True
 
@@ -714,7 +808,9 @@ class RunProjectService:
         ]
         if identity and identity not in project.graveyard_pokemon:
             project.graveyard_pokemon.append(identity)
-        events = self.history(project)
+        # Leer con `history()` aqui era la via destructiva: devuelve [] si el
+        # archivo no se puede leer, y estas funciones lo reescriben entero.
+        events = self._historial_para_escribir(project)
         events.append({
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "type": "pokemon_faint_replacement_declined",
@@ -725,8 +821,7 @@ class RunProjectService:
             "source": str(pending.get("source_label", "Azahar en vivo") or "Azahar en vivo"),
             "reason": "sustitución descartada por el usuario",
         })
-        path = self.folder(project) / "history.json"
-        path.write_text(json.dumps(events, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        self._escribir_historial(project, events)
         self.save(project)
         return True
 
@@ -744,7 +839,9 @@ class RunProjectService:
         ]
         if identity and identity not in project.graveyard_pokemon:
             project.graveyard_pokemon.append(identity)
-        events = self.history(project)
+        # Leer con `history()` aqui era la via destructiva: devuelve [] si el
+        # archivo no se puede leer, y estas funciones lo reescriben entero.
+        events = self._historial_para_escribir(project)
         events.append({
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "type": "pokemon_faint_resolved",
@@ -755,8 +852,7 @@ class RunProjectService:
             "substitute": str(substitute),
             "source": str(pending.get("source_label", "Azahar en vivo") or "Azahar en vivo"),
         })
-        path = self.folder(project) / "history.json"
-        path.write_text(json.dumps(events, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        self._escribir_historial(project, events)
         self.save(project)
         return True
 
