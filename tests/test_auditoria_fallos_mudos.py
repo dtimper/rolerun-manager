@@ -188,3 +188,64 @@ def test_prisma_sigue_teniendo_sus_problemas_de_estado() -> None:
     legales = allowed_status_move_ids("Prisma", pools, clases, set()) or set()
 
     assert set(pools["problemas_estado"]).issubset(legales)
+
+
+# --------------------------- 6. «bad window path name» al abrir otra Run
+
+def test_vaciar_la_raiz_olvida_TODAS_las_vistas() -> None:
+    """La de MOVIMIENTOS era la única de las cuatro que sobrevivía.
+
+    `_clear_root` destruye el árbol de widgets y pone a `None` las referencias
+    para que ningún callback tardío las toque. Se olvidó `_global_tm_view`, y
+    como `render_page` empieza destruyendo la vista anterior, abrir otra Run
+    llamaba a `destroy()` sobre un árbol ya arrasado. Reventaba con «bad window
+    path name .!ctkframeN…!ctkscrollableframe.!ctkframe» y el usuario veía «No
+    se pudo abrir la Run».
+    """
+    fuente = inspect.getsource(RoleRunManager._clear_root)
+
+    for atributo in ("_team_pc_view", "_tm_teach_flow", "_draft_view",
+                     "_global_tm_view", "_navigation_owner"):
+        assert f"self.{atributo} = None" in fuente, atributo
+
+
+def test_destruir_una_vista_huerfana_no_lanza() -> None:
+    """Su `winfo_toplevel()` era la única línea sin proteger del método."""
+    fuente = inspect.getsource(GlobalTMView.destroy)
+    cabeza = fuente[:fuente.index("for sequence")]
+
+    assert "try:" in cabeza
+    assert "winfo_toplevel()" in cabeza
+
+
+def test_el_contexto_de_mt_no_sobrevive_a_otra_run() -> None:
+    """Traería la mochila de la partida anterior a la nueva."""
+    fuente = inspect.getsource(RoleRunManager._clear_root)
+
+    assert "self._global_tm_context = None" in fuente
+    assert "self._global_tm_load_requested = False" in fuente
+
+
+# ------------------- 7. el mando en las páginas sin vista navegable
+
+def test_el_mando_alcanza_el_menu_lateral_desde_cualquier_pagina() -> None:
+    """Configuración, Ayuda, Registro y Consulta no publican vista navegable.
+
+    Sin esto el mando se quedaba muerto ahí: no había forma de abrir el menú
+    lateral para salir de esas páginas sin usar el ratón.
+    """
+    mover = inspect.getsource(RoleRunManager._dispatch_game_overlay_key)
+    aceptar = inspect.getsource(RoleRunManager._accept_floating_overlay_key)
+
+    assert "self._handle_sidebar_navigation(direction)" in mover
+    assert "self._select_sidebar_from_content()" in mover
+    assert "self._accept_sidebar_from_content()" in aceptar
+
+
+def test_con_vista_navegable_manda_la_vista_y_no_el_menu() -> None:
+    """El menú lateral es el ÚLTIMO recurso, no un atajo que robe las flechas."""
+    mover = inspect.getsource(RoleRunManager._dispatch_game_overlay_key)
+    antes = mover[:mover.index("_handle_sidebar_navigation")]
+
+    assert "callback(event, direction)" in antes
+    assert 'return "break"' in antes, "la vista tiene que cortar antes de llegar aquí"

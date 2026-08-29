@@ -144,10 +144,18 @@ class GlobalTMView:
             pass
 
     def destroy(self) -> None:
-        top = self.frame.winfo_toplevel()
+        # `winfo_toplevel()` sobre un frame ya destruido lanza TclError («bad
+        # window path name»), y esto se llama justo al abrir otra Run, cuando
+        # `_clear_root` puede haber arrasado el árbol antes. Era la única línea
+        # sin proteger de todo el método.
+        try:
+            top = self.frame.winfo_toplevel()
+        except Exception:
+            top = None
         for sequence, binding in self._bindings:
             try:
-                top.unbind(sequence, binding)
+                if top is not None:
+                    top.unbind(sequence, binding)
             except Exception:
                 pass
         canvas = getattr(self.master, "_parent_canvas", None)

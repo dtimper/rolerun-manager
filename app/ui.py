@@ -3356,6 +3356,14 @@ class RoleRunManager(ctk.CTk):
                     or getattr(view, "_move_keyboard", None))
         if callable(callback):
             callback(event, direction)
+            return "break"
+        # Configuración, Ayuda, Registro y Consulta de movimientos no publican
+        # ninguna vista navegable, así que aquí no había a quién despachar y el
+        # mando se quedaba muerto: sin ratón no se podía ni abrir el menú
+        # lateral para salir de esas páginas. El menú lateral es de la ventana,
+        # no de la vista, y desde aquí se alcanza siempre.
+        if not self._handle_sidebar_navigation(direction) and direction == "left":
+            self._select_sidebar_from_content()
         return "break"
 
     def _accept_floating_overlay_key(self, event=None) -> str:
@@ -3367,6 +3375,10 @@ class RoleRunManager(ctk.CTk):
                     or getattr(view, "_accept_keyboard", None))
         if callable(callback):
             callback(event)
+            return "break"
+        # Sin vista navegable, aceptar es aceptar en el menú lateral: es lo
+        # único que hay que confirmar en esas páginas.
+        self._accept_sidebar_from_content()
         return "break"
 
     def _back_floating_overlay_key(self, _event=None) -> str:
@@ -4256,6 +4268,16 @@ class RoleRunManager(ctk.CTk):
         self._tm_teach_flow = None
         self._role_info_popover = None
         self._draft_view = None
+        # Faltaba, y era la única de las cuatro que sobrevivía aquí. `render_page`
+        # empieza destruyendo la vista anterior, así que al abrir otra Run
+        # llamaba a `destroy()` sobre un árbol que `_clear_root` ya había
+        # arrasado: «bad window path name .!ctkframeN…!ctkscrollableframe».
+        self._global_tm_view = None
+        self._global_tm_context = None
+        self._global_tm_sin_mochila = ""
+        self._global_tm_load_requested = False
+        # Y la autoridad de teclado no puede apuntar a nada de lo anterior.
+        self._navigation_owner = None
         self._team_pc_pending_incoming = None
         self._team_pc_pending_outgoing = None
 

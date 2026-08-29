@@ -1,6 +1,58 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.1-alpha.12 — «No se pudo abrir la Run», y el mando en Configuración
+
+Dos cosas reportadas al probar la tanda anterior. La primera la destapé yo con
+el arreglo de la alpha.9.
+
+## bad window path name al abrir otra Run
+
+> *«al meterme a una run, probar a abrir MTs teniendo el juego apagado (por lo
+> que dio error) e intentar entrar a una run cuyo juego SÍ tengo abierto, me da
+> este mensaje de error»* — `bad window path name
+> ".!ctkframe9.!ctkframe10.!canvas.!ctkscrollableframe.!ctkframe"`
+
+`_clear_root` destruye el árbol de widgets y pone a `None` las referencias para
+que ningún callback tardío las toque. Nulaba `_team_pc_view`, `_tm_teach_flow` y
+`_draft_view`… y se dejaba **`_global_tm_view`**, la única de las cuatro. Como
+`render_page` empieza destruyendo la vista anterior, abrir otra Run llamaba a
+`destroy()` sobre un árbol ya arrasado.
+
+Reproducido en Tk, con la misma forma de ruta que el error del usuario:
+
+```
+ruta del hijo:   .!ctkframe.!ctkframe.!canvas.!ctkscrollableframe.!ctkframe
+winfo_exists:    0
+winfo_toplevel:  TclError: bad window path name ...
+```
+
+Estaba latente desde siempre, pero hasta la alpha.9 no se llegaba: cuando el
+perfil de MT fallaba, la página salía por el panel de carga y **no llegaba a
+crear la vista**. Al hacer que se pinte igual —para que los drafteos guardados
+sean alcanzables— la vista pasó a existir, y con ella el agujero.
+
+Se tapa por las dos capas: `_clear_root` olvida ahora también `_global_tm_view`,
+su contexto y la autoridad de teclado; y `GlobalTMView.destroy` protege su
+`winfo_toplevel()`, que era la única línea sin proteger de todo el método.
+
+## El mando no abría el menú lateral en Configuración
+
+> *«cuando me pongo en el menú de opciones, no puedo abrir con el mando el
+> desplegable del menú para ir a otra pestaña»*
+
+Configuración, Ayuda, Registro y Consulta de movimientos no publican ninguna
+vista navegable, así que `_dispatch_game_overlay_key` no tenía a quién despachar
+y el mando se quedaba muerto: sin ratón no había forma de salir de esas páginas.
+
+Antes «funcionaba» por accidente, despachando a la vista de la página anterior
+—ya destruida—, que es justo el fallo que arreglé en la alpha.11. Al taparlo,
+quedó al descubierto que esas páginas nunca tuvieron una ruta propia.
+
+Ahora el menú lateral se alcanza desde cualquier página: es de la ventana, no de
+la vista. Cuando hay vista navegable manda ella y corta antes, así que el menú es
+el último recurso y no un atajo que robe las flechas.
+
 # v0.3.1-alpha.11 — los cinco que no decían nada
 
 Con esto se cierra la lista confirmada de la auditoría. Los cinco eran fallos
