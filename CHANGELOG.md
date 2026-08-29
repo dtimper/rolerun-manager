@@ -1,6 +1,33 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.1-alpha.6 — Drenadoras entra en Tanque y Prisma
+
+Cambio de formato, decidido por el usuario tras ver la lista completa de
+candidatos verificada contra el catálogo de movimientos.
+
+```
+defensa_recuperacion_pasiva
+  392  Acua Aro
+  275  Arraigo
+   73  Drenadoras     <- nuevo
+```
+
+Fuera se quedan **Deseo** (273) y **Campo de Hierba** (580), que también curan
+solos y estaban sobre la mesa. Y siguen fuera, como antes, todas las curaciones
+directas —Recuperación, Fotosíntesis, Respiro, Tragar, Absorbefuerza—, que es
+justo la mitad de la regla que distingue a estos dos roles.
+
+Las fichas de rol pasan a decir «Acua Aro, Arraigo y Drenadoras».
+
+`tests/test_recuperacion_pasiva.py` fija las tres cosas que importan: que los
+tres entran, que la curación directa sigue prohibida y **que lo descartado sigue
+descartado**. Esa última es la que evita que Deseo o Campo de Hierba se cuelen el
+día que alguien amplíe el pool sin releer la decisión.
+
+Nota: `data/moves_legacy.json` tiene la misma clave y **no** se ha tocado. No lo
+lee nadie —el motor solo carga `moves.json`—; es una copia histórica.
+
 # v0.3.1-alpha.5 — correcciones de la GUÍA, y una que era un error de verdad
 
 Cuatro cosas señaladas al leerla. Tres son de redacción; la tercera no.
