@@ -1,6 +1,56 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.1-alpha.4 — la GUÍA cuenta el programa que hay
+
+Estaba desactualizada, y no en detalles: describía un drafteo sin GUARDAR, un
+guardado con cola de cambios y botón de GUARDAR CAMBIOS —que RoleRun ya no
+tiene, porque no escribe el archivo— y hablaba de ORAS, Citra y DeSmuME cuando
+la partida en curso es Perla Reluciente en Ryujinx. Una guía que miente es peor
+que no tenerla: manda a buscar botones que no existen.
+
+Se reescribe **el contenido**, no la página. La mecánica —el héroe, las tarjetas
+de flujo, las secciones con viñetas y el bloque desplegable de los seis roles—
+funciona y no había motivo para tocarla. Y los seis roles se siguen leyendo de
+`role_content.py`, que es la fuente canónica: la guía no los reescribe, así que
+no pueden discrepar.
+
+## El flujo recomendado, como es ahora
+
+```
+1  ABRE TU EDICIÓN          RoleRun lee el equipo y las cajas en vivo
+2  REPARTE LOS ROLES        seis roles, seis casillas, no se repiten
+3  AJUSTA LOS MOVIMIENTOS   lo que no cumple el rol sale en rojo
+4  SIGUE JUGANDO            los cambios se escriben al momento; guardas tú
+```
+
+Ese cuarto paso era «REVISA Y GUARDA · guarda con una copia de seguridad
+automática», que describe un programa distinto del actual.
+
+## Secciones
+
+De cinco a seis, y con otro reparto:
+
+- **Tu Run de un vistazo** — los cuatro contadores, cuáles lleva el juego y por
+  qué RoleRun ignora que los muevas a mano.
+- **Equipo y PC** — roles, arrastre (incluido PC→PC), el intercambio automático
+  de roles y por qué manda el rol y no la especie.
+- **Movimientos** — nueva. Las dos pestañas, el equipo siempre a la derecha, qué
+  limita a una MT y qué a un drafteo, y la papelera.
+- **Drafteos** — reescrita entera con las dos salidas y lo que cuesta cada una.
+- **Cómo se escriben los cambios** — escritura verificada en la partida, y que
+  guardar lo sigue haciendo el usuario desde el juego.
+- **Mientras juegas** — nueva. La barra flotante y cuándo se retira, el menú, F8
+  para guardar un fallo y OBS.
+
+## Y una prueba para que no vuelva a pudrirse
+
+`tests/test_guia_de_ayuda.py` ata cada afirmación a la parte del programa que la
+sostiene: si la guía promete un cobro, se comprueba que `guardar_drafteo` cobra;
+si dice que la papelera no devuelve nada, que `descartar_drafteo_guardado` no
+toca el contador. Y comprueba que no vuelvan a colarse «GUARDAR CAMBIOS»,
+DeSmuME ni Citra.
+
 # v0.3.1-alpha.3 — pestañas dentro de MOVIMIENTOS, y el equipo vuelve a la derecha
 
 > *«me gustaba que se pudiera ver a quién se le puede enseñar y a quién no desde

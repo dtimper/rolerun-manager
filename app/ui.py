@@ -20823,7 +20823,7 @@ class RoleRunManager(ctk.CTk):
         ).grid(row=1, column=1, sticky="w", padx=(0, 28))
         ctk.CTkLabel(
             hero,
-            text="Una guía visual para aprender el flujo del programa y evitar errores al modificar el guardado.",
+            text="Cómo se juega una RoleRun y qué hace el Manager por ti mientras juegas.",
             text_color=MUTED, wraplength=700, justify="left",
             font=ctk.CTkFont("Segoe UI", 14),
         ).grid(row=2, column=1, sticky="nw", padx=(0, 28), pady=(6, 26))
@@ -20844,10 +20844,10 @@ class RoleRunManager(ctk.CTk):
         flow.grid(row=3, column=0, sticky="ew")
         flow.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="helpflow")
         steps = [
-            ("1", "ABRE LA PARTIDA", "Selecciona el guardado correcto y deja que el Manager lea el equipo."),
-            ("2", "ASIGNA LOS ROLES", "Revisa el equipo y define un rol único para cada Pokémon."),
-            ("3", "HAZ LOS DRAFTEOS", "Elige el rol, el Pokémon, el movimiento y el ataque que se sustituirá."),
-            ("4", "REVISA Y GUARDA", "Comprueba la cola de cambios y guarda con una copia de seguridad automática."),
+            ("1", "ABRE TU EDICIÓN", "Elige el juego en el selector. Con el emulador abierto, RoleRun lee el equipo y las cajas en vivo."),
+            ("2", "REPARTE LOS ROLES", "Cada Pokémon que vaya a combatir necesita un rol, y no se repiten: seis roles, seis casillas."),
+            ("3", "AJUSTA LOS MOVIMIENTOS", "Lo que no cumple el rol sale en rojo. Se corrige con una MT o con un drafteo."),
+            ("4", "SIGUE JUGANDO", "Los cambios compatibles se escriben en la partida al momento. Guardar lo sigues haciendo tú, desde el juego."),
         ]
         for col, (number, title, description) in enumerate(steps):
             card = ctk.CTkFrame(
@@ -20905,44 +20905,49 @@ class RoleRunManager(ctk.CTk):
                     font=ctk.CTkFont("Segoe UI", 13),
                 ).pack(side="left", fill="x", expand=True)
 
-        section(4, "◆", "Estado de la Run", "La información esencial siempre accesible.", [
-            "Pulsa RUN ACTIVA en la barra lateral para consultar vidas, curaciones, progreso, drafteos y sincronización.",
-            "Los contadores automáticos se muestran como tales y solo el juego puede modificarlos.",
-            "La Barra Flotante reúne las acciones principales mientras juegas con un solo monitor.",
+        section(4, "◆", "Tu Run de un vistazo", "Los cuatro contadores y dónde mirarlos.", [
+            "VIDAS, POCIONES, MEDALLAS y DRAFTEOS son el estado de la Run. Pulsa RUN ACTIVA en la barra lateral para verlos todos.",
+            "Los contadores automáticos los lleva el juego, no tú: se marcan como tales y RoleRun ignora cualquier intento de moverlos a mano. Las medallas son el caso típico.",
+            "El resto los mueves con los atajos globales sin salir del juego. Están en CONFIGURACIÓN → ATAJOS, con tecla y botón de mando por separado.",
         ])
-        section(5, "♟", "Equipo, PC y roles", "Construye el equipo sin romper la jerarquía de RoleRun.", [
-            "Las reglas RoleRun están siempre activas. Los Pokémon que vayan a combatir deben tener un rol único.",
-            "No es obligatorio llevar seis Pokémon y puedes mantener temporalmente miembros SIN ROL para entrenarlos o preparar su moveset; todavía no son aptos para combatir.",
-            "En el PC, RoleRun recuerda el ÚLTIMO ROL UTILIZADO por cada Pokémon. Ese dato sirve para recuperar su contexto al volver al equipo; sus movimientos nunca se borran automáticamente.",
-            "Si eliges un rol que ya pertenece a otro miembro, los dos Pokémon intercambian automáticamente sus roles para mantener las seis casillas sin crear un miembro SIN ROL adicional.",
-            "Los huecos libres muestran un + para abrir el selector rápido del PC. Equipo y Cajas PC comparten ahora una sola sección principal.",
-            "Si el juego carga dos Pokémon con el mismo rol, el Manager detecta el conflicto. Un Pokémon SIN ROL puede mantenerse temporalmente en el equipo para prepararlo, pero no es apto para combate hasta asignarle uno.",
-            "La legalidad del moveset se comprueba automáticamente: los movimientos incompatibles aparecen en rojo. Cada ataque rojo ofrece SUSTITUIR por una MT de tu mochila compatible con el ROL; RoleRun ignora la compatibilidad de especie del juego. Si no existe ninguna MT válida para el rol, SUSTITUIR queda apagado.",
-            "AYUDA → CONSULTA DE MOVIMIENTOS permite elegir un rol, buscar en el catálogo del juego y separar movimientos compatibles e incompatibles.",
+        section(5, "♟", "Equipo y PC", "Seis roles, seis casillas, y las cajas al lado.", [
+            "Un Pokémon SIN ROL puede estar en el equipo mientras lo preparas, pero todavía no es apto para combatir.",
+            "Arrastra para mover: del equipo al PC, del PC al equipo y de una casilla del PC a otra vacía. El borde del destino te dice en verde o rojo si ese gesto vale antes de soltarlo.",
+            "Si das a un Pokémon un rol que ya tiene otro, los dos lo intercambian. Así nunca aparece un SIN ROL de más.",
+            "De los Pokémon guardados en el PC, RoleRun recuerda el último rol que tuvieron. Es solo memoria para reconocerlos al volver: sus movimientos no se tocan nunca solos.",
+            "Los movimientos que no cumplen el rol salen en rojo, y cada uno ofrece SUSTITUIR con una MT compatible con el ROL. La compatibilidad de especie del juego no se usa: manda el rol.",
         ])
-        section(6, "◈", "Drafteos", "El flujo guiado para enseñar movimientos.", [
-            "Selecciona un rol y después el Pokémon de ese rol o el Líbero.",
-            "Generar opciones no consume el drafteo: puedes cambiar de rol o Pokémon y volver atrás libremente.",
-            "ELEGIR destaca la opción que quieres usar; ↻ rehace solo esa propuesta. El drafteo se consume al confirmar qué movimiento del Pokémon vas a sustituir.",
-            "Selecciona qué movimiento se sustituye y el cambio se añadirá a la cola pendiente.",
+        section(6, "▣", "Movimientos", "Todo lo que puedes enseñar hoy, en un sitio.", [
+            "Dos pestañas a la izquierda: MT son las de tu mochila; DRAFTEOS son las tiradas que te guardaste sin enseñar.",
+            "A la derecha está tu equipo, siempre. Pasa el ratón por un movimiento y verás encendidos los que pueden aprenderlo y apagados los que no, con el motivo.",
+            "Una MT la limita lo que el juego demuestre. Un drafteo lo limita el ROL del que salió: cualquier Pokémon con ese rol puede aprenderlo.",
+            "La papelera de un drafteo aparece al pasar el ratón por su fila. Pregunta antes, porque no devuelve el drafteo que costó.",
+            "Si lo que quieres es mirar sin enseñar nada, AYUDA → CONSULTA DE MOVIMIENTOS busca en el catálogo del juego y separa lo que cada rol admite de lo que no.",
         ])
-        section(7, "✓", "Cambios y guardado", "ORAS se edita en vivo; el juego decide cuándo queda definitivo.", [
-            "En ORAS/Azahar y X/Y cuando Azahar o Citra están sincronizados, los cambios compatibles se aplican y verifican automáticamente en RAM; RoleRun no escribe main.",
-            "REVISAR CAMBIOS conserva las acciones realizadas desde RoleRun y permite deshacer de forma segura roles, movimientos, MT y sustituciones Equipo↔PC antes de consolidarlas.",
-            "Cuando guardas desde el menú del propio juego, SaveFileWatcher detecta el nuevo main, lo toma como nueva fuente de verdad y limpia la revisión de cambios ya consolidados.",
-            "Los motores que todavía no tienen sincronización viva mantienen temporalmente el flujo clásico de DESCARTAR / GUARDAR CAMBIOS.",
+        section(7, "◈", "Drafteos", "Tirar es gratis. Quedarse un resultado, no.", [
+            "Elige el rol y después el Pokémon. Se generan cuatro opciones del conjunto de ese rol.",
+            "Repetir una opción con ↻ no cuesta nada, y volver atrás tampoco. Puedes cambiar de rol o de Pokémon cuantas veces quieras.",
+            "Cada opción ofrece dos salidas: ENSEÑAR AHORA, que te lleva a elegir qué movimiento olvida; o GUARDAR, que la deja esperando en MOVIMIENTOS.",
+            "Las dos cuestan un drafteo. Es lo mismo quedárselo que enseñarlo, y por eso enseñar después un drafteo guardado ya no vuelve a cobrar.",
         ])
-        section(8, "⚙", "OBS, atajos y Nintendo DS", "Detalles importantes para una experiencia estable.", [
-            "Configura una sola vez las fuentes de OBS; el Manager actualiza los archivos automáticamente.",
-            "Los atajos globales permiten modificar contadores y ocultar roles sin cambiar de ventana.",
-            "En DeSmuME puede ser necesario reiniciar, cerrar la ROM o reabrir el emulador para liberar el .dsv.",
+        section(8, "✓", "Cómo se escriben los cambios", "En la partida abierta, y solo lo demostrado.", [
+            "Con el emulador conectado, los cambios compatibles se escriben en la memoria del juego y se vuelven a leer para comprobar que quedaron como debían. Si la comprobación falla, se deshace.",
+            "RoleRun no toca el archivo de guardado. Guardas tú, desde el menú del juego, cuando te venga bien.",
+            "La barra de abajo cuenta lo que está pasando: preparado, aplicando, verificando o confirmado. Un fallo se queda ahí hasta que lo leas; un aviso se recoge solo.",
+            "REVISAR CAMBIOS conserva lo que has hecho desde RoleRun y permite deshacer roles, movimientos, MT y cambios entre equipo y PC.",
+        ])
+        section(9, "⚙", "Mientras juegas", "RoleRun de fondo, sin quitarte la pantalla.", [
+            "La barra flotante se queda encima del juego con lo esencial. Si otra ventana tapa el juego, se retira sola; en otro monitor no estorba, así que se queda.",
+            "El botón MENÚ abre RoleRun entero sobre el juego, y se despega en cuanto cambias de aplicación.",
+            "F8 guarda un fallo con lo que estaba pasando en ese momento. Durante un directo es la forma de no perder nada sin cortar la partida.",
+            "Las fuentes de OBS se configuran una vez y el Manager mantiene sus archivos al día.",
         ])
 
         roles = ctk.CTkFrame(
             self.body, fg_color="#151515", corner_radius=17,
             border_width=1, border_color="#333333",
         )
-        roles.grid(row=9, column=0, sticky="ew", pady=(10, 20))
+        roles.grid(row=10, column=0, sticky="ew", pady=(10, 20))
         ctk.CTkLabel(
             roles, text="LOS SEIS ROLES", text_color=TEXT,
             font=ctk.CTkFont("Segoe UI", 20, "bold"),
