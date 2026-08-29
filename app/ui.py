@@ -793,6 +793,9 @@ class RoleRunManager(ctk.CTk):
         self._tm_teach_flow: IntegratedTMTeachFlow | None = None
         self._global_tm_view: GlobalTMView | None = None
         self._global_tm_context: tuple[object, dict[int, int], str] | None = None
+        # Por qué no hay mochila de MT que enseñar, si es que no la hay.
+        # Vacío significa «todavía se está mirando».
+        self._global_tm_sin_mochila = ""
         self._global_tm_load_requested = False
         self._role_info_popover: IntegratedRoleInfoPopover | None = None
         self._draft_view: IntegratedDraftFlow | None = None
@@ -3199,8 +3202,22 @@ class RoleRunManager(ctk.CTk):
             current = sample.pressed if sample and sample.connected else frozenset()
             previous = self._gamepad_previous_buttons
             pressed = current - previous
-            released = previous - current
             self._gamepad_previous_buttons = current
+
+            # Un botón está reservado mientras se mantenga pulsado, y ni un
+            # ciclo más. Esto se hacía al final, DESPUÉS de los `return` de las
+            # ramas «menú abierto» y «RoleRun delante», así que con el atajo de
+            # fábrica —el menú flotante abre en milisegundos, mucho antes de que
+            # el dedo suelte— el flanco de soltar se perdía y el botón se
+            # quedaba reservado para siempre. A partir de ahí, las dos
+            # liberaciones automáticas de la retención de Ryujinx exigen que el
+            # conjunto esté vacío, y nunca lo estaba: el juego se congelaba cada
+            # vez que el usuario volvía a él.
+            #
+            # Se cruza contra lo que sigue pulsado en vez de restar lo soltado
+            # este ciclo: así también se limpia solo si alguna vez se pierde un
+            # flanco entero.
+            self._gamepad_reserved_buttons.intersection_update(current)
 
             # SDL entrega estado, no una cola de eventos. Generamos repetición
             # controlada para el D-pad: conserva cada flanco corto y permite
@@ -3267,7 +3284,6 @@ class RoleRunManager(ctk.CTk):
                         self._gamepad_reserved_buttons.add(button)
                         self._hotkey_action(action)
 
-            self._gamepad_reserved_buttons.difference_update(released)
             if (
                 self._ryujinx_input_gate.active
                 and not self._gamepad_reserved_buttons
@@ -13836,7 +13852,14 @@ class RoleRunManager(ctk.CTk):
             return
         profile = self._resolve_global_tm_profile()
         if profile is None:
+            # Sin mochila no se puede pintar la columna de MT, pero los drafteos
+            # guardados NO dependen de ella y esta página es su única superficie
+            # en todo el programa: un drafteo ya pagado se quedaba inalcanzable,
+            # detrás de un rótulo de carga que no terminaba nunca.
+            self._global_tm_sin_mochila = self._motivo_sin_mochila_de_mt()
+            self._smooth_render_page(reset_scroll=True)
             return
+        self._global_tm_sin_mochila = ""
         self._global_tm_load_requested = True
 
         def loaded(profile, inventory, source) -> None:
@@ -13850,6 +13873,25 @@ class RoleRunManager(ctk.CTk):
         self._start_live_tm_inventory_load(
             None, 1, replace_existing=True, profile=profile, on_loaded=loaded,
             on_failed=lambda: setattr(self, "_global_tm_load_requested", False),
+        )
+
+    def _motivo_sin_mochila_de_mt(self) -> str:
+        """Por qué no se puede listar la mochila de MT del juego abierto."""
+        clave = str(getattr(self.save_engine, "key", "") or "")
+        if clave not in LIVE_TM_GAME_KEYS:
+            return (
+                f"{self._game_label(clave) or 'Este juego'} todavía no tiene una "
+                "lectura demostrada de su mochila de MT. Los drafteos que hayas "
+                "guardado sí puedes enseñarlos desde aquí."
+            )
+        if not self._oras_live_active:
+            return (
+                "Abre el juego y espera a que RoleRun confirme la conexión para "
+                "ver tus MT. Los drafteos guardados no necesitan la conexión."
+            )
+        return (
+            "No se pudo preparar la tabla de MT de este juego. Los drafteos "
+            "guardados siguen disponibles."
         )
 
     def _global_tm_entries(self, profile, inventory: dict[int, int]) -> tuple[dict[str, object], ...]:
@@ -13945,7 +13987,7 @@ class RoleRunManager(ctk.CTk):
             self._empty_page("No hay partida cargada", "Abre una Run para ver qué puedes enseñar.", self._return_to_welcome)
             return
         context = self._global_tm_context
-        if context is None:
+        if context is None and not self._global_tm_sin_mochila:
             panel = ctk.CTkFrame(self.body, height=520, fg_color="#151515", corner_radius=16,
                                  border_width=1, border_color="#3A3A3A")
             panel.grid(row=0, column=0, sticky="nsew")
@@ -13956,10 +13998,15 @@ class RoleRunManager(ctk.CTk):
                          text_color=MUTED, font=ctk.CTkFont("Segoe UI", 12)).place(relx=.5, rely=.52, anchor="center")
             self.after(20, self._load_global_tm_context)
             return
-        profile, inventory, source_detail = context
+        # Sin mochila la página se pinta igual: la columna de MT explica por qué
+        # está vacía y la de DRAFTEOS funciona entera.
+        profile, inventory, source_detail = context or (None, {}, "")
+        entradas = (
+            self._global_tm_entries(profile, inventory) if profile is not None else ()
+        )
         party = tuple(self._projected_party()[:6])
         self._global_tm_view = GlobalTMView(
-            self.body, entries=self._global_tm_entries(profile, inventory), party=party,
+            self.body, entries=entradas, party=party,
             identity_for=self._pokemon_identity, role_for=self._effective_role,
             sprite_for=self._team_pc_sprite, role_icon_for=self.role_icons.image,
             on_choose=lambda entry, pokemon: self._open_global_tm_choice(profile, inventory, source_detail, entry, pokemon),
@@ -13967,6 +14014,7 @@ class RoleRunManager(ctk.CTk):
             drafts=self._entradas_de_drafteos_guardados(),
             on_choose_draft=self.ensenar_drafteo_guardado,
             on_delete_draft=self.descartar_drafteo_guardado,
+            sin_mt=self._global_tm_sin_mochila,
             navigation_keys=self.project.menu_keys if self.project else None,
             on_left_edge=self._select_sidebar_from_content,
             on_edge_accept=self._accept_sidebar_from_content,
@@ -13974,7 +14022,7 @@ class RoleRunManager(ctk.CTk):
         self._set_navigation_owner(self._global_tm_view)
 
     def _open_global_tm_choice(self, profile, inventory, source_detail, entry, pokemon) -> None:
-        if entry is None:
+        if entry is None or profile is None:
             return
         self._open_integrated_tm_flow(
             pokemon, profile, inventory, source_detail,
@@ -16492,7 +16540,26 @@ class RoleRunManager(ctk.CTk):
             return
         self.after(35, lambda: self._retire_tm_open_when_ready(flow))
 
-    def _retire_tm_close_when_ready(self) -> None:
+    #: Cuántas vueltas espera la barrera de cierre de MT antes de retirarse
+    #: igualmente. A 35 ms por vuelta son unos 4 segundos, la misma paciencia
+    #: que `_retire_team_pc_loader_when_ready`.
+    INTENTOS_BARRERA_MT = 120
+
+    def _retire_tm_close_when_ready(self, attempt: int = 0) -> None:
+        """Retira la barrera del cierre de MT, y se retira SIEMPRE.
+
+        Esto se comprobaba **una sola vez**: sin `else`, sin reintento y sin
+        tope. Si en ese instante la comprobación no salía afirmativa, la barrera
+        —un `Toplevel` sin marco y en `-topmost` sobre el contenido— se quedaba
+        tapando la página entera y solo se salía cerrando el programa. Y peor:
+        `_hide_busy_indicator` solo destruye la ventana cuando el diccionario de
+        motivos queda vacío, así que con «tm-flow» clavado ninguna retirada
+        posterior de ningún otro flujo podía quitarla ya.
+
+        Ahora se reintenta y, al agotar la paciencia, se retira igual y se dice
+        que la vista no terminó de componerse. Un fallo ruidoso es preferible a
+        una barrera eterna.
+        """
         if self.active_page == "tms":
             view = getattr(self, "_global_tm_view", None)
             ready = bool(
@@ -16500,19 +16567,33 @@ class RoleRunManager(ctk.CTk):
                 and callable(getattr(view, "is_fully_composed", None))
                 and view.is_fully_composed()
             )
-            if ready:
-                self._hide_busy_indicator("tm-flow")
-            return
-        view = getattr(self, "_team_pc_view", None)
-        pc_data = self._team_pc_cached_data()
-        ready = bool(
-            not self._body_swap_in_progress
-            and pc_data is not None
-            and view is not None
-            and callable(getattr(view, "is_fully_composed", None))
-            and view.is_fully_composed(int(pc_data.box_count))
-        )
+        else:
+            view = getattr(self, "_team_pc_view", None)
+            pc_data = self._team_pc_cached_data()
+            ready = bool(
+                not self._body_swap_in_progress
+                and pc_data is not None
+                and view is not None
+                and callable(getattr(view, "is_fully_composed", None))
+                and view.is_fully_composed(int(pc_data.box_count))
+            )
         if ready:
+            self._hide_busy_indicator("tm-flow")
+            return
+        if attempt >= self.INTENTOS_BARRERA_MT:
+            self._hide_busy_indicator("tm-flow")
+            self._set_operation_status(
+                "failed", "LA VISTA NO TERMINÓ DE COMPONERSE",
+                "Se cerró el selector de MT, pero la página de debajo no alcanzó "
+                "un estado visual estable. No se ha perdido ningún cambio.",
+                persistent=True,
+            )
+            return
+        try:
+            self.after(35, lambda: self._retire_tm_close_when_ready(attempt + 1))
+        except Exception:
+            # Si ni siquiera se puede reprogramar, la barrera se va ahora: es
+            # preferible una página sin barrera a una barrera sin salida.
             self._hide_busy_indicator("tm-flow")
 
     def _open_tm_selector(
@@ -22160,6 +22241,7 @@ class RoleRunManager(ctk.CTk):
         self._initial_shell_stable_polls = 0
         self._initial_shell_stable_signature = None
         self._global_tm_context = None
+        self._global_tm_sin_mochila = ""
         self._global_tm_load_requested = False
         self._busy_reasons.pop("initial-shell", None)
         self._cancel_oras_initial_auto_sync()

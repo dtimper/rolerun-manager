@@ -1939,6 +1939,7 @@ def test_closing_tm_destroys_its_bindings_behind_an_independent_barrier() -> Non
 def test_tm_close_keeps_the_complete_flow_alive_until_controller_captures_it() -> None:
     events: list[str] = []
     flow = SimpleNamespace(
+        frame=SimpleNamespace(winfo_exists=lambda: True),
         on_close=lambda: events.append("controller-captured"),
         destroy=lambda: events.append("destroyed-too-early"),
     )
@@ -1947,6 +1948,25 @@ def test_tm_close_keeps_the_complete_flow_alive_until_controller_captures_it() -
 
     assert result == "break"
     assert events == ["controller-captured"]
+
+
+def test_tm_close_no_hace_nada_si_su_frame_ya_no_esta() -> None:
+    """`<Escape>` está enganchado al toplevel, no al frame del selector.
+
+    Al navegar a otra página el flujo no se destruye, así que su Escape seguía
+    vivo: pulsarlo en otra sección levantaba la barrera de «Volviendo a…» sobre
+    una página que nunca había abierto ningún selector, y esa barrera podía
+    quedarse para siempre.
+    """
+    events: list[str] = []
+    flow = SimpleNamespace(
+        frame=SimpleNamespace(winfo_exists=lambda: False),
+        on_close=lambda: events.append("no-deberia"),
+        destroy=lambda: events.append("no-deberia"),
+    )
+
+    assert IntegratedTMTeachFlow._close(flow) == "break"
+    assert events == []
 
 
 def test_tm_destroy_releases_bindings_and_removes_its_frame() -> None:

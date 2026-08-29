@@ -102,3 +102,61 @@ def test_la_ficha_de_rol_nombra_los_tres() -> None:
 def test_drenadoras_es_un_movimiento_de_estado() -> None:
     """Si fuera de daño, entraría por otra puerta y con otra regla."""
     assert clases()[DRENADORAS] == "status"
+
+
+# ------------------------------------------- los boosts que faltaban en los datos
+
+TAMBOR, LUMINICOLA, ACUPRESION = 187, 294, 367
+DESLOME = 868
+
+
+def test_tambor_es_legal_para_asesino_y_luminicola_para_mago() -> None:
+    """No estaban en ningún pool, así que RoleRun proponía borrarlos.
+
+    Tambor sube solo el Ataque y Luminicola solo el Ataque Especial: es
+    literalmente lo que la ficha de cada rol permite («boosts que aumenten al
+    menos el Ataque»). Un Snorlax con Tambor al que se asignaba Asesino veía el
+    movimiento en rojo, se quedaba en preparación, y el diálogo ofrecía
+    eliminarlo — con el juego conectado, eso puede acabar en una escritura real
+    que borra un movimiento legal.
+    """
+    assert TAMBOR in permitidos("Asesino")
+    assert LUMINICOLA in permitidos("Mago")
+
+
+def test_no_se_cruzan_de_rol() -> None:
+    assert TAMBOR not in permitidos("Mago")
+    assert LUMINICOLA not in permitidos("Asesino")
+
+
+def test_que_era_un_olvido_lo_demuestra_deslome() -> None:
+    """Deslome hace lo mismo que Tambor pagando PS, y sí estaba en los pools."""
+    assert DESLOME in pools()["asesino_subir_ataque"]
+    assert DESLOME in pools()["global_self_boosts"]
+    assert TAMBOR in pools()["global_self_boosts"]
+
+
+def test_un_support_no_puede_subirse_las_estadisticas() -> None:
+    """El Support se valida por RESTA sobre `global_self_boosts`.
+
+    Lo que no esté en esa lista pasa en verde. Sin estos tres, un Support podía
+    llevar Tambor, Luminicola o Acupresión pese a que su ficha lo prohíbe, y
+    RoleRun podía además OFRECÉRSELOS como MT compatible.
+    """
+    legales = permitidos("Support")
+    for move_id in (TAMBOR, LUMINICOLA, ACUPRESION):
+        assert move_id not in legales, move_id
+
+
+def test_acupresion_no_entra_en_asesino_ni_mago() -> None:
+    """Sube una estadística al azar: no garantiza Ataque ni Ataque Especial."""
+    assert ACUPRESION not in permitidos("Asesino")
+    assert ACUPRESION not in permitidos("Mago")
+    assert ACUPRESION in pools()["global_self_boosts"]
+
+
+def test_los_roles_defensivos_siguen_sin_boosts_ofensivos() -> None:
+    for rol in ROLES_DEFENSIVOS:
+        legales = permitidos(rol)
+        assert TAMBOR not in legales
+        assert LUMINICOLA not in legales

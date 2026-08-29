@@ -257,6 +257,16 @@ class IntegratedTMTeachFlow:
             pass
 
     def _close(self) -> str:
+        # `<Escape>` está enganchado al toplevel, no a este frame. Al navegar a
+        # otra página el flujo no se destruye, así que su Escape seguía vivo:
+        # pulsarlo en otra sección levantaba la barrera de «Volviendo a…» sobre
+        # una página que nunca había abierto ningún selector.
+        try:
+            if not self.frame.winfo_exists():
+                return "break"
+        except Exception:
+            return "break"
+
         # El controlador captura primero esta superficie completa y solo después
         # la destruye. Retirarla aquí dejaba a la captura el árbol inferior a
         # medio reconstruir, origen demostrado del frame roto al volver.

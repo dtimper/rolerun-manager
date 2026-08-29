@@ -1,6 +1,81 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.1-alpha.9 — cuatro más de la auditoría
+
+## La barrera de MT ya no puede quedarse para siempre
+
+`_retire_tm_close_when_ready` se comprobaba **una sola vez**: sin `else`, sin
+reintento y sin tope. Si en ese instante la comprobación no salía afirmativa, la
+barrera —un `Toplevel` sin marco y en `-topmost` sobre el contenido— tapaba la
+página entera y solo se salía cerrando el programa. Y peor: `_hide_busy_indicator`
+solo destruye la ventana cuando el diccionario de motivos queda vacío, así que
+con «tm-flow» clavado **ninguna** retirada posterior de ningún otro flujo podía
+quitarla ya.
+
+Ahora reintenta 120 veces (unos 4 s, la misma paciencia que su hermano
+`_retire_team_pc_loader_when_ready`) y al agotarse **se retira igual** diciendo
+que la vista no terminó de componerse. Un fallo ruidoso es preferible a una
+barrera sin salida.
+
+Y se cierra una de las vías que llevaban a ella: el `<Escape>` del selector está
+enganchado al *toplevel*, no a su frame, y navegar a otra página no destruye el
+flujo. Pulsar Escape en otra sección levantaba la barrera sobre una página que
+nunca había abierto ningún selector. Ahora `_close` comprueba primero que su
+frame siga vivo.
+
+## Un botón fantasma congelaba Ryujinx
+
+El conjunto de botones reservados se limpiaba al final de `_poll_gamepad`,
+**después** de los `return` de las ramas «menú abierto» y «RoleRun delante». Con
+el atajo de fábrica —el menú flotante abre en milisegundos, mucho antes de que el
+dedo suelte— el flanco de soltar se consumía en ese `return` y el botón quedaba
+reservado para siempre. A partir de ahí, las dos liberaciones automáticas de la
+retención de Ryujinx exigen que el conjunto esté vacío, y nunca lo estaba: **el
+juego se congelaba cada vez que el usuario volvía a él**, sin decir nada.
+
+La limpieza sube al principio del ciclo, antes de cualquier `return`. Y en vez de
+restar lo soltado en ese ciclo, se cruza contra lo que sigue pulsado: así también
+se limpia solo si alguna vez se pierde un flanco entero.
+
+## MOVIMIENTOS deja de colgarse, y de secuestrar los drafteos
+
+En HeartGold/SoulSilver, Diamante/Perla y Platino la página no se pintaba nunca:
+el perfil de MT devolvía `None`, el único reintento volvía a fallar y nadie
+repintaba jamás. Sin ningún mensaje.
+
+El daño no era no ver las MT. **Los drafteos guardados se pintan en esa misma
+página**, y es su única superficie en todo el programa: un drafteo que ya costó
+su contador quedaba inalcanzable, detrás de un rótulo de carga que no terminaba.
+Y el aviso al guardarlo dice «te espera en MOVIMIENTOS». Era falso. Lo introduje
+yo en la alpha.2.
+
+Ahora la página se pinta igual: la columna de MT explica **por qué** está vacía
+—juego sin lectura demostrada, emulador sin conectar, tabla que no se pudo
+preparar— y la de DRAFTEOS funciona entera. Si no hay mochila y sí drafteos, la
+pestaña abre directamente en la que sirve. Cubre también el caso permanente de
+cancelar el diálogo de ROM en ORAS/XY/SM/USUM.
+
+## Tambor y Luminicola faltaban en los datos
+
+Ninguno de los dos estaba en ningún conjunto. Consecuencias en las dos
+direcciones:
+
+- Un Snorlax con **Tambor** al que se asigna Asesino, o un Volbeat con
+  **Luminicola** al que se asigna Mago, mostraba el movimiento en rojo, se
+  quedaba en preparación y el diálogo ofrecía eliminarlo. Con el juego conectado
+  eso puede acabar en una escritura real que borra un movimiento legal.
+- Y como el Support se valida **por resta** sobre `global_self_boosts`, los
+  mismos huecos dejaban que un Support llevara Tambor, Luminicola o
+  **Acupresión** en verde, pese a que su ficha lo prohíbe.
+
+Que era un olvido y no una decisión lo demuestra **Deslome**, que hace lo mismo
+que Tambor pagando PS y sí estaba en los tres conjuntos.
+
+Acupresión entra solo en `global_self_boosts`: sube una estadística al azar, así
+que no garantiza Ataque ni Ataque Especial y no pertenece a los pools de Asesino
+ni de Mago.
+
 # v0.3.1-alpha.8 — lo que la auditoría encontró destruyendo datos
 
 Los tres primeros hallazgos del informe del 29-08-2026, que son los únicos que

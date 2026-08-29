@@ -38,6 +38,7 @@ class GlobalTMView:
                  drafts: tuple[dict[str, Any], ...] = (),
                  on_choose_draft: Callable[[dict[str, Any], Any], None] | None = None,
                  on_delete_draft: Callable[[dict[str, Any]], None] | None = None,
+                 sin_mt: str = "",
                  navigation_keys: dict[str, str] | None = None,
                  on_left_edge: Callable[[], None] | None = None,
                  on_edge_accept: Callable[[], bool] | None = None) -> None:
@@ -46,12 +47,17 @@ class GlobalTMView:
         self.identity_for, self.role_for, self.sprite_for = identity_for, role_for, sprite_for
         self.role_icon_for, self.on_choose, self.source_detail = role_icon_for, on_choose, source_detail
         self.on_choose_draft, self.on_delete_draft = on_choose_draft, on_delete_draft
+        #: Por qué no hay MT que listar, si es que no las hay.
+        self.sin_mt = str(sin_mt or "")
         self.navigation_keys = dict(navigation_keys or {"accept": "z", "back": "x"})
         self.on_left_edge, self.on_edge_accept = on_left_edge, on_edge_accept
         self.navigation_guard: Callable[[], bool] | None = None
         self.navigation_intercept: Callable[[str], bool] | None = None
         self._external_navigation_focus = False
-        self.pestana = "tm"
+        # Sin mochila que enseñar, la pestaña útil es la otra: abrir en una
+        # lista que solo puede explicar por qué está vacía es hacer perder
+        # un clic a quien viene a por sus drafteos.
+        self.pestana = "draft" if (sin_mt and drafts) else "tm"
         self.preview_key: tuple[str, int] | None = None
         self.selected_key: tuple[str, int] | None = None
         self._search_after = None
@@ -267,16 +273,17 @@ class GlobalTMView:
             self.preview_key = self._clave(filtradas[0])
         if not filtradas:
             self.preview_key = None
+            if self.pestana == "draft":
+                vacio = ("Todavía no has guardado ningún drafteo.\n"
+                         "En Drafteos, tira y pulsa GUARDAR para dejarlo aquí.")
+            elif self.sin_mt:
+                vacio = self.sin_mt
+            else:
+                vacio = "No tienes ninguna MT que coincida con la búsqueda."
             ctk.CTkLabel(
-                self.list_scroll,
-                text=(
-                    "Todavía no has guardado ningún drafteo.\n"
-                    "En Drafteos, tira y pulsa GUARDAR para dejarlo aquí."
-                    if self.pestana == "draft" else
-                    "No tienes ninguna MT que coincida con la búsqueda."
-                ),
-                text_color=MUTED, justify="center",
-                font=ctk.CTkFont("Segoe UI", 13, "bold")).grid(row=0, column=0, pady=70)
+                self.list_scroll, text=vacio, text_color=MUTED, justify="center",
+                wraplength=330,
+                font=ctk.CTkFont("Segoe UI", 13, "bold")).grid(row=0, column=0, pady=70, padx=12)
         for row, entry in enumerate(filtradas):
             self._fila(row, entry)
         self._pintar_pestanas()
