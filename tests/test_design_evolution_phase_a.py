@@ -295,7 +295,11 @@ def test_primary_navigation_removes_dashboard_history_and_moves() -> None:
     assert "EQUIPO Y PC" in labels
     assert "DASHBOARD" not in labels
     assert "HISTORIAL" not in labels
-    assert "MOVIMIENTOS" not in labels
+    # Antes esto miraba el rotulo, buscando que "MOVIMIENTOS" no apareciera: era
+    # la forma de comprobar que la consulta de movimientos habia dejado de ser
+    # destino principal. Ya no vale, porque la pestana de MT se llama asi. Lo
+    # que importa es la clave, y esa sigue fuera.
+    assert "moves" not in {key for key, _label in PRIMARY_NAVIGATION}
 
 
 def test_legacy_navigation_targets_land_in_the_new_information_architecture() -> None:
@@ -1923,7 +1927,7 @@ def test_opening_shell_preserves_the_original_loading_toplevel() -> None:
 def test_closing_tm_destroys_its_bindings_behind_an_independent_barrier() -> None:
     source = inspect.getsource(RoleRunManager._open_integrated_tm_flow)
 
-    assert '"Volviendo a MT…" if return_page == "tms" else "Volviendo a Equipo y PC…"' in source
+    assert '"Volviendo a Movimientos…" if return_page == "tms" else "Volviendo a Equipo y PC…"' in source
     assert "freeze_source=True" in source
     assert '"tm-flow", "Abriendo el selector de MT…", freeze_source=True' in source
     assert "flow.destroy()" in source
@@ -2105,34 +2109,54 @@ def test_global_tm_distinguishes_already_known_from_incompatible() -> None:
 
 
 def test_global_tm_selection_does_not_rebuild_the_scroll_surface() -> None:
-    source = inspect.getsource(GlobalTMView._select_tm)
-    preview = inspect.getsource(GlobalTMView._preview_tm)
+    """Abrir el selector no puede rehacer las listas de debajo.
 
-    assert "_render_list" not in source
-    assert "_render_list" not in preview
-    assert "_render_team" not in preview
-    assert "_update_team_compatibility" in preview
+    Antes esto miraba el preview del hover, que ya no existe: ahora se pulsa un
+    movimiento y aparece el selector. La garantía es la misma —elegir no destruye
+    la superficie con scroll— y sigue haciendo falta, porque rehacerla dejaría el
+    scroll donde no estaba y perdería la posición del teclado.
+    """
+    abrir = inspect.getsource(GlobalTMView.abrir_selector)
+    cerrar = inspect.getsource(GlobalTMView.cerrar_selector)
+
+    assert "_render_lists" not in abrir
+    assert "_render_lists" not in cerrar
+    assert "_render_team" in abrir, "el equipo si se compone al abrirlo"
 
 
-def test_global_tm_z_advances_from_tm_to_first_compatible_pokemon() -> None:
-    first = SpatialTarget(("tm", 10), 0, 0)
-    second = SpatialTarget(("pokemon", "party-2"), 0, 2)
-    keyboard = SpatialSelection((first, second))
-    keyboard.selected_key = first.key
-    painted: list[object] = []
+def test_global_tm_z_moves_the_keyboard_into_the_open_selector() -> None:
+    """Con el selector encima, moverse por la lista de debajo no significa nada.
+
+    Antes la Z avanzaba de la MT al primer Pokémon compatible dentro de la misma
+    pantalla. Ahora la Z abre el selector, y el teclado tiene que pasar entero a
+    los seis del equipo: si siguiera apuntando a la lista, la siguiente flecha
+    movería algo que el usuario ni ve.
+    """
+    keyboard = SpatialSelection()
+    party = (SimpleNamespace(nickname="Absol"), SimpleNamespace(nickname="Delphox"))
+    entry = {"kind": "tm", "move_id": 10, "compatible": ("party-2",)}
     view = SimpleNamespace(
-        selected_move_id=None,
-        _preview_tm=lambda _move_id: None,
-        _update_tm_highlight=lambda: None,
+        abierto=entry,
+        party=party,
+        identity_for=lambda pokemon: (
+            "party-2" if pokemon is party[1] else "party-1"
+        ),
+        _entry=lambda: entry,
+        _elegir=lambda _item, _member: None,
+        _keyboard_targets={},
+        _team_cards={"party-2": object()},
+        _move_buttons={},
+        _filtered_entries=lambda: (),
+        _filtered_drafts=lambda: (),
         _keyboard=keyboard,
-        _apply_keyboard=lambda: painted.append(keyboard.selected_key),
+        _apply_keyboard=lambda: None,
     )
 
-    GlobalTMView._select_tm(view, 10)
+    GlobalTMView._rebuild_keyboard(view)
 
-    assert view.selected_move_id == 10
-    assert keyboard.selected_key == second.key
-    assert painted == [second.key]
+    assert list(view._keyboard_targets) == [("pokemon", "party-2")], (
+        "el teclado sigue apuntando a la lista tapada"
+    )
 
 
 def test_draft_results_expose_choose_and_reroll_as_separate_targets() -> None:

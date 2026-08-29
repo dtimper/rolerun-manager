@@ -45,6 +45,7 @@ from .config import (
 )
 from . import perf
 from .draft_engine import DraftEngine
+from . import drafteos_guardados
 from .role_content import GLOBAL_ROLE_NOTE, ROLE_GUIDE
 from .pc_browser import filter_pc_pokemon, reset_scrollable_to_top
 from .role_rules import (
@@ -3045,7 +3046,7 @@ class RoleRunManager(ctk.CTk):
                          row=0, column=0, columnspan=2, pady=(24, 10))
         self._floating_menu_buttons = []
         self._floating_menu_index = 0
-        for index, (label, page) in enumerate((("EQUIPO Y PC", "team"), ("MT", "tms"),
+        for index, (label, page) in enumerate((("EQUIPO Y PC", "team"), ("MOVIMIENTOS", "tms"),
                                                ("DRAFTEOS", "drafts"), ("BOLSA", "bag"))):
             row, column = 1 + index // 2, index % 2
             button = ctk.CTkButton(
@@ -12309,6 +12310,7 @@ class RoleRunManager(ctk.CTk):
                 view.update_entries(
                     self._global_tm_entries(profile, inventory),
                     tuple(self._projected_party()[:6]),
+                    self._entradas_de_drafteos_guardados(),
                 )
                 refreshed_global_tm = True
         if not refreshed_global_tm:
@@ -12816,7 +12818,7 @@ class RoleRunManager(ctk.CTk):
         titles = {
             "drafts": ("Drafteos", "Genera movimientos compatibles con el rol del Pokémon."),
             "team": ("Equipo y PC", "Gestiona el equipo y las cajas."),
-            "tms": ("MT", "Elige una MT y quién la aprende."),
+            "tms": ("Movimientos", "MT de la mochila y drafteos que te guardaste."),
             "moves": ("Ayuda · Consulta de movimientos", "Comprueba qué movimientos admite cada rol en el juego actual."),
             "pc": ("Equipo y PC", "Consulta las cajas y reorganiza el equipo desde el mismo espacio."),
             "history": ("Configuración · Registro y recuperación", "Consulta la línea temporal y las opciones de recuperación de la Run."),
@@ -12912,6 +12914,7 @@ class RoleRunManager(ctk.CTk):
             on_choose_move=self.select_drafted_move,
             on_reroll=self.reroll_move,
             on_choose_slot=self.select_move_slot,
+            on_save_move=self.guardar_drafteo,
             on_back=self._draft_back,
             on_cancel=self._draft_cancel,
             on_open_moves=self._open_moves_from_draft,
@@ -13837,6 +13840,7 @@ class RoleRunManager(ctk.CTk):
             metadata = self._draft_move_metadata(int(tm.move_id))
             move = self.engine.move(int(tm.move_id))
             entries.append({
+                "kind": "tm",
                 "number": int(number), "item_id": int(tm.item_id), "move_id": int(tm.move_id),
                 "move_name": str(move.get("name_es", f"Movimiento #{int(tm.move_id)}")),
                 "quantity": quantity, "owned": quantity > 0,
@@ -13851,10 +13855,57 @@ class RoleRunManager(ctk.CTk):
             })
         return tuple(entries)
 
+    def _entradas_de_drafteos_guardados(self) -> tuple[dict[str, object], ...]:
+        """Los drafteos guardados, con la misma forma que una MT.
+
+        Que compartan forma no es casualidad: la columna de la izquierda y la de
+        la derecha son dos maneras de llegar a lo mismo —enseñar un movimiento—
+        y el selector de Pokémon es idéntico para las dos. Con formas distintas
+        habría que escribir dos veces la misma pantalla.
+
+        La diferencia real está en quién puede aprenderlo: una MT la limita la
+        compatibilidad que demuestra el juego; un drafteo, **el rol**, porque
+        salió del conjunto de ese rol.
+        """
+        if not self.project:
+            return ()
+        entradas: list[dict[str, object]] = []
+        for guardado in drafteos_guardados.ordenados(self.project.saved_drafts):
+            move_id = int(guardado.get("move_id", 0) or 0)
+            metadata = self._draft_move_metadata(move_id)
+            compatibles: list[str] = []
+            conocidos: list[str] = []
+            for pokemon in tuple(self._projected_party()[:6]):
+                identidad = self._pokemon_identity(pokemon)
+                rol, _simbolo = self._effective_role(pokemon)
+                _nombres, ids = self._effective_moves_for_review(pokemon)
+                if move_id in {int(valor or 0) for valor in ids}:
+                    conocidos.append(identidad)
+                elif drafteos_guardados.puede_aprenderlo(guardado, rol):
+                    compatibles.append(identidad)
+            entradas.append({
+                "kind": "draft",
+                "move_id": move_id,
+                "move_name": str(guardado.get("move", "")),
+                "role": str(guardado.get("role", "")),
+                "origen": str(guardado.get("origen_nombre", "")),
+                "category": {
+                    "physical": "FÍSICO", "special": "ESPECIAL", "status": "ESTADO",
+                }.get(str(self._damage_class_for_move(move_id)), "NO DISPONIBLE"),
+                "power": metadata.get("power", "—"),
+                "accuracy": metadata.get("accuracy", "—"),
+                "pp": metadata.get("pp", "—"),
+                "description": metadata.get("description", "No disponible"),
+                "compatible": tuple(compatibles),
+                "known": tuple(conocidos),
+                "guardado": dict(guardado),
+            })
+        return tuple(entradas)
+
     def _render_global_tm_page(self) -> None:
         self._clear(self.body)
         if not self.current_game:
-            self._empty_page("No hay partida cargada", "Abre una Run para consultar sus MT.", self._return_to_welcome)
+            self._empty_page("No hay partida cargada", "Abre una Run para ver qué puedes enseñar.", self._return_to_welcome)
             return
         context = self._global_tm_context
         if context is None:
@@ -13876,6 +13927,8 @@ class RoleRunManager(ctk.CTk):
             sprite_for=self._team_pc_sprite, role_icon_for=self.role_icons.image,
             on_choose=lambda entry, pokemon: self._open_global_tm_choice(profile, inventory, source_detail, entry, pokemon),
             source_detail=source_detail,
+            drafts=self._entradas_de_drafteos_guardados(),
+            on_choose_draft=self.ensenar_drafteo_guardado,
             navigation_keys=self.project.menu_keys if self.project else None,
             on_left_edge=self._select_sidebar_from_content,
             on_edge_accept=self._accept_sidebar_from_content,
@@ -16303,7 +16356,7 @@ class RoleRunManager(ctk.CTk):
         def close_flow() -> None:
             flow = self._tm_teach_flow
             self._show_busy_indicator(
-                "tm-flow", "Volviendo a MT…" if return_page == "tms" else "Volviendo a Equipo y PC…",
+                "tm-flow", "Volviendo a Movimientos…" if return_page == "tms" else "Volviendo a Equipo y PC…",
                 freeze_source=True,
             )
 
@@ -22651,6 +22704,78 @@ class RoleRunManager(ctk.CTk):
         self._schedule_body_scroll_redraw()
         self.after(30, lambda: self._smooth_scroll_to_step(3))
 
+    def guardar_drafteo(self, index: int) -> None:
+        """Se queda la tirada para más tarde, y la cobra ahora.
+
+        Cobrarla aquí no es una decisión estética. Repetir la tirada es gratis y
+        siempre lo fue; lo que cuesta un drafteo es **quedarse con un
+        resultado**. Si guardar saliera gratis, la jugada obvia sería tirar,
+        guardarse las cuatro opciones y volver a tirar, y el contador dejaría de
+        significar nada. Por eso enseñarlo después ya no vuelve a cobrar.
+        """
+        if not self.project or not 0 <= int(index) < len(self.current_results):
+            return
+        if max(0, int(self.project.counters.get("drafteos", 0))) <= 0:
+            self._set_operation_status(
+                "warning", "SIN DRAFTEOS DISPONIBLES",
+                "Guardar una tirada cuesta un drafteo igual que enseñarla. "
+                "Sube el contador para poder quedártela.",
+            )
+            return
+        resultado = self.current_results[int(index)]
+        pokemon = self.selected_pokemon
+        guardado = drafteos_guardados.nuevo_drafteo(
+            move_id=int(resultado["move_id"]),
+            move=str(resultado["move"]),
+            role=str(self.run.role or ""),
+            pool_key=str(resultado.get("pool_key", "")),
+            categoria=str(resultado.get("title", "")),
+            origen_identidad=(
+                self._pokemon_identity(pokemon) if pokemon is not None else ""
+            ),
+            origen_nombre=str(
+                getattr(pokemon, "nickname", "") or getattr(pokemon, "species", "")
+            ),
+            cuando=datetime.now().isoformat(timespec="seconds"),
+        )
+        # Guardar antes de tocar el contador: `adjust_run_counter` relee el
+        # proyecto del disco, y lo que no esté escrito se perdería ahí.
+        self.project.saved_drafts = drafteos_guardados.anadir(
+            self.project.saved_drafts, guardado,
+        )
+        self.project_service.save(self.project)
+        self.adjust_run_counter(
+            "drafteos", -1, source=f"Drafteo guardado · {guardado['move']}",
+        )
+        rol = str(guardado["role"] or "").strip()
+        self._set_operation_status(
+            "confirmed", "DRAFTEO GUARDADO",
+            f"{guardado['move']} te espera en MOVIMIENTOS"
+            + (f", para cualquier {rol}." if rol else "."),
+        )
+        self._reset_visual_draft_flow()
+        if self.active_page == "drafts":
+            self._smooth_render_page()
+
+    def ensenar_drafteo_guardado(self, guardado: dict, pokemon) -> None:
+        """Abre «qué movimiento olvidará» con un drafteo que ya está pagado."""
+        if pokemon is None or not guardado:
+            return
+        self.selected_pokemon = pokemon
+        self.run.role = str(guardado.get("role", "")) or self.run.role
+        self.run.draft = PendingDraft(
+            role=str(guardado.get("role", "")),
+            category=str(guardado.get("categoria", "")),
+            pool_key=str(guardado.get("pool_key", "")),
+            move_id=int(guardado.get("move_id", 0) or 0),
+            move=str(guardado.get("move", "")),
+            ya_pagado=True,
+        )
+        self.run.move_slot = None
+        self.current_results = []
+        self._draft_fade_in_pending = True
+        self.navigate("drafts")
+
     def select_move_slot(self, slot: int) -> None:
         # Elegir el movimiento a olvidar completa el drafteo de inmediato:
         # el cambio se añade a la cola, pero el guardado no se escribe aún.
@@ -22661,8 +22786,11 @@ class RoleRunManager(ctk.CTk):
         if not all((self.current_save, self.current_game, self.run.draft, self.selected_pokemon, self.run.move_slot)):
             return
         pending_ids_before = {id(change) for change in self.run.pending_changes}
+        # Un drafteo recuperado de los guardados ya se pagó al guardarlo: ni se
+        # comprueba el contador ni se vuelve a descontar.
+        ya_pagado = bool(getattr(self.run.draft, "ya_pagado", False))
         draft_count = max(0, int(self.project.counters.get("drafteos", 0))) if self.project else 0
-        if draft_count <= 0:
+        if not ya_pagado and draft_count <= 0:
             messagebox.showinfo(
                 "Sin drafteos disponibles",
                 "Ya no queda ningún drafteo disponible. Aumenta el contador antes de confirmar el reemplazo.",
@@ -22705,7 +22833,20 @@ class RoleRunManager(ctk.CTk):
         self.run.pending_changes.append(change)
         # Este es el momento definitivo del drafteo: ya se ha elegido tanto el
         # movimiento nuevo como el hueco que va a sustituir. Solo ahora se consume.
-        self.adjust_run_counter("drafteos", -1, source="Drafteo confirmado")
+        if ya_pagado:
+            # Sale de la lista de guardados, que es donde estaba esperando.
+            if self.project is not None:
+                self.project.saved_drafts = drafteos_guardados.quitar_uno(
+                    self.project.saved_drafts,
+                    {
+                        "move_id": int(draft.move_id),
+                        "role": str(draft.role),
+                        "pool_key": str(draft.pool_key),
+                    },
+                )
+                self.project_service.save(self.project)
+        else:
+            self.adjust_run_counter("drafteos", -1, source="Drafteo confirmado")
 
         # Al completar el drafteo saltamos directamente a Equipo y dejamos a la
         # vista el Pokémon que acaba de recibir el movimiento. El scroll se fija

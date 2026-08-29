@@ -11,6 +11,9 @@ class PendingDraft:
     pool_key: str
     move_id: int
     move: str
+    # Un drafteo recuperado de los guardados ya se pagó al guardarlo. Sin esto,
+    # enseñarlo más tarde cobraría el mismo drafteo dos veces.
+    ya_pagado: bool = False
 
 
 @dataclass(slots=True)

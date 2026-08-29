@@ -1,6 +1,72 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.1-alpha.2 — MOVIMIENTOS: los drafteos que te guardas viven junto a las MT
+
+Un drafteo tirado tenía un solo final: elegir el movimiento y, a continuación,
+el hueco que sustituye. Ahora tiene dos.
+
+En el paso 2 cada opción ofrece **ENSEÑAR AHORA** —lo de siempre— y **GUARDAR**.
+Lo guardado espera en la pestaña, que deja de llamarse MT y pasa a llamarse
+**MOVIMIENTOS**, con dos columnas del mismo peso: las MT de la mochila y los
+drafteos que te quedaste.
+
+## Guardar cuesta un drafteo. Enseñarlo después, no
+
+Esto no es una decisión estética y conviene que quede escrita.
+
+Repetir la tirada es gratis y siempre lo fue: lo que cuesta un drafteo es
+**quedarse con un resultado**. Si guardar saliera gratis, la jugada obvia sería
+tirar, guardarse las cuatro opciones y volver a tirar, y el contador dejaría de
+significar nada. Se paga al guardar, y **por eso** enseñarlo más tarde no vuelve
+a cobrar: cobrarlo dos veces por el mismo movimiento sería un robo silencioso,
+del peor tipo, porque verías bajar el contador sin saber por qué.
+
+Un drafteo recuperado viaja marcado como pagado, y con esa marca ni se comprueba
+el contador —un guardado quedaría inservible justo cuando más falta hace— ni se
+descuenta nada; solo sale de la lista.
+
+## A quién se le puede enseñar
+
+Al **rol**, no a la especie. Un drafteo sale del conjunto de un rol, así que
+cualquier Pokémon que lo tenga puede aprenderlo; el Pokémon para el que se tiró
+se recuerda solo para saber de dónde salió.
+
+## El selector se abre al pulsar el movimiento
+
+Antes había que elegir el movimiento **y** al Pokémon en la misma vista, y el
+panel del equipo ocupaba media pantalla apagado, sin nada que decir hasta que
+elegías. Ahora se pulsa un movimiento y entonces aparece el selector, que es el
+orden en que se piensa: primero qué quiero enseñar, después a quién.
+
+Con el selector abierto, el teclado pasa entero a los seis del equipo y la tecla
+de atrás lo cierra. Si siguiera apuntando a la lista de debajo, la siguiente
+flecha movería algo que no se ve.
+
+## Detalles que costaría descubrir tarde
+
+- **Un drafteo y una MT comparten forma.** No es casualidad: las dos columnas
+  llevan al mismo sitio y el selector es idéntico. Con formas distintas habría
+  que escribir dos veces la misma pantalla.
+- **El proyecto se escribe antes de tocar el contador.** `adjust_run_counter`
+  relee el proyecto del disco, así que lo que no estuviera escrito se perdería
+  ahí sin avisar.
+- **Dos tiradas iguales son dos drafteos.** Cada una costó lo suyo, así que
+  enseñar una no puede llevarse la otra por delante.
+- **Un `config.json` corrupto no impide abrir la Run**: lo que no tenga forma de
+  drafteo se descarta al leerlo.
+
+Pruebas nuevas: `tests/test_drafteos_guardados.py` (reglas y cobro) y
+`tests/test_pagina_movimientos.py` (las dos columnas y el selector).
+
+## Dos pruebas que protegían lo que acabas de cambiar
+
+`test_global_tm_selection_does_not_rebuild_the_scroll_surface` miraba el preview
+del hover, que ya no existe; se reescribe sobre `abrir_selector`, porque la
+garantía sigue haciendo falta: abrir el selector no puede rehacer las listas de
+debajo. Y la que comprobaba que la Z avanzaba de la MT al primer Pokémon
+compatible ahora comprueba que la Z mueve el teclado **dentro** del selector.
+
 # v0.3.1-alpha.1 — textos, y dos cosas que engañaban de verdad
 
 Primera de la 0.3.1. Los textos que pediste, y por el camino dos fallos que la

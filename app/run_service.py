@@ -53,6 +53,10 @@ class RunProject:
     # Identidades ya retiradas al Cementerio. Evita descontar
     # dos veces la misma baja si un estado de UI se reconstruye.
     graveyard_pokemon: list[str] = field(default_factory=list)
+    # Drafteos tirados y guardados para enseñar más tarde. Guardar ya costó su
+    # drafteo, así que enseñarlos después no vuelve a cobrar. Ver
+    # `app/drafteos_guardados.py`.
+    saved_drafts: list[dict[str, Any]] = field(default_factory=list)
     hotkeys: dict[str, str] = field(default_factory=lambda: {
         "sync_live_game": "f5",
         "vidas_mas": "num 7",

@@ -7,7 +7,7 @@ DEFAULT_PAGE = "team"
 # secundarios siguen existiendo, pero ya no compiten en la barra principal.
 PRIMARY_NAVIGATION: tuple[tuple[str, str], ...] = (
     ("team", "♟  EQUIPO Y PC"),
-    ("tms", "▣  MT"),
+    ("tms", "▣  MOVIMIENTOS"),
     ("drafts", "◈  DRAFTEOS"),
     ("settings", "⚙  CONFIGURACIÓN"),
     ("help", "?  AYUDA"),

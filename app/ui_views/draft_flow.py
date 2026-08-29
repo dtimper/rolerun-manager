@@ -76,6 +76,7 @@ class IntegratedDraftFlow:
         on_choose_move: Callable[[int], None],
         on_reroll: Callable[[int], None],
         on_choose_slot: Callable[[int], None],
+        on_save_move: Callable[[int], None] | None = None,
         on_back: Callable[[], None],
         on_cancel: Callable[[], None],
         on_open_moves: Callable[[], None] | None = None,
@@ -99,6 +100,7 @@ class IntegratedDraftFlow:
         self.on_choose_move = on_choose_move
         self.on_reroll = on_reroll
         self.on_choose_slot = on_choose_slot
+        self.on_save_move = on_save_move
         self.on_back = on_back
         self.on_cancel = on_cancel
         self.on_open_moves = on_open_moves
@@ -338,7 +340,7 @@ class IntegratedDraftFlow:
         }
         subtitles = {
             1: "Los seis miembros se muestran a la vez. Cada rol genera su propio conjunto de opciones.",
-            2: "Generar, volver o repetir una opción todavía no consume el drafteo.",
+            2: "Enseñarla ahora o guardarla para después cuesta un drafteo. Repetir la tirada, no.",
             3: "El drafteo se consume únicamente al confirmar uno de estos cuatro huecos.",
         }
         ctk.CTkLabel(header, text=titles[self.step], text_color=GOLD, anchor="w",
@@ -581,13 +583,35 @@ class IntegratedDraftFlow:
             ).pack(fill="x", padx=16, pady=(0, 7))
             actions = ctk.CTkFrame(card, fg_color="transparent")
             actions.pack(side="bottom", fill="x", padx=12, pady=(0, 12))
+            # Dos salidas para la misma tirada: enseñarla ahora o quedársela.
+            # Las dos cuestan el mismo drafteo, así que guardar no es una vía
+            # para acumular tiradas gratis.
             choose = ctk.CTkButton(
-                actions, text="ELEGIR", height=32,
+                actions, text="ENSEÑAR AHORA", height=32,
                 command=lambda i=index: self.on_choose_move(i),
                 fg_color=GOLD, hover_color="#D3AF70", text_color="#111111",
                 font=ctk.CTkFont("Segoe UI", 10, "bold"),
             )
             choose.pack(side="left", fill="x", expand=True)
+            columna = result_column * 3
+            self._register_keyboard_target(
+                ("result-choose", index), result_row, columna, choose,
+                lambda i=index: self.on_choose_move(i),
+            )
+            if self.on_save_move is not None:
+                save = ctk.CTkButton(
+                    actions, text="GUARDAR", width=86, height=32,
+                    command=lambda i=index: self.on_save_move(i),
+                    fg_color="transparent", hover_color="#303030", border_width=1,
+                    border_color=GOLD, text_color=GOLD,
+                    font=ctk.CTkFont("Segoe UI", 10, "bold"),
+                )
+                save.pack(side="left", padx=(7, 0))
+                columna += 1
+                self._register_keyboard_target(
+                    ("result-save", index), result_row, columna, save,
+                    lambda i=index: self.on_save_move(i),
+                )
             reroll = ctk.CTkButton(
                 actions, text="↻", width=38, height=32,
                 command=lambda i=index: self.on_reroll(i),
@@ -596,11 +620,7 @@ class IntegratedDraftFlow:
             )
             reroll.pack(side="left", padx=(7, 0))
             self._register_keyboard_target(
-                ("result-choose", index), result_row, result_column * 2, choose,
-                lambda i=index: self.on_choose_move(i),
-            )
-            self._register_keyboard_target(
-                ("result-reroll", index), result_row, result_column * 2 + 1,
+                ("result-reroll", index), result_row, columna + 1,
                 reroll, lambda i=index: self.on_reroll(i),
             )
 
