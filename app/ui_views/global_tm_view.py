@@ -63,8 +63,10 @@ class GlobalTMView:
         self.search.grid(row=0, column=0, columnspan=2, sticky="w")
         ctk.CTkLabel(heading, text="ELIGE UNA MT", text_color=GOLD, anchor="w",
                      font=ctk.CTkFont("Segoe UI", 20, "bold")).grid(row=1, column=0, sticky="w", pady=(9, 0))
-        ctk.CTkLabel(heading, text=source_detail, text_color=MUTED, anchor="w",
-                     font=ctk.CTkFont("Segoe UI", 11)).grid(row=2, column=0, sticky="w", pady=(2, 0))
+        # Debajo del título iba la procedencia del inventario
+        # («personal_masterdatas · RAM viva validada»). Es cierto y es interno:
+        # a quien elige una MT no le dice nada. Se conserva en `source_detail`
+        # para los diagnósticos, pero no se pinta.
         self.search.bind("<KeyRelease>", self._schedule_filter, add="+")
 
         left = ctk.CTkFrame(self.frame, fg_color="#111111", corner_radius=12)

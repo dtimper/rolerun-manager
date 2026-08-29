@@ -74,8 +74,70 @@ def test_ninguna_se_anuncia_como_no_aplicable_en_vivo() -> None:
 
 def test_la_interfaz_ofrece_mover_dentro_del_pc_en_bdsp() -> None:
     """Si la compuerta lo acepta pero el gesto se rechaza, no sirve de nada."""
-    fuente = inspect.getsource(RoleRunManager._team_pc_drop)
-    indice = fuente.index('intent.operation == "move-box-slot"')
-    permitidos = fuente[indice:indice + 260]
+    from app.ui import PC_A_PC_GAME_KEYS
 
-    assert '"bdsp"' in permitidos
+    assert "bdsp" in PC_A_PC_GAME_KEYS
+
+
+def test_pintar_el_destino_y_ejecutarlo_usan_la_misma_lista() -> None:
+    """Estaban escritas dos veces y no decian lo mismo.
+
+    La que ejecuta el movimiento incluia Perla Reluciente; la que decide de que
+    color se pinta el destino mientras arrastras, no. Resultado: en BDSP TODAS
+    las casillas del PC salian en rojo —tanto las que iban a funcionar como las
+    que no— y solo lo descubrias al soltar. Con las dos leyendo la misma lista
+    no pueden volver a discrepar.
+    """
+    ejecutar = inspect.getsource(RoleRunManager._team_pc_drop)
+    pintar = inspect.getsource(RoleRunManager._team_pc_can_drop)
+
+    for fuente, nombre in ((ejecutar, "_team_pc_drop"), (pintar, "_team_pc_can_drop")):
+        indice = fuente.index('intent.operation == "move-box-slot"')
+        trozo = fuente[indice:indice + 260]
+        assert "PC_A_PC_GAME_KEYS" in trozo, nombre
+        assert '"usum"' not in trozo, f"{nombre} vuelve a llevar su propia lista"
+
+
+def test_un_aviso_de_arrastre_no_se_queda_ahi_para_siempre() -> None:
+    """El usuario lo leyó como el resultado de un movimiento que sí funcionó.
+
+    *«después de probar un par de cambios entre casillas del PC exitosamente, me
+    he fijado y pone abajo DESTINO NO HABILITADO… ya no sé qué pensar»*. El
+    aviso era correcto cuando se escribió —había soltado en una casilla
+    ocupada—, pero seguía abajo mucho después del gesto que lo provocó.
+    """
+    from app.ui_state.operation_status import OperationStatusStore
+
+    tienda = OperationStatusStore()
+    aviso = tienda.publish(
+        "warning", "AHI NO SE PUEDE SOLTAR", "Esa casilla ya está ocupada.",
+        persistent=False,
+    )
+
+    assert aviso.may_auto_collapse is True, "se quedaria hasta que otra cosa lo tape"
+    assert tienda.collapse_if_current(aviso.revision) is True
+    assert tienda.message.kind == "neutral"
+    assert "confirmado" not in tienda.message.detail, (
+        "un aviso no confirma nada, y decirlo es el mismo malentendido"
+    )
+
+
+def test_un_fallo_de_verdad_sigue_sin_irse_solo() -> None:
+    from app.ui_state.operation_status import OperationStatusStore
+
+    tienda = OperationStatusStore()
+    fallo = tienda.publish("failed", "NO SE PUDO", "La escritura no se verificó.")
+
+    assert fallo.may_auto_collapse is False
+    assert tienda.collapse_if_current(fallo.revision) is False
+
+
+def test_el_rechazo_de_soltar_ya_no_se_publica_como_permanente() -> None:
+    fuente = inspect.getsource(RoleRunManager._team_pc_drop)
+    indice = fuente.index("if intent.operation is None:")
+    rechazo = fuente[indice:indice + 700]
+
+    assert "persistent=False" in rechazo
+    assert "DESTINO NO HABILITADO" not in rechazo, (
+        "ese titulo se lee como que ha fallado lo ultimo que hiciste"
+    )

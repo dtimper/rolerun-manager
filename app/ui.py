@@ -124,7 +124,7 @@ from .ui_views import (
 from .realtime import (
     ORASRealTimeAdapter, XYRealTimeAdapter, XYMultiRealTimeAdapter, SMRealTimeAdapter, USUMRealTimeAdapter,
     BDSPRealTimeAdapter, B2W2RealTimeAdapter, HgssRealTimeAdapter,
-    CitraBridge, RealTimeRegistry, RealTimeReplay,
+    CitraBridge, RealTimeRegistry,
 )
 from .realtime.models import badge_source_is_live
 from .live_party_watch import (
@@ -195,6 +195,12 @@ INSTANT_REALTIME_UI_GAME_KEYS = (
     AZAHAR_REALTIME_GAME_KEYS | {"bdsp"} | MELONDS_REALTIME_GAME_KEYS
 )
 AUTOMATIC_BADGE_GAME_KEYS = {"oras", "xy", "sm", "usum"} | MELONDS_REALTIME_GAME_KEYS
+# Backends con escritura PC->PC demostrada. Estaba escrito dos veces: la que
+# ejecuta el movimiento incluia Perla Reluciente y la que pinta si el destino
+# vale, no. El resultado era que en BDSP TODAS las casillas del PC se marcaban
+# en rojo mientras arrastrabas —tanto las que iban a funcionar como las que
+# no— y solo lo descubrias al soltar.
+PC_A_PC_GAME_KEYS = {"usum", "xy", "bdsp"} | MELONDS_REALTIME_GAME_KEYS
 # Backends cuyo writer de rol escribe además el reparto de EV del rol. Estaba
 # repetido como literal en siete sitios, y olvidar uno bastaba para que un
 # juego escribiera la marca del rol pero no sus EV: exactamente lo que le
@@ -478,8 +484,6 @@ class RoleRunManager(ctk.CTk):
         self.realtime_core = self.oras_realtime_core
         # 0.2.1-alpha.3: grabación diagnóstica/replay desde la propia UI. No se
         # activa nunca sola: el usuario decide cuándo capturar una reproducción.
-        self._realtime_diagnostic_started_at: datetime | None = None
-        self._last_realtime_diagnostic_package: Path | None = None
         self._live_sync_in_progress = False
         self._live_write_in_progress = False
         # 1.13 alpha.30: al abrir una Run ORAS, RoleRun enlaza automáticamente
@@ -4769,7 +4773,7 @@ class RoleRunManager(ctk.CTk):
         self.page_title.grid(row=0, column=0, sticky="w")
         self.page_subtitle = ctk.CTkLabel(
             header,
-            text="Gestiona el equipo y las cajas en un mismo espacio.",
+            text="Gestiona el equipo y las cajas.",
             text_color=MUTED,
             anchor="w",
             justify="left",
@@ -10927,7 +10931,7 @@ class RoleRunManager(ctk.CTk):
             return
         if getattr(self.save_engine, "key", "") not in REALTIME_READ_GAME_KEYS:
             self._show_live_sync_toast(
-                "F5 · REAL-TIME CORE",
+                "F5 · SIN ENLACE EN VIVO",
                 "El tiempo real está disponible para los juegos con un backend validado y activo.",
                 False,
             )
@@ -12810,9 +12814,9 @@ class RoleRunManager(ctk.CTk):
         with perf.span("ui.render.estado_superior"):
             self._update_top_status()
         titles = {
-            "drafts": ("Drafteos", "Genera movimientos y añádelos como cambios pendientes."),
-            "team": ("Equipo y PC", "Gestiona el equipo y las cajas en un mismo espacio."),
-            "tms": ("MT", "Elige primero una MT de la mochila y después quién la aprenderá."),
+            "drafts": ("Drafteos", "Genera movimientos compatibles con el rol del Pokémon."),
+            "team": ("Equipo y PC", "Gestiona el equipo y las cajas."),
+            "tms": ("MT", "Elige una MT y quién la aprende."),
             "moves": ("Ayuda · Consulta de movimientos", "Comprueba qué movimientos admite cada rol en el juego actual."),
             "pc": ("Equipo y PC", "Consulta las cajas y reorganiza el equipo desde el mismo espacio."),
             "history": ("Configuración · Registro y recuperación", "Consulta la línea temporal y las opciones de recuperación de la Run."),
@@ -14768,11 +14772,15 @@ class RoleRunManager(ctk.CTk):
             motivo=str(intent.reason or "")[:70] or None,
         )
         if intent.operation is None:
+            # Sin caducidad, este aviso seguia abajo mucho despues del gesto que
+            # lo provoco, y el usuario lo leia como el resultado del movimiento
+            # que SI acababa de hacer bien. Se explica lo que hay que hacer y se
+            # recoge solo.
             self._set_operation_status(
                 "warning",
-                "DESTINO NO HABILITADO",
+                "AHI NO SE PUEDE SOLTAR",
                 intent.reason or "No existe una escritura demostrada para ese movimiento.",
-                persistent=True,
+                persistent=False,
             )
             return
         if intent.operation == "party-to-box":
@@ -14794,9 +14802,7 @@ class RoleRunManager(ctk.CTk):
             )
             return
         if intent.operation == "move-box-slot":
-            if self._active_azahar_realtime_key() not in (
-                {"usum", "xy", "bdsp"} | MELONDS_REALTIME_GAME_KEYS
-            ):
+            if self._active_azahar_realtime_key() not in PC_A_PC_GAME_KEYS:
                 game_label = self._active_azahar_realtime_label()
                 self._set_operation_status(
                     "warning", "DESTINO NO HABILITADO",
@@ -14871,7 +14877,7 @@ class RoleRunManager(ctk.CTk):
             return False
         if intent.operation == "move-box-slot":
             return (
-                self._active_azahar_realtime_key() in {"usum", "xy"}
+                self._active_azahar_realtime_key() in PC_A_PC_GAME_KEYS
                 and self._oras_live_auto_apply_available()
             )
         if (
@@ -21035,68 +21041,6 @@ class RoleRunManager(ctk.CTk):
             button.grid(row=0, column=column, sticky="ew", padx=3)
             role_buttons[role] = button
 
-    def _realtime_diagnostics_folder(self) -> Path:
-        folder = LOG_DIR / "Realtime Diagnostics"
-        folder.mkdir(parents=True, exist_ok=True)
-        return folder
-
-    def _refresh_settings_after_diagnostic_action(self) -> None:
-        if self.active_page == "settings" and self._shell_built:
-            try:
-                self._smooth_render_page()
-            except Exception:
-                pass
-
-    def _start_realtime_diagnostic_recording(self) -> None:
-        core = getattr(self, "realtime_core", None)
-        if core is None or not self.project or not self.current_game:
-            messagebox.showinfo("Diagnóstico", "Abre una Run compatible antes de iniciar la grabación.")
-            return
-        if core.is_recording:
-            messagebox.showinfo("Diagnóstico", "Ya hay una sesión de diagnóstico grabándose.")
-            return
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        slug = str(getattr(self.project, "slug", "rolerun") or "rolerun")
-        path = self._realtime_diagnostics_folder() / f"{stamp}-{slug}.ndjson"
-        core.start_recording(path, include_memory=True)
-        self._realtime_diagnostic_started_at = datetime.now()
-        self._refresh_settings_after_diagnostic_action()
-
-    def _stop_realtime_diagnostic_recording(self) -> None:
-        core = getattr(self, "realtime_core", None)
-        if core is None or not core.is_recording:
-            return
-        raw_path = core.recording_path
-        if raw_path is None:
-            return
-        package_path = raw_path.with_suffix(".zip")
-        metadata = {
-            "app": APP_NAME,
-            "app_version": APP_VERSION,
-            "run": str(getattr(self.project, "slug", "") or ""),
-            "game": str(getattr(self.current_game, "game", "") or ""),
-            "save_type": str(getattr(self.current_game, "save_type", "") or ""),
-            "sync_status": str(self.sync_status or ""),
-        }
-        try:
-            result = core.stop_recording(package_path=package_path, metadata=metadata)
-        except Exception as exc:
-            messagebox.showerror("Diagnóstico", f"No se pudo generar el paquete:\n{exc}")
-            return
-        self._realtime_diagnostic_started_at = None
-        if result is not None:
-            self._last_realtime_diagnostic_package = Path(result)
-            try:
-                raw_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-        self._refresh_settings_after_diagnostic_action()
-        if result is not None:
-            messagebox.showinfo(
-                "Paquete de diagnóstico creado",
-                f"Listo. Si algo falla en tiempo real, pásame este ZIP:\n\n{result}",
-            )
-
     def _open_path_in_explorer(self, value: str | Path | None) -> bool:
         """Abre una ruta visible mediante un único flujo con error comprensible."""
         target = resolve_explorer_target(value)
@@ -21110,7 +21054,15 @@ class RoleRunManager(ctk.CTk):
             return False
         try:
             if os.name == "nt" and target.select_file:
-                subprocess.Popen(["explorer.exe", f"/select,{target.requested}"])
+                # Ojo con la forma de esta llamada. Pasando una lista, Python
+                # entrecomilla el argumento entero porque lleva espacios:
+                #
+                #   explorer.exe "/select,D:\...\Pokemon Shining Pearl [...].nsp"
+                #
+                # y explorer.exe no sabe leer eso: se rinde y abre su carpeta por
+                # defecto, Documentos. Era exactamente lo que hacía ABRIR JUEGO.
+                # Las comillas tienen que rodear solo la ruta.
+                subprocess.Popen(f'explorer.exe /select,"{target.requested}"')
             elif os.name == "nt":
                 os.startfile(target.open_path)
             elif sys.platform == "darwin":
@@ -21135,80 +21087,6 @@ class RoleRunManager(ctk.CTk):
             str(target.requested if target.select_file else target.open_path),
         )
         return True
-
-    def _open_realtime_diagnostics_folder(self) -> None:
-        self._open_path_in_explorer(self._realtime_diagnostics_folder())
-
-    def _show_realtime_diagnostic_report(self) -> None:
-        core = getattr(self, "realtime_core", None)
-        if core is None:
-            return
-        report = core.diagnostic_report()
-        window = IntegratedWindowSurface(self)
-        window.title("Real-Time Core · Diagnóstico")
-        window.geometry("820x650")
-        window.minsize(680, 500)
-        window.configure(fg_color=BG)
-        ctk.CTkLabel(
-            window, text="REAL-TIME CORE · ESTADO ACTUAL", text_color=GOLD,
-            font=ctk.CTkFont("Segoe UI", 18, "bold"),
-        ).pack(anchor="w", padx=20, pady=(18, 8))
-        textbox = ctk.CTkTextbox(
-            window, fg_color=PANEL, text_color=TEXT, border_width=1,
-            border_color=PANEL_ALT, font=ctk.CTkFont("Consolas", 12), wrap="word",
-        )
-        textbox.pack(fill="both", expand=True, padx=20, pady=(0, 14))
-        textbox.insert("1.0", report)
-        textbox.configure(state="disabled")
-        actions = ctk.CTkFrame(window, fg_color="transparent")
-        actions.pack(fill="x", padx=20, pady=(0, 18))
-        ctk.CTkButton(
-            actions, text="ACTUALIZAR", fg_color=GOLD, hover_color="#D3AF70", text_color="#111111",
-            command=lambda: self._refresh_realtime_report_textbox(textbox),
-        ).pack(side="left")
-        ctk.CTkButton(
-            actions, text="CERRAR", fg_color="transparent", border_width=1, border_color=GOLD, text_color=GOLD,
-            command=window.destroy,
-        ).pack(side="right")
-
-    def _refresh_realtime_report_textbox(self, textbox) -> None:
-        core = getattr(self, "realtime_core", None)
-        if core is None:
-            return
-        try:
-            textbox.configure(state="normal")
-            textbox.delete("1.0", "end")
-            textbox.insert("1.0", core.diagnostic_report())
-            textbox.configure(state="disabled")
-        except Exception:
-            return
-
-    def _inspect_realtime_replay(self) -> None:
-        path = filedialog.askopenfilename(
-            title="Abrir diagnóstico/replay de RoleRun",
-            initialdir=str(self._realtime_diagnostics_folder()),
-            filetypes=[
-                ("Diagnóstico RoleRun", "*.zip *.ndjson"),
-                ("Paquete ZIP", "*.zip"),
-                ("Replay NDJSON", "*.ndjson"),
-                ("Todos los archivos", "*.*"),
-            ],
-        )
-        if not path:
-            return
-        try:
-            summary = RealTimeReplay(path).summary()
-        except Exception as exc:
-            messagebox.showerror("Replay", f"No se pudo leer el replay:\n{exc}")
-            return
-        badges = ", ".join(str(value) for value in summary.badges_seen) or "—"
-        events = ", ".join(summary.event_types) or "ninguno"
-        adapters = ", ".join(summary.adapters) or "—"
-        messagebox.showinfo(
-            "Replay válido",
-            f"Frames: {summary.frames}\nSecuencias: {summary.first_sequence} → {summary.last_sequence}\n"
-            f"Adaptador: {adapters}\nMedallas observadas: {badges}\nEventos: {events}",
-        )
 
     def _render_settings_page(self) -> None:
         row = 0
@@ -21249,7 +21127,8 @@ class RoleRunManager(ctk.CTk):
                 ).grid(row=0, column=1, rowspan=2, padx=14, pady=10)
             row += 1
 
-        section("GENERAL", "Preferencias generales y garantías de seguridad.")
+        # No hay nada que elegir aquí: son dos hechos sobre cómo trabaja RoleRun.
+        section("GENERAL", "Idioma y garantías de seguridad.")
         setting_card("Idioma", "Español (nombres oficiales de PKHeX.Core)")
         setting_card("Seguridad", "Backups automáticos y validación tras cada guardado")
 
@@ -21259,7 +21138,6 @@ class RoleRunManager(ctk.CTk):
         setting_card("Carpeta de datos", str(USER_DATA_DIR), USER_DATA_DIR)
         setting_card("Carpeta de Runs", str(RUNS_DIR), RUNS_DIR)
         setting_card("Backups", str(BACKUP_DIR), BACKUP_DIR)
-        setting_card("Diagnósticos", str(self._realtime_diagnostics_folder()), self._realtime_diagnostics_folder())
 
         section("ARCHIVOS DEL JUEGO", "Partida y ROM configuradas para el backend activo.")
 
@@ -21322,13 +21200,13 @@ class RoleRunManager(ctk.CTk):
             row += 1
 
         if self.project and getattr(self.save_engine, "key", "") in REALTIME_READ_GAME_KEYS:
-            section("DIAGNÓSTICO AVANZADO", "Estado en vivo y herramientas manuales de captura y replay.")
+            section("CONEXIÓN CON EL JUEGO", "Estado del enlace en vivo y resincronización manual.")
             live_key = self._active_azahar_realtime_key()
             live_label = self._active_azahar_realtime_label()
             live_card = ctk.CTkFrame(self.body, fg_color=PANEL, corner_radius=14, border_width=1, border_color=GOLD)
             live_card.grid(row=row, column=0, sticky="ew", pady=(16, 5))
             backend_label = "RYUJINX" if live_key == "bdsp" else "AZAHAR"
-            ctk.CTkLabel(live_card, text=f"{backend_label} · {live_label} EN VIVO · REAL-TIME CORE", text_color=GOLD,
+            ctk.CTkLabel(live_card, text=f"{backend_label} · {live_label} EN VIVO", text_color=GOLD,
                          font=ctk.CTkFont("Segoe UI", 16, "bold")).pack(anchor="w", padx=18, pady=(16, 2))
             ctk.CTkLabel(
                 live_card,
@@ -21344,57 +21222,6 @@ class RoleRunManager(ctk.CTk):
                 live_card, text="RESINCRONIZAR AHORA (F5)", command=self.sync_oras_live,
                 fg_color=GOLD, hover_color="#D3AF70", text_color="#111111",
             ).pack(anchor="w", padx=18, pady=(0, 16))
-            row += 1
-
-            diagnostic_card = ctk.CTkFrame(
-                self.body, fg_color=PANEL, corner_radius=14, border_width=1, border_color=PANEL_ALT,
-            )
-            diagnostic_card.grid(row=row, column=0, sticky="ew", pady=(10, 5))
-            ctk.CTkLabel(
-                diagnostic_card, text="REAL-TIME CORE · DIAGNÓSTICO Y REPLAY", text_color=TEXT,
-                font=ctk.CTkFont("Segoe UI", 16, "bold"),
-            ).pack(anchor="w", padx=18, pady=(16, 2))
-            recording = bool(getattr(self.realtime_core, "is_recording", False))
-            if recording:
-                started = self._realtime_diagnostic_started_at
-                status = f"● GRABANDO desde {started.strftime('%H:%M:%S') if started else 'ahora'}"
-                status_color = GOLD
-            else:
-                status = "Preparado. La grabación es manual y no modifica RAM ni el guardado."
-                status_color = MUTED
-            ctk.CTkLabel(
-                diagnostic_card,
-                text=(
-                    f"{status}\n"
-                    "Úsalo cuando quieras capturar un bug difícil de repetir. El paquete contiene snapshots, eventos, "
-                    "diagnóstico de carriles y bloques pequeños de RAM ya validados por el adaptador."
-                ),
-                text_color=status_color, wraplength=760, justify="left",
-            ).pack(anchor="w", padx=18, pady=(0, 12))
-            actions = ctk.CTkFrame(diagnostic_card, fg_color="transparent")
-            actions.pack(fill="x", padx=18, pady=(0, 16))
-            if recording:
-                ctk.CTkButton(
-                    actions, text="DETENER Y GENERAR PAQUETE", command=self._stop_realtime_diagnostic_recording,
-                    fg_color=GOLD, hover_color="#D3AF70", text_color="#111111",
-                ).pack(side="left", padx=(0, 8))
-            else:
-                ctk.CTkButton(
-                    actions, text="INICIAR GRABACIÓN", command=self._start_realtime_diagnostic_recording,
-                    fg_color=GOLD, hover_color="#D3AF70", text_color="#111111",
-                ).pack(side="left", padx=(0, 8))
-            ctk.CTkButton(
-                actions, text="VER ESTADO", command=self._show_realtime_diagnostic_report,
-                fg_color="transparent", border_width=1, border_color=GOLD, text_color=GOLD,
-            ).pack(side="left", padx=(0, 8))
-            ctk.CTkButton(
-                actions, text="ABRIR REPLAY", command=self._inspect_realtime_replay,
-                fg_color="transparent", border_width=1, border_color=GOLD, text_color=GOLD,
-            ).pack(side="left", padx=(0, 8))
-            ctk.CTkButton(
-                actions, text="CARPETA", command=self._open_realtime_diagnostics_folder,
-                fg_color="transparent", border_width=1, border_color=PANEL_ALT, text_color=MUTED,
-            ).pack(side="left")
             row += 1
 
         section("ATAJOS", "Controles globales disponibles mientras juegas.")

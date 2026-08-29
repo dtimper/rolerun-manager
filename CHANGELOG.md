@@ -1,6 +1,80 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.1-alpha.1 — textos, y dos cosas que engañaban de verdad
+
+Primera de la 0.3.1. Los textos que pediste, y por el camino dos fallos que la
+revisión de esos textos destapó.
+
+## El aviso del PC que te hizo dudar
+
+> *«después de probar un par de cambios entre casillas del PC exitosamente, me
+> he fijado y pone abajo DESTINO NO HABILITADO… ya no sé qué pensar.»*
+
+El aviso era **cierto cuando se escribió** —en algún momento soltaste sobre una
+casilla ocupada, que es lo único que el writer PC→PC no sabe hacer— pero se
+publicaba como permanente. Seguía abajo mucho después, y lo leíste como el
+resultado del movimiento que sí acababa de funcionar.
+
+Y había una razón para que soltaras donde no debías: **las dos listas de juegos
+con PC→PC estaban escritas por separado**. La que ejecuta el movimiento incluía
+Perla Reluciente; la que decide de qué color se pinta el destino mientras
+arrastras, no. En BDSP **todas** las casillas del PC salían en rojo, tanto las
+que iban a funcionar como las que no, así que el color no te servía de nada.
+
+- Las dos leen ahora `PC_A_PC_GAME_KEYS`, y una prueba falla si vuelven a
+  llevar su propia lista.
+- El aviso pasa a llamarse «AHÍ NO SE PUEDE SOLTAR» y se recoge solo. Un aviso
+  marcado como no persistente no estaba en la lista de los que caducan, así que
+  «no persistente» no significaba nada para él.
+- Al recogerse ya no dice «el último cambio quedó confirmado», que era
+  exactamente el malentendido.
+
+Los fallos de verdad (`failed`, `intervention`, `disconnected`) siguen sin irse
+solos.
+
+## ABRIR JUEGO abría Documentos
+
+> *«en ABRIR JUEGO se abre la carpeta de documentos, sin más.»*
+
+La ruta estaba bien —el `.nsp` existe y está guardado correctamente—. Era la
+llamada. Pasando una lista, Python entrecomilla el argumento entero porque lleva
+espacios:
+
+```
+explorer.exe "/select,D:\...\Pokemon Shining Pearl [...].nsp"
+```
+
+`explorer.exe` no sabe leer eso, y no falla ni avisa: se rinde y abre su carpeta
+por defecto, Documentos. Las comillas tienen que rodear **solo la ruta**. Afecta
+igual a ABRIR PARTIDA en los juegos cuya ruta lleva espacios.
+
+## Textos
+
+- **Equipo y PC** — «Gestiona el equipo y las cajas.»
+- **MT** — «Elige una MT y quién la aprende.»
+- **Drafteos** — «Genera movimientos compatibles con el rol del Pokémon.»
+- **GENERAL** — «Idioma y garantías de seguridad.» No hay nada que elegir ahí:
+  son dos hechos sobre cómo trabaja RoleRun.
+- Bajo **ELIGE UNA MT** iba la procedencia del inventario
+  («personal_masterdatas · RAM viva validada»). Es cierto y es interno. Se
+  conserva para los diagnósticos, pero ya no se pinta.
+
+## Diagnósticos y REAL-TIME CORE: sí estaban en desuso
+
+Lo comprobé antes de tocarlo. La carpeta `Realtime Diagnostics` tiene **cero
+archivos**: la grabación manual no se ha usado nunca en esta instalación, y
+además ya tiene sustituto —el botón GUARDAR FALLO y F8, que es la forma orgánica
+que pediste—.
+
+- Fuera la tarjeta «REAL-TIME CORE · DIAGNÓSTICO Y REPLAY» y el atajo a la
+  carpeta de Diagnósticos, con los ocho métodos que solo esa tarjeta usaba.
+- La sección pasa de «DIAGNÓSTICO AVANZADO» a **«CONEXIÓN CON EL JUEGO»**, que
+  es lo que queda dentro: el estado del enlace y el F5 de resincronización. Eso
+  **sí** se usa y se queda.
+- «REAL-TIME CORE» desaparece de los rótulos. Es el nombre del motor por dentro,
+  no algo que tengas que leer tú.
+
 # v0.3.0-alpha.17 — el menú salía solo en Perla Reluciente
 
 > *«solo se ve cuando paso el ratón por encima del BDSP. Del resto, no sale

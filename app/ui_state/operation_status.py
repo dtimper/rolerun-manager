@@ -20,7 +20,11 @@ OperationKind = Literal[
 
 
 PERSISTENT_KINDS = frozenset({"failed", "intervention", "disconnected"})
-AUTO_COLLAPSE_KINDS = frozenset({"confirmed", "restored"})
+# Un aviso marcado como no persistente tiene que irse solo. Antes no estaba
+# aqui, asi que "no persistente" no significaba nada para el: se quedaba igual
+# hasta que otra cosa lo sustituyera. Con un aviso de arrastre eso es peor que
+# no decir nada, porque se lee como el resultado de lo ultimo que hiciste.
+AUTO_COLLAPSE_KINDS = frozenset({"confirmed", "restored", "warning"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,7 +98,13 @@ class OperationStatusStore:
             self._message,
             kind="neutral",
             title="ROLERUN PREPARADO",
-            detail="El último cambio quedó confirmado.",
+            # Un aviso no confirma nada: decir que quedó confirmado sería
+            # justo el malentendido que se quiere evitar.
+            detail=(
+                "El último cambio quedó confirmado."
+                if self._message.kind != "warning" else
+                "Selecciona una acción para continuar."
+            ),
             actions=(),
             persistent=False,
             revision=self._message.revision + 1,
