@@ -13929,6 +13929,7 @@ class RoleRunManager(ctk.CTk):
             source_detail=source_detail,
             drafts=self._entradas_de_drafteos_guardados(),
             on_choose_draft=self.ensenar_drafteo_guardado,
+            on_delete_draft=self.descartar_drafteo_guardado,
             navigation_keys=self.project.menu_keys if self.project else None,
             on_left_edge=self._select_sidebar_from_content,
             on_edge_accept=self._accept_sidebar_from_content,
@@ -22756,6 +22757,42 @@ class RoleRunManager(ctk.CTk):
         self._reset_visual_draft_flow()
         if self.active_page == "drafts":
             self._smooth_render_page()
+
+    def descartar_drafteo_guardado(self, guardado: dict) -> None:
+        """Tira a la basura un drafteo guardado. No devuelve el drafteo.
+
+        Guardarlo ya lo gastó, igual que enseñarlo: desecharlo es tirar algo que
+        ya está pagado, no deshacer la compra. Devolverlo convertiría la papelera
+        en un botón de «repetir tirada gratis».
+
+        Por eso se pregunta antes. Es la única acción de esta pantalla que
+        destruye algo sin poder recuperarlo.
+        """
+        if not self.project or not guardado:
+            return
+        nombre = str(guardado.get("move", "ese movimiento"))
+        if not messagebox.askyesno(
+            "Descartar drafteo",
+            f"¿Seguro que quieres tirar {nombre}?\n\n"
+            "El drafteo que costó no se devuelve.",
+        ):
+            return
+        self.project.saved_drafts = drafteos_guardados.quitar_uno(
+            self.project.saved_drafts, guardado,
+        )
+        self.project_service.save(self.project)
+        self._set_operation_status(
+            "neutral", "DRAFTEO DESCARTADO",
+            f"{nombre} ya no está en la lista.",
+        )
+        if self.active_page == "tms":
+            view = self._global_tm_view
+            if view is not None and callable(getattr(view, "update_entries", None)):
+                view.update_entries(
+                    view.entries,
+                    tuple(self._projected_party()[:6]),
+                    self._entradas_de_drafteos_guardados(),
+                )
 
     def ensenar_drafteo_guardado(self, guardado: dict, pokemon) -> None:
         """Abre «qué movimiento olvidará» con un drafteo que ya está pagado."""

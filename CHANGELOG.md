@@ -1,6 +1,55 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.1-alpha.3 — pestañas dentro de MOVIMIENTOS, y el equipo vuelve a la derecha
+
+> *«me gustaba que se pudiera ver a quién se le puede enseñar y a quién no desde
+> la propia selección de movimientos. Haz 2 pestañas dentro entre las que
+> variar: MTs y DRAFTEOS. Así, puedes guardar el panel de los pokémon a la
+> derecha.»*
+
+Tenía razón. En la alpha.2 puse las dos listas una al lado de otra y eso se comió
+el sitio del equipo, así que hubo que sacarlo a un selector que se abría al
+pulsar. El resultado era peor: para saber quién puede aprender algo había que
+abrirlo primero, cuando antes se veía pasando el ratón por encima.
+
+Ahora la izquierda tiene **dos pestañas** —MT y DRAFTEOS, cada una con su
+contador— y la derecha vuelve a ser el equipo, siempre visible. **La lista se
+turna; el panel que informa, no.**
+
+Pasar el ratón por un movimiento sigue encendiendo a quién puede aprenderlo, y
+pulsarlo lleva el teclado al primer compatible, igual que antes. Cambiar de
+pestaña olvida la previsualización a propósito: si no, el panel se quedaría
+informando sobre un movimiento que ya no está en pantalla.
+
+## La papelera
+
+> *«también podría un botón de papelera en la esquina derecha cuando pasas el
+> ratón por encima de los Drafteos, por si quieres desechar alguno.»*
+
+Solo en los drafteos: una MT es del juego y RoleRun no la tira. Aparece al pasar
+el ratón, porque un botón destructivo no tiene por qué estar tentando en cada
+fila de la lista.
+
+Dos decisiones que van con ella:
+
+- **Pregunta antes.** Es la única acción de esta pantalla que destruye algo sin
+  poder recuperarlo.
+- **No devuelve el drafteo**, y lo dice en la pregunta. Guardarlo ya lo gastó,
+  igual que enseñarlo: desecharlo es tirar algo pagado, no deshacer la compra.
+  Devolverlo convertiría la papelera en un botón de «repetir tirada gratis».
+
+El detalle que la habría roto: Tk manda `Leave` de la fila **al entrar en un hijo
+suyo**, así que la papelera desaparecería justo cuando vas a pulsarla. Se
+comprueba dónde está el puntero de verdad antes de esconderla.
+
+## Y dos pruebas que vuelven a lo que eran
+
+`test_global_tm_selection_does_not_rebuild_the_scroll_surface` y la de la Z
+avanzando al primer Pokémon compatible las reescribí en la alpha.2 para el
+selector; vuelven a su forma original con los nombres nuevos (`_preview` y
+`_select`, que ahora también valen para drafteos).
+
 # v0.3.1-alpha.2 — MOVIMIENTOS: los drafteos que te guardas viven junto a las MT
 
 Un drafteo tirado tenía un solo final: elegir el movimiento y, a continuación,

@@ -2109,54 +2109,42 @@ def test_global_tm_distinguishes_already_known_from_incompatible() -> None:
 
 
 def test_global_tm_selection_does_not_rebuild_the_scroll_surface() -> None:
-    """Abrir el selector no puede rehacer las listas de debajo.
+    """Elegir o previsualizar no puede rehacer la lista.
 
-    Antes esto miraba el preview del hover, que ya no existe: ahora se pulsa un
-    movimiento y aparece el selector. La garantía es la misma —elegir no destruye
-    la superficie con scroll— y sigue haciendo falta, porque rehacerla dejaría el
-    scroll donde no estaba y perdería la posición del teclado.
+    Rehacerla movería el scroll y perdería la posición del teclado. Los métodos
+    cambiaron de nombre al llegar las pestañas —`_preview_tm` es `_preview` y
+    `_select_tm` es `_select`, porque ahora también hay drafteos— pero la
+    garantía es la misma y sigue haciendo falta.
     """
-    abrir = inspect.getsource(GlobalTMView.abrir_selector)
-    cerrar = inspect.getsource(GlobalTMView.cerrar_selector)
+    source = inspect.getsource(GlobalTMView._select)
+    preview = inspect.getsource(GlobalTMView._preview)
 
-    assert "_render_lists" not in abrir
-    assert "_render_lists" not in cerrar
-    assert "_render_team" in abrir, "el equipo si se compone al abrirlo"
+    assert "_render_list" not in source
+    assert "_render_list" not in preview
+    assert "_render_team" not in preview
+    assert "_update_team_compatibility" in preview
 
 
-def test_global_tm_z_moves_the_keyboard_into_the_open_selector() -> None:
-    """Con el selector encima, moverse por la lista de debajo no significa nada.
-
-    Antes la Z avanzaba de la MT al primer Pokémon compatible dentro de la misma
-    pantalla. Ahora la Z abre el selector, y el teclado tiene que pasar entero a
-    los seis del equipo: si siguiera apuntando a la lista, la siguiente flecha
-    movería algo que el usuario ni ve.
-    """
-    keyboard = SpatialSelection()
-    party = (SimpleNamespace(nickname="Absol"), SimpleNamespace(nickname="Delphox"))
-    entry = {"kind": "tm", "move_id": 10, "compatible": ("party-2",)}
+def test_global_tm_z_advances_from_the_move_to_first_compatible_pokemon() -> None:
+    first = SpatialTarget(("tm", 10), 0, 0)
+    second = SpatialTarget(("pokemon", "party-2"), 0, 2)
+    keyboard = SpatialSelection((first, second))
+    keyboard.selected_key = first.key
+    painted: list[object] = []
     view = SimpleNamespace(
-        abierto=entry,
-        party=party,
-        identity_for=lambda pokemon: (
-            "party-2" if pokemon is party[1] else "party-1"
-        ),
-        _entry=lambda: entry,
-        _elegir=lambda _item, _member: None,
-        _keyboard_targets={},
-        _team_cards={"party-2": object()},
-        _move_buttons={},
-        _filtered_entries=lambda: (),
-        _filtered_drafts=lambda: (),
+        selected_key=None,
+        preview_key=first.key,
+        _preview=lambda _clave: None,
+        _update_highlight=lambda: None,
         _keyboard=keyboard,
-        _apply_keyboard=lambda: None,
+        _apply_keyboard=lambda: painted.append(keyboard.selected_key),
     )
 
-    GlobalTMView._rebuild_keyboard(view)
+    GlobalTMView._select(view, ("tm", 10))
 
-    assert list(view._keyboard_targets) == [("pokemon", "party-2")], (
-        "el teclado sigue apuntando a la lista tapada"
-    )
+    assert view.selected_key == ("tm", 10)
+    assert keyboard.selected_key == second.key
+    assert painted == [second.key]
 
 
 def test_draft_results_expose_choose_and_reroll_as_separate_targets() -> None:

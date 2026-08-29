@@ -11,22 +11,23 @@ from app.ui_state.spatial_navigation import SpatialSelection, SpatialTarget, eve
 
 SELECTED = "#73A9FF"
 
+#: Las dos procedencias, en el orden en que se muestran.
+PESTANAS: tuple[tuple[str, str], ...] = (("tm", "MT"), ("draft", "DRAFTEOS"))
+
 
 class GlobalTMView:
     """MOVIMIENTOS: lo que puedes enseñar hoy, venga de donde venga.
 
-    Dos columnas con el mismo peso, porque son dos formas de lo mismo:
+    A la izquierda, dos pestañas entre las que cambiar:
 
     - **MT**, lo que llevas en la mochila del juego.
     - **DRAFTEOS**, tiradas que te quedaste y todavía no has enseñado. Cada una
-      ya costó su drafteo al guardarla, así que enseñarla aquí no vuelve a
-      cobrar.
+      ya costó su drafteo al guardarla, así que enseñarla no vuelve a cobrar.
 
-    El equipo ya no ocupa media pantalla esperando. Antes había que elegir el
-    movimiento **y** al Pokémon en la misma vista, y el panel de la derecha
-    estaba siempre ahí, apagado, sin nada que decir hasta que elegías. Ahora se
-    pulsa un movimiento y **entonces** aparece el selector, que es el orden en
-    que se piensa: primero qué quiero enseñar, después a quién.
+    A la derecha, el equipo. Y ahí está el motivo de que sean pestañas y no dos
+    columnas: **poniendo las dos listas a la vez no queda sitio para el equipo**,
+    y sin el equipo delante no se ve de un vistazo quién puede aprender cada cosa
+    y quién no. La lista se turna; el panel que informa, no.
     """
 
     def __init__(self, master, *, entries: tuple[dict[str, Any], ...], party: tuple[Any, ...],
@@ -36,6 +37,7 @@ class GlobalTMView:
                  on_choose: Callable[[dict[str, Any], Any], None], source_detail: str,
                  drafts: tuple[dict[str, Any], ...] = (),
                  on_choose_draft: Callable[[dict[str, Any], Any], None] | None = None,
+                 on_delete_draft: Callable[[dict[str, Any]], None] | None = None,
                  navigation_keys: dict[str, str] | None = None,
                  on_left_edge: Callable[[], None] | None = None,
                  on_edge_accept: Callable[[], bool] | None = None) -> None:
@@ -43,17 +45,19 @@ class GlobalTMView:
         self.drafts = tuple(drafts)
         self.identity_for, self.role_for, self.sprite_for = identity_for, role_for, sprite_for
         self.role_icon_for, self.on_choose, self.source_detail = role_icon_for, on_choose, source_detail
-        self.on_choose_draft = on_choose_draft
+        self.on_choose_draft, self.on_delete_draft = on_choose_draft, on_delete_draft
         self.navigation_keys = dict(navigation_keys or {"accept": "z", "back": "x"})
         self.on_left_edge, self.on_edge_accept = on_left_edge, on_edge_accept
         self.navigation_guard: Callable[[], bool] | None = None
         self.navigation_intercept: Callable[[str], bool] | None = None
         self._external_navigation_focus = False
-        #: Qué movimiento tiene abierto el selector, o ``None`` si está cerrado.
-        self.abierto: dict[str, Any] | None = None
+        self.pestana = "tm"
+        self.preview_key: tuple[str, int] | None = None
+        self.selected_key: tuple[str, int] | None = None
         self._search_after = None
         self._images: list[Any] = []
         self._move_buttons: dict[tuple[str, int], Any] = {}
+        self._tab_buttons: dict[str, Any] = {}
         self._team_cards: dict[str, Any] = {}
         self._team_widgets: dict[str, tuple[Any, ...]] = {}
         self._keyboard = SpatialSelection()
@@ -68,7 +72,8 @@ class GlobalTMView:
                                   border_width=1, border_color="#3A3A3A")
         self.frame.grid(row=0, column=0, sticky="nsew")
         self.frame.grid_propagate(False)
-        self.frame.grid_columnconfigure((0, 1), weight=1, uniform="movimientos")
+        self.frame.grid_columnconfigure(0, weight=5, uniform="global_tm")
+        self.frame.grid_columnconfigure(1, weight=7, uniform="global_tm")
         self.frame.grid_rowconfigure(1, weight=1)
 
         heading = ctk.CTkFrame(self.frame, fg_color="transparent")
@@ -76,19 +81,45 @@ class GlobalTMView:
         heading.grid_columnconfigure(1, weight=1)
         self.search = ctk.CTkEntry(heading, width=300, height=36,
                                    placeholder_text="⌕  Buscar por MT o movimiento…")
-        self.search.grid(row=0, column=0, sticky="w")
+        self.search.grid(row=0, column=0, columnspan=2, sticky="w")
         ctk.CTkLabel(heading, text="ELIGE QUÉ ENSEÑAR", text_color=GOLD, anchor="w",
                      font=ctk.CTkFont("Segoe UI", 20, "bold")).grid(row=1, column=0, sticky="w", pady=(9, 0))
         self.search.bind("<KeyRelease>", self._schedule_filter, add="+")
 
-        self.tm_scroll = self._columna(0, "MT", "Las que llevas en la mochila.", (18, 7))
-        self.draft_scroll = self._columna(
-            1, "DRAFTEOS", "Tiradas que te guardaste. Ya están pagadas.", (7, 18),
-        )
-        self._montar_selector()
+        left = ctk.CTkFrame(self.frame, fg_color="#111111", corner_radius=12)
+        left.grid(row=1, column=0, sticky="nsew", padx=(18, 7), pady=(0, 16))
+        left.grid_rowconfigure(1, weight=1)
+        left.grid_columnconfigure(0, weight=1)
+        self.tabs = ctk.CTkFrame(left, fg_color="transparent")
+        self.tabs.grid(row=0, column=0, sticky="ew", padx=6, pady=(8, 4))
+        self.tabs.grid_columnconfigure(tuple(range(len(PESTANAS))), weight=1, uniform="pestanas")
+        for column, (clave, etiqueta) in enumerate(PESTANAS):
+            boton = ctk.CTkButton(
+                self.tabs, text=etiqueta, height=32, corner_radius=9,
+                command=lambda value=clave: self.cambiar_pestana(value),
+                font=ctk.CTkFont("Segoe UI", 11, "bold"),
+            )
+            boton.grid(row=0, column=column, sticky="ew", padx=3)
+            self._tab_buttons[clave] = boton
+        self.list_scroll = ctk.CTkScrollableFrame(left, fg_color="transparent")
+        self.list_scroll.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+        self.list_scroll.grid_columnconfigure(0, weight=1)
+
+        self.team_panel = ctk.CTkFrame(self.frame, fg_color="#111111", corner_radius=12)
+        self.team_panel.grid(row=1, column=1, sticky="nsew", padx=(7, 18), pady=(0, 16))
+        self.team_panel.grid_rowconfigure(1, weight=1)
+        self.team_panel.grid_columnconfigure(0, weight=1)
+        self.team_title = ctk.CTkLabel(self.team_panel, text="POKÉMON COMPATIBLES", text_color=GOLD,
+                                       font=ctk.CTkFont("Segoe UI", 14, "bold"))
+        self.team_title.grid(row=0, column=0, sticky="w", padx=16, pady=(13, 4))
+        self.team_grid = ctk.CTkFrame(self.team_panel, fg_color="transparent")
+        self.team_grid.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        self.team_grid.grid_columnconfigure((0, 1, 2), weight=1, uniform="tm_party")
+        self.team_grid.grid_rowconfigure((0, 1), weight=1, uniform="tm_party")
 
         self._bind_keyboard()
-        self._render_lists()
+        self._render_list()
+        self._render_team()
         if canvas is not None:
             self._viewport_binding = canvas.bind(
                 "<Configure>", lambda event: self.frame.configure(height=max(480, int(event.height))), add="+")
@@ -96,44 +127,6 @@ class GlobalTMView:
             self.frame.after(delay, self._fit_to_viewport)
 
     # ----------------------------------------------------------------- montaje
-
-    def _columna(self, column: int, titulo: str, detalle: str, padx) -> Any:
-        panel = ctk.CTkFrame(self.frame, fg_color="#111111", corner_radius=12)
-        panel.grid(row=1, column=column, sticky="nsew", padx=padx, pady=(0, 16))
-        panel.grid_rowconfigure(2, weight=1)
-        panel.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(panel, text=titulo, text_color=GOLD,
-                     font=ctk.CTkFont("Segoe UI", 14, "bold")).grid(
-                         row=0, column=0, sticky="w", padx=16, pady=(13, 0))
-        ctk.CTkLabel(panel, text=detalle, text_color=MUTED,
-                     font=ctk.CTkFont("Segoe UI", 10)).grid(
-                         row=1, column=0, sticky="w", padx=16, pady=(1, 6))
-        scroll = ctk.CTkScrollableFrame(panel, fg_color="transparent")
-        scroll.grid(row=2, column=0, sticky="nsew", padx=5, pady=(0, 5))
-        scroll.grid_columnconfigure(0, weight=1)
-        return scroll
-
-    def _montar_selector(self) -> None:
-        """El selector existe desde el principio, pero no se coloca hasta abrirlo."""
-        self.selector = ctk.CTkFrame(self.frame, fg_color="#0D0D0D", corner_radius=18,
-                                     border_width=2, border_color=GOLD)
-        self.selector.grid_columnconfigure(0, weight=1)
-        self.selector.grid_rowconfigure(2, weight=1)
-        self.team_title = ctk.CTkLabel(self.selector, text="", text_color=GOLD, anchor="w",
-                                       font=ctk.CTkFont("Segoe UI", 17, "bold"))
-        self.team_title.grid(row=0, column=0, sticky="w", padx=22, pady=(18, 1))
-        self.team_detail = ctk.CTkLabel(self.selector, text="", text_color=MUTED, anchor="w",
-                                        font=ctk.CTkFont("Segoe UI", 11))
-        self.team_detail.grid(row=1, column=0, sticky="w", padx=22, pady=(0, 8))
-        ctk.CTkButton(self.selector, text="×", width=40, height=40, corner_radius=12,
-                      command=self.cerrar_selector, fg_color="transparent",
-                      hover_color=DANGER, border_width=1, border_color=GOLD,
-                      text_color=GOLD, font=ctk.CTkFont("Segoe UI", 20, "bold")).grid(
-                          row=0, column=1, rowspan=2, padx=(10, 18), pady=(16, 0))
-        self.team_grid = ctk.CTkFrame(self.selector, fg_color="transparent")
-        self.team_grid.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=12, pady=(0, 14))
-        self.team_grid.grid_columnconfigure((0, 1, 2), weight=1, uniform="tm_party")
-        self.team_grid.grid_rowconfigure((0, 1), weight=1, uniform="tm_party")
 
     def _fit_to_viewport(self) -> None:
         canvas = getattr(self.master, "_parent_canvas", None)
@@ -166,28 +159,50 @@ class GlobalTMView:
         try:
             self.frame.update_idletasks()
             return bool(self.frame.winfo_ismapped() and self.frame.winfo_width() > 800
-                        and self.frame.winfo_height() > 450
-                        and self.tm_scroll.winfo_ismapped()
-                        and self.draft_scroll.winfo_ismapped())
+                        and self.frame.winfo_height() > 450 and self.team_panel.winfo_ismapped())
         except Exception:
             return False
 
     def update_entries(self, entries: tuple[dict[str, Any], ...], party: tuple[Any, ...],
                        drafts: tuple[dict[str, Any], ...] | None = None) -> None:
-        """Publica el readback conservando la misma página y posición."""
+        """Publica el readback conservando pestaña, posición y previsualización."""
         fraction = self._scroll_fraction()
         self.entries, self.party = entries, party
         if drafts is not None:
             self.drafts = tuple(drafts)
-        # Si el movimiento abierto ha dejado de existir —se acaba de enseñar, o
-        # era la última MT— el selector no puede seguir en pantalla ofreciendo
-        # algo que ya no está.
-        if self.abierto is not None and self._buscar(self._clave(self.abierto)) is None:
-            self.cerrar_selector()
-        self._render_lists()
+        self._render_list()
+        self._render_team()
         self._restore_scroll(fraction)
-        if self.abierto is not None:
-            self._render_team()
+
+    # --------------------------------------------------------------- pestañas
+
+    def cambiar_pestana(self, pestana: str) -> None:
+        if pestana not in {clave for clave, _etiqueta in PESTANAS}:
+            return
+        if pestana == self.pestana:
+            return
+        self.pestana = pestana
+        # La previsualización pertenece a la lista que se estaba viendo. Al
+        # cambiar de pestaña se recalcula, o el panel del equipo se quedaría
+        # informando sobre un movimiento que ya no está en pantalla.
+        self.preview_key = None
+        self._render_list()
+        self._render_team()
+
+    def _pintar_pestanas(self) -> None:
+        for clave, boton in self._tab_buttons.items():
+            activa = clave == self.pestana
+            cuantos = len(self._filtradas(clave))
+            etiqueta = dict(PESTANAS)[clave]
+            configurar_si_cambia(
+                boton,
+                text=f"{etiqueta}  ·  {cuantos}",
+                fg_color=GOLD if activa else "transparent",
+                hover_color="#D3AF70" if activa else PANEL_ALT,
+                text_color="#111111" if activa else MUTED,
+                border_width=0 if activa else 1,
+                border_color="#3A3A3A",
+            )
 
     # -------------------------------------------------------------- las listas
 
@@ -198,7 +213,9 @@ class GlobalTMView:
     def _todas(self) -> tuple[dict[str, Any], ...]:
         return (*self.entries, *self.drafts)
 
-    def _buscar(self, clave: tuple[str, int]) -> dict[str, Any] | None:
+    def _buscar(self, clave: tuple[str, int] | None) -> dict[str, Any] | None:
+        if clave is None:
+            return None
         return next((item for item in self._todas() if self._clave(item) == clave), None)
 
     def _consulta(self) -> str:
@@ -207,15 +224,13 @@ class GlobalTMView:
         except Exception:
             return ""
 
-    def _filtered_entries(self) -> tuple[dict[str, Any], ...]:
+    def _filtradas(self, pestana: str | None = None) -> tuple[dict[str, Any], ...]:
         query = self._consulta()
+        if (pestana or self.pestana) == "draft":
+            return tuple(item for item in self.drafts if not query or query in
+                         f"{item['move_name']} {item.get('role', '')}".casefold())
         return tuple(item for item in self.entries if not query or query in
                      f"mt{int(item['number']):02d} {item['move_name']}".casefold())
-
-    def _filtered_drafts(self) -> tuple[dict[str, Any], ...]:
-        query = self._consulta()
-        return tuple(item for item in self.drafts if not query or query in
-                     f"{item['move_name']} {item.get('role', '')}".casefold())
 
     def _schedule_filter(self, _event=None) -> None:
         if self._search_after is not None:
@@ -227,105 +242,146 @@ class GlobalTMView:
 
     def _filter_now(self) -> None:
         self._search_after = None
-        self._render_lists()
+        self._render_list()
+        self._render_team()
 
     def _scroll_fraction(self) -> float:
-        canvas = getattr(self.tm_scroll, "_parent_canvas", None)
+        canvas = getattr(self.list_scroll, "_parent_canvas", None)
         try:
             return float(canvas.yview()[0]) if canvas is not None else 0.0
         except Exception:
             return 0.0
 
     def _restore_scroll(self, fraction: float) -> None:
-        canvas = getattr(self.tm_scroll, "_parent_canvas", None)
+        canvas = getattr(self.list_scroll, "_parent_canvas", None)
         if canvas is not None:
             self.frame.after_idle(lambda: canvas.yview_moveto(max(0.0, min(1.0, fraction))))
 
-    def _render_lists(self) -> None:
+    def _render_list(self) -> None:
+        for child in self.list_scroll.winfo_children():
+            child.destroy()
         self._move_buttons.clear()
-        for child in self.tm_scroll.winfo_children():
-            child.destroy()
-        for child in self.draft_scroll.winfo_children():
-            child.destroy()
-
-        mts = self._filtered_entries()
-        if not mts:
-            ctk.CTkLabel(self.tm_scroll, text="Ninguna MT coincide con la búsqueda.",
-                         text_color=MUTED, font=ctk.CTkFont("Segoe UI", 12, "bold")).grid(
-                             row=0, column=0, pady=50)
-        for row, entry in enumerate(mts):
-            self._tarjeta_de_movimiento(
-                self.tm_scroll, row, entry,
-                f"MT{int(entry['number']):02d}   {entry['move_name']}",
-                (f"{entry['category']}  ·  Pot. {entry['power']}  ·  Prec. {entry['accuracy']}  ·  "
-                 f"PP {entry['pp']}  ·  x{entry['quantity']}"),
-            )
-
-        drafteos = self._filtered_drafts()
-        if not drafteos:
+        filtradas = self._filtradas()
+        claves = {self._clave(item) for item in filtradas}
+        if filtradas and self.preview_key not in claves:
+            self.preview_key = self._clave(filtradas[0])
+        if not filtradas:
+            self.preview_key = None
             ctk.CTkLabel(
-                self.draft_scroll,
-                text=("Todavía no has guardado ningún drafteo.\n"
-                      "En Drafteos, tira y pulsa GUARDAR para dejarlo aquí."),
+                self.list_scroll,
+                text=(
+                    "Todavía no has guardado ningún drafteo.\n"
+                    "En Drafteos, tira y pulsa GUARDAR para dejarlo aquí."
+                    if self.pestana == "draft" else
+                    "No tienes ninguna MT que coincida con la búsqueda."
+                ),
                 text_color=MUTED, justify="center",
-                font=ctk.CTkFont("Segoe UI", 12, "bold")).grid(row=0, column=0, pady=50)
-        for row, entry in enumerate(drafteos):
-            rol = str(entry.get("role", "")) or "cualquier rol"
-            self._tarjeta_de_movimiento(
-                self.draft_scroll, row, entry,
-                str(entry["move_name"]),
-                (f"{rol}  ·  {entry['category']}  ·  Pot. {entry['power']}  ·  "
-                 f"Prec. {entry['accuracy']}  ·  PP {entry['pp']}"),
-            )
+                font=ctk.CTkFont("Segoe UI", 13, "bold")).grid(row=0, column=0, pady=70)
+        for row, entry in enumerate(filtradas):
+            self._fila(row, entry)
+        self._pintar_pestanas()
         self._update_highlight()
         self._rebuild_keyboard()
 
-    def _tarjeta_de_movimiento(self, host, row: int, entry: dict[str, Any],
-                               titulo: str, detalle: str) -> None:
+    def _fila(self, row: int, entry: dict[str, Any]) -> None:
         clave = self._clave(entry)
+        es_drafteo = clave[0] == "draft"
+        if es_drafteo:
+            rol = str(entry.get("role", "")) or "cualquier rol"
+            titulo = str(entry["move_name"])
+            detalle = (f"{rol}  ·  {entry['category']}  ·  Pot. {entry['power']}  ·  "
+                       f"Prec. {entry['accuracy']}  ·  PP {entry['pp']}")
+        else:
+            titulo = f"MT{int(entry['number']):02d}   {entry['move_name']}"
+            detalle = (f"{entry['category']}  ·  Pot. {entry['power']}  ·  "
+                       f"Prec. {entry['accuracy']}  ·  PP {entry['pp']}  ·  x{entry['quantity']}")
+
+        # Cada fila es un contenedor porque la papelera se pone ENCIMA del botón.
+        # Un `CTkButton` no admite hijos colocados sobre su lienzo sin estorbar
+        # a su propio texto, y el hueco reservado a la derecha es lo que evita
+        # que el nombre del movimiento pase por debajo del icono.
+        fila = ctk.CTkFrame(self.list_scroll, fg_color="transparent")
+        fila.grid(row=row, column=0, sticky="ew", padx=4, pady=4)
+        fila.grid_columnconfigure(0, weight=1)
         card = ctk.CTkButton(
-            host, text=f"{titulo}\n{detalle}",
-            command=lambda value=clave: self.abrir_selector(value), anchor="w", height=66,
+            fila, text=f"{titulo}\n{detalle}",
+            command=lambda value=clave: self._select(value), anchor="w", height=66,
             fg_color=PANEL, hover_color=PANEL_ALT, border_width=1, border_color="#3A3A3A",
             text_color=TEXT, font=ctk.CTkFont("Segoe UI", 12, "bold"))
-        card.grid(row=row, column=0, sticky="ew", padx=4, pady=4)
+        card.grid(row=0, column=0, sticky="ew")
+        card.bind("<Enter>", lambda _event, value=clave: self._preview(value), add="+")
         self._move_buttons[clave] = card
 
+        if es_drafteo and self.on_delete_draft is not None:
+            papelera = ctk.CTkButton(
+                fila, text="🗑", width=34, height=30, corner_radius=8,
+                command=lambda item=entry: self._descartar(item),
+                fg_color="#241818", hover_color=DANGER, border_width=1,
+                border_color="#4A2C2C", text_color=DANGER,
+                font=ctk.CTkFont("Segoe UI Symbol", 13, "bold"))
+            # Aparece solo al pasar por encima: es un botón destructivo y no
+            # tiene por qué estar tentando en cada fila de la lista.
+            def mostrar(_event=None, boton=papelera) -> None:
+                boton.place(relx=1.0, x=-10, rely=0.5, anchor="e")
+
+            def ocultar(_event=None, boton=papelera, contenedor=fila) -> None:
+                try:
+                    x, y = contenedor.winfo_pointerxy()
+                    dentro = (
+                        contenedor.winfo_rootx() <= x <= contenedor.winfo_rootx() + contenedor.winfo_width()
+                        and contenedor.winfo_rooty() <= y <= contenedor.winfo_rooty() + contenedor.winfo_height()
+                    )
+                except Exception:
+                    dentro = False
+                if not dentro:
+                    boton.place_forget()
+
+            for widget in (fila, card, papelera):
+                widget.bind("<Enter>", mostrar, add="+")
+                widget.bind("<Leave>", ocultar, add="+")
+
+    def _descartar(self, entry: dict[str, Any]) -> None:
+        if self.on_delete_draft is None:
+            return
+        self.on_delete_draft(dict(entry.get("guardado", {})))
+
     def _update_highlight(self) -> None:
-        activo = self._clave(self.abierto) if self.abierto is not None else None
         for clave, button in self._move_buttons.items():
-            encendido = clave == activo
+            activo = clave == self.preview_key
             configurar_si_cambia(
                 button,
-                fg_color="#27231B" if encendido else PANEL,
-                border_color=GOLD if encendido else "#3A3A3A",
-                border_width=2 if encendido else 1,
+                fg_color="#27231B" if activo else PANEL,
+                border_color=GOLD if activo else "#3A3A3A",
+                border_width=2 if activo else 1,
             )
 
-    # ------------------------------------------------------------- el selector
-
-    def abrir_selector(self, clave: tuple[str, int]) -> None:
-        entry = self._buscar(clave)
-        if entry is None:
-            return
-        self.abierto = entry
-        self.selector.grid(row=0, column=0, rowspan=2, columnspan=2, sticky="nsew",
-                           padx=40, pady=34)
-        self.selector.lift()
-        self._render_team()
-        self._update_highlight()
-
-    def cerrar_selector(self) -> None:
-        self.abierto = None
-        try:
-            self.selector.grid_forget()
-        except Exception:
-            pass
-        self._update_highlight()
-        self._rebuild_keyboard()
+    # ------------------------------------------------------------- el equipo
 
     def _entry(self) -> dict[str, Any] | None:
-        return self.abierto
+        return self._buscar(self.preview_key)
+
+    def _preview(self, clave: tuple[str, int]) -> None:
+        if self.preview_key == clave:
+            return
+        self.preview_key = clave
+        self._update_highlight()
+        self._update_team_compatibility()
+
+    def _select(self, clave: tuple[str, int]) -> None:
+        self.selected_key = clave
+        self._preview(clave)
+        self._update_highlight()
+        # Confirmar un movimiento termina la fase izquierda: el selector avanza
+        # al primer miembro compatible para que la siguiente Z ejecute una
+        # elección visible, en lugar de volver a confirmar el mismo preview.
+        compatibles = [
+            target for target in self._keyboard.targets
+            if isinstance(target.key, tuple) and target.key[0] == "pokemon"
+        ]
+        if compatibles:
+            primero = min(compatibles, key=lambda target: (target.row, target.column))
+            self._keyboard.selected_key = primero.key
+            self._apply_keyboard()
 
     def _elegir(self, entry: dict[str, Any], pokemon: Any) -> None:
         if str(entry.get("kind", "tm")) == "draft":
@@ -392,14 +448,13 @@ class GlobalTMView:
         entry = self._entry()
         compatible = set(entry.get("compatible", ())) if entry else set()
         known = set(entry.get("known", ())) if entry else set()
-        if entry is not None:
-            self.team_title.configure(
-                text=f"¿QUIÉN APRENDERÁ {str(entry['move_name']).upper()}?")
-            self.team_detail.configure(text=(
-                "Este drafteo ya está pagado: enseñarlo no consume otro."
-                if str(entry.get("kind", "tm")) == "draft" else
-                f"Te queda x{entry.get('quantity', 1)} de esta MT."
-            ))
+        if entry is None:
+            titulo = "POKÉMON COMPATIBLES"
+        else:
+            titulo = f"¿QUIÉN APRENDERÁ {str(entry['move_name']).upper()}?"
+            if str(entry.get("kind", "tm")) == "draft":
+                titulo += "   ·   DRAFTEO YA PAGADO"
+        configurar_si_cambia(self.team_title, text=titulo)
         for identity, widgets in self._team_widgets.items():
             pokemon, card, name_label, species_label, role_label, move_labels, action = widgets
             enabled = identity in compatible
@@ -433,30 +488,27 @@ class GlobalTMView:
     def _rebuild_keyboard(self) -> None:
         self._keyboard_targets.clear()
         targets: list[SpatialTarget] = []
-        if self.abierto is None:
-            for column, filtradas in ((0, self._filtered_entries()), (1, self._filtered_drafts())):
-                for row, entry in enumerate(filtradas):
-                    clave = self._clave(entry)
-                    widget = self._move_buttons.get(clave)
-                    if widget is None:
-                        continue
-                    self._keyboard_targets[clave] = (
-                        widget, lambda value=clave: self.abrir_selector(value), "#3A3A3A", 1,
-                    )
-                    targets.append(SpatialTarget(clave, row, column))
-        else:
-            entry = self._entry()
-            compatible = set(entry.get("compatible", ())) if entry else set()
-            for index, pokemon in enumerate(self.party[:6]):
-                identity = self.identity_for(pokemon)
-                if identity not in compatible or entry is None:
-                    continue
-                widget = self._team_cards.get(identity)
-                key = ("pokemon", identity)
-                self._keyboard_targets[key] = (
-                    widget, lambda item=entry, member=pokemon: self._elegir(item, member), GOLD, 2,
-                )
-                targets.append(SpatialTarget(key, index // 3, index % 3))
+        for row, entry in enumerate(self._filtradas()):
+            clave = self._clave(entry)
+            widget = self._move_buttons.get(clave)
+            if widget is None:
+                continue
+            self._keyboard_targets[clave] = (
+                widget, lambda value=clave: self._select(value), "#3A3A3A", 1,
+            )
+            targets.append(SpatialTarget(clave, row, 0))
+        entry = self._entry()
+        compatible = set(entry.get("compatible", ())) if entry else set()
+        for index, pokemon in enumerate(self.party[:6]):
+            identity = self.identity_for(pokemon)
+            if identity not in compatible or entry is None:
+                continue
+            widget = self._team_cards.get(identity)
+            key = ("pokemon", identity)
+            self._keyboard_targets[key] = (
+                widget, lambda item=entry, member=pokemon: self._elegir(item, member), GOLD, 2,
+            )
+            targets.append(SpatialTarget(key, index // 3, 1 + index % 3))
         self._keyboard.reset(targets, preserve=True)
         self._apply_keyboard()
 
@@ -485,12 +537,13 @@ class GlobalTMView:
             return "break"
         before = self._keyboard.selected_key
         self._keyboard.move(direction)
-        # Solo se sale hacia la barra lateral desde la lista: con el selector
-        # abierto, izquierda es moverse entre los seis del equipo.
-        if direction == "left" and before == self._keyboard.selected_key and self.abierto is None:
+        current = self._keyboard.current
+        if direction == "left" and before == self._keyboard.selected_key:
             if callable(self.on_left_edge):
                 self.on_left_edge()
             return "break"
+        if current and isinstance(current.key, tuple) and current.key[0] in {"tm", "draft"}:
+            self._preview(current.key)
         self._apply_keyboard()
         return "break"
 
@@ -517,11 +570,12 @@ class GlobalTMView:
         intercept = getattr(self, "navigation_intercept", None)
         if callable(intercept) and intercept("back"):
             return "break"
-        # Con el selector abierto, atrás significa cerrarlo: es la única forma de
-        # volver a la lista sin tocar el ratón.
-        if self.abierto is not None:
-            self.cerrar_selector()
-            return "break"
+        current = self._keyboard.current
+        if current is not None and isinstance(current.key, tuple) and current.key[0] == "pokemon":
+            if self.preview_key in self._keyboard_targets:
+                self._keyboard.selected_key = self.preview_key
+                self._apply_keyboard()
+                return "break"
         self._keyboard.clear()
         self._apply_keyboard()
         return "break"
