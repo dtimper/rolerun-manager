@@ -40,7 +40,7 @@ ROLE_GUIDE: dict[str, dict[str, str]] = {
     "Support": {
         "summary": "Rol de utilidad para estados, hazards, pantallas, curación y control del combate.",
         "allowed": "Movimientos de utilidad, problemas de estado, hazards, pantallas y curación; además, un máximo de 2 movimientos de daño en su set, físicos o especiales.",
-        "limits": "No puede usar movimientos de protección ni movimientos que aumenten sus propias estadísticas, salvo la excepción global de Velocidad.",
+        "limits": "No puede usar movimientos de protección ni movimientos que aumenten sus propias estadísticas, salvo la excepción global de Velocidad. La evasión y el ratio de crítico no cuentan a estos efectos, así que Doble Equipo, Reducción y Foco Energía sí son legales.",
         "preparation": "El límite de dos movimientos de daño se valida sobre el conjunto completo y por cada sustitución propuesta.",
     },
     "Prisma": {

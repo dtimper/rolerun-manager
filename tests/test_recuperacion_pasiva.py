@@ -160,3 +160,43 @@ def test_los_roles_defensivos_siguen_sin_boosts_ofensivos() -> None:
         legales = permitidos(rol)
         assert TAMBOR not in legales
         assert LUMINICOLA not in legales
+
+
+# ----------------------------------------- lo que se decidió dejar fuera, y por qué
+
+DOBLE_EQUIPO, REDUCCION, FOCO_ENERGIA = 104, 107, 116
+
+
+def test_evasion_y_critico_no_cuentan_como_estadistica() -> None:
+    """Decisión del formato, tomada a la vista de la lista completa.
+
+    El Support se valida por resta sobre `global_self_boosts`, así que dejar
+    estos tres fuera es dejarlos **legales** para él. No es un olvido como el de
+    Tambor: se preguntó y se decidió que la evasión y el ratio de crítico no
+    cuentan como «aumentar sus propias estadísticas».
+
+    Esta prueba existe para que no se «arreglen» por parecido con Tambor.
+    """
+    conjunto = pools()["global_self_boosts"]
+    for move_id in (DOBLE_EQUIPO, REDUCCION, FOCO_ENERGIA):
+        assert move_id not in conjunto, move_id
+
+    legales = permitidos("Support")
+    for move_id in (DOBLE_EQUIPO, REDUCCION, FOCO_ENERGIA):
+        assert move_id in legales, move_id
+
+
+def test_los_demas_roles_no_los_heredan() -> None:
+    """Usan lista blanca, así que la decisión del Support no los alcanza."""
+    for rol in ("Asesino", "Mago", "Tanque", "Prisma"):
+        legales = permitidos(rol)
+        for move_id in (DOBLE_EQUIPO, REDUCCION, FOCO_ENERGIA):
+            assert move_id not in legales, f"{rol} / {move_id}"
+
+
+def test_la_ficha_del_support_dice_la_excepcion() -> None:
+    """Si la ficha dice una cosa y el código hace otra, una de las dos miente."""
+    texto = ROLE_GUIDE["Support"]["limits"]
+
+    assert "evasión" in texto.casefold()
+    assert "Doble Equipo, Reducción y Foco Energía" in texto

@@ -1,6 +1,34 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.1-alpha.10 — la evasión y el crítico no cuentan como estadística
+
+Decisión de formato, tomada a la vista de la lista completa: **ninguno** de los
+tres entra en `global_self_boosts`.
+
+```
+104  Doble Equipo    evasión
+107  Reducción       evasión
+116  Foco Energía    ratio de crítico
+```
+
+Como el Support se valida **por resta** sobre ese conjunto, dejarlos fuera es
+dejarlos legales para él. No es lo mismo que el olvido de Tambor: aquí se
+preguntó y se decidió, y el archivo ya estaba como debía estar.
+
+Lo que sí faltaba era **dejarlo escrito**, porque el parecido con Tambor invita a
+«arreglarlo» algún día. Ahora hay dos cosas que lo impiden:
+
+- La ficha del Support lo dice: *«La evasión y el ratio de crítico no cuentan a
+  estos efectos, así que Doble Equipo, Reducción y Foco Energía sí son
+  legales.»* Antes decía solo «no puede aumentar sus propias estadísticas», que
+  con esta decisión ya contradecía al código.
+- Una prueba falla si alguno aparece en el conjunto, y otra comprueba que la
+  ficha y el código siguen diciendo lo mismo.
+
+Los demás roles no se ven afectados: usan lista blanca, así que los tres siguen
+siendo ilegales para Asesino, Mago, Tanque y Prisma sin necesidad de prohibirlos.
+
 # v0.3.1-alpha.9 — cuatro más de la auditoría
 
 ## La barrera de MT ya no puede quedarse para siempre
