@@ -62,7 +62,7 @@ class MoveBrowserManager:
                 "asesino_bajar_defensa": [], "asesino_subir_ataque": [],
                 "mago_bajar_defensa_esp": [], "mago_subir_ataque_esp": [],
                 "tanque_proteccion": [], "tanque_subir_defensa_fisica": [],
-                "prisma_subir_defensa_especial": [], "prisma_problemas_estado": [],
+                "prisma_subir_defensa_especial": [], "problemas_estado": [],
                 "defensa_recuperacion_pasiva": [],
                 "global_self_boosts": [], "extra_ataque_fisico": [], "extra_ataque_especial": [],
             },

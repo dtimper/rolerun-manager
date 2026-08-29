@@ -107,7 +107,7 @@ def allowed_status_move_ids(
             "defensa_recuperacion_pasiva",
         ),
         "Prisma": (
-            "prisma_problemas_estado",
+            "problemas_estado",
             "prisma_subir_defensa_especial",
             "defensa_recuperacion_pasiva",
         ),

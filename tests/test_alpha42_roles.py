@@ -145,7 +145,7 @@ class Alpha42RoleReworkTests(unittest.TestCase):
             [entry["pool_key"] for entry in self.roles["Prisma"]],
             [
                 "prisma_subir_defensa_especial",
-                "prisma_problemas_estado",
+                "problemas_estado",
                 "defensa_ataque_fisico",
                 "defensa_ataque_especial",
             ],
@@ -162,7 +162,7 @@ class Alpha42RoleReworkTests(unittest.TestCase):
             [entry["pool_key"] for entry in self.roles["Support"]],
             [
                 "support_infatuaciones",
-                "support_problemas_estado",
+                "problemas_estado",
                 "support_recuperaciones",
                 "support_hazards",
                 "support_ataque_estado",
@@ -178,7 +178,7 @@ class Alpha42RoleReworkTests(unittest.TestCase):
         # Tóxico existe en X/Y; Hilo Tóxico (672) pertenece a Gen 7.
         engine.set_allowed_moves({92})
 
-        pool = engine._compatible_pool("prisma_problemas_estado")
+        pool = engine._compatible_pool("problemas_estado")
 
         self.assertIn(92, pool)
         self.assertNotIn(672, pool)

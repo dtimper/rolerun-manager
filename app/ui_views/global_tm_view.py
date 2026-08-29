@@ -355,12 +355,19 @@ class GlobalTMView:
     def _update_highlight(self) -> None:
         for clave, button in self._move_buttons.items():
             activo = clave == self.preview_key
-            configurar_si_cambia(
-                button,
-                fg_color="#27231B" if activo else PANEL,
-                border_color=GOLD if activo else "#3A3A3A",
-                border_width=2 if activo else 1,
-            )
+            # Protegido como `_apply_keyboard`, y por el mismo motivo: escribir
+            # un color sobre un widget ya destruido lanza `TclError`. Aquí no lo
+            # estaba, y esa era la grieta por la que el mando se caía al salir de
+            # esta página.
+            try:
+                configurar_si_cambia(
+                    button,
+                    fg_color="#27231B" if activo else PANEL,
+                    border_color=GOLD if activo else "#3A3A3A",
+                    border_width=2 if activo else 1,
+                )
+            except Exception:
+                pass
 
     # ------------------------------------------------------------- el equipo
 

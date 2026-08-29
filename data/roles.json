@@ -52,7 +52,7 @@
     },
     {
       "title": "Problemas de Estado",
-      "pool_key": "prisma_problemas_estado"
+      "pool_key": "problemas_estado"
     },
     {
       "title": "Ataque Físico",
@@ -70,7 +70,7 @@
     },
     {
       "title": "Problemas de Estado",
-      "pool_key": "support_problemas_estado"
+      "pool_key": "problemas_estado"
     },
     {
       "title": "Recuperaciones",

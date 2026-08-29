@@ -3400,7 +3400,17 @@ class RoleRunManager(ctk.CTk):
         """
         owner = getattr(self, "_navigation_owner", None)
         if owner is not None:
-            return owner
+            marco = getattr(owner, "frame", None)
+            if marco is None or self._widget_alive(marco):
+                return owner
+            # Su vista ya no existe. `render_page` la destruye al cambiar de
+            # página y nadie soltaba la autoridad, así que el mando se seguía
+            # despachando ahí: acababa escribiendo color sobre un canvas muerto,
+            # el `TclError` subía hasta el `except` de `_poll_gamepad`, y ese
+            # cierra el mando y lo pone a None. Para el usuario el mando se moría
+            # al cambiar de sección, revivía a los dos segundos y se volvía a
+            # morir en la siguiente pulsación. Sin un solo aviso.
+            self._navigation_owner = None
         return (self._team_pc_view if self.active_page == "team" else
                 self._global_tm_view if self.active_page == "tms" else
                 self._draft_view if self.active_page == "drafts" else None)
@@ -9596,15 +9606,28 @@ class RoleRunManager(ctk.CTk):
         changed = RoleRunManager._merge_live_health_fields(self.current_game, game)
         if not changed:
             return False
-        self._floating_bar_last_signature = None
         if self._floating_bar_is_visible():
+            # La firma anterior NO se anula aquí. `force=True` ya se salta por su
+            # cuenta la comparación de igualdad, y la ruta rápida —mover solo las
+            # barritas de PS— necesita esa firma para saber qué ha cambiado:
+            # anulándola devolvía False siempre. Resultado medido en el log del
+            # usuario: las nueve muestras de la sesión con `applied: False`. La
+            # optimización no se había aplicado ni una sola vez, y cada cambio de
+            # PS en combate reconstruía la barra entera, con dos PNG releídos del
+            # disco y unos cuarenta widgets, en el hilo de Tk.
             self._render_floating_bar(force=True)
             self._main_ui_dirty_while_floating = True
-        elif (
-            self.active_page in TEAM_PC_PAGES
-            and self._live_health_render_after_id is None
-        ):
-            self._live_health_render_after_id = self.after(90, self._refresh_live_health_page)
+        else:
+            # Oculta no hay nada que repintar, pero su firma queda vieja: se
+            # anula para que al volver a mostrarse se recomponga entera.
+            self._floating_bar_last_signature = None
+            if (
+                self.active_page in TEAM_PC_PAGES
+                and self._live_health_render_after_id is None
+            ):
+                self._live_health_render_after_id = self.after(
+                    90, self._refresh_live_health_page,
+                )
         return True
 
     def _process_oras_health_snapshot(self, game: SaveGameData, *, source: str = "overworld") -> None:
@@ -9997,7 +10020,20 @@ class RoleRunManager(ctk.CTk):
         live_key_getter = getattr(self, "_active_azahar_realtime_key", None)
         live_key = live_key_getter() if callable(live_key_getter) else ""
         if live_key not in FULL_MATRIX_LIVE_PC_GAME_KEYS:
-            return False
+            # Salía por un `return False` mudo —en una función `-> None`, huella
+            # de un copiar y pegar—. La barra ofrece este botón sin mirar el
+            # juego, así que en ORAS y X/Y el usuario lo pulsaba y no pasaba
+            # absolutamente nada: ni selector, ni cambio de estado, ni aviso. Y
+            # es la única reentrada posible una vez cerrado el selector.
+            self._set_operation_status(
+                "warning", "AQUÍ NO SE PUEDE ELEGIR SUSTITUTO",
+                f"{self._active_azahar_realtime_label()} todavía no lee las cajas "
+                "completas, que es lo que hace falta para elegir el sustituto "
+                "desde RoleRun. Hazlo dentro del juego: al volver, RoleRun lo "
+                "reconoce solo.",
+                persistent=False,
+            )
+            return
         pc_data = self._team_pc_cached_data()
         if pc_data is None:
             self._faint_reopen_requested_identity = str(event.get("identity", "") or "")
@@ -21887,12 +21923,23 @@ class RoleRunManager(ctk.CTk):
         # carpetas-. Estaba dentro del bucle, así que abrir una Run con seis
         # especies sin descargar disparaba esas escrituras seis veces, en el
         # hilo de Tk, justo mientras construía la página.
-        if llegados and self.project and self.current_game:
-            self._sync_obs_state(self.current_game)
-        if faltantes:
-            self._notify_missing_sprites(faltantes)
-        if self.winfo_exists():
-            self.after(100, self._poll_sprite_queue)
+        try:
+            if llegados and self.project and self.current_game:
+                # Si OBS no puede escribir -antivirus, copia de seguridad,
+                # OneDrive- la excepcion salia de aqui ANTES de reprogramar el
+                # sondeo, y este es el unico `after` que lo mantiene vivo: el
+                # bombeo de sprites moria para toda la sesion. Y si pasaba
+                # durante el arranque no eran siluetas, era un cuelgue: la
+                # barrera inicial exige las especies en cache y no tiene tope
+                # por decision explicita.
+                self._sync_obs_state(self.current_game)
+            if faltantes:
+                self._notify_missing_sprites(faltantes)
+        finally:
+            # El reenganche va en `finally`, como en `_poll_gamepad`: ninguna
+            # excepcion futura del cuerpo puede volver a matar el bombeo.
+            if self.winfo_exists():
+                self.after(100, self._poll_sprite_queue)
 
     def _notify_missing_sprites(self, species_ids: list[int]) -> None:
         """Aviso no bloqueante: RoleRun sigue funcionando sin los sprites."""

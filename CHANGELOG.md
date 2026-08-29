@@ -1,6 +1,68 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.1-alpha.11 — los cinco que no decían nada
+
+Con esto se cierra la lista confirmada de la auditoría. Los cinco eran fallos
+silenciosos, que es exactamente lo que este proyecto no tolera: el usuario no
+puede ni describir lo que le pasa.
+
+## El mando se moría al salir de MOVIMIENTOS
+
+`render_page` destruye la vista al cambiar de página y nadie soltaba la autoridad
+de navegación. El mando se seguía despachando ahí, acababa escribiendo un color
+sobre un canvas muerto, el `TclError` subía hasta el `except` de `_poll_gamepad`
+y **ese cierra el mando**. Revivía solo a los dos segundos y se volvía a morir en
+la siguiente pulsación, sin un solo aviso.
+
+Se arregla en el punto que cubre todos los caminos, presentes y futuros:
+`_active_navigation_view` suelta al dueño cuyo marco ya no existe. Y de paso se
+protege `GlobalTMView._update_highlight`, que era la grieta concreta —su hermano
+`_apply_keyboard` sí lo estaba—.
+
+## «Elegir sustituto» no hacía absolutamente nada en ORAS y X/Y
+
+Salía por un `return False` mudo en una función declarada `-> None`, huella de un
+copiar y pegar. La barra ofrece ese botón sin mirar el juego, así que el usuario
+lo pulsaba y no pasaba nada: ni selector, ni cambio de estado, ni aviso. Y es la
+**única** reentrada posible una vez cerrado el selector.
+
+Ahora dice por qué no puede y qué sí puede hacer: hacer el cambio dentro del
+juego, que RoleRun reconcilia solo al volver.
+
+## Un fallo de OBS mataba el bombeo de sprites de toda la sesión
+
+`_sync_obs_state` escribe en la carpeta de OBS. Si eso lanzaba —antivirus, copia
+de seguridad, OneDrive—, la excepción salía **antes** de reprogramar el sondeo, y
+ese `after` es el único que lo mantiene vivo. Durante el arranque no eran
+siluetas: era un cuelgue, porque la barrera inicial exige las especies en caché y
+no tiene tope por decisión explícita.
+
+El reenganche pasa a un `finally`, como en `_poll_gamepad`. Ninguna excepción
+futura del cuerpo puede volver a matarlo.
+
+## La optimización de la barra flotante no se había ejecutado nunca
+
+`_publish_live_health` anulaba la firma anterior justo antes de pedir el
+repintado forzado, y la ruta rápida **necesita** esa firma para saber qué cambió:
+devolvía `False` siempre. El log de la sesión del usuario lo confirma, nueve
+muestras de nueve con `applied: False`.
+
+Cada cambio de PS en combate reconstruía la barra entera: dos PNG releídos del
+disco, un LANCZOS por sprite de rol y unos cuarenta widgets, en el hilo de Tk,
+exactamente cuando el usuario está mirándola. La anulación se queda solo en la
+rama en que la barra no se ve, que es donde sí hace falta.
+
+## Dos categorías «Problemas de Estado» en el mismo drafteo
+
+`prisma_problemas_estado` y `support_problemas_estado` eran **la misma lista de
+11 IDs con el mismo título bajo dos claves**, y el dedup del Líbero es por clave.
+Medido antes: 3,85% de los drafteos con la categoría repetida. Cuatro categorías
+útiles en vez de cinco.
+
+Se unifican en una sola clave, `problemas_estado`, que es lo que ya eran de
+hecho. Medido después: **0 de 20.000**.
+
 # v0.3.1-alpha.10 — la evasión y el crítico no cuentan como estadística
 
 Decisión de formato, tomada a la vista de la lista completa: **ninguno** de los
