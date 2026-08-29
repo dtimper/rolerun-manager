@@ -109,3 +109,39 @@ def test_las_tarjetas_no_se_pisan_de_fila() -> None:
     assert f"roles.grid(row={max(filas) + 1}" in texto, (
         "el bloque de roles tiene que ir después de la última sección"
     )
+
+
+def test_la_guia_no_manda_a_pulsar_run_activa_para_ver_los_contadores() -> None:
+    """Están en la barra de arriba todo el rato: mandar a otro sitio sobra."""
+    texto = guia()
+
+    assert "RUN ACTIVA" not in texto
+    assert "siempre delante en la barra de arriba" in texto
+
+
+def test_la_guia_dice_que_los_contadores_tambien_se_pulsan() -> None:
+    texto = guia()
+
+    assert "pulsando sus botones" in texto
+
+
+def test_la_guia_no_dice_que_una_mt_la_limite_el_juego() -> None:
+    """No es cierto, y el propio código lo dice: manda el rol, no la especie.
+
+    `_build_tm_candidates` ignora deliberadamente la compatibilidad de especie
+    de la ROM. Una MT de la mochila se puede enseñar a cualquier Pokémon cuyo
+    rol admita ese movimiento.
+    """
+    texto = guia()
+    candidatos = inspect.getsource(RoleRunManager._build_tm_candidates)
+
+    assert "lo que el juego demuestre" not in texto
+    assert "lo decide su ROL, no su especie" in texto
+    assert "ignora deliberadamente la compatibilidad de especie" in candidatos
+
+
+def test_la_guia_no_supone_que_quien_la_lee_hace_directos() -> None:
+    """F8 sirve igual jugando solo; el directo es un caso de uso concreto."""
+    texto = guia()
+
+    assert "directo" not in texto

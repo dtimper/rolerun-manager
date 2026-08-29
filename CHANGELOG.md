@@ -1,6 +1,40 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.1-alpha.5 — correcciones de la GUÍA, y una que era un error de verdad
+
+Cuatro cosas señaladas al leerla. Tres son de redacción; la tercera no.
+
+- Los contadores **están siempre en la barra de arriba**, así que mandar a
+  pulsar RUN ACTIVA para verlos sobraba. Fuera esa mención, y de paso se dice lo
+  que faltaba: además de los atajos, se mueven **pulsando sus botones**.
+- **«Una MT la limita lo que el juego demuestre» era falso.** Lo dice el propio
+  código: `_build_tm_candidates` *«ignora deliberadamente la compatibilidad de
+  especie de la ROM: una MT disponible puede enseñarse a cualquier Pokémon si el
+  movimiento existe en el juego y el rol lo permite»*. Ahora la guía dice lo que
+  pasa: **lo decide el rol, no la especie**, y vale igual para MT y para
+  drafteos.
+- La frase de F8 daba por hecho que quien lee hace directos. Sirve igual jugando
+  solo.
+
+Las pruebas nuevas atan cada corrección a su fuente: la de la MT falla si la
+guía vuelve a decir «lo que el juego demuestre» **o** si `_build_tm_candidates`
+deja de ignorar la especie.
+
+## Pendiente: la recuperación pasiva de Tanque y Prisma
+
+Los dos roles permiten hoy exactamente dos movimientos de recuperación pasiva:
+
+```
+392  Acua Aro   Aqua Ring
+275  Arraigo    Ingrain
+```
+
+Está pedido ampliarlo a la familia entera, y la lista de candidatos verificados
+contra el catálogo está sobre la mesa esperando decisión. No se ha tocado nada
+todavía: cambiar qué movimientos son legales para un rol es cambiar el formato,
+y eso no se decide por conveniencia.
+
 # v0.3.1-alpha.4 — la GUÍA cuenta el programa que hay
 
 Estaba desactualizada, y no en detalles: describía un drafteo sin GUARDAR, un

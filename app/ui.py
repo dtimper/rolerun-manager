@@ -20906,9 +20906,9 @@ class RoleRunManager(ctk.CTk):
                 ).pack(side="left", fill="x", expand=True)
 
         section(4, "◆", "Tu Run de un vistazo", "Los cuatro contadores y dónde mirarlos.", [
-            "VIDAS, POCIONES, MEDALLAS y DRAFTEOS son el estado de la Run. Pulsa RUN ACTIVA en la barra lateral para verlos todos.",
+            "VIDAS, POCIONES, MEDALLAS y DRAFTEOS son el estado de la Run, y los tienes siempre delante en la barra de arriba.",
             "Los contadores automáticos los lleva el juego, no tú: se marcan como tales y RoleRun ignora cualquier intento de moverlos a mano. Las medallas son el caso típico.",
-            "El resto los mueves con los atajos globales sin salir del juego. Están en CONFIGURACIÓN → ATAJOS, con tecla y botón de mando por separado.",
+            "El resto los mueves pulsando sus botones, o con los atajos globales para no salir del juego. Los atajos están en CONFIGURACIÓN → ATAJOS, con tecla y botón de mando por separado.",
         ])
         section(5, "♟", "Equipo y PC", "Seis roles, seis casillas, y las cajas al lado.", [
             "Un Pokémon SIN ROL puede estar en el equipo mientras lo preparas, pero todavía no es apto para combatir.",
@@ -20920,7 +20920,7 @@ class RoleRunManager(ctk.CTk):
         section(6, "▣", "Movimientos", "Todo lo que puedes enseñar hoy, en un sitio.", [
             "Dos pestañas a la izquierda: MT son las de tu mochila; DRAFTEOS son las tiradas que te guardaste sin enseñar.",
             "A la derecha está tu equipo, siempre. Pasa el ratón por un movimiento y verás encendidos los que pueden aprenderlo y apagados los que no, con el motivo.",
-            "Una MT la limita lo que el juego demuestre. Un drafteo lo limita el ROL del que salió: cualquier Pokémon con ese rol puede aprenderlo.",
+            "Lo que puede aprender cada Pokémon lo decide su ROL, no su especie: RoleRun ignora a propósito la compatibilidad de especie del juego.",
             "La papelera de un drafteo aparece al pasar el ratón por su fila. Pregunta antes, porque no devuelve el drafteo que costó.",
             "Si lo que quieres es mirar sin enseñar nada, AYUDA → CONSULTA DE MOVIMIENTOS busca en el catálogo del juego y separa lo que cada rol admite de lo que no.",
         ])
@@ -20939,7 +20939,7 @@ class RoleRunManager(ctk.CTk):
         section(9, "⚙", "Mientras juegas", "RoleRun de fondo, sin quitarte la pantalla.", [
             "La barra flotante se queda encima del juego con lo esencial. Si otra ventana tapa el juego, se retira sola; en otro monitor no estorba, así que se queda.",
             "El botón MENÚ abre RoleRun entero sobre el juego, y se despega en cuanto cambias de aplicación.",
-            "F8 guarda un fallo con lo que estaba pasando en ese momento. Durante un directo es la forma de no perder nada sin cortar la partida.",
+            "F8 guarda un fallo con lo que estaba pasando en ese momento, sin cortar la partida. Queda en una carpeta para revisarlo después.",
             "Las fuentes de OBS se configuran una vez y el Manager mantiene sus archivos al día.",
         ])
 
