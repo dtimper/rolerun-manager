@@ -586,6 +586,35 @@ def test_xy_party_resize_reaches_the_live_writer_gate(operation: str) -> None:
     assert scheduled == [True]
 
 
+@pytest.mark.parametrize("operation", ["party-to-box", "box-to-party"])
+def test_oras_party_resize_reaches_the_live_writer_gate(operation: str) -> None:
+    """El bug real del 30-08-2026: esta compuerta (independiente de
+    _oras_live_unsupported_changes y de ORASLiveWriter._unsupported_changes)
+    seguía sin actualizarse para ORAS. El cambio se quedaba proyectado en
+    "REVISAR CAMBIOS" como PENDIENTE para siempre — nunca se llegaba siquiera
+    a intentar la escritura, así que nunca aparecía ningún error.
+    """
+    change = PendingTeamChange(
+        operation=operation,
+        party_slot=2,
+        box=1,
+        box_slot=5,
+    )
+    scheduled: list[bool] = []
+    manager = SimpleNamespace(
+        run=SimpleNamespace(pending_changes=[change]),
+        _active_azahar_realtime_key=lambda: "oras",
+        _oras_live_auto_apply_available=lambda: True,
+        _oras_live_auto_apply_ids=set(),
+        _schedule_oras_live_auto_apply=lambda: scheduled.append(True),
+    )
+
+    RoleRunManager._request_oras_live_auto_apply(manager, [change])
+
+    assert manager._oras_live_auto_apply_ids == {id(change)}
+    assert scheduled == [True]
+
+
 def test_xy_pc_to_pc_moves_exact_pk6_to_requested_box_and_slot() -> None:
     writer, client, game, change, source_address, destination_address, source_raw = _pc_move_setup()
 
@@ -854,7 +883,11 @@ def test_xy_ui_accepts_exact_pc_to_pc_drop_only_for_demonstrated_backends() -> N
     assert can_drop("oras") is False
 
 
-def test_xy_ui_enables_party_resize_but_keeps_oras_closed() -> None:
+def test_xy_ui_enables_party_resize_and_oras_too() -> None:
+    """ORAS dejó de estar cerrado el 30-08-2026: ORASLiveWriter._apply_party_resize
+    ya existe y está cubierto por tests sintéticos (ver ORASPartyResizeTests
+    en test_oras_live_write.py). Sin validar aún contra una partida real.
+    """
     source = SimpleNamespace()
 
     def can_drop(live_key: str, source_context: str, target_context: str) -> bool:
@@ -873,8 +906,8 @@ def test_xy_ui_enables_party_resize_but_keeps_oras_closed() -> None:
 
     assert can_drop("xy", "team", "pc") is True
     assert can_drop("xy", "pc", "team") is True
-    assert can_drop("oras", "team", "pc") is False
-    assert can_drop("oras", "pc", "team") is False
+    assert can_drop("oras", "team", "pc") is True
+    assert can_drop("oras", "pc", "team") is True
 
 
 def test_xy_pc_to_pc_drop_queues_exact_coordinates_and_requests_live_apply() -> None:
@@ -939,6 +972,33 @@ def test_xy_party_to_pc_drop_preserves_the_exact_empty_destination() -> None:
     )
 
     assert destinations == [(3, 11)]
+
+
+def test_oras_party_to_pc_drop_preserves_the_exact_empty_destination() -> None:
+    """El bug real del 30-08-2026: esta rama del handler de drop —distinta de
+    las otras cinco compuertas ya arregladas— también daba por hecho que solo
+    X/Y necesitaba el destino exacto. Sin "oras" aquí, arrastrar a un hueco
+    concreto del PC siempre acababa en el primer hueco libre, ignorando dónde
+    soltó el usuario de verdad.
+    """
+    source = SimpleNamespace(nickname="Houndoom", species="Houndoom", slot=2)
+    destinations: list[tuple[int, int] | None] = []
+    manager = SimpleNamespace(
+        _projected_party=lambda: [SimpleNamespace(), source],
+        _active_azahar_realtime_key=lambda: "oras",
+        _oras_live_auto_apply_available=lambda: True,
+        send_pokemon_to_pc=lambda pokemon, *, ask, destination=None: destinations.append(destination),
+    )
+
+    RoleRunManager._team_pc_drop(
+        manager,
+        "team",
+        source,
+        "pc",
+        {"pokemon": None, "box": 1, "slot": 5},
+    )
+
+    assert destinations == [(1, 5)]
 
 
 def test_xy_pc_to_free_party_role_is_not_rejected_as_swap_only() -> None:

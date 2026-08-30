@@ -8650,6 +8650,23 @@ class RoleRunManager(ctk.CTk):
                     # posterior parte de un origen que nunca existió.
                     supported_ids.add(id(change))
                 continue
+            if live_key == "oras":
+                if isinstance(change, (
+                    PendingChange, PendingRoleChange, PendingInventoryChange,
+                    PendingPCRoleChange, PendingTMTeach, PendingPartyHeal,
+                )):
+                    supported_ids.add(id(change))
+                elif isinstance(change, PendingTeamChange) and change.operation in {
+                    "swap-party-box", "party-to-box", "box-to-party", "replace-fainted",
+                }:
+                    # ORASLiveWriter._apply_party_resize (30-08-2026) ya valida
+                    # el cambio de tamaño 5↔6 (contador, identidades, testigos
+                    # de caja, commit del contador al final, rollback). Sin
+                    # esta entrada el cambio se quedaba proyectado para
+                    # siempre como "pendiente": esta compuerta nunca llegaba a
+                    # pedir la escritura.
+                    supported_ids.add(id(change))
+                continue
             if isinstance(change, (
                 PendingChange, PendingRoleChange, PendingInventoryChange,
                 PendingPCRoleChange, PendingTMTeach, PendingPartyHeal,
@@ -11570,6 +11587,25 @@ class RoleRunManager(ctk.CTk):
                 if label not in result:
                     result.append(label)
             return result
+        if self._active_azahar_realtime_key() == "oras":
+            result: list[str] = []
+            for change in changes:
+                if isinstance(change, (
+                    PendingChange, PendingRoleChange, PendingPCRoleChange,
+                    PendingPartyHeal, PendingTMTeach, PendingInventoryChange,
+                )):
+                    continue
+                if isinstance(change, PendingTeamChange) and change.operation in {
+                    "swap-party-box", "party-to-box", "box-to-party", "replace-fainted",
+                }:
+                    continue
+                label = {
+                    "PendingInventoryChange": "escritura de utilidades de inventario",
+                    "PendingTeamChange": "entradas/salidas que cambian el tamaño del equipo",
+                }.get(type(change).__name__, type(change).__name__)
+                if label not in result:
+                    result.append(label)
+            return result
         result: list[str] = []
         for change in changes:
             label = None
@@ -11635,6 +11671,19 @@ class RoleRunManager(ctk.CTk):
         if unsupported:
             if automatic:
                 self._stop_oras_live_auto_apply_for(changes)
+                # Rechazar aquí (antes de llegar al writer) es tan definitivo
+                # como un fallo dentro de él: dejar el cambio en la cola sin
+                # limpiarlo mostraba una proyección fantasma (el Pokémon
+                # "incorporado" pero sin PS, sin que ORAS lo tuviera de
+                # verdad) que ningún ciclo posterior retiraba solo.
+                rejected_ids = {id(change) for change in changes}
+                self.run.pending_changes = [
+                    change for change in self.run.pending_changes
+                    if id(change) not in rejected_ids
+                ]
+                self._pc_cache = None
+                self._pc_cache_signature = None
+                self._refresh_main_after_oras_live_write()
                 self.sync_status = "⚠ Aplicación inmediata pausada: cambio no compatible"
                 self._update_top_status()
                 self._show_live_sync_toast(
@@ -11811,7 +11860,7 @@ class RoleRunManager(ctk.CTk):
         return any(
             (
                 isinstance(change, PendingTeamChange)
-                and change.operation in {"swap-party-box", "replace-fainted"}
+                and change.operation in {"swap-party-box", "replace-fainted", "box-to-party"}
             )
             or (
                 isinstance(change, PendingRoleChange)
@@ -14896,18 +14945,6 @@ class RoleRunManager(ctk.CTk):
                 persistent=True,
             )
             return False
-        if (
-            outgoing is None
-            and self._active_azahar_realtime_key() == "oras"
-            and self._oras_live_auto_apply_available()
-        ):
-            self._set_operation_status(
-                "warning",
-                "OPERACIÓN NO HABILITADA",
-                f"{self._active_azahar_realtime_label()} solo tiene demostrado el intercambio directo Equipo↔PC.",
-                persistent=True,
-            )
-            return False
         projected = self._projected_party()
         effective_target_role = target_role
         if outgoing is not None:
@@ -15006,7 +15043,7 @@ class RoleRunManager(ctk.CTk):
         if intent.operation == "party-to-box":
             exact_destination = None
             if self._active_azahar_realtime_key() in (
-                *GEN7_REALTIME_GAME_KEYS, "xy", *MELONDS_REALTIME_GAME_KEYS,
+                *GEN7_REALTIME_GAME_KEYS, "xy", "oras", *MELONDS_REALTIME_GAME_KEYS,
             ):
                 box = int(target.get("box") or 0)
                 slot = int(target.get("slot") or 0)
@@ -15105,10 +15142,12 @@ class RoleRunManager(ctk.CTk):
             and self._active_azahar_realtime_key() in GEN6_REALTIME_GAME_KEYS
             and self._oras_live_auto_apply_available()
         ):
-            # X/Y dispone de transacción de cambio de tamaño validada: bloque
-            # PK6, compactación de party y contador 0x08CE1C74 con commit final.
-            # ORAS continúa cerrado hasta demostrar su contador propio.
-            return self._active_azahar_realtime_key() == "xy"
+            # X/Y (bloque PK6, compactación, contador 0x08CE1C74) y ahora ORAS
+            # (ORAS_PARTY_COUNT_ADDRESS, sin compactación — ver
+            # ORASLiveWriter._apply_party_resize) tienen transacción de cambio
+            # de tamaño validada por tests sintéticos. Sin validar aún contra
+            # una partida real (ver docs/CURRENT_STATE.md, 30-08-2026).
+            return self._active_azahar_realtime_key() in {"xy", "oras"}
         return True
 
     def _show_role_information(self, role: str) -> None:
@@ -17789,9 +17828,9 @@ class RoleRunManager(ctk.CTk):
         if not self.current_game:
             return
 
-        # ORAS sigue cerrado para cambios de tamaño hasta demostrar su contador
-        # de party. X/Y usa su writer transaccional específico y nunca proyecta
-        # el resultado antes del readback vivo.
+        # X/Y y ORAS usan su writer transaccional específico (ORASLiveWriter
+        # ._apply_party_resize) y nunca proyectan el resultado antes del
+        # readback vivo.
         live_key_getter = getattr(self, "_active_azahar_realtime_key", None)
         live_key = live_key_getter() if callable(live_key_getter) else None
         if getattr(getattr(self, "save_engine", None), "key", "") == "bdsp":
@@ -17803,18 +17842,6 @@ class RoleRunManager(ctk.CTk):
                     "No se ha cambiado ni RoleRun ni el juego.",
                 )
                 return
-        elif (
-            live_key == "oras"
-            and self._oras_live_auto_apply_available()
-        ):
-            messagebox.showinfo(
-                "Enviar al PC desde RoleRun",
-                "Esta operación cambia el tamaño del equipo y todavía no tiene una escritura viva "
-                f"validada en {self._active_azahar_realtime_label()}.\n\n"
-                "Esta build habilita únicamente CAMBIAR CON PC (sustitución directa 1↔1). "
-                "No se ha cambiado ni RoleRun ni el juego.",
-            )
-            return
         else:
             projected_party = self._projected_party()
 
@@ -17836,12 +17863,12 @@ class RoleRunManager(ctk.CTk):
         # primer hueco realmente libre. Esto hace ENVIAR AL PC autosuficiente.
         if (
             live_key in (
-                *GEN7_REALTIME_GAME_KEYS, "xy", "bdsp", *MELONDS_REALTIME_GAME_KEYS,
+                *GEN7_REALTIME_GAME_KEYS, "xy", "oras", "bdsp", *MELONDS_REALTIME_GAME_KEYS,
             )
         ) and self._oras_live_auto_apply_available():
             if live_key in GEN7_REALTIME_GAME_KEYS and destination is not None:
                 destination_box, destination_slot = map(int, destination)
-            elif live_key in ({"xy"} | MELONDS_REALTIME_GAME_KEYS):
+            elif live_key in ({"xy", "oras"} | MELONDS_REALTIME_GAME_KEYS):
                 if destination is None:
                     # La ocupación visible de estos backends procede de RAM.
                     # Volver al save aquí puede elegir una casilla distinta.
@@ -17889,7 +17916,7 @@ class RoleRunManager(ctk.CTk):
             outgoing_identity=self._pokemon_identity(pokemon),
             box_witnesses=(
                 self._pc_box_witnesses(int(destination_box), int(destination_slot))
-                if live_key == "xy" and destination_box is not None and destination_slot is not None
+                if live_key in {"xy", "oras"} and destination_box is not None and destination_slot is not None
                 else ()
             ),
         ))
@@ -17904,7 +17931,7 @@ class RoleRunManager(ctk.CTk):
         self._smooth_render_page(preserve_scroll=True)
         if not (
             self._active_azahar_realtime_key() in (
-                *GEN7_REALTIME_GAME_KEYS, "xy", "bdsp", *MELONDS_REALTIME_GAME_KEYS,
+                *GEN7_REALTIME_GAME_KEYS, "xy", "oras", "bdsp", *MELONDS_REALTIME_GAME_KEYS,
             )
             and self._oras_live_auto_apply_available()
         ):
@@ -18433,7 +18460,7 @@ class RoleRunManager(ctk.CTk):
             # primer rol libre de izquierda a derecha, independientemente del rol
             # que el Pokémon tuviera registrado en el PC o del + que se pulsó.
             if (
-                self._active_azahar_realtime_key() in (*GEN7_REALTIME_GAME_KEYS, "xy", "bdsp")
+                self._active_azahar_realtime_key() in (*GEN7_REALTIME_GAME_KEYS, "xy", "oras", "bdsp")
                 and self._oras_live_auto_apply_available()
             ):
                 occupied_roles = {

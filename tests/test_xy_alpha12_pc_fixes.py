@@ -190,6 +190,28 @@ def test_xy_all_team_pc_operations_cross_the_live_ui_gate() -> None:
         assert RoleRunManager._oras_live_unsupported_changes(manager, [change]) == []
 
 
+def test_oras_party_resize_crosses_the_live_ui_gate() -> None:
+    """El bug real del 30-08-2026: ORASLiveWriter._apply_party_resize ya
+    existía y estaba testeado, pero esta compuerta de la UI —independiente
+    de ORASLiveWriter._unsupported_changes— seguía sin actualizarse. Una
+    incorporación se rechazaba aquí, ANTES de llegar al escritor, dejando el
+    cambio fantasma en la cola pendiente (Quagsire "incorporado" sin PS,
+    aunque la RAM nunca cambiara).
+    """
+    manager = SimpleNamespace(_active_azahar_realtime_key=lambda: "oras")
+
+    for operation in ("swap-party-box", "party-to-box", "box-to-party", "replace-fainted"):
+        change = PendingTeamChange(operation=operation, party_slot=1)
+        assert RoleRunManager._oras_live_unsupported_changes(manager, [change]) == []
+
+    # move-box-slot (PC↔PC sin pasar por el equipo) sigue sin escritura
+    # viva validada en ORAS.
+    change = PendingTeamChange(operation="move-box-slot", party_slot=1)
+    assert RoleRunManager._oras_live_unsupported_changes(manager, [change]) == [
+        "entradas/salidas que cambian el tamaño del equipo",
+    ]
+
+
 def test_xy_pc_witnesses_use_the_live_matrix_shown_by_the_ui() -> None:
     saved = _empty_pc()
     live = _mon(1, 133, pid=200, box=1, box_slot=1)

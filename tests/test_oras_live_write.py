@@ -1606,6 +1606,40 @@ class ORASPartyResizeTests(unittest.TestCase):
         for index in (0, 1, 2, 4, 5):
             self.assertEqual(fake.slots[index], slots[index])
 
+    def test_a_hole_left_by_the_game_itself_still_counts_as_empty(self) -> None:
+        """El bug real, encontrado el 30-08-2026 contra una partida real: al
+        depositar desde el propio menú del juego (no desde RoleRun), ORAS solo
+        pone a cero la cabecera del slot (constante de cifrado, centinela,
+        checksum) — el resto de bytes se queda tal cual, con la especie/nivel
+        de quien ocupara antes ese slot. `any(raw)` contaba ese hueco como
+        "ocupado" (checksum roto pero bytes no-cero), y la precondición
+        rechazaba una incorporación perfectamente válida con "El equipo vivo
+        tiene 6 slot(s) ocupado(s), pero el contador de ORAS dice 5" — aunque
+        la RAM real solo tuviera 5 Pokémon de verdad.
+        """
+        slots = list(self._six_full_slots())
+        stale = bytearray(slots[2])
+        stale[0:10] = bytes(10)  # cabecera a cero; el resto, basura sin limpiar
+        slots[2] = bytes(stale)
+        incoming = make_encrypted_pk6(species_id=263, pid=0xAAAA0006)[:PK6_STORED_SIZE]
+        fake = _ResizeFakeClient(tuple(slots), count=5, pc_slot=incoming)
+
+        result = self._writer(fake).apply(self.current, [
+            PendingTeamChange(
+                operation="box-to-party", party_slot=3,
+                box=1, box_slot=1,
+                incoming_pokemon="Pikachu", incoming_species="Pikachu",
+                incoming_identity=self._identity(263, 0xAAAA0006),
+                incoming_role="Mago",
+            ),
+        ])
+
+        self.assertEqual(fake.count, 6)
+        incorporated = parse_pk6_party(fake.slots[2], 3, {})
+        self.assertIsNotNone(incorporated)
+        self.assertEqual(incorporated.species_id, 263)
+        self.assertEqual(len(result.game.party), 6)
+
     def test_party_to_box_refuses_the_last_member(self) -> None:
         slots = [self._slot()] + [bytes(PK6_PARTY_SIZE)] * 5
         fake = _ResizeFakeClient(tuple(slots), count=1, pc_slot=bytes(PK6_STORED_SIZE))

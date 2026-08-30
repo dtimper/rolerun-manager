@@ -4428,12 +4428,67 @@ class ORASLiveWriter(_ORASLiveWriterExtendedMixin):
             "Sal de combates, mochila o cajas y vuelve a intentarlo."
         )
 
-    @staticmethod
-    def _first_empty_party_slot(slots: Sequence[bytes]) -> int | None:
+    def _party_slot_occupied(self, raw: bytes, index: int) -> bool:
+        """Un slot está ocupado solo si contiene un Pokémon que valida de verdad.
+
+        Depositar desde el propio menú del juego (demostrado el 30-08-2026,
+        ver ``_apply_party_resize``) no deja el slot vacante a cero: solo pone
+        a cero la cabecera (constante de cifrado, centinela, checksum) y deja
+        el resto de bytes tal como estaban. Ese slot ya no es "cero puro"
+        (`parse_pk6_party` no lo trataría como hueco vacío) pero tampoco
+        supera la validación de checksum — antes eso hacía que `any(raw)`
+        lo contara como ocupado y que el propio contador de ORAS pareciera
+        "equivocado" frente al equipo vivo real.
+        """
+        try:
+            return parse_pk6_party(raw, index, self.reader.move_names) is not None
+        except ORASLiveError:
+            return False
+
+    def _first_empty_party_slot(self, slots: Sequence[bytes]) -> int | None:
         for index, raw in enumerate(slots, start=1):
-            if not any(raw):
+            if not self._party_slot_occupied(raw, index):
                 return index
         return None
+
+    def _build_game_lenient(
+        self,
+        slots: Sequence[bytes],
+        current: SaveGameData,
+        process: AzaharProcess,
+        *,
+        live_write: bool,
+    ) -> SaveGameData:
+        """Como ``_build_game``, pero sin abortar por un hueco ajeno a esta operación.
+
+        Un slot que el propio juego dejó a medio vaciar (ver
+        `_party_slot_occupied`) en un slot que esta transacción no tocó no
+        puede hacer que `_read_party_members` levante y tire toda la
+        confirmación de un depósito o incorporación que sí salió bien.
+        """
+        party = []
+        for index, raw in enumerate(slots, start=1):
+            if not self._party_slot_occupied(raw, index):
+                continue
+            pokemon = parse_pk6_party(raw, index, self.reader.move_names)
+            party.append(self.reader._preserve_known_labels(pokemon, current))
+        if not party:
+            raise ORASLiveError("La captura posterior de ORAS no contiene ningún Pokémon en el equipo.")
+        return SaveGameData(
+            game=current.game,
+            save_type=f"{current.save_type} + Azahar RPC",
+            generation=current.generation,
+            trainer=current.trainer,
+            party=party,
+            raw={
+                **current.raw,
+                "liveSync": True,
+                "liveWrite": live_write,
+                "liveProcess": process.name,
+                "liveTitleId": f"{process.title_id:016X}",
+                "liveProfile": "ORAS-1.4",
+            },
+        )
 
     def _resolve_party_resize_source(
         self, change: PendingTeamChange, live_party: dict[int, SavePokemon],
@@ -4573,7 +4628,8 @@ class ORASLiveWriter(_ORASLiveWriterExtendedMixin):
                     self._capture_stable_party_and_count(client)
                 )
                 occupied_slots = {
-                    index for index, raw in enumerate(original_slots, start=1) if any(raw)
+                    index for index, raw in enumerate(original_slots, start=1)
+                    if self._party_slot_occupied(raw, index)
                 }
                 if len(occupied_slots) != original_count:
                     raise ORASLiveError(
@@ -4581,7 +4637,17 @@ class ORASLiveWriter(_ORASLiveWriterExtendedMixin):
                         f"contador de ORAS dice {original_count}. No se escribió nada; pulsa F5 y "
                         "vuelve a intentarlo."
                     )
-                live_party = self._read_party_members(original_slots, current)
+                # `_read_party_members` no tolera un slot no-cero pero inválido
+                # (levanta ORASLiveError): exactamente el hueco que deja el
+                # propio juego al depositar. Aquí ya sabemos, por el recuento
+                # de arriba, que cualquier slot así es un hueco — se salta en
+                # vez de abortar toda la lectura por él.
+                live_party: dict[int, SavePokemon] = {}
+                for index, raw in enumerate(original_slots, start=1):
+                    if not self._party_slot_occupied(raw, index):
+                        continue
+                    pokemon = parse_pk6_party(raw, index, self.reader.move_names)
+                    live_party[index] = self.reader._preserve_known_labels(pokemon, current)
 
                 planned: list[tuple[int, bytes, bytes]] = []
                 if operation == "party-to-box":
@@ -4728,7 +4794,8 @@ class ORASLiveWriter(_ORASLiveWriterExtendedMixin):
                                 f"({verified_count} != {expected_count}) tras la escritura."
                             )
                         occupied = {
-                            index for index, raw in enumerate(verified_slots, start=1) if any(raw)
+                            index for index, raw in enumerate(verified_slots, start=1)
+                            if self._party_slot_occupied(raw, index)
                         }
                         if len(occupied) != verified_count:
                             raise ORASLiveError(
@@ -4757,7 +4824,7 @@ class ORASLiveWriter(_ORASLiveWriterExtendedMixin):
                     time.sleep(max(0.60, float(getattr(self.reader, "stable_delay", 0.06)) * 5.0))
                     verified_slots, verified_count, settled_attempt = verify_once()
 
-                    game = self._build_game(verified_slots, current, process, live_write=True)
+                    game = self._build_game_lenient(verified_slots, current, process, live_write=True)
                     return ORASLiveWriteResult(
                         game=game,
                         process=process,

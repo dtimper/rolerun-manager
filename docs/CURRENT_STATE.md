@@ -16,6 +16,49 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
 
+### VALIDADO FÍSICAMENTE 30-08-2026 — party-to-box/box-to-party en ORAS
+
+Cierra las dos entradas anteriores. El usuario validó en directo, contra su
+partida real (Omega Rubí/Alfa Zafiro en Azahar), el ciclo completo desde
+RoleRun: depositar un Pokémon del equipo al PC y traer uno del PC de vuelta
+al equipo, en ambas direcciones, sin pérdida ni duplicado.
+
+Entre el escritor (entrada anterior) y esta validación aparecieron **siete**
+compuertas más, todas con el mismo patrón exacto que ya había dejado ORAS sin
+esta capacidad desde el principio: cada una de las rutas de UI que ya sabían
+tratar `party-to-box`/`box-to-party` para X/Y tenía su propia lista de claves
+de juego, y "oras" faltaba en seis de ellas mientras la séptima confundía
+"ocupado" con "no está a cero puro":
+
+1. `_oras_live_unsupported_changes` (app/ui.py) — compuerta de la UI,
+   independiente de `ORASLiveWriter._unsupported_changes`.
+2. `_request_oras_live_auto_apply` (app/ui.py) — sin esta, el cambio se
+   quedaba "PENDIENTE · todavía no confirmado en Azahar" para siempre: nunca
+   se llegaba siquiera a intentar la escritura, así que tampoco aparecía
+   ningún error.
+3. La rama "destino exacto" de `_team_pc_drop` para party-to-box — sin
+   "oras" aquí, arrastrar a una casilla concreta del PC siempre acababa en
+   el primer hueco libre.
+4. **El bug más sutil**: la precondición de `_apply_party_resize` contaba un
+   slot como "ocupado" con `any(raw)` (¿tiene algún byte no-cero?). Depositar
+   desde el propio menú del juego —no desde RoleRun— solo pone a cero la
+   cabecera del slot (constante de cifrado, centinela, checksum), dejando el
+   resto de bytes tal cual. Ese hueco real se contaba como "ocupado", así
+   que el equipo vivo parecía tener un miembro más de los que decía el
+   contador de ORAS, y la operación se rechazaba con "El equipo vivo tiene 6
+   slot(s) ocupado(s), pero el contador de ORAS dice 5" — aunque la RAM
+   estuviera perfectamente sana. Arreglado con `_party_slot_occupied`, que
+   usa el mismo criterio ya validado que `parse_pk6_party` (un slot solo
+   cuenta si parsea de verdad), reutilizado también en `_first_empty_party_slot`
+   y en la verificación posterior a escribir.
+
+Confirmado también, en el mismo directo: `move-box-slot` (mover dentro del
+PC sin pasar por el equipo) sigue correctamente bloqueado con "DESTINO NO
+HABILITADO" — nunca se prometió esa capacidad en esta ronda, y el aviso lo
+deja claro sin proyectar ningún cambio falso.
+
+Suite completa: 2185 passed, 1 skipped.
+
 ### Escritor 30-08-2026 — party-to-box/box-to-party en ORAS (sin validación física, sin UI)
 
 Sigue de la entrada anterior ("Hallazgo físico 30-08-2026"). Con
