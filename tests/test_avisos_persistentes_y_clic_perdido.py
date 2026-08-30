@@ -323,18 +323,6 @@ def test_el_scrim_de_la_ficha_de_rol_cierra_al_soltar_no_al_pulsar() -> None:
     assert 'close_button.bind("<ButtonRelease-1>"' in fuente
 
 
-def test_el_scrim_del_estado_de_la_run_cierra_al_soltar_no_al_pulsar() -> None:
-    """El mismo defecto, encontrado de paso: idéntico patrón, mismo arreglo."""
-    from app.ui_components.run_state_panel import IntegratedRunStatePanel
-
-    fuente = inspect.getsource(IntegratedRunStatePanel.__init__)
-
-    assert 'self.scrim.bind("<ButtonRelease-1>", self._close_from_scrim' in fuente
-    assert 'self.scrim.bind("<Button-1>"' not in fuente
-    assert "command=self.close" not in fuente
-    assert 'close_button.bind("<ButtonRelease-1>", self.close' in fuente
-
-
 # --------------------- 3. cerrar un popover ya no repinta 31 casillas del PC
 
 def test_el_popover_de_rol_es_una_ventana_propia_no_un_marco_encima() -> None:
@@ -348,9 +336,8 @@ def test_el_popover_de_rol_es_una_ventana_propia_no_un_marco_encima() -> None:
     repintar nada de la principal al cerrarse: medido, ~2-20 ms.
     """
     from app.ui_components.role_info_popover import IntegratedRoleInfoPopover
-    from app.ui_components.run_state_panel import IntegratedRunStatePanel
 
-    for clase in (IntegratedRoleInfoPopover, IntegratedRunStatePanel):
+    for clase in (IntegratedRoleInfoPopover,):
         fuente = inspect.getsource(clase.__init__)
         assert "ctk.CTkToplevel(master)" in fuente, clase.__name__
         assert "self.scrim.overrideredirect(True)" in fuente, clase.__name__

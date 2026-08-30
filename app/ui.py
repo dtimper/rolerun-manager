@@ -98,7 +98,6 @@ from .live_review import inverse_oras_live_change
 from .ui_components import fundido_de_tarjeta
 from .ui_components import (
     IntegratedRoleInfoPopover,
-    IntegratedRunStatePanel,
     IntegratedWindowSurface,
     OperationStatusBar,
     RoleIconProvider,
@@ -649,7 +648,6 @@ class RoleRunManager(ctk.CTk):
         # alterar las rutas funcionales ya validadas de cada superficie.
         self.active_page = DEFAULT_PAGE
         self.nav_buttons: dict[str, ctk.CTkButton] = {}
-        self._run_state_panel: IntegratedRunStatePanel | None = None
         self.operation_status_store = OperationStatusStore()
         self._operation_autocollapse_after_id: str | None = None
         self._capturing_hotkey_action: str | None = None
@@ -4283,7 +4281,6 @@ class RoleRunManager(ctk.CTk):
         ):
             setattr(self, attr, None)
 
-        self._run_state_panel = None
         self._team_pc_view = None
         self._tm_teach_flow = None
         self._role_info_popover = None
@@ -4780,14 +4777,15 @@ class RoleRunManager(ctk.CTk):
         ctk.CTkLabel(brand, text="MANAGER", text_color=TEXT,
                      font=ctk.CTkFont("Segoe UI", 22, "bold")).pack(anchor="w")
 
+        # Tarjeta informativa: ya no abre nada al pulsarla, así que sin
+        # `command=` ni `hover_color` distinto que sugiera que es un botón.
         self.sidebar_run = ctk.CTkButton(
             self.sidebar_expanded_content,
             text="",
-            command=self._open_run_state_from_sidebar,
             height=92,
             corner_radius=13,
             fg_color="#15130F",
-            hover_color="#211B11",
+            hover_color="#15130F",
             border_width=1,
             border_color="#4A3D25",
             text_color=MUTED,
@@ -5328,10 +5326,6 @@ class RoleRunManager(ctk.CTk):
                     self.sidebar_source_capture = None
 
         frame()
-
-    def _open_run_state_from_sidebar(self) -> None:
-        self._set_sidebar_expanded(False)
-        self.after(0, self.open_run_state_panel)
 
     def _return_to_welcome_from_sidebar(self) -> None:
         self._set_sidebar_expanded(False)
@@ -6210,52 +6204,6 @@ class RoleRunManager(ctk.CTk):
                 font=ctk.CTkFont("Segoe UI", 12, "bold"),
             ).pack(side="left", padx=(0, 8))
 
-    def _run_state_snapshot(self) -> dict:
-        project = self.project
-        automatic = {
-            key for key in ("vidas", "pociones", "medallas", "drafteos")
-            if self._counter_is_automatic(key)
-        }
-        return {
-            "name": project.name if project else "Sin Run activa",
-            "game": self._game_label(),
-            "counters": dict(project.counters) if project else {},
-            "automatic_counters": automatic,
-            "progress_label": "MEDALLAS",
-            "sync_status": self.sync_status,
-            "pending_changes": len(self.run.pending_changes),
-            "pending_faints": len(project.pending_faints) if project else 0,
-        }
-
-    def open_run_state_panel(self) -> None:
-        if not self.project or not self._shell_built or not self._widget_alive(self.content):
-            return
-        if self._run_state_panel is not None:
-            try:
-                self._run_state_panel.close()
-            except Exception:
-                self._run_state_panel = None
-        self._run_state_panel = IntegratedRunStatePanel(
-            self.content,
-            snapshot=self._run_state_snapshot(),
-            on_close=self._on_run_state_panel_closed,
-            on_adjust_counter=self._adjust_counter_from_run_panel,
-            on_open_floating=self.open_floating_bar,
-        )
-
-    def _on_run_state_panel_closed(self) -> None:
-        self._run_state_panel = None
-
-    def _adjust_counter_from_run_panel(self, counter: str, delta: int) -> None:
-        self.adjust_run_counter(counter, delta)
-        panel = self._run_state_panel
-        if panel is not None:
-            try:
-                panel.close()
-            except Exception:
-                self._run_state_panel = None
-        self.after(0, self.open_run_state_panel)
-
     def _set_operation_status(
         self,
         kind: str,
@@ -6297,9 +6245,7 @@ class RoleRunManager(ctk.CTk):
 
     def _handle_operation_bar_action(self, action: str) -> None:
         key = str(action).strip().casefold()
-        if key in {"ver detalle", "abrir detalle", "estado de la run"}:
-            self.open_run_state_panel()
-        elif key in {"reintentar", "resincronizar"}:
+        if key in {"reintentar", "resincronizar"}:
             self.sync_oras_live()
         elif key in {"revisar", "revisar cambios"}:
             self.show_pending_changes()
@@ -6353,7 +6299,6 @@ class RoleRunManager(ctk.CTk):
             if current.kind != "warning" or current.detail != detalle:
                 self._set_operation_status(
                     "warning", "REVISIÓN NECESARIA", detalle,
-                    actions=("Ver detalle",),
                     # Igual que BAJA PENDIENTE: es una condición que sigue
                     # siendo cierta, no un resultado puntual. Sin esto, el
                     # autocolapso de 4,2 s la borraba y el siguiente ciclo del
@@ -8016,7 +7961,7 @@ class RoleRunManager(ctk.CTk):
         else:
             kind = "failed"
             persistent = True
-        actions = ("Reintentar", "Ver detalle") if kind in {"failed", "disconnected"} else ()
+        actions = ("Reintentar",) if kind in {"failed", "disconnected"} else ()
         set_operation_status = getattr(self, "_set_operation_status", None)
         if callable(set_operation_status):
             set_operation_status(
@@ -14633,7 +14578,7 @@ class RoleRunManager(ctk.CTk):
             "failed",
             "NO SE PUDIERON ABRIR LAS CAJAS",
             str(error),
-            actions=("Reintentar", "Ver detalle"),
+            actions=("Reintentar",),
             persistent=True,
         )
 

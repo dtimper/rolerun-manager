@@ -1,6 +1,24 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.1-alpha.18 — fuera el panel de Estado de la Run
+
+Pedido directamente: el panel "ESTADO DE LA RUN" (abierto desde el menú
+lateral, el botón "VER DETALLE" de los avisos, o al ajustar sus contadores)
+no aportaba nada que no estuviera ya en la cabecera —contadores, barra
+flotante— y oscurecía toda la pantalla con su scrim al abrirse.
+
+Se retira la función entera: `IntegratedRunStatePanel` (y su archivo),
+`open_run_state_panel`, `_run_state_snapshot`, el cierre/reapertura al
+ajustar un contador, y la entrada del menú lateral que lo abría. La tarjeta
+del lateral con el resumen de la Run (nombre, vidas, medallas) se conserva
+como información pura, ya sin acción al pulsarla. La acción "Ver detalle" se
+retira de los avisos que la ofrecían (REVISIÓN NECESARIA, fallos de
+sincronización, fallo al abrir las cajas): el detalle ya se lee entero en la
+propia barra, sobre todo ahora que ya no se sale de su borde (alpha.17).
+
+Suite completa: 2168 passed, 1 skipped.
+
 # v0.3.1-alpha.17 — dos efectos secundarios de la alpha.16
 
 Dos problemas nuevos, ambos causados por los propios arreglos de alpha.16.

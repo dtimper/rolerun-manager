@@ -69,7 +69,7 @@ def _pokemon(
 
 
 def build_preview(
-    width: int, height: int, output: Path, *, panel: bool, tm_step: int,
+    width: int, height: int, output: Path, *, tm_step: int,
     draft_step: int, scale: float, page: str, faint: bool, role_editor: bool,
     sidebar: bool, select_team: bool, role_tooltip: bool,
     navigate_team: bool, settle_ms: int, activity_ms: int, tm_close: bool,
@@ -238,8 +238,6 @@ def build_preview(
             app._team_pc_view._select_pc(selected)
         if role_editor:
             app.open_role_editor(party[0])
-        if panel:
-            app.open_run_state_panel()
         if tm_step:
             if page == "tms":
                 profile, inventory, source = app._global_tm_context
@@ -503,7 +501,6 @@ def main() -> None:
     parser.add_argument("--width", type=int, default=1360)
     parser.add_argument("--height", type=int, default=768)
     parser.add_argument("--scale", type=float, default=1.12)
-    parser.add_argument("--panel", action="store_true")
     parser.add_argument("--tm-step", type=int, choices=(0, 1, 2, 3), default=0)
     parser.add_argument("--draft-step", type=int, choices=(0, 1, 2, 3), default=0)
     parser.add_argument("--page", choices=("team", "tms", "help", "help-format", "settings"), default="team")
@@ -528,7 +525,7 @@ def main() -> None:
     args = parser.parse_args()
     build_preview(
         args.width, args.height, args.output,
-        panel=args.panel, tm_step=args.tm_step, draft_step=args.draft_step,
+        tm_step=args.tm_step, draft_step=args.draft_step,
         scale=args.scale, page=args.page, faint=args.faint, role_editor=args.role_editor,
         sidebar=args.sidebar, select_team=args.select_team,
         role_tooltip=args.role_tooltip, navigate_team=args.navigate_team,
