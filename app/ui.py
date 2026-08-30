@@ -6343,6 +6343,13 @@ class RoleRunManager(ctk.CTk):
                 self._set_operation_status(
                     "warning", "REVISIÓN NECESARIA", detalle,
                     actions=("Ver detalle",),
+                    # Igual que BAJA PENDIENTE: es una condición que sigue
+                    # siendo cierta, no un resultado puntual. Sin esto, el
+                    # autocolapso de 4,2 s la borraba y el siguiente ciclo del
+                    # monitor —a 1,6 s— la volvía a publicar: la barra
+                    # reiniciaba su escritura letra a letra sin parar mientras
+                    # el juego siguiera cerrado.
+                    persistent=True,
                 )
         elif pending and current.kind not in {"pending", "prepared"}:
             self._set_operation_status(
@@ -6357,6 +6364,22 @@ class RoleRunManager(ctk.CTk):
                 "CAMBIO REALIZADO",
                 sync_text.lstrip("✓☠ "),
             )
+        elif (
+            current.kind == "warning" and current.title == "REVISIÓN NECESARIA"
+            and not sync_text.startswith("⚠")
+        ):
+            # Persistente, así que no se retira sola: la condición que la
+            # motivó ya no es cierta (el juego volvió a responder) y hay que
+            # decirlo explícitamente o se queda colgada para siempre.
+            if sync_text.startswith(("✓", "☠")):
+                self._set_operation_status(
+                    "confirmed", "CAMBIO REALIZADO", sync_text.lstrip("✓☠ "),
+                )
+            else:
+                self._set_operation_status(
+                    "neutral", "ROLERUN PREPARADO",
+                    "Selecciona una acción para continuar.",
+                )
 
     def _widget_alive(self, widget) -> bool:
         if widget is None:

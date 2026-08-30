@@ -1,6 +1,41 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.1-alpha.14 — la alpha.13 no había terminado de arreglar dos cosas
+
+Dos bugs reportados que la alpha.13 dio por cerrados y no lo estaban. Los dos
+comparten el mismo patrón: algo se destruye o se reinicia **a mitad de un
+gesto**, en vez de esperar a que termine.
+
+## «REVISIÓN NECESARIA» seguía reescribiéndose sin parar
+
+El arreglo de la alpha.13 evitaba publicar el MISMO mensaje dos veces
+seguidas — pero no evitaba que el autocolapso a los 4,2 s lo borrara solo,
+y que el siguiente ciclo del monitor —a 1,6 s— lo volviera a publicar. Con
+el juego cerrado esos dos temporizadores nunca dejan de cruzarse: colapsa,
+publica, colapsa, publica, para siempre.
+
+`BAJA PENDIENTE` ya se libraba de esto marcándose `persistent=True` — es una
+condición que sigue siendo cierta, no un resultado puntual que deba
+desvanecerse. `REVISIÓN NECESARIA` nunca lo hacía. Ahora sí, y al dejar de
+autocolapsarse hace falta decir explícitamente cuándo se retira: se confirma
+si la reconexión tuvo éxito, o vuelve a «ROLERUN PREPARADO» si sólo volvió a
+«esperando».
+
+## Cerrar la ficha de un rol seguía repintando la página
+
+No era el repintado en sí — medido, destruir el scrim y recomponer la página
+cuesta 3,2 ms. Era que el popover se cierra destruyendo su scrim en el
+`<Button-1>`, **al pulsar**, y eso rompe el grab implícito de Tk a mitad del
+clic: el `<ButtonRelease-1>` que ya venía en camino se entrega a lo que haya
+quedado debajo — la tarjeta del Pokémon —, que lo interpreta como una
+selección y repinta su inspector.
+
+Demostrado con un clic real (`SendInput`) sobre una ventana propia: destruir
+en el PRESS deja escapar el release a la tarjeta de abajo; destruir en el
+RELEASE, no. Mismo defecto, mismo arreglo, en el panel de Estado de la Run
+— encontrado de paso, con el mismo patrón exacto.
+
 # v0.3.1-alpha.13 — abrir una partida con el juego cerrado
 
 Cuatro de las cinco cosas reportadas. Todas resultaron ser la misma familia:

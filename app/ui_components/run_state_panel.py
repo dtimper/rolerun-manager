@@ -26,7 +26,11 @@ class IntegratedRunStatePanel:
         self.scrim = ctk.CTkFrame(master, fg_color="#080808", corner_radius=0)
         self.scrim.place(relx=0, rely=0, relwidth=1, relheight=1)
         self.scrim.lift()
-        self.scrim.bind("<Button-1>", self._close_from_scrim, add="+")
+        # Cerrar en el <Button-1> (al PULSAR) destruye el scrim a mitad del
+        # gesto de clic y rompe el grab implícito de Tk: el <ButtonRelease-1>
+        # que ya venía en camino se entrega a lo que haya quedado debajo, que
+        # lo interpreta como una selección. Cerrar en el SUELTA lo evita.
+        self.scrim.bind("<ButtonRelease-1>", self._close_from_scrim, add="+")
 
         self.panel = ctk.CTkFrame(
             self.scrim,
@@ -38,7 +42,7 @@ class IntegratedRunStatePanel:
         )
         self.panel.place(relx=1.0, x=-20, rely=0.02, relheight=0.96, anchor="ne")
         self.panel.pack_propagate(False)
-        self.panel.bind("<Button-1>", lambda _event: "break", add="+")
+        self.panel.bind("<ButtonRelease-1>", lambda _event: "break", add="+")
 
         header = ctk.CTkFrame(self.panel, fg_color="transparent")
         header.pack(fill="x", padx=22, pady=(20, 12))
@@ -48,17 +52,20 @@ class IntegratedRunStatePanel:
             text_color="#C9A45F",
             font=ctk.CTkFont("Segoe UI", 22, "bold"),
         ).pack(side="left")
-        ctk.CTkButton(
+        close_button = ctk.CTkButton(
             header,
             text="×",
-            command=self.close,
             width=38,
             height=34,
             fg_color="transparent",
             hover_color="#2B2B2B",
             text_color="#F4F4F4",
             font=ctk.CTkFont("Segoe UI", 20, "bold"),
-        ).pack(side="right")
+        )
+        close_button.pack(side="right")
+        # Sin `command=`: CTkButton lo dispara en el <Button-1>, con el mismo
+        # problema que el scrim de arriba.
+        close_button.bind("<ButtonRelease-1>", self.close, add="+")
 
         ctk.CTkLabel(
             self.panel,

@@ -22,7 +22,13 @@ class IntegratedRoleInfoPopover:
         self.scrim = ctk.CTkFrame(master, fg_color="#080808", corner_radius=0)
         self.scrim.place(relx=0, rely=0, relwidth=1, relheight=1)
         self.scrim.lift()
-        self.scrim.bind("<Button-1>", lambda _event: self.close(), add="+")
+        # Cerrar en el <Button-1> (al PULSAR) destruye el scrim a mitad del
+        # gesto de clic y rompe el grab implícito de Tk: el <ButtonRelease-1>
+        # que ya venía en camino se entrega entonces a lo que haya quedado
+        # debajo —la tarjeta del equipo—, que lo interpreta como una selección
+        # y repinta su inspector. Cerrar en el SUELTA evita que quede nada
+        # pendiente de entregar.
+        self.scrim.bind("<ButtonRelease-1>", lambda _event: self.close(), add="+")
         self.card = ctk.CTkFrame(
             self.scrim, width=610, height=474, fg_color="#171717",
             corner_radius=18, border_width=2, border_color=GOLD,
@@ -34,8 +40,14 @@ class IntegratedRoleInfoPopover:
         header.pack(fill="x", padx=20, pady=(17, 8))
         ctk.CTkLabel(header, text=role.upper(), text_color=GOLD,
                      font=ctk.CTkFont("Segoe UI", 22, "bold")).pack(side="left")
-        ctk.CTkButton(header, text="×", width=34, height=32, command=self.close,
-                      fg_color="transparent", hover_color="#303030", text_color=TEXT).pack(side="right")
+        close_button = ctk.CTkButton(
+            header, text="×", width=34, height=32,
+            fg_color="transparent", hover_color="#303030", text_color=TEXT,
+        )
+        close_button.pack(side="right")
+        # Sin `command=`: CTkButton lo dispara en el <Button-1>, con el mismo
+        # problema que el scrim de arriba.
+        close_button.bind("<ButtonRelease-1>", lambda _event: self.close(), add="+")
         ctk.CTkLabel(
             self.card, text=data["summary"], text_color=TEXT, wraplength=550,
             justify="left", anchor="w", font=ctk.CTkFont("Segoe UI", 13, "bold"),
