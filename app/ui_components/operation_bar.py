@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tkinter.font as tkfont
 from collections.abc import Callable
 
 import customtkinter as ctk
@@ -24,6 +25,16 @@ _KIND_VISUALS = {
 
 class OperationStatusBar(ctk.CTkFrame):
     """Barra persistente que refleja hechos, nunca una proyección como éxito."""
+
+    _DETAIL_WRAPLENGTH = 760
+    _DETAIL_BASE_HEIGHT = 78  # cabecera + 2 líneas de detalle: el caso normal
+    _DETAIL_BASE_LINES = 2
+    # Un error de socket real («[WinError 10054] Se ha forzado la interrupción
+    # de una conexión existente por el host remoto») puede necesitar más de
+    # dos líneas. Sin este límite, RoleRun sigue creciendo la barra sin fin;
+    # a partir de aquí se trunca con «…» — el texto completo sigue disponible
+    # en "Ver detalle" para los avisos que ofrecen esa acción.
+    _DETAIL_MAX_LINES = 5
 
     def __init__(
         self,
@@ -50,6 +61,7 @@ class OperationStatusBar(ctk.CTkFrame):
         #: de un ciclo a otro (el error de socket concreto no siempre es el
         #: mismo) sin que el aviso en sí sea otro distinto.
         self._shown_kind_title: tuple[str, str] | None = None
+        self._detail_font = tkfont.Font(family="Segoe UI", size=15)
 
         self._mark = ctk.CTkLabel(
             self,
@@ -73,14 +85,50 @@ class OperationStatusBar(ctk.CTkFrame):
             text_color="#F4F4F4",
             anchor="w",
             justify="left",
-            wraplength=760,
+            wraplength=self._DETAIL_WRAPLENGTH,
             font=ctk.CTkFont("Segoe UI", 15),
         )
         self._detail.grid(row=1, column=1, sticky="nw", pady=(0, 11))
         # CTkFrame solicita 200 px de alto por defecto. Sin una altura acotada
-        # desplazaría las dos filas de texto fuera de esta barra de 78 px.
+        # desplazaría las dos filas de texto fuera de esta barra de 78 px. La
+        # altura de partida es esta; show_message la amplía si el detalle
+        # necesita más líneas (ver _wrapped_lines/_target_height).
         self._actions = ctk.CTkFrame(self, width=1, height=40, fg_color="transparent")
         self._actions.grid(row=0, column=2, rowspan=2, sticky="e", padx=14, pady=10)
+
+    def _wrapped_lines(self, text: str) -> list[str]:
+        """Simula el ajuste de línea de CTkLabel para saber cuánto alto hace falta."""
+        words = text.split()
+        if not words:
+            return [text]
+        lines: list[str] = []
+        current = words[0]
+        for word in words[1:]:
+            candidate = f"{current} {word}"
+            if self._detail_font.measure(candidate) <= self._DETAIL_WRAPLENGTH:
+                current = candidate
+            else:
+                lines.append(current)
+                current = word
+        lines.append(current)
+        return lines
+
+    def _fit_detail(self, text: str) -> str:
+        """Ajusta el detalle a `_DETAIL_MAX_LINES`, truncando con «…» si hace falta.
+
+        Un error de socket real puede llegar con cualquier longitud. Sin este
+        tope, un detalle largo desbordaba por debajo del borde de la barra —el
+        marco tiene altura fija y no se repinta solo al crecer el texto.
+        """
+        lines = self._wrapped_lines(text)
+        if len(lines) <= self._DETAIL_MAX_LINES:
+            return text
+        recortado = " ".join(lines[: self._DETAIL_MAX_LINES])
+        limite = self._DETAIL_WRAPLENGTH * self._DETAIL_MAX_LINES
+        palabras = recortado.split()
+        while palabras and self._detail_font.measure(" ".join(palabras) + "…") > limite:
+            palabras.pop()
+        return (" ".join(palabras) or recortado[:1]).rstrip() + "…"
 
     def show_message(self, message: OperationMessage) -> None:
         self._cancel_typing()
@@ -88,7 +136,13 @@ class OperationStatusBar(ctk.CTkFrame):
         self.configure(fg_color=surface, border_color=accent, border_width=2 if message.stays_visible else 1)
         self._mark.configure(text=symbol, text_color=accent)
         self._title.configure(text=message.title, text_color=accent)
-        detail = message.detail or " "
+        detail = self._fit_detail(message.detail or " ")
+
+        line_count = max(self._DETAIL_BASE_LINES, len(self._wrapped_lines(detail)))
+        extra_lines = line_count - self._DETAIL_BASE_LINES
+        target_height = self._DETAIL_BASE_HEIGHT + extra_lines * self._detail_font.metrics("linespace")
+        if int(self.cget("height")) != target_height:
+            self.configure(height=target_height)
 
         # Mismo aviso (kind+title), detalle distinto: un reintento en curso
         # —«Azahar no responde»— puede traer cada vez un error de socket

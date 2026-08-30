@@ -159,13 +159,18 @@ def test_minimizar_sin_el_emulador_en_primer_plano_no_activa_la_barra() -> None:
     sobre lo que superponerse. Sólo `current_game` se comprobaba; a diferencia
     de los otros dos caminos que abren la barra automáticamente, éste no
     exigía `_foreground_is_supported_emulator()`.
+
+    Tampoco se fuerza la ventana de vuelta: eso reabriría RoleRun al instante
+    tras pulsar minimizar, que fue el segundo bug reportado sobre este mismo
+    arreglo. Sin emulador en primer plano, minimizar se deja como un
+    minimizado normal.
     """
     fake, llamadas = _minimizador(current_game=object(), emulador_en_primer_plano=False)
 
     fake._auto_float_if_minimized()
 
     assert llamadas.flotante == 0, "no debería aparecer la barra sin el emulador"
-    assert llamadas.restaurada == 1, "debería volver a la ventana principal"
+    assert llamadas.restaurada == 0, "no debería reabrir la ventana principal sola"
 
 
 def test_minimizar_con_el_emulador_en_primer_plano_si_activa_la_barra() -> None:

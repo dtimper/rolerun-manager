@@ -235,6 +235,64 @@ def test_el_ciclo_de_reintento_real_no_reescribe_letra_a_letra() -> None:
         root.destroy()
 
 
+def test_un_detalle_largo_hace_crecer_la_barra_en_vez_de_desbordar() -> None:
+    """El caso reportado: un error RPC real («[WinError 10054] Se ha forzado
+    la interrupción de una conexión existente por el host remoto») necesita
+    más de las dos líneas fijas de la barra, y el texto se salía por debajo
+    de su borde (el marco tiene altura fija, `grid_propagate(False)`, y no
+    se repinta solo al crecer el contenido). Ahora la barra crece con el
+    detalle, y sólo a partir de `_DETAIL_MAX_LINES` se trunca con «…».
+    """
+    import customtkinter as ctk
+
+    from app.ui_components.operation_bar import OperationStatusBar
+    from app.ui_state.operation_status import OperationMessage
+
+    try:
+        root = ctk.CTk()
+    except Exception as exc:  # pragma: no cover - según entorno
+        import pytest
+        pytest.skip(f"Sin entorno gráfico para Tk: {exc}")
+
+    try:
+        root.withdraw()
+        barra = OperationStatusBar(root)
+        altura_base = int(barra.cget("height"))
+
+        detalle_largo = (
+            "ORAS · Azahar no responde por RPC. Activa el servidor RPC en la "
+            "configuración del emulador y mantén abierto el juego 3DS "
+            "compatible ([WinError 10054] Se ha forzado la interrupción de "
+            "una conexión existente por el host remoto)"
+        )
+        recortado = barra._fit_detail(detalle_largo)
+        assert len(barra._wrapped_lines(recortado)) <= OperationStatusBar._DETAIL_MAX_LINES
+
+        barra.show_message(
+            OperationMessage(
+                kind="warning", title="REVISIÓN NECESARIA", detail=detalle_largo,
+                actions=("Ver detalle",), persistent=True,
+            )
+        )
+        root.update()
+
+        assert int(barra.cget("height")) > altura_base, "debería haber crecido"
+
+        detalle_extremo = "palabra " * 500
+        barra.show_message(
+            OperationMessage(
+                kind="warning", title="REVISIÓN NECESARIA", detail=detalle_extremo,
+                actions=("Ver detalle",), persistent=True,
+            )
+        )
+        root.update()
+        assert barra._detail_font.measure(
+            barra._fit_detail(detalle_extremo)
+        ) <= OperationStatusBar._DETAIL_WRAPLENGTH * OperationStatusBar._DETAIL_MAX_LINES
+    finally:
+        root.destroy()
+
+
 def test_un_aviso_no_persistente_normal_sigue_pudiendo_autocolapsar() -> None:
     """El arreglo es específico de REVISIÓN NECESARIA: no toca el resto."""
     tienda = OperationStatusStore()

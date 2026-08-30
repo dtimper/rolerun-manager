@@ -1323,6 +1323,11 @@ def test_minimizing_role_run_switches_to_floating_mode() -> None:
 def test_minimizing_role_run_without_the_emulator_in_foreground_does_not_float() -> None:
     """El caso reportado: minimizar sin el emulador abierto entraba en modo
     barra flotante igual, aunque no hubiera nada sobre lo que superponerse.
+
+    Reportado de nuevo tras el primer arreglo: forzar la ventana de vuelta en
+    este caso la reabría al instante, justo tras pulsar minimizar. Sin
+    emulador en primer plano, minimizar se deja como un minimizado normal —
+    ni barra flotante ni ventana principal forzadas.
     """
     actions: list[str] = []
     manager = SimpleNamespace(
@@ -1339,6 +1344,27 @@ def test_minimizing_role_run_without_the_emulator_in_foreground_does_not_float()
     RoleRunManager._auto_float_if_minimized(manager)
 
     assert manager._unmap_after_id is None
+    assert actions == []
+
+
+def test_minimizing_role_run_without_an_active_run_still_restores() -> None:
+    """Sin Run activa no hay nada que gestionar en segundo plano: dejar
+    RoleRun escondido en la barra de tareas sigue sin tener sentido.
+    """
+    actions: list[str] = []
+    manager = SimpleNamespace(
+        _unmap_after_id="pending",
+        state=lambda: "iconic",
+        current_game=None,
+        _faint_picker_blocks_floating=lambda: False,
+        _foreground_is_supported_emulator=lambda: False,
+        _barra_oculta_por_tapado=False,
+        open_floating_bar=lambda: actions.append("floating"),
+        _restore_main_window_maximized=lambda: actions.append("maximized"),
+    )
+
+    RoleRunManager._auto_float_if_minimized(manager)
+
     assert actions == ["maximized"]
 
 

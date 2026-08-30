@@ -1,6 +1,40 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.1-alpha.17 — dos efectos secundarios de la alpha.16
+
+Dos problemas nuevos, ambos causados por los propios arreglos de alpha.16.
+
+## El detalle de REVISIÓN NECESARIA se salía de la barra
+
+La barra tiene altura fija (78 px, `grid_propagate(False)`) pensada para dos
+líneas de detalle. Un error RPC real («[WinError 10054] Se ha forzado la
+interrupción de una conexión existente por el host remoto») necesita más de
+dos líneas, y el texto se salía por debajo del borde — el marco no se
+repinta solo al crecer el contenido.
+
+`OperationStatusBar` ahora simula el ajuste de línea (mismo `wraplength` y
+fuente que el `CTkLabel` real) para saber cuántas líneas necesita el detalle,
+y ajusta la altura de la barra en consecuencia. Por encima de
+`_DETAIL_MAX_LINES` (5) se trunca con «…» en vez de seguir creciendo sin
+límite — el texto completo sigue disponible en "Ver detalle".
+
+## Minimizar sin el emulador reabría la ventana al instante
+
+El arreglo de alpha.16 (no activar la barra flotante al minimizar si el
+emulador no está en primer plano) caía al `else` que ya existía para "sin
+Run activa": `_restore_main_window_maximized()`. Eso reabría RoleRun al
+instante, justo después de pulsar minimizar — el usuario no podía minimizar
+sin más si el emulador no estaba abierto.
+
+Ahora `_auto_float_if_minimized` distingue los tres casos por separado: sin
+Run activa restaura (sin cambios), con un selector de baja pendiente
+restaura (sin cambios, evita esconder ese selector sin avisar), y con Run
+activa pero sin el emulador en primer plano simplemente no hace nada —
+minimizar se comporta como un minimizado normal.
+
+Suite completa: 2169 passed, 1 skipped.
+
 # v0.3.1-alpha.16 — el vídeo de después de alpha.15
 
 El usuario grabó un segundo vídeo probando ya la build con el arreglo de

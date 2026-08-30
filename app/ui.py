@@ -2001,21 +2001,24 @@ class RoleRunManager(ctk.CTk):
             minimized = False
         if not minimized:
             return
-        # RoleRun tiene dos modos deliberados: ventana principal maximizada o
-        # barra flotante. El botón nativo de minimizar equivale a entrar en la
-        # barra; nunca deja una tercera representación escondida en la taskbar.
-        # Pero la barra flotante solo tiene sentido sobre el emulador: sin él
-        # en primer plano (cerrado, o minimizando hacia otra ventana) no hay
-        # nada que sobreponer, y aparecía una barra flotando sobre el
-        # escritorio o lo que hubiera detrás.
-        if (
-            self.current_game
-            and not self._faint_picker_blocks_floating()
-            and self._foreground_is_supported_emulator()
-        ):
-            self.open_floating_bar()
-        else:
+        # Sin Run activa no hay nada que gestionar en segundo plano: no tiene
+        # sentido dejar RoleRun escondido en la barra de tareas.
+        if not self.current_game:
             self._restore_main_window_maximized()
+            return
+        if self._faint_picker_blocks_floating():
+            # Hay un selector modal pendiente (una baja); minimizar con la
+            # barra flotante escondería ese selector sin avisar.
+            self._restore_main_window_maximized()
+            return
+        # La barra flotante solo tiene sentido sobre el emulador: sin él en
+        # primer plano no hay nada que sobreponer. Antes se abría igual, y
+        # aparecía flotando sobre el escritorio o lo que hubiera detrás.
+        if self._foreground_is_supported_emulator():
+            self.open_floating_bar()
+        # Si no hay emulador en primer plano, se deja minimizado con
+        # normalidad: forzar la ventana de vuelta la reabriría al instante,
+        # justo tras pulsar minimizar.
 
     def _on_main_focus_out(self, _event=None) -> None:
         if (
