@@ -16,6 +16,28 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
 
+### Corrección posterior 30-08-2026 (2) — el mismo problema, del lado del PC
+
+Con la lectura de la party ya reparada (entrada de abajo), "Equipo → casilla
+concreta del PC" seguía fallando: un hueco del PC que la revisión de
+ORAS/emulador nunca ha tocado puede no ser cero puro (memoria del emulador
+sin inicializar), sin ser por eso un Pokémon real — el mismo problema que el
+hueco de party, pero del lado de la caja. `_empty_pc_destination_matches` (al
+comprobar si el destino elegido está realmente libre) y la reverificación de
+`_apply_party_resize` justo antes de escribir llamaban a `parse_pk6_boxed`
+sin capturar su `ORASLiveError`, así que el depósito entero abortaba con "El
+Pokémon del PC 1:1 no superó checksum/especie" aunque ese hueco estuviera
+perfectamente disponible.
+
+Añadido `parse_pk6_boxed_lenient` (mismo patrón que `parse_pk6_party_lenient`)
+y usado en esos dos puntos exactos. Los demás usos de `parse_pk6_boxed` en el
+resto del escritor (`_pc_base_matches`, `_scan_pc_base`, `_resolve_pc_target`)
+ya estaban correctamente protegidos o deliberadamente estrictos (un slot
+fuente que debería tener un Pokémon real y no lo tiene es un error genuino,
+no un hueco disponible) y se dejan sin tocar.
+
+Suite completa: 2187 passed, 1 skipped.
+
 ### Corrección posterior 30-08-2026 — un hueco roto tiraba TODA lectura de ORAS
 
 Encontrado tras la validación física de abajo, con el hueco residual de esas

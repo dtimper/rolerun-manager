@@ -1578,6 +1578,37 @@ class ORASPartyResizeTests(unittest.TestCase):
         deposited = parse_pk6_boxed(bytes(fake.memory[ORAS_PC_ADDRESS][:PK6_STORED_SIZE]), 1, 1, {})
         self.assertEqual(deposited.species_id, 261)
 
+    def test_party_to_box_accepts_a_pc_slot_the_game_never_touched(self) -> None:
+        """El bug real del 30-08-2026: un hueco del PC que la revisión de
+        ORAS/emulador nunca ha tocado puede no ser cero puro (memoria del
+        emulador sin inicializar), sin ser por eso un Pokémon real.
+        `parse_pk6_boxed` lo rechazaba levantando `ORASLiveError` en vez de
+        devolver `None`, y eso tiraba el depósito entero con "El Pokémon del
+        PC 1:1 no superó checksum/especie" — aunque el destino elegido
+        estuviera perfectamente disponible para escribir.
+        """
+        slots = list(self._six_full_slots())
+        outgoing_identity = self._identity(261, 0x89ABCDEF + 2)  # slot 3
+        witness = make_encrypted_pk6(species_id=263, pid=0xAAAA0007)[:PK6_STORED_SIZE]
+        untouched_pc_slot = bytes([0xAB]) * PK6_STORED_SIZE
+        pc_buffer = untouched_pc_slot + witness  # box 1: slot 1 sin tocar, slot 2 = testigo
+        fake = _ResizeFakeClient(tuple(slots), count=6, pc_slot=pc_buffer)
+
+        result = self._writer(fake).apply(self.current, [
+            PendingTeamChange(
+                operation="party-to-box", party_slot=3,
+                box=1, box_slot=1,
+                outgoing_pokemon="Poochyena", outgoing_species="Poochyena",
+                outgoing_identity=outgoing_identity,
+                box_witnesses=((2, self._identity(263, 0xAAAA0007)),),
+            ),
+        ])
+
+        self.assertEqual(fake.count, 5)
+        deposited = parse_pk6_boxed(bytes(fake.memory[ORAS_PC_ADDRESS][:PK6_STORED_SIZE]), 1, 1, {})
+        self.assertEqual(deposited.species_id, 261)
+        self.assertEqual(len(result.game.party), 5)
+
     def test_box_to_party_incorporates_and_increments_count_last(self) -> None:
         slots = list(self._six_full_slots())
         slots[3] = bytes(PK6_PARTY_SIZE)  # slot 4 vacío

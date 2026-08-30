@@ -870,6 +870,24 @@ def parse_pk6_boxed(
     )
 
 
+def parse_pk6_boxed_lenient(
+    raw: bytes, box: int, box_slot: int, move_names: dict[int, str], *, family: str = "oras",
+) -> SavePokemon | None:
+    """Como ``parse_pk6_boxed``, pero un hueco roto cuenta como vacío, no como error.
+
+    Un hueco del PC que el juego nunca ha tocado puede no ser cero puro —
+    memoria del emulador sin inicializar, o un resto de una revisión de ORAS
+    distinta— sin ser por eso un Pokémon real. Igual que
+    ``parse_pk6_party_lenient``, existe para los caminos que deciden "¿está
+    este hueco realmente libre?" antes de escribir, no para los que ya
+    esperan un Pokémon confirmado ahí.
+    """
+    try:
+        return parse_pk6_boxed(raw, box, box_slot, move_names, family=family)
+    except ORASLiveError:
+        return None
+
+
 def calculate_pk6_stats(
     *,
     level: int,
@@ -4512,7 +4530,11 @@ class ORASLiveWriter(_ORASLiveWriterExtendedMixin):
             )
         except Exception:
             return False
-        if parse_pk6_boxed(target_raw, box, target_slot, self.reader.move_names) is not None:
+        # Un hueco de PC nunca tocado por el juego puede no ser cero puro
+        # (memoria del emulador sin inicializar): ni levantar "no superó
+        # checksum/especie" ni un PK6 real cuentan como "ocupado" aquí — solo
+        # un PK6 que valida de verdad bloquea este destino.
+        if parse_pk6_boxed_lenient(target_raw, box, target_slot, self.reader.move_names) is not None:
             return False
         for slot, identity in witnesses:
             try:
@@ -4628,7 +4650,7 @@ class ORASLiveWriter(_ORASLiveWriterExtendedMixin):
                         int(change.box), int(change.box_slot), base_address=pc_base,
                     )
                     pc_original = client.read_memory(pc_address, PK6_STORED_SIZE)
-                    if parse_pk6_boxed(
+                    if parse_pk6_boxed_lenient(
                         pc_original, int(change.box), int(change.box_slot), self.reader.move_names,
                     ) is not None:
                         raise ORASLiveError(
