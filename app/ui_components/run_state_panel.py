@@ -23,13 +23,25 @@ class IntegratedRunStatePanel:
         self._on_open_floating = on_open_floating
         self._escape_binding = None
 
-        self.scrim = ctk.CTkFrame(master, fg_color="#080808", corner_radius=0)
-        self.scrim.place(relx=0, rely=0, relwidth=1, relheight=1)
-        self.scrim.lift()
-        # Cerrar en el <Button-1> (al PULSAR) destruye el scrim a mitad del
-        # gesto de clic y rompe el grab implícito de Tk: el <ButtonRelease-1>
-        # que ya venía en camino se entrega a lo que haya quedado debajo, que
-        # lo interpreta como una selección. Cerrar en el SUELTA lo evita.
+        # Antes esto era un CTkFrame cubriendo `master` con `place()`. Cerrarlo
+        # obliga a Tk a repintar TODO lo que queda al descubierto: medido
+        # sobre Equipo y PC de verdad, ~195 ms de bloqueo visible. Una ventana
+        # propia la compone Windows por DWM: la principal nunca deja de estar
+        # pintada debajo. Medido: ~2 ms. Mismo patrón que el fantasma de
+        # arrastre y la barra flotante en este programa.
+        self.scrim = ctk.CTkToplevel(master)
+        self.scrim.overrideredirect(True)
+        self.scrim.attributes("-topmost", True)
+        self.scrim.configure(fg_color="#080808")
+        master.update_idletasks()
+        self.scrim.geometry(
+            f"{master.winfo_width()}x{master.winfo_height()}"
+            f"+{master.winfo_rootx()}+{master.winfo_rooty()}"
+        )
+        # Cerrar en el <Button-1> (al PULSAR) rompe el grab implícito de Tk a
+        # mitad del gesto de clic: el <ButtonRelease-1> que ya venía en camino
+        # se entrega a lo que haya quedado debajo, que lo interpreta como una
+        # selección. Cerrar en el SUELTA lo evita.
         self.scrim.bind("<ButtonRelease-1>", self._close_from_scrim, add="+")
 
         self.panel = ctk.CTkFrame(
@@ -182,7 +194,10 @@ class IntegratedRunStatePanel:
             font=ctk.CTkFont("Segoe UI", 12, "bold"),
         ).pack(fill="x", padx=22, pady=(8, 20))
 
-        self._escape_binding = master.bind("<Escape>", self.close, add="+")
+        # `panel.focus_set()` mueve el foco de teclado a esta ventana nueva
+        # —ya no es la misma que `master`—, así que Escape hay que engancharlo
+        # aquí; en `master` ya no le llegaría nada mientras el panel esté abierto.
+        self._escape_binding = self.scrim.bind("<Escape>", self.close, add="+")
         self.panel.focus_set()
 
     def _adjust(self, counter: str, delta: int) -> None:
@@ -201,7 +216,7 @@ class IntegratedRunStatePanel:
     def close(self, _event=None):
         try:
             if self._escape_binding:
-                self.master.unbind("<Escape>", self._escape_binding)
+                self.scrim.unbind("<Escape>", self._escape_binding)
         except Exception:
             pass
         try:

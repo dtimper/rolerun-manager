@@ -1,6 +1,48 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.1-alpha.15 — el vídeo del usuario, y las causas de verdad
+
+El usuario grabó un vídeo tras la alpha.14: los dos bugs seguían ahí. Antes de
+tocar nada, confirmé que el proceso en marcha era de verdad el del repositorio
+con mi arreglo (no una instalación vieja de `Local\Programs\RoleRun Manager`,
+que existe y está en `0.2.2-alpha.5` — descartada por el `pycache` del proceso
+real). Con eso descartado, extraje fotogramas del vídeo y medí sobre la
+página real. Las dos causas eran más profundas que las de la alpha.14.
+
+## «REVISIÓN NECESARIA»: el texto SÍ cambiaba entre reintentos
+
+`persistent=True` (alpha.14) evitaba el bucle de autocolapso, pero el vídeo
+seguía mostrando el tecleo reiniciándose cada 1,6 s. La causa: un reintento de
+conexión con Azahar no siempre falla con el MISMO error de socket —a veces es
+un tiempo agotado, otras una conexión rechazada (`azahar_rpc.py`, `detail = f"
+({last_error})"`)—, así que el `detail` del aviso cambiaba de un ciclo a otro
+aunque la categoría siguiera siendo la misma. Un mensaje con un carácter
+distinto ya es, para `OperationStatusStore`, un mensaje distinto: se
+publicaba, y `OperationStatusBar` lo tecleaba desde la primera letra.
+
+Ahora la barra sólo teclea letra a letra cuando cambia la **categoría**
+(kind + title) del aviso. Una actualización dentro de la misma categoría —el
+mismo reintento, con otro error de socket— se escribe entera de golpe.
+
+## Cerrar la ficha de un rol: no era el clic, era el repintado
+
+El arreglo anterior (cerrar en el `<ButtonRelease-1>` en vez del `<Button-1>`)
+sigue siendo correcto —confirmado: ya no se filtra ningún clic a la tarjeta de
+debajo—, pero no era la causa de fondo. El vídeo, foto a fotograma, mostraba
+la ficha y la página de Equipo y PC superpuestas durante varios fotogramas
+tras pulsar cerrar. Medido sobre la página real (31 casillas del PC, 6
+tarjetas del equipo): destruir el fondo oscuro que tapa la página —un
+`CTkFrame` corriente, cubriendo todo con `place()`— obliga a Tk a repintar
+TODO lo que queda al descubierto. **~195 ms de bloqueo visible**, cada vez.
+
+La ficha y el panel de Estado de la Run ahora son una **ventana propia**
+(`CTkToplevel`, sin bordes, compuesta por Windows mediante DWM) en vez de un
+`CTkFrame` superpuesto. La ventana principal nunca deja de estar pintada
+debajo: cerrar la ventana nueva no le exige ningún repintado. Medido:
+**~2-20 ms**. Mismo patrón que ya usaban el fantasma de arrastre y la barra
+flotante en este programa.
+
 # v0.3.1-alpha.14 — la alpha.13 no había terminado de arreglar dos cosas
 
 Dos bugs reportados que la alpha.13 dio por cerrados y no lo estaban. Los dos

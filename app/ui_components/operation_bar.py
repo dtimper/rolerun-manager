@@ -45,6 +45,11 @@ class OperationStatusBar(ctk.CTkFrame):
         self._action_buttons: list[ctk.CTkButton] = []
         self._typing_after_id = None
         self._typing_revision = 0
+        #: (kind, title) del aviso mostrado ahora mismo. Un reintento en curso
+        #: —por ejemplo, la conexión con el emulador— puede cambiar el DETALLE
+        #: de un ciclo a otro (el error de socket concreto no siempre es el
+        #: mismo) sin que el aviso en sí sea otro distinto.
+        self._shown_kind_title: tuple[str, str] | None = None
 
         self._mark = ctk.CTkLabel(
             self,
@@ -84,20 +89,34 @@ class OperationStatusBar(ctk.CTkFrame):
         self._mark.configure(text=symbol, text_color=accent)
         self._title.configure(text=message.title, text_color=accent)
         detail = message.detail or " "
-        self._detail.configure(text="")
-        self._typing_revision += 1
-        revision = self._typing_revision
 
-        def reveal(index: int = 1) -> None:
-            if revision != self._typing_revision:
-                return
-            self._detail.configure(text=detail[:index])
-            if index < len(detail):
-                self._typing_after_id = self.after(14, lambda: reveal(index + 1))
-            else:
-                self._typing_after_id = None
+        # Mismo aviso (kind+title), detalle distinto: un reintento en curso
+        # —«Azahar no responde»— puede traer cada vez un error de socket
+        # ligeramente distinto (tiempo agotado una vez, conexión rechazada la
+        # siguiente), y eso ya bastaba para que `OperationMessage` contara
+        # como "otro mensaje". Volver a teclearlo desde la primera letra cada
+        # vez lo hacía perpetuamente ilegible. Sólo se teclea letra a letra
+        # cuando cambia la CATEGORÍA del aviso; una actualización dentro de
+        # la misma categoría se escribe entera de golpe.
+        es_el_mismo_aviso = (message.kind, message.title) == self._shown_kind_title
+        self._shown_kind_title = (message.kind, message.title)
+        if es_el_mismo_aviso:
+            self._detail.configure(text=detail)
+        else:
+            self._detail.configure(text="")
+            self._typing_revision += 1
+            revision = self._typing_revision
 
-        reveal()
+            def reveal(index: int = 1) -> None:
+                if revision != self._typing_revision:
+                    return
+                self._detail.configure(text=detail[:index])
+                if index < len(detail):
+                    self._typing_after_id = self.after(14, lambda: reveal(index + 1))
+                else:
+                    self._typing_after_id = None
+
+            reveal()
         for button in self._action_buttons:
             try:
                 button.destroy()

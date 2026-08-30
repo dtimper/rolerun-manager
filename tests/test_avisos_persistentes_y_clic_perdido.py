@@ -103,6 +103,56 @@ def test_el_aviso_se_retira_sin_confirmar_nada_si_solo_vuelve_a_esperar() -> Non
     assert fake.operation_status_store.message.revision == revision_tras_limpiar
 
 
+def test_el_teclado_no_se_reinicia_si_solo_cambia_el_detalle_de_un_reintento() -> None:
+    """La causa real, encontrada revisando un vídeo del usuario: un reintento
+    de conexión no siempre falla con el MISMO error de socket —a veces es un
+    tiempo agotado, otras una conexión rechazada—, así que el `detail` de
+    REVISIÓN NECESARIA cambiaba de un ciclo a otro aunque la categoría del
+    aviso siguiera siendo la misma. `persistent=True` no alcanzaba: el store
+    publicaba un mensaje genuinamente distinto y la barra lo tecleaba desde
+    la primera letra, cada 1,6 s, para siempre.
+    """
+    import customtkinter as ctk
+
+    from app.ui_components.operation_bar import OperationStatusBar
+    from app.ui_state.operation_status import OperationStatusStore
+
+    try:
+        root = ctk.CTk()
+    except Exception as exc:  # pragma: no cover - según entorno
+        import pytest
+        pytest.skip(f"Sin entorno gráfico para Tk: {exc}")
+
+    try:
+        root.withdraw()
+        barra = OperationStatusBar(root)
+        tienda = OperationStatusStore()
+        tienda.subscribe(barra.show_message)
+
+        tienda.publish(
+            "warning", "REVISIÓN NECESARIA", "Azahar no responde (tiempo agotado).",
+            actions=("Ver detalle",), persistent=True,
+        )
+        root.update()
+        assert barra._typing_after_id is not None, "el primer aviso sí teclea"
+
+        # Reintento con OTRO error de socket: misma categoría, detalle distinto.
+        tienda.publish(
+            "warning", "REVISIÓN NECESARIA", "Azahar no responde (conexión rechazada).",
+            actions=("Ver detalle",), persistent=True,
+        )
+        root.update()
+        assert barra._typing_after_id is None, "no debería reiniciar el tecleo"
+        assert barra._detail.cget("text") == "Azahar no responde (conexión rechazada)."
+
+        # Una categoría de verdad nueva sí teclea.
+        tienda.publish("confirmed", "CAMBIO REALIZADO", "Reconectado.")
+        root.update()
+        assert barra._typing_after_id is not None, "un aviso nuevo sí debe teclear"
+    finally:
+        root.destroy()
+
+
 def test_un_aviso_no_persistente_normal_sigue_pudiendo_autocolapsar() -> None:
     """El arreglo es específico de REVISIÓN NECESARIA: no toca el resto."""
     tienda = OperationStatusStore()
@@ -143,6 +193,109 @@ def test_el_scrim_del_estado_de_la_run_cierra_al_soltar_no_al_pulsar() -> None:
     assert 'self.scrim.bind("<Button-1>"' not in fuente
     assert "command=self.close" not in fuente
     assert 'close_button.bind("<ButtonRelease-1>", self.close' in fuente
+
+
+# --------------------- 3. cerrar un popover ya no repinta 31 casillas del PC
+
+def test_el_popover_de_rol_es_una_ventana_propia_no_un_marco_encima() -> None:
+    """La causa real del "repinta la página": no era el clic, era el repintado.
+
+    Medido sobre Equipo y PC de verdad (31 casillas, 6 tarjetas): destruir un
+    `CTkFrame` que tapaba la página con `place()` obligaba a Tk a repintar
+    TODO lo que quedaba al descubierto — ~195 ms de bloqueo visible, y varios
+    fotogramas de vídeo con la ficha y la página de debajo superpuestas. Una
+    ventana propia (`CTkToplevel`, compuesta por Windows/DWM) no obliga a
+    repintar nada de la principal al cerrarse: medido, ~2-20 ms.
+    """
+    from app.ui_components.role_info_popover import IntegratedRoleInfoPopover
+    from app.ui_components.run_state_panel import IntegratedRunStatePanel
+
+    for clase in (IntegratedRoleInfoPopover, IntegratedRunStatePanel):
+        fuente = inspect.getsource(clase.__init__)
+        assert "ctk.CTkToplevel(master)" in fuente, clase.__name__
+        assert "self.scrim.overrideredirect(True)" in fuente, clase.__name__
+        assert '.attributes("-topmost", True)' in fuente, clase.__name__
+        assert "ctk.CTkFrame(master" not in fuente, clase.__name__
+
+
+def test_cerrar_el_popover_de_rol_sobre_la_pagina_real_es_barato() -> None:
+    """La medida que demuestra el arreglo, no solo la forma del código."""
+    import time
+
+    ctk = __import__("customtkinter")
+    from app.ui_state.team_pc_state import TeamPCSelectionState
+    from app.ui_views.team_pc_view import UnifiedTeamPCView
+    from app.ui_components.role_info_popover import IntegratedRoleInfoPopover
+
+    try:
+        root = ctk.CTk()
+    except Exception as exc:  # pragma: no cover - según entorno
+        import pytest
+        pytest.skip(f"Sin entorno gráfico para Tk: {exc}")
+
+    try:
+        root.geometry("1360x860")
+        cuerpo = ctk.CTkFrame(root)
+        cuerpo.pack(fill="both", expand=True)
+
+        ROLES = ("TANQUE", "APOYO", "ATACANTE", "VELOZ", "ESPECIAL", "COMODIN")
+
+        class _Mono:
+            def __init__(self, i):
+                self.species_id = 100 + i
+                self.species = f"E{i}"
+                self.nickname = f"M{i}"
+                self.level = 20 + i
+                self.max_hp = 60 + i
+                self.current_hp = 40 + i
+                self.stats = {
+                    "hp": self.max_hp, "attack": 50, "defense": 45,
+                    "sp_attack": 40, "sp_defense": 42, "speed": 55,
+                }
+                self.nature_increased = "attack"
+                self.nature_decreased = "sp_attack"
+                self.ability = f"H{i}"
+                self.held_item = "Ninguno"
+                self.moves = [f"MOV{i}-{h}" for h in range(4)]
+                self.slot = i
+                self.box_slot = i
+
+        equipo = tuple(
+            {"slot_role": ROLES[i], "state": "", "pokemon": _Mono(i + 1)}
+            for i in range(6)
+        )
+        caja = {h: _Mono(h) for h in range(1, 31)}
+
+        vista = UnifiedTeamPCView(
+            cuerpo, team_slots=equipo, pc_members=caja, pc_box=1,
+            pc_box_count=18, pc_slot_count=30,
+            selection=TeamPCSelectionState(),
+            identity_for=lambda p: f"id:{p.species_id}",
+            role_for=lambda p, c: (c, ""), sprite_for=lambda p, t: None,
+            role_icon_for=lambda r, t: None, pending_for=lambda p, c: False,
+            move_issues_for=lambda p, c: [], on_box_change=lambda b: (b, caja),
+            on_search=lambda t: [], on_action=lambda a, p: None,
+            on_role_info=lambda r: None,
+        )
+        vista.frame.pack(fill="both", expand=True)
+        root.update()
+        root.update_idletasks()
+
+        popover = IntegratedRoleInfoPopover(cuerpo, "Líbero", on_close=lambda: None)
+        root.update()
+        root.update_idletasks()
+
+        inicio = time.perf_counter()
+        popover.close()
+        root.update()
+        coste_ms = (time.perf_counter() - inicio) * 1000
+
+        assert coste_ms < 80, (
+            f"cerrar la ficha costó {coste_ms:.1f} ms; antes del arreglo eran "
+            "~195 ms de página repintándose delante del usuario"
+        )
+    finally:
+        root.destroy()
 
 
 def test_cerrar_el_scrim_de_la_ficha_de_rol_no_selecciona_la_tarjeta_de_abajo() -> None:
