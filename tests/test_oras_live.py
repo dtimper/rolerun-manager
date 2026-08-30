@@ -199,6 +199,29 @@ class ORASLiveTests(unittest.TestCase):
         self.assertEqual(len(snapshot.game.party), 1)
         self.assertTrue(snapshot.game.raw["liveSync"])
 
+    def test_a_hole_left_by_the_game_itself_does_not_break_the_whole_read(self) -> None:
+        """El bug real del 30-08-2026: un solo hueco roto bastaba para tirar
+        CUALQUIER lectura de la party completa — el monitor normal, F5, una
+        reconexión — no solo las operaciones nuevas de cambio de tamaño.
+        Depositar desde el propio menú del juego (no desde RoleRun) solo pone
+        a cero la cabecera del slot; `parse_pk6_party` lo rechaza levantando
+        `ORASLiveError` en vez de devolver `None`, y antes nada en `read()`
+        atrapaba esa excepción.
+        """
+        broken = bytearray(make_encrypted_pk6())
+        broken[0:10] = bytes(10)  # cabecera a cero; el resto, basura sin limpiar
+        slots = (make_encrypted_pk6(), bytes(broken)) + (bytes(PK6_PARTY_SIZE),) * 4
+        current = SaveGameData("AS", "SAV6AO", 6, "Diego", [], {})
+        reader = ORASLiveReader(
+            Path("does-not-exist.json"),
+            client_factory=lambda: _FakeClient(slots),
+            stable_delay=0,
+        )
+
+        snapshot = reader.read(current)
+
+        self.assertEqual(len(snapshot.game.party), 1)
+
     def test_process_detection_prefers_official_title_id_even_if_codeset_name_changes(self) -> None:
         process = ORASLiveReader._find_oras_process([
             AzaharProcess(77, 0x000400000011C500, "randommod"),

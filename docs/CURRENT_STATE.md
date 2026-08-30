@@ -16,6 +16,29 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
 
+### Corrección posterior 30-08-2026 — un hueco roto tiraba TODA lectura de ORAS
+
+Encontrado tras la validación física de abajo, con el hueco residual de esas
+mismas pruebas todavía en la party: el "hueco roto" que deja el propio juego
+al depositar (cabecera a cero, resto de bytes sin limpiar — ver la entrada de
+abajo) no solo confundía la precondición de `_apply_party_resize`.
+`ORASLiveReader.read()`, `read_monitor()`, `_parse_compact_party_region`
+(sondeo de batalla) y `ORASLiveWriter._read_party_members` (compartido por
+roles, movimientos, curación, swap...) llamaban a `parse_pk6_party`
+directamente, sin capturar el `ORASLiveError` que levanta un slot así. Un
+solo hueco de este tipo bastaba para tirar **cualquier** lectura completa de
+la party — el monitor normal, F5, cada intento de reconexión — dejando a
+ORAS atascado en "REVISIÓN NECESARIA" sin recuperarse nunca solo, y
+bloqueando de paso "Equipo → casilla concreta del PC" (nunca llegaba a
+intentar la escritura).
+
+Añadido `parse_pk6_party_lenient` (envuelve `parse_pk6_party`, un slot roto
+cuenta como vacío) y usado en los cuatro puntos de lectura de arriba.
+`ORASLiveWriter._party_slot_occupied`/`_build_game_lenient` (de la entrada
+de abajo) se simplificaron para reusarlo, eliminando la duplicación.
+
+Suite completa: 2186 passed, 1 skipped.
+
 ### VALIDADO FÍSICAMENTE 30-08-2026 — party-to-box/box-to-party en ORAS
 
 Cierra las dos entradas anteriores. El usuario validó en directo, contra su
