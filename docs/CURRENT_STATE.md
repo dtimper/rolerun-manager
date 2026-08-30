@@ -16,6 +16,36 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
 
+### Hallazgo físico 30-08-2026 — contador de tamaño de party localizado en ORAS
+
+No es una versión nueva: es un prerequisito para una capacidad que sigue sin
+existir. El usuario pidió depositar un Pokémon en ORAS sin sustituto 1↔1
+("Enviar al PC"), bloqueado hoy porque `ORASLiveWriter` no tenía ninguna
+dirección de "cuántos miembros tiene la party" — a diferencia de X/Y
+(`XY_PARTY_COUNT_ADDRESS`, alpha.8 de v0.2.4), nadie había hecho todavía la
+prueba física controlada equivalente para ORAS.
+
+Captura de solo lectura (`tools_oras_party_size_capture.py`, nuevo,
+`diagnostics/manual/oras_party_size_transition_AUTO_20260830_15*.json`)
+contra una partida real en Azahar: `0x08CF7208` pasó de 6 a 5 al depositar un
+Pokémon desde el propio menú del juego, y volvió a 6 al retirarlo — el mismo
+desplazamiento relativo (`-0x74`) que usa X/Y respecto al inicio de su party.
+Ahora vive como `ORAS_PARTY_COUNT_ADDRESS` en `app/oras_live.py`, documentada
+pero sin usar en ningún escritor todavía.
+
+**Diferencia importante con X/Y: ORAS no compacta la party al depositar.**
+El Pokémon depositado estaba en el slot 3 de 6; tras el depósito ese slot
+quedó con un checksum inválido en su sitio (ni PK6 vacío canónico, ni
+desplazamiento de los slots 4-6). Al retirarlo, volvió exactamente al mismo
+slot. El contrato de "prefijo compacto" que usa el writer de X/Y
+(`_apply_party_resize`) no aplica aquí sin más — un futuro escritor ORAS
+necesita su propia lógica para decidir qué slot está realmente activo.
+
+Sigue sin existir ninguna escritura viva que cambie el tamaño del equipo en
+ORAS; `send_pokemon_to_pc`/`_team_pc_execute_change`/`_team_pc_can_drop`
+siguen bloqueándolo igual que antes. Esto solo cierra el primer prerequisito
+de esa capacidad, documentado para retomarlo.
+
 ### v0.2.6 Alpha.68 — FIJAR ROLES, en los diez juegos
 
 Botón nuevo en la cabecera de EQUIPO. Asigna de una vez el rol de su casilla a

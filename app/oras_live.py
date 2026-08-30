@@ -38,6 +38,23 @@ PK6_PARTY_SIZE = 0x104
 PK6_STORED_SIZE = 0xE8
 ORAS_PARTY_STATS_OFFSET = 0x158
 ORAS_PARTY_STATS_SIZE = 0x16
+# Prueba física controlada del 30-08-2026 contra ORAS/Azahar real (captura en
+# diagnostics/manual/oras_party_size_transition_AUTO_20260830_15*.json):
+# este u32 little-endian pasó 6→5 al depositar un miembro desde el propio
+# menú del juego, y volvió a 6 al retirarlo — mismo desplazamiento relativo
+# (-0x74) que XY_PARTY_COUNT_ADDRESS respecto a su party.
+#
+# A diferencia de X/Y, ORAS NO compacta la party al depositar: el slot
+# vacante (comprobado con el Pokémon depositado en el slot 3 de 6) se queda
+# con un checksum inválido en su sitio en vez de recibir el PK6 vacío
+# canónico o que los miembros posteriores se desplacen. Al retirar, el
+# Pokémon volvió exactamente al mismo slot que había quedado libre. Ningún
+# escritor debe asumir el contrato de "prefijo compacto" de X/Y para ORAS
+# sin volver a demostrarlo — esta dirección solo confirma el CONTADOR, no
+# la disposición de los slots. Todavía no hay escritura viva que cambie el
+# tamaño del equipo en ORAS (ver `_unsupported_changes`); esta constante es
+# el primer prerequisito, no una capacidad activada.
+ORAS_PARTY_COUNT_ADDRESS = 0x08CF7208
 ORAS_PROCESS_NAMES = {"sango-1", "sango-2"}
 ORAS_TITLE_IDS = {0x000400000011C400, 0x000400000011C500}
 
