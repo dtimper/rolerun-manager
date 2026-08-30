@@ -16,6 +16,41 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
 
+### Escritor 30-08-2026 — party-to-box/box-to-party en ORAS (sin validación física, sin UI)
+
+Sigue de la entrada anterior ("Hallazgo físico 30-08-2026"). Con
+`ORAS_PARTY_COUNT_ADDRESS` confirmado, se implementó
+`ORASLiveWriter._apply_party_resize`, siguiendo el mismo patrón transaccional
+que `XYLiveWriter._apply_party_resize` (captura doble estable, identidad
+antes de tocar nada, escribir, readback por unidad, contador al final como
+punto de compromiso, segunda lectura diferida de asentamiento, reversión
+completa —contador incluido, el último en restaurarse— ante cualquier
+divergencia), adaptado al hallazgo de que ORAS NO compacta: cada uno de los
+6 slots se trata como independiente, y "hueco" se define exactamente como lo
+hace `parse_pk6_party` (el bloque almacenado + el espejo de estadísticas en
+`ORAS_PARTY_STATS_OFFSET` a cero) — nunca se toca la franja completa de
+`ORAS_PARTY_STRIDE`, solo esas dos regiones que el resto del código ya lee o
+escribe.
+
+Cubierto con 9 tests sintéticos nuevos (`ORASPartyResizeTests` en
+`tests/test_oras_live_write.py`): depósito y retirada completos, contador
+como último byte escrito en ambas direcciones, rechazo sin vaciar el equipo,
+rechazo con el equipo lleno, rechazo si el contador no coincide con los
+slots realmente ocupados, exigencia de testigos de caja antes de aceptar un
+destino vacío, reversión completa si el commit del contador falla, y
+detección de que el juego revierte la escritura tras la primera
+confirmación (mismo hallazgo que motivó el segundo readback diferido de
+X/Y). Suite completa: 2179 passed, 2 skipped.
+
+**Todavía NO hay validación física.** Y, deliberadamente, la función sigue
+sin poderse usar desde la aplicación: `send_pokemon_to_pc`
+(`app/ui.py:17806-17817`), `_team_pc_execute_change` (`app/ui.py:14899-14910`)
+y `_team_pc_can_drop` (`app/ui.py:15103-15111`) siguen bloqueando ORAS
+exactamente igual que antes. Falta, en este orden: (1) revisar el escritor
+con calma, (2) una validación física controlada de un depósito y una
+retirada reales antes de confiar en él, y solo entonces (3) quitar los tres
+bloqueos de UI.
+
 ### Hallazgo físico 30-08-2026 — contador de tamaño de party localizado en ORAS
 
 No es una versión nueva: es un prerequisito para una capacidad que sigue sin

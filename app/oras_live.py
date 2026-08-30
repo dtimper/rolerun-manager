@@ -4404,6 +4404,373 @@ class ORASLiveWriter(_ORASLiveWriterExtendedMixin):
                 errors.append(f"0x{address:08X}: {exc}")
         return errors
 
+    def _capture_stable_party_and_count(
+        self, client: AzaharRPCClient,
+    ) -> tuple[tuple[bytes, ...], int, int]:
+        """Captura la party y ``ORAS_PARTY_COUNT_ADDRESS`` en el mismo instante estable."""
+        for attempt in range(1, self.reader.snapshot_attempts + 1):
+            first_party = self.reader._read_party(client)
+            first_count = client.read_memory(ORAS_PARTY_COUNT_ADDRESS, 4)
+            if self.reader.stable_delay:
+                time.sleep(self.reader.stable_delay)
+            second_party = self.reader._read_party(client)
+            second_count = client.read_memory(ORAS_PARTY_COUNT_ADDRESS, 4)
+            if first_party == second_party and first_count == second_count:
+                count = struct.unpack("<I", second_count)[0]
+                if not 1 <= count <= 6:
+                    raise ORASLiveError(
+                        f"El contador de tamaño de ORAS midió {count}, fuera del rango 1-6. "
+                        "No se escribió nada."
+                    )
+                return second_party, count, attempt
+        raise ORASLiveError(
+            "El equipo o su contador de tamaño cambiaron durante todas las lecturas. "
+            "Sal de combates, mochila o cajas y vuelve a intentarlo."
+        )
+
+    @staticmethod
+    def _first_empty_party_slot(slots: Sequence[bytes]) -> int | None:
+        for index, raw in enumerate(slots, start=1):
+            if not any(raw):
+                return index
+        return None
+
+    def _resolve_party_resize_source(
+        self, change: PendingTeamChange, live_party: dict[int, SavePokemon],
+    ) -> int:
+        identity = str(change.outgoing_identity or "")
+        if identity:
+            matches = [
+                slot for slot, pokemon in live_party.items()
+                if self._pokemon_identity(pokemon) == identity
+            ]
+            if len(matches) == 1:
+                return matches[0]
+            if not matches:
+                raise ORASLiveError(
+                    f"{change.outgoing_pokemon or 'El Pokémon'} ya no está en el equipo vivo. "
+                    "Pulsa F5, revisa y vuelve a preparar el cambio."
+                )
+            raise ORASLiveError(
+                "La identidad del Pokémon a depositar aparece más de una vez en el equipo vivo. "
+                "No se escribió nada."
+            )
+        slot = int(change.party_slot)
+        if slot not in live_party:
+            raise ORASLiveError(
+                f"El slot {slot} ya no contiene un Pokémon vivo. Pulsa F5 antes de depositar."
+            )
+        return slot
+
+    def _empty_pc_destination_matches(
+        self,
+        client: AzaharRPCClient,
+        base_address: int,
+        box: int,
+        target_slot: int,
+        witnesses: tuple[tuple[int, str], ...],
+    ) -> bool:
+        base_address = int(base_address)
+        if not 0x08000000 <= base_address < 0x0A000000:
+            return False
+        try:
+            target_raw = client.read_memory(
+                self._box_slot_address(box, target_slot, base_address=base_address),
+                PK6_STORED_SIZE,
+            )
+        except Exception:
+            return False
+        if parse_pk6_boxed(target_raw, box, target_slot, self.reader.move_names) is not None:
+            return False
+        for slot, identity in witnesses:
+            try:
+                raw = client.read_memory(
+                    self._box_slot_address(box, slot, base_address=base_address), PK6_STORED_SIZE,
+                )
+                pokemon = parse_pk6_boxed(raw, box, slot, self.reader.move_names)
+            except ORASLiveError:
+                return False
+            if pokemon is None or self._pokemon_identity(pokemon) != identity:
+                return False
+        return True
+
+    def _locate_empty_pc_destination(
+        self,
+        client: AzaharRPCClient,
+        process: AzaharProcess,
+        change: PendingTeamChange,
+    ) -> int:
+        """Resuelve la base de PC para un depósito sin anclar en un hueco aislado.
+
+        A diferencia de ``_locate_pc_base`` (que verifica el Pokémon que YA
+        debería estar en el destino), aquí el destino debe estar vacío: un
+        hueco vacío no identifica una matriz por sí solo, así que nunca se
+        escanea RAM tomando el vacío como ancla. Solo se acepta una base
+        conocida cuyos testigos —Pokémon ocupados de la MISMA caja, captados
+        por la UI al arrastrar— coincidan. Mismo criterio que
+        ``XYLiveWriter._locate_empty_pc_destination``.
+        """
+        witnesses = tuple(
+            (int(slot), str(identity))
+            for slot, identity in (getattr(change, "box_witnesses", ()) or ())
+            if identity
+        )
+        if not witnesses:
+            raise ORASLiveError(
+                "No hay testigos de la caja de destino; no se puede confirmar el hueco vacío "
+                "sin arriesgar una escritura ciega. No se escribió nada."
+            )
+        process_key = (int(process.title_id), str(process.name))
+        candidates: list[int] = []
+        cached = self._pc_bases_by_process.get(process_key)
+        if cached is not None:
+            candidates.append(cached)
+        candidates.extend(address for address in ORAS_PC_KNOWN_ADDRESSES if address not in candidates)
+        target_slot = int(change.box_slot)
+        for base_address in candidates:
+            if self._empty_pc_destination_matches(client, base_address, int(change.box), target_slot, witnesses):
+                self._pc_bases_by_process[process_key] = base_address
+                return base_address
+        raise ORASLiveError(
+            "No se pudo confirmar el hueco vacío del PC de ORAS con los testigos de esa caja. "
+            "No se escribió nada. Pulsa F5 fuera del PC y vuelve a probar."
+        )
+
+    def _apply_party_resize(
+        self, current: SaveGameData, change: PendingTeamChange,
+    ) -> ORASLiveWriteResult:
+        """Deposita o retira un Pokémon del PC cambiando el tamaño del equipo.
+
+        ORAS, a diferencia de X/Y, NO compacta la party al depositar: el slot
+        vacante no se desplaza ni recibe el PK6 vacío cifrado canónico de X/Y,
+        se queda con un checksum inválido en su sitio (demostrado físicamente
+        el 30-08-2026 contra ORAS/Azahar real, ver ``ORAS_PARTY_COUNT_ADDRESS``
+        y ``diagnostics/manual/oras_party_size_transition_AUTO_20260830_*.json``).
+        Por eso este writer no asume ningún "prefijo compacto": cada uno de los
+        6 slots fijos se trata de forma independiente, y un slot cuenta como
+        hueco cuando su reconstrucción (`ORASLiveReader._read_party`: los 0xE8
+        bytes almacenados + los 0x16 bytes del espejo de estadísticas en
+        ``ORAS_PARTY_STATS_OFFSET``) está completamente a cero — el mismo
+        criterio que ya usa ``parse_pk6_party`` para "vacío".
+
+        Al depositar, este writer pone a cero exactamente esas DOS regiones
+        (nunca los 0x1E4 bytes completos de la franja): son las únicas que
+        cualquier código validado de este escritor lee o escribe alguna vez.
+        El resto de la franja —incluida la zona entre el bloque almacenado y
+        el espejo— es territorio que nadie ha demostrado que sea seguro
+        tocar, así que no se toca, ni siquiera para ponerlo a cero.
+        """
+        operation = str(change.operation)
+        if operation not in {"party-to-box", "box-to-party"}:
+            raise ORASLiveError(f"Operación de tamaño de equipo no reconocida: {operation}.")
+
+        try:
+            with self.reader.client_factory() as client:
+                process = self.reader._find_oras_process(client.process_list())
+                client.set_process(process.process_id)
+
+                original_slots, original_count, capture_attempt = (
+                    self._capture_stable_party_and_count(client)
+                )
+                occupied_slots = {
+                    index for index, raw in enumerate(original_slots, start=1) if any(raw)
+                }
+                if len(occupied_slots) != original_count:
+                    raise ORASLiveError(
+                        f"El equipo vivo tiene {len(occupied_slots)} slot(s) ocupado(s), pero el "
+                        f"contador de ORAS dice {original_count}. No se escribió nada; pulsa F5 y "
+                        "vuelve a intentarlo."
+                    )
+                live_party = self._read_party_members(original_slots, current)
+
+                planned: list[tuple[int, bytes, bytes]] = []
+                if operation == "party-to-box":
+                    if original_count <= 1:
+                        raise ORASLiveError(
+                            "El equipo necesita al menos un Pokémon; no se depositó nada."
+                        )
+                    source_slot = self._resolve_party_resize_source(change, live_party)
+                    pc_base = self._locate_empty_pc_destination(client, process, change)
+                    pc_address = self._box_slot_address(
+                        int(change.box), int(change.box_slot), base_address=pc_base,
+                    )
+                    pc_original = client.read_memory(pc_address, PK6_STORED_SIZE)
+                    if parse_pk6_boxed(
+                        pc_original, int(change.box), int(change.box_slot), self.reader.move_names,
+                    ) is not None:
+                        raise ORASLiveError(
+                            f"El hueco {change.box}:{change.box_slot} del PC ya no está vacío. "
+                            "No se escribió nada."
+                        )
+                    outgoing_plain, _was_encrypted = _plain_pk6(original_slots[source_slot - 1])
+                    outgoing_stored = bytearray(outgoing_plain[:PK6_STORED_SIZE])
+                    self._refresh_checksum(outgoing_stored)
+                    pc_encoded = encrypt_pk6_stored(bytes(outgoing_stored))
+
+                    planned.append((pc_address, pc_original, pc_encoded))
+                    # Solo se tocan las dos regiones que el lector reconstruye
+                    # y que "parse_pk6_party" usa para decidir si un slot está
+                    # vacío (almacenado + espejo de estadísticas). El resto de
+                    # la franja de 0x1E4 bytes es territorio que ningún código
+                    # validado de este escritor lee ni escribe nunca, así que
+                    # tampoco se toca aquí — ni siquiera para ponerlo a cero.
+                    planned.append((
+                        self._slot_address(source_slot),
+                        original_slots[source_slot - 1][:PK6_STORED_SIZE],
+                        bytes(PK6_STORED_SIZE),
+                    ))
+                    planned.append((
+                        self._slot_address(source_slot) + ORAS_PARTY_STATS_OFFSET,
+                        original_slots[source_slot - 1][PK6_STORED_SIZE:PK6_STORED_SIZE + ORAS_PARTY_STATS_SIZE],
+                        bytes(ORAS_PARTY_STATS_SIZE),
+                    ))
+                    expected_count = original_count - 1
+                else:  # box-to-party
+                    if original_count >= 6:
+                        raise ORASLiveError(
+                            "El equipo ya tiene seis Pokémon; no se incorporó nada."
+                        )
+                    target_slot = self._first_empty_party_slot(original_slots)
+                    if target_slot is None:
+                        raise ORASLiveError(
+                            "El contador de ORAS dice que hay hueco, pero los 6 slots están "
+                            "ocupados. No se escribió nada; pulsa F5 y vuelve a intentarlo."
+                        )
+                    pc_base = self._locate_pc_base(client, process, [change])
+                    pc_address = self._box_slot_address(
+                        int(change.box), int(change.box_slot), base_address=pc_base,
+                    )
+                    pc_original = client.read_memory(pc_address, PK6_STORED_SIZE)
+                    self._resolve_pc_target(change, pc_original)
+
+                    incoming_plain, _incoming_was_encrypted = _plain_stored_pk6(pc_original)
+                    incoming_stored = bytearray(incoming_plain)
+                    self._set_role(incoming_stored, change.incoming_role or "SIN ROL")
+                    ev_map = dict(change.incoming_snapshot.get("evs", {}) or {})
+                    if ev_map:
+                        stat_keys = ("hp", "attack", "defense", "sp_attack", "sp_defense", "speed")
+                        try:
+                            desired_evs = tuple(int(ev_map[key]) for key in stat_keys)
+                        except (KeyError, TypeError, ValueError) as exc:
+                            raise ORASLiveError(
+                                "La incorporación Equipo↔PC de ORAS no recibió los seis EV del "
+                                "Pokémon entrante. No se escribió ningún byte."
+                            ) from exc
+                        incoming_stored[0x1E:0x24] = bytes(self._native_evs(desired_evs))
+                    self._remove_move_slots(incoming_stored, change.remove_move_slots)
+                    self._refresh_checksum(incoming_stored)
+                    species_id = struct.unpack_from("<H", incoming_stored, 8)[0]
+                    form = incoming_stored[0x1D] >> 3
+                    personal = self.personal_for(species_id, form) if self.personal_for else None
+                    if personal is None:
+                        raise ORASLiveError(
+                            f"La ROM activa no aportó estadísticas personales para la especie "
+                            f"#{species_id}, forma {form}. No se escribió ningún byte."
+                        )
+                    extension = self._party_extension(incoming_stored, personal)
+                    full_plain = bytes(incoming_stored) + extension
+                    full_encoded = encrypt_pk6(full_plain)
+
+                    planned.append((
+                        self._slot_address(target_slot),
+                        original_slots[target_slot - 1],
+                        full_encoded[:PK6_STORED_SIZE],
+                    ))
+                    planned.append((
+                        self._slot_address(target_slot) + ORAS_PARTY_STATS_OFFSET,
+                        client.read_memory(
+                            self._slot_address(target_slot) + ORAS_PARTY_STATS_OFFSET,
+                            ORAS_PARTY_STATS_SIZE,
+                        ),
+                        full_encoded[PK6_STORED_SIZE:PK6_STORED_SIZE + ORAS_PARTY_STATS_SIZE],
+                    ))
+                    planned.append((pc_address, pc_original, bytes(PK6_STORED_SIZE)))
+                    expected_count = original_count + 1
+
+                # Reverificación justo antes de escribir: nada de lo capturado
+                # arriba puede haber cambiado entre tanto.
+                refreshed_slots, refreshed_count, _refreshed_attempt = (
+                    self._capture_stable_party_and_count(client)
+                )
+                if refreshed_slots != original_slots or refreshed_count != original_count:
+                    raise ORASLiveError(
+                        "El equipo cambió justo antes de escribir. No se escribió nada; "
+                        "vuelve a intentarlo."
+                    )
+
+                attempted: list[tuple[int, bytes]] = []
+                try:
+                    for address, original, replacement in planned:
+                        attempted.append((address, original))
+                        client.write_memory(address, replacement)
+                        readback = client.read_memory(address, len(replacement))
+                        if readback != replacement:
+                            raise ORASLiveError(
+                                f"Azahar no confirmó la escritura en 0x{address:08X}."
+                            )
+                    # El contador es el punto de compromiso: se escribe el
+                    # último, igual que en X/Y.
+                    count_address = ORAS_PARTY_COUNT_ADDRESS
+                    count_original = struct.pack("<I", original_count)
+                    attempted.append((count_address, count_original))
+                    client.write_memory(count_address, struct.pack("<I", expected_count))
+                    count_readback = client.read_memory(count_address, 4)
+                    if count_readback != struct.pack("<I", expected_count):
+                        raise ORASLiveError("Azahar no confirmó el nuevo contador de tamaño de ORAS.")
+
+                    def verify_once() -> tuple[tuple[bytes, ...], int, int]:
+                        verified_slots, verified_count, attempt = (
+                            self._capture_stable_party_and_count(client)
+                        )
+                        if verified_count != expected_count:
+                            raise ORASLiveError(
+                                f"Azahar devolvió un contador distinto al esperado "
+                                f"({verified_count} != {expected_count}) tras la escritura."
+                            )
+                        occupied = {
+                            index for index, raw in enumerate(verified_slots, start=1) if any(raw)
+                        }
+                        if len(occupied) != verified_count:
+                            raise ORASLiveError(
+                                "El equipo quedó en un estado inconsistente tras la escritura: "
+                                f"{len(occupied)} slot(s) ocupado(s) frente a un contador de "
+                                f"{verified_count}."
+                            )
+                        for index, raw in enumerate(verified_slots, start=1):
+                            if index == (source_slot if operation == "party-to-box" else target_slot):
+                                continue
+                            if raw != original_slots[index - 1]:
+                                raise ORASLiveError(
+                                    f"El slot {index}, ajeno a esta operación, cambió durante la "
+                                    "escritura. Se restaurará el contenido original."
+                                )
+                        return verified_slots, verified_count, attempt
+
+                    _verified_slots, _verified_count, verified_attempt = verify_once()
+
+                    # Un commit inmediato no basta: Azahar puede aceptar y
+                    # confirmar la escritura y el propio juego reconstruir la
+                    # party desde su estado interno una fracción de segundo
+                    # después (mismo hallazgo que motivó el segundo readback
+                    # diferido de X/Y). Solo se publica éxito si el estado
+                    # sobrevive a una segunda lectura tras el asentamiento.
+                    time.sleep(max(0.60, float(getattr(self.reader, "stable_delay", 0.06)) * 5.0))
+                    verified_slots, verified_count, settled_attempt = verify_once()
+
+                    game = self._build_game(verified_slots, current, process, live_write=True)
+                    return ORASLiveWriteResult(
+                        game=game,
+                        process=process,
+                        attempts=max(capture_attempt, verified_attempt, settled_attempt),
+                        applied_count=1,
+                    )
+                except Exception as exc:
+                    rollback_errors = self._rollback(client, attempted)
+                    detail = f" Además falló la restauración: {'; '.join(rollback_errors)}" if rollback_errors else " Los bytes originales se restauraron y se verificaron."
+                    raise ORASLiveError(f"{exc}{detail}") from exc
+        except AzaharRPCError as exc:
+            raise ORASLiveError(str(exc)) from exc
+
     def apply(
         self,
         current: SaveGameData,
@@ -4434,6 +4801,17 @@ class ORASLiveWriter(_ORASLiveWriterExtendedMixin):
                     "El cambio de rol y EV de ORAS debe ejecutarse separado de PC, bolsa y curación."
                 )
             return self._apply_party_role_evs(current, changes)
+        resize_changes = [
+            change for change in changes
+            if isinstance(change, PendingTeamChange) and change.operation in {"party-to-box", "box-to-party"}
+        ]
+        if resize_changes:
+            if len(resize_changes) != 1 or len(changes) != 1:
+                raise ORASLiveError(
+                    "Cada cambio de tamaño Equipo↔PC de ORAS se confirma como una "
+                    "transacción independiente. No se escribió ningún byte."
+                )
+            return self._apply_party_resize(current, resize_changes[0])
         if any(
             isinstance(change, (PendingPCRoleChange, PendingInventoryChange, PendingTMTeach, PendingTeamChange))
             for change in changes

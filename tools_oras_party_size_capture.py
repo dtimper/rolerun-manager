@@ -99,6 +99,10 @@ def _slot_payload(raw: bytes) -> dict[str, object]:
         "empty": False,
         "diagnostic_error": "checksum del bloque almacenado no válido ni en crudo ni descifrado",
         "sha256": hashlib.sha256(raw).hexdigest(),
+        # Un slot que no valida como PK6 es justo el caso que hay que poder
+        # inspeccionar byte a byte después: guardamos el crudo completo aquí,
+        # no solo en los vacíos/válidos donde el hash ya basta.
+        "raw_hex": raw.hex(),
     }
 
 

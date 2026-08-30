@@ -13,6 +13,7 @@ from app.oras_tm_service import ORASPersonalStats
 with patch("pathlib.Path.home", return_value=Path(tempfile.gettempdir()) / "rolerun-tests"):
     from app.oras_live import (
         ORAS_PARTY_ADDRESS,
+        ORAS_PARTY_COUNT_ADDRESS,
         ORAS_PARTY_STATS_OFFSET,
         ORAS_PARTY_STATS_SIZE,
         ORAS_PARTY_STRIDE,
@@ -1414,14 +1415,18 @@ class ORASLiveWriteTests(unittest.TestCase):
             ])
         self.assertEqual(fake.writes, [])
 
-    def test_live_writer_still_rejects_team_size_changes(self) -> None:
+    def test_live_writer_still_rejects_pc_to_pc_moves(self) -> None:
+        """party-to-box/box-to-party ya están soportados (ver
+        ORASPartyResizeTests); move-box-slot (PC↔PC sin pasar por el equipo)
+        sigue sin escritura viva validada en ORAS.
+        """
         fake = _ExtendedFakeClient(
             (self.initial,) + self.empty_slots,
             pc_slot=make_encrypted_pk6()[:PK6_STORED_SIZE],
         )
         with self.assertRaisesRegex(ORASLiveError, "cambian el tamaño del equipo"):
             self._writer(fake).apply(self.current, [
-                PendingTeamChange(operation="party-to-box", party_slot=1),
+                PendingTeamChange(operation="move-box-slot", party_slot=1),
             ])
         self.assertEqual(fake.writes, [])
 
@@ -1464,6 +1469,276 @@ class ORASLiveWriteTests(unittest.TestCase):
             ])
         self.assertEqual(fake.slots[0], self.initial)
         self.assertEqual(len(fake.writes), 2)
+
+
+class _ResizeFakeClient(_ExtendedFakeClient):
+    """``_ExtendedFakeClient`` más el contador de tamaño de party de ORAS."""
+
+    def __init__(self, slots: tuple[bytes, ...], *, count: int, pc_slot: bytes) -> None:
+        super().__init__(slots, pc_slot=pc_slot)
+        self.count = int(count)
+
+    def read_memory(self, address: int, size: int):
+        if address == ORAS_PARTY_COUNT_ADDRESS and size == 4:
+            return struct.pack("<I", self.count)
+        return super().read_memory(address, size)
+
+    def write_memory(self, address: int, data: bytes):
+        if address == ORAS_PARTY_COUNT_ADDRESS:
+            if len(data) != 4:
+                raise AssertionError("Escritura del contador de tamaño con longitud inesperada.")
+            if address in self.ignore_first_at and address not in self._ignored_at:
+                self._ignored_at.add(address)
+                self.writes.append((address, bytes(data)))
+                return
+            self.writes.append((address, bytes(data)))
+            self.count = struct.unpack("<I", data)[0]
+            return
+        return super().write_memory(address, data)
+
+
+class ORASPartyResizeTests(unittest.TestCase):
+    """``party-to-box``/``box-to-party``: el equipo cambia de tamaño de verdad.
+
+    Hallazgo físico del 30-08-2026 (ver ``docs/CURRENT_STATE.md`` y
+    ``diagnostics/manual/oras_party_size_transition_AUTO_20260830_*.json``):
+    ``ORAS_PARTY_COUNT_ADDRESS`` es el contador real, pero ORAS NO compacta la
+    party al depositar (a diferencia de X/Y) — el hueco se queda en su sitio.
+    Estos tests usan la misma reconstrucción que ``ORASLiveReader._read_party``
+    (0xE8 almacenados + 0x16 del espejo en ``ORAS_PARTY_STATS_OFFSET``): un
+    slot cuenta como hueco cuando esos dos bloques están a cero.
+    """
+
+    def setUp(self) -> None:
+        self.current = SaveGameData("AS", "SAV6AO", 6, "Diego", [], {})
+        self.personal_for = lambda species_id, _form: {
+            261: ORASPersonalStats((35, 55, 35, 35, 30, 30), 0),
+            263: ORASPersonalStats((38, 30, 41, 60, 30, 41), 0),
+        }.get(species_id)
+
+    def _writer(self, fake: _ResizeFakeClient) -> ORASLiveWriter:
+        reader = ORASLiveReader(
+            Path("does-not-exist.json"),
+            client_factory=lambda: fake,
+            stable_delay=0,
+        )
+        return ORASLiveWriter(
+            reader,
+            move_pp_for=lambda move_id: {33: 35, 44: 25, 45: 15}[move_id],
+            personal_for=self.personal_for,
+        )
+
+    def _slot(self, *, species_id: int = 261, pid: int = 0x89ABCDEF, marking: int = 0) -> bytes:
+        raw = make_encrypted_pk6(species_id=species_id, pid=pid, marking=marking)
+        plain = bytearray(decrypt_pk6(raw))
+        personal = self.personal_for(species_id, 0)
+        plain[PK6_STORED_SIZE:] = ORASLiveWriter._party_extension(
+            bytes(plain[:PK6_STORED_SIZE]), personal,
+        )
+        return encrypt_pk6(bytes(plain))
+
+    @staticmethod
+    def _identity(species_id: int, pid: int) -> str:
+        return f"{species_id}:{pid}:12345:54321"
+
+    def _six_full_slots(self) -> tuple[bytes, ...]:
+        return tuple(self._slot(pid=0x89ABCDEF + index) for index in range(6))
+
+    def test_party_to_box_deposits_and_decrements_count_last(self) -> None:
+        slots = list(self._six_full_slots())
+        outgoing_identity = self._identity(261, 0x89ABCDEF + 2)  # slot 3
+        witness = make_encrypted_pk6(species_id=263, pid=0xAAAA0001)[:PK6_STORED_SIZE]
+        empty_pc = bytes(PK6_STORED_SIZE)
+        pc_buffer = empty_pc + witness  # box 1: slot 1 vacío, slot 2 = testigo
+        fake = _ResizeFakeClient(tuple(slots), count=6, pc_slot=pc_buffer)
+
+        result = self._writer(fake).apply(self.current, [
+            PendingTeamChange(
+                operation="party-to-box", party_slot=3,
+                box=1, box_slot=1,
+                outgoing_pokemon="Poochyena", outgoing_species="Poochyena",
+                outgoing_identity=outgoing_identity,
+                box_witnesses=((2, self._identity(263, 0xAAAA0001)),),
+            ),
+        ])
+
+        self.assertEqual(fake.count, 5)
+        self.assertEqual(len(result.game.party), 5)
+        # El contador es el punto de compromiso: la última escritura.
+        self.assertEqual(fake.writes[-1], (ORAS_PARTY_COUNT_ADDRESS, struct.pack("<I", 5)))
+        # El slot 3 quedó vacío (almacenado + espejo a cero); el resto, intacto.
+        self.assertEqual(fake.slots[2][:PK6_STORED_SIZE], bytes(PK6_STORED_SIZE))
+        self.assertEqual(
+            fake.slots[2][PK6_STORED_SIZE:PK6_STORED_SIZE + ORAS_PARTY_STATS_SIZE],
+            bytes(ORAS_PARTY_STATS_SIZE),
+        )
+        for index in (0, 1, 3, 4, 5):
+            self.assertEqual(fake.slots[index], slots[index])
+        # El PC recibió al Pokémon depositado en el hueco exacto elegido.
+        deposited = parse_pk6_boxed(bytes(fake.memory[ORAS_PC_ADDRESS][:PK6_STORED_SIZE]), 1, 1, {})
+        self.assertEqual(deposited.species_id, 261)
+
+    def test_box_to_party_incorporates_and_increments_count_last(self) -> None:
+        slots = list(self._six_full_slots())
+        slots[3] = bytes(PK6_PARTY_SIZE)  # slot 4 vacío
+        incoming = make_encrypted_pk6(species_id=263, pid=0xAAAA0002)[:PK6_STORED_SIZE]
+        fake = _ResizeFakeClient(tuple(slots), count=5, pc_slot=incoming)
+
+        result = self._writer(fake).apply(self.current, [
+            PendingTeamChange(
+                operation="box-to-party", party_slot=5,
+                box=1, box_slot=1,
+                incoming_pokemon="Pikachu", incoming_species="Pikachu",
+                incoming_identity=self._identity(263, 0xAAAA0002),
+                incoming_role="Mago",
+            ),
+        ])
+
+        self.assertEqual(fake.count, 6)
+        self.assertEqual(len(result.game.party), 6)
+        self.assertEqual(fake.writes[-1], (ORAS_PARTY_COUNT_ADDRESS, struct.pack("<I", 6)))
+        incorporated = parse_pk6_party(fake.slots[3], 4, {})
+        self.assertIsNotNone(incorporated)
+        self.assertEqual(incorporated.species_id, 263)
+        self.assertEqual(incorporated.role, "Mago")
+        # El origen en el PC quedó vacío.
+        self.assertEqual(fake.memory[ORAS_PC_ADDRESS][:PK6_STORED_SIZE], bytes(PK6_STORED_SIZE))
+        for index in (0, 1, 2, 4, 5):
+            self.assertEqual(fake.slots[index], slots[index])
+
+    def test_party_to_box_refuses_the_last_member(self) -> None:
+        slots = [self._slot()] + [bytes(PK6_PARTY_SIZE)] * 5
+        fake = _ResizeFakeClient(tuple(slots), count=1, pc_slot=bytes(PK6_STORED_SIZE))
+
+        with self.assertRaisesRegex(ORASLiveError, "al menos un Pokémon"):
+            self._writer(fake).apply(self.current, [
+                PendingTeamChange(
+                    operation="party-to-box", party_slot=1, box=1, box_slot=1,
+                    outgoing_identity=self._identity(261, 0x89ABCDEF),
+                    box_witnesses=((2, "no-importa"),),
+                ),
+            ])
+        self.assertEqual(fake.writes, [])
+        self.assertEqual(fake.count, 1)
+
+    def test_box_to_party_refuses_a_full_team(self) -> None:
+        slots = self._six_full_slots()
+        incoming = make_encrypted_pk6(species_id=263, pid=0xAAAA0003)[:PK6_STORED_SIZE]
+        fake = _ResizeFakeClient(slots, count=6, pc_slot=incoming)
+
+        with self.assertRaisesRegex(ORASLiveError, "ya tiene seis Pokémon"):
+            self._writer(fake).apply(self.current, [
+                PendingTeamChange(
+                    operation="box-to-party", party_slot=7, box=1, box_slot=1,
+                    incoming_identity=self._identity(263, 0xAAAA0003),
+                ),
+            ])
+        self.assertEqual(fake.writes, [])
+        self.assertEqual(fake.count, 6)
+
+    def test_party_resize_rejects_when_count_disagrees_with_occupied_slots(self) -> None:
+        """El contador dice 6, pero solo 5 slots están realmente ocupados."""
+        slots = list(self._six_full_slots())
+        slots[5] = bytes(PK6_PARTY_SIZE)
+        fake = _ResizeFakeClient(tuple(slots), count=6, pc_slot=bytes(PK6_STORED_SIZE))
+
+        with self.assertRaisesRegex(ORASLiveError, "contador de ORAS dice"):
+            self._writer(fake).apply(self.current, [
+                PendingTeamChange(
+                    operation="party-to-box", party_slot=1, box=1, box_slot=1,
+                    outgoing_identity=self._identity(261, 0x89ABCDEF),
+                    box_witnesses=((2, "no-importa"),),
+                ),
+            ])
+        self.assertEqual(fake.writes, [])
+
+    def test_party_resize_must_be_a_solo_transaction(self) -> None:
+        """Igual que X/Y: un cambio de tamaño nunca se mezcla con otra operación."""
+        slots = self._six_full_slots()
+        fake = _ResizeFakeClient(slots, count=6, pc_slot=bytes(PK6_STORED_SIZE))
+
+        with self.assertRaisesRegex(ORASLiveError, "transacción independiente"):
+            self._writer(fake).apply(self.current, [
+                PendingTeamChange(
+                    operation="party-to-box", party_slot=1, box=1, box_slot=1,
+                    outgoing_identity=self._identity(261, 0x89ABCDEF),
+                    box_witnesses=((2, "no-importa"),),
+                ),
+                PendingTeamChange(operation="swap-party-box", party_slot=2, box=1, box_slot=3),
+            ])
+        self.assertEqual(fake.writes, [])
+
+    def test_party_to_box_without_witnesses_refuses_a_blind_write(self) -> None:
+        slots = self._six_full_slots()
+        fake = _ResizeFakeClient(slots, count=6, pc_slot=bytes(PK6_STORED_SIZE))
+
+        with self.assertRaisesRegex(ORASLiveError, "testigos"):
+            self._writer(fake).apply(self.current, [
+                PendingTeamChange(
+                    operation="party-to-box", party_slot=1, box=1, box_slot=1,
+                    outgoing_identity=self._identity(261, 0x89ABCDEF),
+                ),
+            ])
+        self.assertEqual(fake.writes, [])
+
+    def test_party_to_box_rolls_back_party_pc_and_count_on_commit_failure(self) -> None:
+        slots = list(self._six_full_slots())
+        witness = make_encrypted_pk6(species_id=263, pid=0xAAAA0004)[:PK6_STORED_SIZE]
+        pc_buffer = bytes(PK6_STORED_SIZE) + witness
+        fake = _ResizeFakeClient(tuple(slots), count=6, pc_slot=pc_buffer)
+        # El propio contador se "revierte" tras el primer intento: simula que
+        # Azahar aceptó el byte pero el estado real no cambió.
+        fake.ignore_first_at.add(ORAS_PARTY_COUNT_ADDRESS)
+
+        with self.assertRaisesRegex(ORASLiveError, "no confirmó el nuevo contador"):
+            self._writer(fake).apply(self.current, [
+                PendingTeamChange(
+                    operation="party-to-box", party_slot=1, box=1, box_slot=1,
+                    outgoing_identity=self._identity(261, 0x89ABCDEF),
+                    box_witnesses=((2, self._identity(263, 0xAAAA0004)),),
+                ),
+            ])
+
+        self.assertEqual(fake.count, 6)
+        self.assertEqual(fake.slots[0], slots[0])
+        self.assertEqual(fake.memory[ORAS_PC_ADDRESS][:PK6_STORED_SIZE], bytes(PK6_STORED_SIZE))
+
+    def test_party_to_box_rejects_if_the_game_reverts_after_the_first_confirmation(self) -> None:
+        """Mismo hallazgo que motivó el segundo readback diferido de X/Y: un
+        commit inmediato no basta si el juego reconstruye su propio estado
+        una fracción de segundo después."""
+        slots = list(self._six_full_slots())
+        witness = make_encrypted_pk6(species_id=263, pid=0xAAAA0005)[:PK6_STORED_SIZE]
+        pc_buffer = bytes(PK6_STORED_SIZE) + witness
+        fake = _ResizeFakeClient(tuple(slots), count=6, pc_slot=pc_buffer)
+        original_slot = fake.slots[0]
+        original_count = fake.count
+        change = PendingTeamChange(
+            operation="party-to-box", party_slot=1, box=1, box_slot=1,
+            outgoing_identity=self._identity(261, 0x89ABCDEF),
+            box_witnesses=((2, self._identity(263, 0xAAAA0005)),),
+        )
+
+        writer = self._writer(fake)
+        real_capture = writer._capture_stable_party_and_count
+        calls = {"n": 0}
+
+        def flaky_capture(client):
+            calls["n"] += 1
+            if calls["n"] == 3:
+                # El juego "revirtió" la escritura justo antes del readback
+                # diferido de asentamiento.
+                client.slots[0] = original_slot
+                client.count = original_count
+            return real_capture(client)
+
+        with patch.object(writer, "_capture_stable_party_and_count", flaky_capture), \
+             patch("app.oras_live.time.sleep", lambda _seconds: None):
+            with self.assertRaisesRegex(ORASLiveError, "contador distinto al esperado"):
+                writer.apply(self.current, [change])
+
+        self.assertEqual(fake.slots[0], original_slot)
+        self.assertEqual(fake.count, original_count)
 
 
 if __name__ == "__main__":
