@@ -2004,7 +2004,15 @@ class RoleRunManager(ctk.CTk):
         # RoleRun tiene dos modos deliberados: ventana principal maximizada o
         # barra flotante. El botón nativo de minimizar equivale a entrar en la
         # barra; nunca deja una tercera representación escondida en la taskbar.
-        if self.current_game and not self._faint_picker_blocks_floating():
+        # Pero la barra flotante solo tiene sentido sobre el emulador: sin él
+        # en primer plano (cerrado, o minimizando hacia otra ventana) no hay
+        # nada que sobreponer, y aparecía una barra flotando sobre el
+        # escritorio o lo que hubiera detrás.
+        if (
+            self.current_game
+            and not self._faint_picker_blocks_floating()
+            and self._foreground_is_supported_emulator()
+        ):
             self.open_floating_bar()
         else:
             self._restore_main_window_maximized()
@@ -8357,8 +8365,22 @@ class RoleRunManager(ctk.CTk):
             "AzaharPlus" if live_key in GEN7_REALTIME_GAME_KEYS else
             "Azahar/Citra" if live_key == "xy" else "Azahar"
         )
-        self.sync_status = f"◌ Esperando {self._active_azahar_realtime_label()} en {transport_label}…"
-        self._update_top_status()
+        current_operation = getattr(self, "operation_status_store", None)
+        current_operation = current_operation.message if current_operation else None
+        # Con el juego cerrado este placeholder se publica cada 1,6 s, ANTES de
+        # saber si el intento va a fallar otra vez. Si REVISIÓN NECESARIA ya
+        # está activa no aporta nada nuevo, y sobreescribirla la hace pasar por
+        # "neutral" un instante (no empieza por "⚠") para volver a "warning" en
+        # cuanto el intento falla: ese vaivén de categoría es lo que reiniciaba
+        # el tecleo letra a letra sin parar. Sólo el resultado real del
+        # intento (éxito o fallo) debe tocar el aviso persistente.
+        if not (
+            current_operation is not None
+            and current_operation.kind == "warning"
+            and current_operation.title == "REVISIÓN NECESARIA"
+        ):
+            self.sync_status = f"◌ Esperando {self._active_azahar_realtime_label()} en {transport_label}…"
+            self._update_top_status()
 
         def worker() -> None:
             try:

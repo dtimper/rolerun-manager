@@ -132,6 +132,51 @@ def test_rolerun_no_se_confunde_consigo_mismo() -> None:
     assert RoleRunManager._foreground_is_supported_emulator(app) is False
 
 
+# --------------- 5. minimizar sin el emulador abierto entraba en flotante
+
+def _minimizador(current_game, emulador_en_primer_plano):
+    llamadas = SimpleNamespace(flotante=0, restaurada=0)
+    fake = SimpleNamespace(
+        _unmap_after_id=None,
+        _barra_oculta_por_tapado=False,
+        current_game=current_game,
+        state=lambda: "iconic",
+        _faint_picker_blocks_floating=lambda: False,
+        _foreground_is_supported_emulator=lambda: emulador_en_primer_plano,
+        open_floating_bar=lambda: setattr(llamadas, "flotante", llamadas.flotante + 1),
+        _restore_main_window_maximized=lambda: setattr(
+            llamadas, "restaurada", llamadas.restaurada + 1,
+        ),
+    )
+    fake._auto_float_if_minimized = RoleRunManager._auto_float_if_minimized.__get__(fake)
+    return fake, llamadas
+
+
+def test_minimizar_sin_el_emulador_en_primer_plano_no_activa_la_barra() -> None:
+    """El caso reportado: minimizar RoleRun con una Run abierta pero SIN el
+    emulador en primer plano (cerrado, o minimizando hacia otra ventana)
+    entraba en modo barra flotante igual, aunque no hubiera nada del juego
+    sobre lo que superponerse. Sólo `current_game` se comprobaba; a diferencia
+    de los otros dos caminos que abren la barra automáticamente, éste no
+    exigía `_foreground_is_supported_emulator()`.
+    """
+    fake, llamadas = _minimizador(current_game=object(), emulador_en_primer_plano=False)
+
+    fake._auto_float_if_minimized()
+
+    assert llamadas.flotante == 0, "no debería aparecer la barra sin el emulador"
+    assert llamadas.restaurada == 1, "debería volver a la ventana principal"
+
+
+def test_minimizar_con_el_emulador_en_primer_plano_si_activa_la_barra() -> None:
+    fake, llamadas = _minimizador(current_game=object(), emulador_en_primer_plano=True)
+
+    fake._auto_float_if_minimized()
+
+    assert llamadas.flotante == 1
+    assert llamadas.restaurada == 0
+
+
 # ------------------ 4. cerrar la ficha de un rol repintaba la página entera
 
 def test_ajustar_al_viewport_no_reescribe_una_altura_identica() -> None:

@@ -1,6 +1,45 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.1-alpha.16 — el vídeo de después de alpha.15
+
+El usuario grabó un segundo vídeo probando ya la build con el arreglo de
+alpha.15, y «REVISIÓN NECESARIA» seguía reescribiéndose sin parar cada 1,6 s
+con el juego cerrado. alpha.15 arregló que el DETALLE cambiara entre
+reintentos, pero no era la única causa.
+
+## El placeholder de "esperando" pisaba el aviso persistente
+
+`_start_oras_initial_auto_sync` publica `self.sync_status = "◌ Esperando
+{juego} en {emulador}…"` al EMPEZAR cada intento de reconexión, antes de saber
+si va a fallar otra vez. `_sync_operation_status_from_runtime` no distinguía
+esto de una reconexión real: como el texto no empieza por "⚠", interpretaba
+"el juego volvió a responder" y devolvía el aviso a "ROLERUN PREPARADO"
+(neutral). En cuanto el intento fallaba —siempre, con el juego cerrado— el
+aviso se republicaba como "warning" de nuevo. Ese vaivén de CATEGORÍA
+(neutral↔warning) en cada ciclo, no solo el detalle, era lo que reiniciaba el
+tecleo letra a letra: el arreglo de alpha.15 (no teclear si sólo cambia el
+detalle dentro de la misma categoría) nunca llegaba a aplicarse porque la
+categoría sí cambiaba.
+
+Ahora `_start_oras_initial_auto_sync` no publica ese placeholder si
+"REVISIÓN NECESARIA" ya está activa: no aporta información nueva, y sólo el
+resultado real del intento (éxito o fallo) debe tocar el aviso persistente.
+
+## La barra flotante aparecía al minimizar sin el emulador abierto
+
+Reportado de paso: minimizar la ventana principal de RoleRun con una Run
+abierta pero SIN el emulador en primer plano (cerrado, o minimizando hacia
+otra ventana) entraba en modo barra flotante igual. `_auto_float_if_minimized`
+sólo comprobaba `self.current_game`, a diferencia de los otros dos caminos que
+también abren la barra automáticamente (`_poll_emulator_foreground`,
+`_auto_float_if_background`), que sí exigen `_foreground_is_supported_emulator()`.
+La barra flotante existe para superponerse al emulador; sin él no tiene nada
+sobre lo que flotar. Ahora minimizar sin el emulador en primer plano
+restaura la ventana principal maximizada, igual que ya hacía sin Run activa.
+
+Suite completa: 2166 passed, 1 skipped.
+
 # v0.3.1-alpha.15 — el vídeo del usuario, y las causas de verdad
 
 El usuario grabó un vídeo tras la alpha.14: los dos bugs seguían ahí. Antes de

@@ -1296,12 +1296,17 @@ def test_role_icons_preserve_supplied_alpha_and_apply_only_the_gold_tint() -> No
 
 
 def test_minimizing_role_run_switches_to_floating_mode() -> None:
+    """La barra flotante solo tiene sentido con el emulador en primer plano:
+    sin él (cerrado, o minimizando hacia otra ventana) no hay nada del juego
+    sobre lo que superponerse.
+    """
     actions: list[str] = []
     manager = SimpleNamespace(
         _unmap_after_id="pending",
         state=lambda: "iconic",
         current_game=object(),
         _faint_picker_blocks_floating=lambda: False,
+        _foreground_is_supported_emulator=lambda: True,
         # No es la minimizacion que hace el sondeo al esconder la barra porque
         # algo tapa el juego: esa no debe reabrirla.
         _barra_oculta_por_tapado=False,
@@ -1313,6 +1318,28 @@ def test_minimizing_role_run_switches_to_floating_mode() -> None:
 
     assert manager._unmap_after_id is None
     assert actions == ["floating"]
+
+
+def test_minimizing_role_run_without_the_emulator_in_foreground_does_not_float() -> None:
+    """El caso reportado: minimizar sin el emulador abierto entraba en modo
+    barra flotante igual, aunque no hubiera nada sobre lo que superponerse.
+    """
+    actions: list[str] = []
+    manager = SimpleNamespace(
+        _unmap_after_id="pending",
+        state=lambda: "iconic",
+        current_game=object(),
+        _faint_picker_blocks_floating=lambda: False,
+        _foreground_is_supported_emulator=lambda: False,
+        _barra_oculta_por_tapado=False,
+        open_floating_bar=lambda: actions.append("floating"),
+        _restore_main_window_maximized=lambda: actions.append("maximized"),
+    )
+
+    RoleRunManager._auto_float_if_minimized(manager)
+
+    assert manager._unmap_after_id is None
+    assert actions == ["maximized"]
 
 
 def test_team_card_click_binding_recurses_through_nested_content() -> None:

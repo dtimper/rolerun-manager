@@ -153,6 +153,88 @@ def test_el_teclado_no_se_reinicia_si_solo_cambia_el_detalle_de_un_reintento() -
         root.destroy()
 
 
+def test_el_placeholder_de_reintento_no_pisa_revision_necesaria() -> None:
+    """La causa real de que el bucle siguiera vivo tras alpha.15.
+
+    `_start_oras_initial_auto_sync` publicaba "◌ Esperando..." ANTES de saber
+    si el intento iba a fallar otra vez. Con REVISIÓN NECESARIA ya activa eso
+    no aportaba nada nuevo, pero `_sync_operation_status_from_runtime` lo
+    interpretaba como "el juego volvió a responder" y volvía a "ROLERUN
+    PREPARADO" — para saltar de vuelta a "warning" en cuanto el intento
+    fallaba. Ese vaivén de CATEGORÍA (neutral↔warning), no solo de detalle,
+    era lo que reiniciaba el tecleo letra a letra cada 1,6 s.
+    """
+    fuente = inspect.getsource(RoleRunManager._start_oras_initial_auto_sync)
+    marca = 'current_operation.title == "REVISIÓN NECESARIA"'
+    assert marca in fuente
+    assert fuente.index('self.sync_status = f"◌ Esperando') > fuente.index(marca)
+
+
+def test_el_ciclo_de_reintento_real_no_reescribe_letra_a_letra() -> None:
+    """Reproduce el bucle de verdad: aviso, placeholder guardado, fallo, otra
+    vez. Antes de este arreglo, cada ciclo tecleaba desde la primera letra.
+    """
+    import customtkinter as ctk
+
+    from app.ui_components.operation_bar import OperationStatusBar
+
+    try:
+        root = ctk.CTk()
+    except Exception as exc:  # pragma: no cover - según entorno
+        import pytest
+        pytest.skip(f"Sin entorno gráfico para Tk: {exc}")
+
+    try:
+        root.withdraw()
+        barra = OperationStatusBar(root)
+        tienda = OperationStatusStore()
+
+        fake = SimpleNamespace(
+            operation_status_store=tienda,
+            operation_bar=barra,
+            _operation_autocollapse_after_id=None,
+            _live_write_in_progress=False,
+            _faint_replacement_mode=None,
+            _pending_faint_for_reopen=lambda: None,
+            run=SimpleNamespace(pending_changes=[]),
+            sync_status="",
+            _widget_alive=lambda widget: widget is not None,
+            _sonar_por_el_estado=lambda *_a, **_k: None,
+            after=lambda _ms, _fn: "id-falso",
+            after_cancel=lambda _id: None,
+        )
+        fake._set_operation_status = RoleRunManager._set_operation_status.__get__(fake)
+        fake._sync_operation_status_from_runtime = (
+            RoleRunManager._sync_operation_status_from_runtime.__get__(fake)
+        )
+
+        fake.sync_status = "⚠ ORAS · Azahar no responde (tiempo agotado)."
+        fake._sync_operation_status_from_runtime()
+        root.update()
+        assert barra._typing_after_id is not None, "el primer aviso sí teclea"
+
+        # Ocho ciclos de reintento (~13 s de juego cerrado), con la misma
+        # guardia que app/ui.py usa antes de publicar el placeholder.
+        for intento in range(8):
+            actual = fake.operation_status_store.message
+            revision_necesaria_activa = (
+                actual.kind == "warning" and actual.title == "REVISIÓN NECESARIA"
+            )
+            if not revision_necesaria_activa:
+                fake.sync_status = "◌ Esperando ORAS en Azahar…"
+                fake._sync_operation_status_from_runtime()
+            fake.sync_status = f"⚠ ORAS · Azahar no responde (intento {intento})."
+            fake._sync_operation_status_from_runtime()
+            root.update()
+
+        assert barra._typing_after_id is None, "no debería haber vuelto a teclear"
+        mensaje = fake.operation_status_store.message
+        assert mensaje.kind == "warning"
+        assert mensaje.title == "REVISIÓN NECESARIA"
+    finally:
+        root.destroy()
+
+
 def test_un_aviso_no_persistente_normal_sigue_pudiendo_autocolapsar() -> None:
     """El arreglo es específico de REVISIÓN NECESARIA: no toca el resto."""
     tienda = OperationStatusStore()
