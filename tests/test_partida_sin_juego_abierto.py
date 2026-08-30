@@ -182,6 +182,67 @@ def test_minimizar_con_el_emulador_en_primer_plano_si_activa_la_barra() -> None:
     assert llamadas.restaurada == 0
 
 
+# --------- 6. encender el juego tras un rato cerrado no volvía a sincronizar
+
+def _poll_de_sincronizacion(*, emulador_en_primer_plano, oras_live_active=False):
+    llamadas = SimpleNamespace(programadas=0)
+    fake = SimpleNamespace(
+        _emulator_focus_poll_id="pending",
+        _shell_built=True,
+        current_game=object(),
+        _auto_floating_guard=False,
+        _faint_picker_blocks_floating=lambda: False,
+        _foreground_is_supported_emulator=lambda: emulador_en_primer_plano,
+        floating_bar=None,
+        state=lambda: "normal",
+        open_floating_bar=lambda: None,
+        _oras_live_active=oras_live_active,
+        current_save=object(),
+        save_engine=SimpleNamespace(key="oras"),
+        _schedule_oras_initial_auto_sync=lambda *_a, **_k: setattr(
+            llamadas, "programadas", llamadas.programadas + 1,
+        ),
+        winfo_exists=lambda: False,
+    )
+    fake._poll_emulator_foreground = RoleRunManager._poll_emulator_foreground.__get__(fake)
+    return fake, llamadas
+
+
+def test_detectar_el_emulador_relanza_la_sincronizacion_en_vivo() -> None:
+    """El caso reportado: dejar RoleRun abierto un rato con el juego cerrado y
+    luego encenderlo no volvía a sincronizar. El reintento automático se
+    reprograma solo cada 1,6 s mientras falla, pero si esa cadena se rompe por
+    cualquier motivo (un intento invalidado a mitad de vuelo que no se
+    reprograma) no había ninguna otra red de seguridad. Este poll ya vigila el
+    primer plano cada 450 ms para la barra flotante; ahora también relanza la
+    sincronización en cuanto ve el emulador, sin coste si ya hay un intento en
+    marcha o ya está sincronizado.
+    """
+    fake, llamadas = _poll_de_sincronizacion(emulador_en_primer_plano=True)
+
+    fake._poll_emulator_foreground()
+
+    assert llamadas.programadas == 1
+
+
+def test_sin_el_emulador_en_primer_plano_no_se_relanza_nada() -> None:
+    fake, llamadas = _poll_de_sincronizacion(emulador_en_primer_plano=False)
+
+    fake._poll_emulator_foreground()
+
+    assert llamadas.programadas == 0
+
+
+def test_ya_sincronizado_no_reprograma_de_mas() -> None:
+    fake, llamadas = _poll_de_sincronizacion(
+        emulador_en_primer_plano=True, oras_live_active=True,
+    )
+
+    fake._poll_emulator_foreground()
+
+    assert llamadas.programadas == 0
+
+
 # ------------------ 4. cerrar la ficha de un rol repintaba la página entera
 
 def test_ajustar_al_viewport_no_reescribe_una_altura_identica() -> None:

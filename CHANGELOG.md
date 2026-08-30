@@ -1,6 +1,28 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.3.1-alpha.19 — encender el juego después de un rato ya sincroniza
+
+Reportado: dejar RoleRun abierto un rato sin el juego encendido y luego
+abrirlo no sincronizaba solo. El enlace automático se reintenta cada 1,6 s
+mientras falla (`_finish_oras_initial_auto_sync` se reprograma él mismo), así
+que en teoría sigue vivo indefinidamente — pero esa cadena depende de que
+cada eslabón se reprograme a sí mismo, y cualquier salida temprana sin
+reprogramar (un intento invalidado a mitad de vuelo, una excepción no
+prevista) la deja muerta para siempre sin ningún aviso visible.
+
+En vez de perseguir esa causa exacta sin poder reproducirla, se añade una red
+de seguridad independiente: `_poll_emulator_foreground` ya vigila la ventana
+en primer plano cada 450 ms (para decidir si mostrar la barra flotante).
+Ahora, cada vez que ve el emulador en primer plano, también llama a
+`_schedule_oras_initial_auto_sync` — sin coste si ya hay un intento
+programado o si ya está sincronizado (los guardas de esa función lo
+convierten en no-op). El resultado es el pedido: en cuanto RoleRun detecta el
+emulador, sincroniza, sin depender de que la cadena de reintentos pasiva
+siga viva.
+
+Suite completa: 2171 passed, 1 skipped.
+
 # v0.3.1-alpha.18 — fuera el panel de Estado de la Run
 
 Pedido directamente: el panel "ESTADO DE LA RUN" (abierto desde el menú

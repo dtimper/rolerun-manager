@@ -1957,17 +1957,34 @@ class RoleRunManager(ctk.CTk):
                 self._shell_built and self.current_game and not self._auto_floating_guard
                 and not self._faint_picker_blocks_floating()
             )
-            bar_visible = bool(
-                self.floating_bar and self.floating_bar.winfo_exists()
-                and str(self.floating_bar.state()) != "withdrawn"
-            )
-            # La barra automática solo puede aparecer mientras la ventana principal
-            # está realmente abierta (normal/maximizada). Si el usuario la minimiza,
-            # ese gesto se respeta y no se sustituye por la barra flotante.
-            main_state = str(self.state())
-            main_visible = main_state not in {"withdrawn", "iconic"}
-            if should_check and main_visible and not bar_visible and self._foreground_is_supported_emulator():
-                self.open_floating_bar()
+            if should_check:
+                emulator_in_foreground = self._foreground_is_supported_emulator()
+                bar_visible = bool(
+                    self.floating_bar and self.floating_bar.winfo_exists()
+                    and str(self.floating_bar.state()) != "withdrawn"
+                )
+                # La barra automática solo puede aparecer mientras la ventana principal
+                # está realmente abierta (normal/maximizada). Si el usuario la minimiza,
+                # ese gesto se respeta y no se sustituye por la barra flotante.
+                main_state = str(self.state())
+                main_visible = main_state not in {"withdrawn", "iconic"}
+                if main_visible and not bar_visible and emulator_in_foreground:
+                    self.open_floating_bar()
+                # El enlace en vivo se reintenta solo cada 1,6 s mientras el
+                # juego está cerrado, pero si esa cadena se rompe por algún
+                # motivo (p.ej. un intento invalidado a mitad de vuelo, que no
+                # se reprograma), RoleRun podía quedarse sin volver a intentarlo
+                # nunca: encender el emulador después no bastaba. Este poll ya
+                # vigila el primer plano cada 450 ms; usarlo también para
+                # relanzar la sincronización es la red de seguridad — no cuesta
+                # nada si ya hay un intento en marcha o si ya está sincronizado.
+                if (
+                    emulator_in_foreground
+                    and not self._oras_live_active
+                    and self.current_save
+                    and getattr(self.save_engine, "key", "") in REALTIME_READ_GAME_KEYS
+                ):
+                    self._schedule_oras_initial_auto_sync(150)
         except Exception:
             pass
         try:
