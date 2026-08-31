@@ -1685,8 +1685,58 @@ class ORASLiveReader:
         except Exception:
             return None
 
-        party: list[SavePokemon] = []
+        # Cada entrada leída de la tabla, o None si no supera la validación
+        # estructural mínima (el motor puede publicar valores transitorios al
+        # entrar/salir de combate).
+        entradas: list[tuple[int, int] | None] = [None] * count
         pairs: list[tuple[int, int]] = []
+        for index in range(count):
+            offset = index * ORAS_BATTLE_MON_STRIDE
+            if offset + 4 > len(raw):
+                pairs.append((-1, -1))
+                continue
+            max_hp, current_hp = struct.unpack_from("<HH", raw, offset)
+            if 1 <= int(max_hp) <= 9999 and 0 <= int(current_hp) <= int(max_hp):
+                entradas[index] = (int(max_hp), int(current_hp))
+                pairs.append((int(current_hp), int(max_hp)))
+            else:
+                pairs.append((-1, -1))
+
+        # Hallazgo físico del 31-08-2026, capturado dos veces en vivo (con
+        # Scyther y con Breloom como combatiente activo): la tabla NO va en
+        # orden de equipo salvo por un detalle — el Pokémon activo se
+        # INTERCAMBIA de posición con quien ocupe su hueco "de reposo". Los
+        # otros cuatro miembros se quedaron exactamente donde se esperaba. No
+        # es una reordenación completa: es un intercambio de dos entradas.
+        # El PS MÁXIMO nunca cambia dentro de un combate en esta generación,
+        # así que sirve de ancla fija para reconocer el intercambio sin
+        # decodificar la identidad del Pokémon.
+        esperado = [int(pokemon.max_hp or 0) for pokemon in current.party[:count]]
+        mapeo = list(range(count))
+        discrepantes = [
+            index for index in range(count)
+            if entradas[index] is not None and entradas[index][0] != esperado[index]
+        ]
+        resoluble = True
+        if len(discrepantes) == 2:
+            i, j = discrepantes
+            entrada_i, entrada_j = entradas[i], entradas[j]
+            if (
+                entrada_i is not None and entrada_j is not None
+                and entrada_i[0] == esperado[j] and entrada_j[0] == esperado[i]
+            ):
+                mapeo[i], mapeo[j] = j, i
+            else:
+                resoluble = False
+        elif discrepantes:
+            # Ni cero discrepancias (todo en su sitio) ni un intercambio
+            # limpio de dos: no se inventa una regla nueva sin capturarla.
+            resoluble = False
+
+        if not resoluble:
+            return ORASBattleProbe(state=state, health_game=None, hp_pairs=tuple(pairs))
+
+        party: list[SavePokemon] = []
         valid = 0
         for index, pokemon in enumerate(current.party):
             clone = replace(
@@ -1696,19 +1746,10 @@ class ORASLiveReader:
                 markings=list(pokemon.markings),
             )
             if index < count:
-                offset = index * ORAS_BATTLE_MON_STRIDE
-                if offset + 4 <= len(raw):
-                    max_hp, current_hp = struct.unpack_from("<HH", raw, offset)
-                    # El motor de batalla puede publicar valores transitorios al
-                    # entrar/salir. No exigimos igualdad con max_hp overworld (mods
-                    # pueden alterar stats), pero sí una estructura físicamente válida.
-                    if 1 <= int(max_hp) <= 9999 and 0 <= int(current_hp) <= int(max_hp):
-                        clone.max_hp = int(max_hp)
-                        clone.current_hp = int(current_hp)
-                        pairs.append((int(current_hp), int(max_hp)))
-                        valid += 1
-                    else:
-                        pairs.append((-1, -1))
+                entrada = entradas[mapeo[index]]
+                if entrada is not None:
+                    clone.max_hp, clone.current_hp = entrada
+                    valid += 1
             party.append(clone)
 
         health = None

@@ -21,6 +21,8 @@ with patch("pathlib.Path.home", return_value=Path(tempfile.gettempdir()) / "role
         ORAS_BATTLE_TRAINER_OPPONENT_ADDRESS,
         ORAS_BATTLE_WILD_PP_ADDRESS,
         ORAS_BATTLE_TRAINER_PP_ADDRESS,
+        ORAS_BATTLE_DYNAMIC_HP_OFFSET,
+        ORAS_BATTLE_MON_STRIDE,
         ORASLiveMemoryBlock,
         ORASLiveSnapshot,
         ORAS_PARTY_STATS_OFFSET,
@@ -468,3 +470,140 @@ class ORASBattleProbeTests(unittest.TestCase):
         assert probe is not None
         self.assertEqual(probe.state, "none")
         self.assertIsNone(probe.health_game)
+
+    def test_battle_probe_abstains_when_the_table_is_mis_indexed(self) -> None:
+        """Reproduce el incidente real del 31-08-2026.
+
+        Torkoal (slot 1, PS máx. 112) y Breloom (slot 4, PS máx. 14) en el
+        mismo equipo. La tabla de batalla, emparejada ciegamente por
+        posición, pintó los PS bajos de Breloom sobre Torkoal — y al caer
+        Breloom se registró una baja falsa de Torkoal. El PS máximo de Gen 6
+        nunca cambia en combate, así que un máximo que no cuadra con el de
+        esa posición es la señal de que la tabla no va en el orden asumido:
+        la sonda entera se abstiene en vez de publicar una salud mal indexada.
+        """
+        torkoal = parse_pk6_party(
+            make_encrypted_pk6(current_hp=112, max_hp=112), 1, {},
+        )
+        breloom = parse_pk6_party(
+            make_encrypted_pk6(current_hp=14, max_hp=14), 4, {},
+        )
+        assert torkoal is not None and breloom is not None
+        current = SaveGameData("AS", "SAV6AO", 6, "Diego", [torkoal, breloom], {})
+
+        class _MesaMalIndexada:
+            def __init__(self) -> None:
+                self.selected = 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def process_list(self):
+                return [AzaharProcess(77, 0x000400000011C500, "sango-2")]
+
+            def set_process(self, process_id: int) -> None:
+                self.selected = process_id
+
+            def read_memory(self, address: int, size: int):
+                if address == ORAS_BATTLE_WILD_OPPONENT_ADDRESS and size == PK6_STORED_SIZE:
+                    return make_encrypted_pk6()[:PK6_STORED_SIZE]
+                if address == ORAS_BATTLE_TRAINER_OPPONENT_ADDRESS and size == PK6_STORED_SIZE:
+                    return bytes(PK6_STORED_SIZE)
+                if address == ORAS_BATTLE_WILD_PP_ADDRESS and size == 1:
+                    return b"\x10"
+                if address == ORAS_BATTLE_TRAINER_PP_ADDRESS and size == 1:
+                    return b"\xff"
+                start = ORAS_BATTLE_WILD_PP_ADDRESS + ORAS_BATTLE_DYNAMIC_HP_OFFSET
+                if address == start:
+                    # El motor puso a Breloom (PS 4/14) en la posición de la
+                    # tabla que la sonda esperaba para Torkoal (slot 1).
+                    tabla = bytearray(size)
+                    struct.pack_into("<HH", tabla, 0, 14, 4)
+                    return bytes(tabla)
+                raise AssertionError(f"Lectura de sonda inesperada: 0x{address:X} + {size}")
+
+        reader = ORASLiveReader(
+            Path("does-not-exist.json"), client_factory=lambda: _MesaMalIndexada(), stable_delay=0,
+        )
+        probe = reader.read_battle_probe(current)
+
+        self.assertIsNotNone(probe)
+        assert probe is not None
+        self.assertEqual(probe.state, "wild")
+        # Se abstiene: NO publica los PS de Breloom pintados sobre Torkoal.
+        self.assertIsNone(probe.health_game)
+
+    def test_battle_probe_resolves_the_active_battler_swap(self) -> None:
+        """El arreglo real, con los bytes capturados en vivo el 31-08-2026.
+
+        Equipo de seis: Torkoal(112) Houndoom(15) Quagsire(33) Breloom(14)
+        Scyther(15) Gardevoir(15). Con Scyther como combatiente activo y
+        recién debilitado, la tabla real leída fue:
+            [0]=(15,0) [1]=(15,15) [2]=(33,33) [3]=(14,14) [4]=(112,112) [5]=(15,15)
+        Scyther (slot 5, índice 4) se intercambió con el índice 0 —el hueco
+        "de reposo" de Torkoal (slot 1)—. Los otros cuatro miembros se
+        quedaron exactamente donde ya se esperaba. No es una reordenación
+        completa: es un intercambio de dos entradas.
+        """
+        maximos = (112, 15, 33, 14, 15, 15)
+        party = []
+        for slot, maximo in enumerate(maximos, start=1):
+            mon = parse_pk6_party(make_encrypted_pk6(current_hp=maximo, max_hp=maximo), slot, {})
+            assert mon is not None
+            party.append(mon)
+        current = SaveGameData("AS", "SAV6AO", 6, "Diego", party, {})
+
+        tabla_real = ((15, 0), (15, 15), (33, 33), (14, 14), (112, 112), (15, 15))
+
+        class _MesaConIntercambio:
+            def __init__(self) -> None:
+                self.selected = 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def process_list(self):
+                return [AzaharProcess(77, 0x000400000011C500, "sango-2")]
+
+            def set_process(self, process_id: int) -> None:
+                self.selected = process_id
+
+            def read_memory(self, address: int, size: int):
+                if address == ORAS_BATTLE_WILD_OPPONENT_ADDRESS and size == PK6_STORED_SIZE:
+                    return make_encrypted_pk6()[:PK6_STORED_SIZE]
+                if address == ORAS_BATTLE_TRAINER_OPPONENT_ADDRESS and size == PK6_STORED_SIZE:
+                    return bytes(PK6_STORED_SIZE)
+                if address == ORAS_BATTLE_WILD_PP_ADDRESS and size == 1:
+                    return b"\x10"
+                if address == ORAS_BATTLE_TRAINER_PP_ADDRESS and size == 1:
+                    return b"\xff"
+                start = ORAS_BATTLE_WILD_PP_ADDRESS + ORAS_BATTLE_DYNAMIC_HP_OFFSET
+                if address == start:
+                    tabla = bytearray(size)
+                    for index, (maximo, actual) in enumerate(tabla_real):
+                        struct.pack_into("<HH", tabla, index * ORAS_BATTLE_MON_STRIDE, maximo, actual)
+                    return bytes(tabla)
+                raise AssertionError(f"Lectura de sonda inesperada: 0x{address:X} + {size}")
+
+        reader = ORASLiveReader(
+            Path("does-not-exist.json"), client_factory=lambda: _MesaConIntercambio(), stable_delay=0,
+        )
+        probe = reader.read_battle_probe(current)
+
+        self.assertIsNotNone(probe)
+        assert probe is not None
+        self.assertIsNotNone(probe.health_game)
+        assert probe.health_game is not None
+        publicado = {int(p.slot): (p.current_hp, p.max_hp) for p in probe.health_game.party}
+        self.assertEqual(publicado[1], (112, 112))  # Torkoal, ajeno al intercambio
+        self.assertEqual(publicado[2], (15, 15))    # Houndoom, ajeno
+        self.assertEqual(publicado[3], (33, 33))    # Quagsire, ajeno
+        self.assertEqual(publicado[4], (14, 14))    # Breloom, ajeno
+        self.assertEqual(publicado[5], (0, 15))     # Scyther: el combatiente, debilitado
+        self.assertEqual(publicado[6], (15, 15))    # Gardevoir, ajeno
