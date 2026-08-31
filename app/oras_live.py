@@ -573,6 +573,50 @@ def encrypt_pk6_stored(data: bytes) -> bytes:
     return bytes(result)
 
 
+def es_hueco_pc_canonico(raw: bytes) -> bool:
+    """¿Estos bytes son el blank LEGÍTIMO con el que ORAS rellena sus huecos?
+
+    Leído de la matriz viva el 31-08-2026: un hueco virgen del PC no es cero
+    puro. Es un PK6 "en blanco" cifrado con constante 0 cuyo cuerpo descifrado
+    contiene el mote de huevo localizado ("Huevo" en un juego en español) y el
+    byte de idioma — con su checksum coherente (0x0B39 en español). Por eso no
+    se puede fabricar aquí una constante: cambia con el idioma del cartucho.
+    Se reconoce en vez de construirse: especie 0 con checksum válido.
+
+    Un cero puro NO es canónico: el juego lo trata como anómalo y su interfaz
+    lo dibuja como un Huevo de verdad — el bug físico de hoy.
+    """
+    if len(raw) != PK6_STORED_SIZE or not any(raw):
+        return False
+    for candidate in (bytes(raw), decrypt_pk6_stored(bytes(raw))):
+        sanity = struct.unpack_from("<H", candidate, 4)[0]
+        checksum_field = struct.unpack_from("<H", candidate, 6)[0]
+        species = struct.unpack_from("<H", candidate, 8)[0]
+        if sanity == 0 and checksum_field == _checksum(candidate) and species == 0:
+            return True
+    return False
+
+
+def oras_empty_party_slot() -> bytes:
+    """El hueco de party EXACTO que deja el propio juego al depositar.
+
+    Demostrado byte a byte el 31-08-2026 (captura
+    ``diagnostics/manual/oras_egg_bug_AUTO_20260831_160527.json``, depósito
+    hecho DESDE EL MENÚ DEL JUEGO): el slot vaciado no queda a cero, queda
+    como el PK6 de party VACÍO CANÓNICO — 0x104 bytes de ceros cifrados con
+    constante 0. Los 8 bytes de cabecera quedan a cero (EC, centinela y
+    checksum de un cuerpo vacío) y el resto es el keystream determinista del
+    LCRNG con semilla 0; el espejo de estadísticas (`ORAS_PARTY_STATS_OFFSET`)
+    recibe la extensión cifrada del mismo PK6 vacío.
+
+    Dos teorías anteriores del mismo día —poner el bloque entero a cero, y
+    limpiar solo la cabecera— fallaron de la misma manera: el juego, al
+    encontrar un hueco que no descifra a un PK6 vacío válido, lo marca por su
+    cuenta (centinela 0→4) y su interfaz lo dibuja como un Huevo genérico.
+    """
+    return encrypt_pk6(bytes(PK6_PARTY_SIZE))
+
+
 def _checksum(data: bytes) -> int:
     return sum(struct.unpack_from("<112H", data, 8)) & 0xFFFF
 
@@ -1319,6 +1363,53 @@ class ORASLiveReader:
                     return True
         return False
 
+    #: Cuántos PK6 válidos exige la prueba estructural. Dos es el mismo listón
+    #: que ya usa `_pc_anchor_matches` con identidades.
+    PC_MINIMO_PARA_PROBAR_LA_MATRIZ = 2
+
+    def _pc_base_looks_like_the_matrix(
+        self,
+        client: AzaharRPCClient,
+        base_address: int,
+        *,
+        minimo: int | None = None,
+    ) -> bool:
+        """¿Esta dirección contiene la rejilla de cajas, sin mirar identidades?
+
+        No compara con el guardado: comprueba que en la rejilla exacta de 232
+        bytes hay Pokémon que superan checksum y especie. Es lo que permite leer
+        el PC cuando el ``main`` lleva rato sin reflejar la RAM —justo después de
+        mover Pokémon desde RoleRun sin guardar dentro del juego—, que era
+        cuando el PC se volvía ilegible hasta guardar la partida.
+
+        Un hueco roto no cuenta en contra: se ignora. Lo que se exige es
+        evidencia A FAVOR, y un solo PK6 ilegítimo nunca la aporta.
+        """
+        requerido = int(minimo if minimo is not None else self.PC_MINIMO_PARA_PROBAR_LA_MATRIZ)
+        try:
+            raw = client.read_memory(int(base_address), ORAS_PC_SIZE)
+        except (AzaharRPCError, ORASLiveError, OSError, ValueError):
+            return False
+        if len(raw) < ORAS_PC_SIZE:
+            return False
+        validos = 0
+        for index in range(ORAS_PC_BOX_COUNT * ORAS_PC_BOX_SLOT_COUNT):
+            start = index * PK6_STORED_SIZE
+            slot = raw[start:start + PK6_STORED_SIZE]
+            if not any(slot):
+                continue
+            box, slot_index = divmod(index, ORAS_PC_BOX_SLOT_COUNT)
+            try:
+                pokemon = parse_pk6_boxed(slot, box + 1, slot_index + 1, self.move_names)
+            except ORASLiveError:
+                continue
+            if pokemon is None:
+                continue
+            validos += 1
+            if validos >= requerido:
+                return True
+        return False
+
     def _locate_pc_base_for_read(
         self,
         client: AzaharRPCClient,
@@ -1334,6 +1425,22 @@ class ORASLiveReader:
         candidates.extend(int(address) for address in ORAS_PC_KNOWN_ADDRESSES if int(address) not in candidates)
         for base_address in candidates:
             if self._pc_anchor_matches(client, base_address, anchors):
+                self._pc_bases_by_process[process_key] = base_address
+                return base_address
+
+        # Las anclas vienen del último ``main``, y un traslado hecho desde
+        # RoleRun vive en la RAM hasta que el jugador guarda dentro del juego.
+        # Cuando eso ocurre, la dirección de arriba ERA la correcta y se rechazó
+        # por una prueba caducada, no por estar equivocada. En una dirección
+        # CONOCIDA la propia estructura basta como prueba: un PK6 válido exige
+        # checksum y especie correctos, así que dos de ellos en la rejilla exacta
+        # de 232 bytes son la misma fuerza de evidencia que dos identidades.
+        #
+        # Solo se aplica a las direcciones conocidas y a la ya calibrada para
+        # este proceso; el barrido dinámico de más abajo, que sí puede topar con
+        # una copia temporal, sigue exigiendo identidades.
+        for base_address in candidates:
+            if self._pc_base_looks_like_the_matrix(client, base_address):
                 self._pc_bases_by_process[process_key] = base_address
                 return base_address
 
@@ -1968,7 +2075,20 @@ class _ORASLiveWriterExtendedMixin:
                         # deposita en la caja de Cementerio. Nunca reducimos el tamaño de
                         # la party ni dejamos un slot vacío durante un combate.
                         graveyard_key = (int(change.graveyard_box), int(change.graveyard_box_slot))
-                        pc_plain[key] = bytearray(PK6_STORED_SIZE)
+                        # El hueco del sustituto no se pone a cero: recibe el
+                        # blank legítimo del juego (bug físico del 31-08-2026:
+                        # los ceros se dibujan como Huevo). El mejor candidato
+                        # es el hueco de Cementerio que esta misma transacción
+                        # va a ocupar — el mismo intercambio que hace el juego.
+                        plantilla = self._plantilla_de_hueco_pc(
+                            client, pc_base,
+                            preferidos=(original_extra.get(
+                                f"pc:{graveyard_key[0]}:{graveyard_key[1]}"
+                            ),),
+                        )
+                        pc_plain[key] = bytearray(
+                            plantilla if plantilla is not None else bytes(PK6_STORED_SIZE)
+                        )
                         pc_encrypted[key] = False
                         pc_identity[key] = ""
                         pc_kind[key] = "pc-empty"
@@ -3628,8 +3748,16 @@ class ORASLiveWriter(_ORASLiveWriterExtendedMixin):
         candidates: list[int] = []
         cached = self._pc_bases_by_process.get(process_key)
         if cached is not None:
-            candidates.append(cached)
-        candidates.extend(address for address in ORAS_PC_KNOWN_ADDRESSES if address not in candidates)
+            candidates.append(int(cached))
+        # El lector calibra su propia base al pintar las cajas y la guarda en SU
+        # caché: es la misma matriz. Probarla evita repetir el escaneo, y sigue
+        # verificándose con `_pc_base_matches` antes de aceptarla.
+        reader_cached = getattr(self.reader, "_pc_bases_by_process", {}).get(process_key)
+        if reader_cached is not None and int(reader_cached) not in candidates:
+            candidates.append(int(reader_cached))
+        candidates.extend(
+            int(address) for address in ORAS_PC_KNOWN_ADDRESSES if int(address) not in candidates
+        )
         for base_address in candidates:
             if self._pc_base_matches(client, base_address, changes, require_companion=False):
                 self._pc_bases_by_process[process_key] = base_address
@@ -4411,6 +4539,38 @@ class ORASLiveWriter(_ORASLiveWriterExtendedMixin):
             )
         return value
 
+    def _plantilla_de_hueco_pc(
+        self,
+        client: AzaharRPCClient,
+        pc_base: int,
+        preferidos: Sequence[bytes | None] = (),
+    ) -> bytes | None:
+        """Los bytes exactos con los que ORAS representa un hueco del PC.
+
+        No se construyen (dependen del idioma del cartucho: el blank lleva el
+        mote de huevo localizado, ver `es_hueco_pc_canonico`): se COSECHAN de
+        la propia matriz viva. Primero se prueban los candidatos preferidos
+        —típicamente el hueco de destino que esta misma operación va a
+        ocupar, que es justo el intercambio que hace el propio juego— y solo
+        si ninguno vale se rastrea la matriz completa. ``None`` significa que
+        no hay ni un solo blank legítimo a la vista; el llamante decide su
+        propio fallback.
+        """
+        for candidato in preferidos:
+            if candidato is not None and es_hueco_pc_canonico(bytes(candidato)):
+                return bytes(candidato)
+        try:
+            matriz = bytes(client.read_memory(int(pc_base), ORAS_PC_SIZE))
+        except Exception:
+            return None
+        if len(matriz) < ORAS_PC_SIZE:
+            return None
+        for index in range(ORAS_PC_BOX_COUNT * ORAS_PC_BOX_SLOT_COUNT):
+            raw = matriz[index * PK6_STORED_SIZE:(index + 1) * PK6_STORED_SIZE]
+            if es_hueco_pc_canonico(raw):
+                return raw
+        return None
+
     def _rollback(
         self,
         client: AzaharRPCClient,
@@ -4512,41 +4672,188 @@ class ORASLiveWriter(_ORASLiveWriterExtendedMixin):
             )
         return slot
 
-    def _empty_pc_destination_matches(
+    @staticmethod
+    def _empty_destination_witnesses(
+        change: PendingTeamChange,
+    ) -> tuple[tuple[int, int, str], ...]:
+        """Reúne los testigos ocupados que pueden demostrar la matriz del PC.
+
+        Primero los vecinos de la caja de destino (``box_witnesses``, la forma
+        histórica) y después los de cualquier otra caja
+        (``pc_anchor_witnesses``). La matriz de cajas es una sola tabla
+        contigua, así que un Pokémon real de la caja 7 demuestra la dirección
+        base igual de bien que uno de la caja 1: es lo que permite soltar en
+        una caja vacía sin usar jamás el hueco vacío como ancla.
+
+        El propio hueco de destino nunca entra en la lista, ni aunque llegue
+        repetido desde la interfaz.
+        """
+        box = int(change.box)
+        target_slot = int(change.box_slot)
+        seen: set[tuple[int, int]] = {(box, target_slot)}
+        witnesses: list[tuple[int, int, str]] = []
+        for slot, identity in (getattr(change, "box_witnesses", ()) or ()):
+            if not identity:
+                continue
+            key = (box, int(slot))
+            if key in seen:
+                continue
+            seen.add(key)
+            witnesses.append((box, int(slot), str(identity)))
+        for anchor_box, slot, identity in (getattr(change, "pc_anchor_witnesses", ()) or ()):
+            if not identity:
+                continue
+            key = (int(anchor_box), int(slot))
+            if key in seen:
+                continue
+            seen.add(key)
+            witnesses.append((int(anchor_box), int(slot), str(identity)))
+        return tuple(witnesses)
+
+    def _pc_witnesses_match(
         self,
         client: AzaharRPCClient,
         base_address: int,
-        box: int,
-        target_slot: int,
-        witnesses: tuple[tuple[int, str], ...],
+        witnesses: tuple[tuple[int, int, str], ...],
+        *,
+        empty_slot: tuple[int, int] | None = None,
     ) -> bool:
+        """Comprueba una base candidata contra posiciones exactas del PC.
+
+        Cada testigo es ``(caja, hueco, identidad)`` y tiene que estar donde
+        dice estar. ``empty_slot`` añade la condición contraria para una única
+        casilla: la que va a recibir un Pokémon debe estar libre. Un hueco
+        vacío nunca prueba nada por sí solo, así que siempre hace falta al
+        menos un testigo ocupado.
+        """
         base_address = int(base_address)
         if not 0x08000000 <= base_address < 0x0A000000:
             return False
-        try:
-            target_raw = client.read_memory(
-                self._box_slot_address(box, target_slot, base_address=base_address),
-                PK6_STORED_SIZE,
-            )
-        except Exception:
+        if not witnesses:
             return False
-        # Un hueco de PC nunca tocado por el juego puede no ser cero puro
-        # (memoria del emulador sin inicializar): ni levantar "no superó
-        # checksum/especie" ni un PK6 real cuentan como "ocupado" aquí — solo
-        # un PK6 que valida de verdad bloquea este destino.
-        if parse_pk6_boxed_lenient(target_raw, box, target_slot, self.reader.move_names) is not None:
-            return False
-        for slot, identity in witnesses:
+        if empty_slot is not None:
+            box, target_slot = (int(value) for value in empty_slot)
+            try:
+                target_raw = client.read_memory(
+                    self._box_slot_address(box, target_slot, base_address=base_address),
+                    PK6_STORED_SIZE,
+                )
+            except Exception:
+                return False
+            # Un hueco de PC nunca tocado por el juego puede no ser cero puro
+            # (memoria del emulador sin inicializar): ni levantar "no superó
+            # checksum/especie" ni un PK6 real cuentan como "ocupado" aquí —
+            # solo un PK6 que valida de verdad bloquea ese destino.
+            if parse_pk6_boxed_lenient(target_raw, box, target_slot, self.reader.move_names) is not None:
+                return False
+        for witness_box, slot, identity in witnesses:
             try:
                 raw = client.read_memory(
-                    self._box_slot_address(box, slot, base_address=base_address), PK6_STORED_SIZE,
+                    self._box_slot_address(witness_box, slot, base_address=base_address),
+                    PK6_STORED_SIZE,
                 )
-                pokemon = parse_pk6_boxed(raw, box, slot, self.reader.move_names)
+                pokemon = parse_pk6_boxed(raw, witness_box, slot, self.reader.move_names)
             except ORASLiveError:
                 return False
             if pokemon is None or self._pokemon_identity(pokemon) != identity:
                 return False
         return True
+
+    def _scan_pc_base_with_witnesses(
+        self,
+        client: AzaharRPCClient,
+        witnesses: tuple[tuple[int, int, str], ...],
+        *,
+        empty_slot: tuple[int, int] | None = None,
+    ) -> int | None:
+        """Calibra la matriz del PC anclando en un TESTIGO ocupado.
+
+        El ancla es siempre un Pokémon real —el que se arrastra, un vecino de
+        su caja o uno de cualquier otra caja: la matriz es una sola tabla
+        contigua—, igual que en ``_scan_pc_base``. Se localiza su PK6 dentro de
+        la zona acotada de datos, se deriva el inicio de la matriz a partir de
+        su caja/hueco y solo se acepta el candidato si ``_pc_witnesses_match``
+        confirma TODOS los testigos (y, si se pide, que la casilla de destino
+        sigue libre). Un hueco vacío no identifica nada por sí solo en ningún
+        momento.
+
+        Sin este escaneo, una operación de PC solo funcionaba cuando otra
+        anterior ya había dejado la base en la caché del escritor. En una
+        partida cuya dirección real no es ninguna de las conocidas, el lector
+        la encontraba escaneando (y la guardaba en SU caché) mientras el
+        escritor abortaba siempre.
+        """
+        if len(witnesses) < 2:
+            # Mismo listón que ``_scan_pc_base``: una identidad aislada puede
+            # vivir en una copia temporal, así que no basta para calibrar.
+            return None
+        anchor_box, anchor_slot, anchor_identity = witnesses[0]
+        anchor_index = (
+            (int(anchor_box) - 1) * ORAS_PC_BOX_SLOT_COUNT + (int(anchor_slot) - 1)
+        )
+        scan_start = (ORAS_PC_SCAN_START + 3) & ~3
+        for block_address in range(scan_start, ORAS_PC_SCAN_END, ORAS_PC_SCAN_BLOCK_SIZE):
+            candidate_size = min(ORAS_PC_SCAN_BLOCK_SIZE, ORAS_PC_SCAN_END - block_address)
+            try:
+                raw_block = client.read_memory(block_address, candidate_size + PK6_STORED_SIZE)
+            except Exception:
+                continue
+            for offset in range(0, candidate_size, 4):
+                # Constante de cifrado y sanity: los huecos a cero puro se
+                # descartan sin descifrar ni crear objetos Python.
+                if not (raw_block[offset] | raw_block[offset + 1] | raw_block[offset + 2] | raw_block[offset + 3]):
+                    continue
+                if raw_block[offset + 4] or raw_block[offset + 5]:
+                    continue
+                candidate = raw_block[offset:offset + PK6_STORED_SIZE]
+                pokemon = parse_pk6_boxed_lenient(
+                    candidate, int(anchor_box), int(anchor_slot), self.reader.move_names,
+                )
+                if pokemon is None or self._pokemon_identity(pokemon) != anchor_identity:
+                    continue
+                base_address = block_address + offset - anchor_index * PK6_STORED_SIZE
+                if self._pc_witnesses_match(
+                    client, base_address, witnesses, empty_slot=empty_slot,
+                ):
+                    return int(base_address)
+        return None
+
+    def _locate_pc_base_with_witnesses(
+        self,
+        client: AzaharRPCClient,
+        process: AzaharProcess,
+        witnesses: tuple[tuple[int, int, str], ...],
+        *,
+        empty_slot: tuple[int, int] | None = None,
+    ) -> int | None:
+        """Prueba caché del escritor, caché del lector, conocidas y, si no, escanea."""
+        if not witnesses:
+            return None
+        process_key = (int(process.title_id), str(process.name))
+        candidates: list[int] = []
+        cached = self._pc_bases_by_process.get(process_key)
+        if cached is not None:
+            candidates.append(int(cached))
+        # El lector calibra su propia base cada vez que lee el PC y la guarda en
+        # SU caché. Es exactamente la misma matriz: probarla aquí evita repetir
+        # el escaneo en la inmensa mayoría de las operaciones.
+        reader_cached = getattr(self.reader, "_pc_bases_by_process", {}).get(process_key)
+        if reader_cached is not None and int(reader_cached) not in candidates:
+            candidates.append(int(reader_cached))
+        candidates.extend(
+            int(address) for address in ORAS_PC_KNOWN_ADDRESSES if int(address) not in candidates
+        )
+        for base_address in candidates:
+            if self._pc_witnesses_match(client, base_address, witnesses, empty_slot=empty_slot):
+                self._pc_bases_by_process[process_key] = base_address
+                return base_address
+        discovered = self._scan_pc_base_with_witnesses(
+            client, witnesses, empty_slot=empty_slot,
+        )
+        if discovered is not None:
+            self._pc_bases_by_process[process_key] = discovered
+            return discovered
+        return None
 
     def _locate_empty_pc_destination(
         self,
@@ -4559,60 +4866,264 @@ class ORASLiveWriter(_ORASLiveWriterExtendedMixin):
         A diferencia de ``_locate_pc_base`` (que verifica el Pokémon que YA
         debería estar en el destino), aquí el destino debe estar vacío: un
         hueco vacío no identifica una matriz por sí solo, así que nunca se
-        escanea RAM tomando el vacío como ancla. Solo se acepta una base
-        conocida cuyos testigos —Pokémon ocupados de la MISMA caja, captados
-        por la UI al arrastrar— coincidan. Mismo criterio que
-        ``XYLiveWriter._locate_empty_pc_destination``.
+        escanea RAM tomando el vacío como ancla. Solo se acepta una base cuyos
+        testigos —Pokémon ocupados, de la caja de destino o de cualquier otra
+        (``_empty_destination_witnesses``)— coincidan en su posición exacta.
+        Mismo criterio que ``XYLiveWriter._locate_empty_pc_destination``.
         """
-        witnesses = tuple(
-            (int(slot), str(identity))
-            for slot, identity in (getattr(change, "box_witnesses", ()) or ())
-            if identity
-        )
+        witnesses = self._empty_destination_witnesses(change)
         if not witnesses:
             raise ORASLiveError(
-                "No hay testigos de la caja de destino; no se puede confirmar el hueco vacío "
-                "sin arriesgar una escritura ciega. No se escribió nada."
+                "No hay testigos: ningún Pokémon del PC —ni de la caja de destino ni de "
+                "ninguna otra— demuestra dónde vive la matriz de cajas, así que no se "
+                "puede confirmar el hueco vacío sin arriesgar una escritura ciega. "
+                "No se escribió nada."
             )
-        process_key = (int(process.title_id), str(process.name))
-        candidates: list[int] = []
-        cached = self._pc_bases_by_process.get(process_key)
-        if cached is not None:
-            candidates.append(cached)
-        candidates.extend(address for address in ORAS_PC_KNOWN_ADDRESSES if address not in candidates)
-        target_slot = int(change.box_slot)
-        for base_address in candidates:
-            if self._empty_pc_destination_matches(client, base_address, int(change.box), target_slot, witnesses):
-                self._pc_bases_by_process[process_key] = base_address
-                return base_address
-        raise ORASLiveError(
-            "No se pudo confirmar el hueco vacío del PC de ORAS con los testigos de esa caja. "
-            "No se escribió nada. Pulsa F5 fuera del PC y vuelve a probar."
+        base_address = self._locate_pc_base_with_witnesses(
+            client, process, witnesses,
+            empty_slot=(int(change.box), int(change.box_slot)),
         )
+        if base_address is not None:
+            return base_address
+        raise ORASLiveError(
+            "No se pudo confirmar el hueco vacío del PC de ORAS con los Pokémon que la "
+            "interfaz aportó como testigos. No se escribió nada. Pulsa F5 fuera del PC y "
+            "vuelve a probar."
+        )
+
+    @staticmethod
+    def _pc_swap_witnesses(change: PendingTeamChange) -> tuple[tuple[int, int, str], ...]:
+        """Los dos Pokémon del intercambio, más los vecinos de la caja de origen.
+
+        Aquí no hay ningún hueco vacío: ambas casillas están ocupadas y ambas
+        identidades se conocen, así que el propio gesto ya aporta los dos
+        testigos que exige el escaneo. Los vecinos solo refuerzan.
+        """
+        source_box = int(change.box)
+        source_slot = int(change.box_slot)
+        destination_box = int(change.destination_box)
+        destination_slot = int(change.destination_box_slot)
+        witnesses: list[tuple[int, int, str]] = []
+        seen: set[tuple[int, int]] = set()
+        for box, slot, identity in (
+            (source_box, source_slot, str(change.incoming_identity or "")),
+            (destination_box, destination_slot, str(change.outgoing_identity or "")),
+        ):
+            if not identity or (box, slot) in seen:
+                continue
+            seen.add((box, slot))
+            witnesses.append((box, slot, identity))
+        for slot, identity in (getattr(change, "box_witnesses", ()) or ()):
+            key = (source_box, int(slot))
+            if not identity or key in seen:
+                continue
+            seen.add(key)
+            witnesses.append((source_box, int(slot), str(identity)))
+        return tuple(witnesses)
+
+    def _apply_pc_swap(
+        self, current: SaveGameData, change: PendingTeamChange,
+    ) -> ORASLiveWriteResult:
+        """Intercambia dos casillas ocupadas del PC, sin tocar el equipo.
+
+        Es el caso que ``_apply_pc_move`` no cubre: allí el destino tiene que
+        estar libre. Aquí las dos casillas están ocupadas y las dos identidades
+        se conocen de antemano, así que ambas son ancla y no hace falta ningún
+        vacío para calibrar la matriz.
+
+        Los dos bloques de 0xE8 bytes se capturan y verifican antes de escribir
+        nada; luego cada uno se escribe en su nueva casilla. Si algo falla, se
+        restauran y verifican las dos. Origen y destino pueden estar en cajas
+        distintas: la tabla es contigua y solo cambia el índice.
+        """
+        source_box = int(change.box or 0)
+        source_slot = int(change.box_slot or 0)
+        destination_box = int(change.destination_box or 0)
+        destination_slot = int(change.destination_box_slot or 0)
+        if min(source_box, source_slot, destination_box, destination_slot) <= 0:
+            raise ORASLiveError(
+                "El intercambio PC→PC de ORAS no contiene un origen y un destino completos."
+            )
+        if (source_box, source_slot) == (destination_box, destination_slot):
+            raise ORASLiveError(
+                "El origen y el destino del intercambio PC→PC de ORAS son la misma casilla."
+            )
+        source_identity = str(change.incoming_identity or "")
+        destination_identity = str(change.outgoing_identity or "")
+        if not source_identity or not destination_identity:
+            raise ORASLiveError(
+                "El intercambio PC→PC de ORAS necesita la identidad estable de los DOS "
+                "Pokémon implicados. No se escribió ningún byte."
+            )
+        if source_identity == destination_identity:
+            raise ORASLiveError(
+                "Las dos casillas del intercambio PC→PC de ORAS declaran el mismo Pokémon. "
+                "No se escribió ningún byte."
+            )
+
+        try:
+            with self.reader.client_factory() as client:
+                process = self.reader._find_oras_process(client.process_list())
+                client.set_process(process.process_id)
+                party_capture, party_attempt = self._capture_stable_party(client)
+                witnesses = self._pc_swap_witnesses(change)
+                pc_base = self._locate_pc_base_with_witnesses(client, process, witnesses)
+                if pc_base is None:
+                    raise ORASLiveError(
+                        "No se pudo confirmar la matriz de cajas de ORAS con los dos Pokémon "
+                        "del intercambio. No se escribió nada. Pulsa F5 fuera del PC y vuelve "
+                        "a probar."
+                    )
+                source_address = self._box_slot_address(
+                    source_box, source_slot, base_address=pc_base,
+                )
+                destination_address = self._box_slot_address(
+                    destination_box, destination_slot, base_address=pc_base,
+                )
+
+                def stable_pair() -> tuple[bytes, bytes, int]:
+                    for attempt in range(1, self.reader.snapshot_attempts + 1):
+                        first = (
+                            bytes(client.read_memory(source_address, PK6_STORED_SIZE)),
+                            bytes(client.read_memory(destination_address, PK6_STORED_SIZE)),
+                        )
+                        if self.reader.stable_delay:
+                            time.sleep(self.reader.stable_delay)
+                        second = (
+                            bytes(client.read_memory(source_address, PK6_STORED_SIZE)),
+                            bytes(client.read_memory(destination_address, PK6_STORED_SIZE)),
+                        )
+                        if first == second:
+                            return second[0], second[1], attempt
+                    raise ORASLiveError(
+                        "Las casillas del PC de ORAS cambiaron durante todas las lecturas; "
+                        "no se escribió ningún byte."
+                    )
+
+                source_original, destination_original, pc_attempt = stable_pair()
+                for raw, box, slot, identity, label in (
+                    (source_original, source_box, source_slot, source_identity, "origen"),
+                    (
+                        destination_original, destination_box, destination_slot,
+                        destination_identity, "destino",
+                    ),
+                ):
+                    pokemon = parse_pk6_boxed(raw, box, slot, self.reader.move_names)
+                    if pokemon is None or self._pokemon_identity(pokemon) != identity:
+                        raise ORASLiveError(
+                            f"El Pokémon de {label} ({box}:{slot}) ya no coincide con el que se "
+                            "arrastró; no se escribió ningún byte. Pulsa F5 y vuelve a intentarlo."
+                        )
+
+                # Precondición inmediata: la captura anterior no vale si el
+                # juego o el usuario movieron algo mientras se preparaba.
+                if bytes(client.read_memory(source_address, PK6_STORED_SIZE)) != source_original:
+                    raise ORASLiveError(
+                        "La casilla de origen cambió antes de escribir; no se escribió ningún byte."
+                    )
+                if bytes(client.read_memory(destination_address, PK6_STORED_SIZE)) != destination_original:
+                    raise ORASLiveError(
+                        "La casilla de destino cambió antes de escribir; no se escribió ningún byte."
+                    )
+
+                attempted: list[tuple[int, bytes]] = []
+                try:
+                    for address, replacement, original in (
+                        (destination_address, source_original, destination_original),
+                        (source_address, destination_original, source_original),
+                    ):
+                        attempted.append((address, original))
+                        client.write_memory(address, replacement)
+                        if bytes(client.read_memory(address, PK6_STORED_SIZE)) != replacement:
+                            raise ORASLiveError(
+                                f"Azahar no confirmó el PK6 exacto en 0x{address:08X}."
+                            )
+
+                    def verify_once() -> tuple[bytes, bytes, int]:
+                        verified_source, verified_destination, attempt = stable_pair()
+                        for raw, expected, box, slot, identity in (
+                            (
+                                verified_source, destination_original,
+                                source_box, source_slot, destination_identity,
+                            ),
+                            (
+                                verified_destination, source_original,
+                                destination_box, destination_slot, source_identity,
+                            ),
+                        ):
+                            pokemon = parse_pk6_boxed(raw, box, slot, self.reader.move_names)
+                            if (
+                                raw != expected
+                                or pokemon is None
+                                or self._pokemon_identity(pokemon) != identity
+                            ):
+                                raise ORASLiveError(
+                                    f"ORAS no confirmó el Pokémon esperado en la casilla "
+                                    f"{box}:{slot} tras el intercambio."
+                                )
+                        return verified_source, verified_destination, attempt
+
+                    verified_source, verified_destination, verified_attempt = verify_once()
+
+                    # Mismo hallazgo que en Equipo↔PC y en `_apply_pc_move`:
+                    # Azahar puede confirmar bytes que el juego todavía no ha
+                    # adoptado. Solo se publica éxito si el estado sobrevive a
+                    # una segunda lectura tras el asentamiento.
+                    time.sleep(max(0.60, float(getattr(self.reader, "stable_delay", 0.06)) * 5.0))
+                    settled_source, settled_destination, settled_attempt = verify_once()
+                    if (
+                        settled_source != verified_source
+                        or settled_destination != verified_destination
+                    ):
+                        raise ORASLiveError(
+                            "El juego restauró las casillas del PC después del readback "
+                            "inmediato; el intercambio no quedó comprometido."
+                        )
+
+                    return ORASLiveWriteResult(
+                        game=self._build_game(party_capture, current, process, live_write=True),
+                        process=process,
+                        attempts=max(
+                            party_attempt, pc_attempt, verified_attempt, settled_attempt,
+                        ),
+                        applied_count=1,
+                    )
+                except Exception as exc:
+                    rollback_errors = self._rollback(client, attempted)
+                    detail = (
+                        f" Además falló la restauración: {'; '.join(rollback_errors)}"
+                        if rollback_errors else
+                        " Los bytes originales se restauraron y se verificaron."
+                    )
+                    raise ORASLiveError(f"{exc}{detail}") from exc
+        except AzaharRPCError as exc:
+            raise ORASLiveError(str(exc)) from exc
 
     def _apply_party_resize(
         self, current: SaveGameData, change: PendingTeamChange,
     ) -> ORASLiveWriteResult:
         """Deposita o retira un Pokémon del PC cambiando el tamaño del equipo.
 
-        ORAS, a diferencia de X/Y, NO compacta la party al depositar: el slot
-        vacante no se desplaza ni recibe el PK6 vacío cifrado canónico de X/Y,
-        se queda con un checksum inválido en su sitio (demostrado físicamente
-        el 30-08-2026 contra ORAS/Azahar real, ver ``ORAS_PARTY_COUNT_ADDRESS``
-        y ``diagnostics/manual/oras_party_size_transition_AUTO_20260830_*.json``).
-        Por eso este writer no asume ningún "prefijo compacto": cada uno de los
-        6 slots fijos se trata de forma independiente, y un slot cuenta como
-        hueco cuando su reconstrucción (`ORASLiveReader._read_party`: los 0xE8
-        bytes almacenados + los 0x16 bytes del espejo de estadísticas en
-        ``ORAS_PARTY_STATS_OFFSET``) está completamente a cero — el mismo
-        criterio que ya usa ``parse_pk6_party`` para "vacío".
+        Al depositar, la party resultante se deja COMPACTA: los miembros
+        posteriores suben un puesto y el hueco queda siempre al final. No es
+        estética. Hallazgo físico del 31-08-2026: con contador=5 y un hueco en
+        el slot 3, el visor de party del PC del propio juego solo pinta los
+        primeros 5 slots físicos — Gardevoir, intacto en el 6, desaparecía de
+        esa vista. Un hueco a mitad de equipo esconde al último miembro, y esa
+        vista truncada es la que el juego usa para operar sobre la party.
+        (El juego tolera huecos intermedios en RAM tras sus propios depósitos
+        —capturado el 30-08-2026— pero "el juego lo tolera un rato" no es "es
+        seguro dejarlo así".) La lectura sí sigue aceptando huecos en
+        cualquier posición: una party ajena no compactada no debe romper nada.
 
-        Al depositar, este writer pone a cero exactamente esas DOS regiones
-        (nunca los 0x1E4 bytes completos de la franja): son las únicas que
-        cualquier código validado de este escritor lee o escribe alguna vez.
-        El resto de la franja —incluida la zona entre el bloque almacenado y
-        el espejo— es territorio que nadie ha demostrado que sea seguro
-        tocar, así que no se toca, ni siquiera para ponerlo a cero.
+        Al depositar, este writer escribe en esas DOS regiones el PK6 vacío
+        CIFRADO canónico (``oras_empty_party_slot``, demostrado byte a byte el
+        31-08-2026 contra un depósito hecho desde el menú del propio juego);
+        ceros en claro quedaron desmentidos ese mismo día: el juego los marca
+        como anómalos y los dibuja como un Huevo. El resto de la franja de
+        0x1E4 bytes —incluida la zona entre el bloque almacenado y el espejo—
+        sigue siendo territorio que nadie ha demostrado que sea seguro tocar,
+        así que no se toca.
         """
         operation = str(change.operation)
         if operation not in {"party-to-box", "box-to-party"}:
@@ -4663,22 +5174,45 @@ class ORASLiveWriter(_ORASLiveWriterExtendedMixin):
                     pc_encoded = encrypt_pk6_stored(bytes(outgoing_stored))
 
                     planned.append((pc_address, pc_original, pc_encoded))
-                    # Solo se tocan las dos regiones que el lector reconstruye
-                    # y que "parse_pk6_party" usa para decidir si un slot está
-                    # vacío (almacenado + espejo de estadísticas). El resto de
-                    # la franja de 0x1E4 bytes es territorio que ningún código
-                    # validado de este escritor lee ni escribe nunca, así que
-                    # tampoco se toca aquí — ni siquiera para ponerlo a cero.
-                    planned.append((
-                        self._slot_address(source_slot),
-                        original_slots[source_slot - 1][:PK6_STORED_SIZE],
-                        bytes(PK6_STORED_SIZE),
-                    ))
-                    planned.append((
-                        self._slot_address(source_slot) + ORAS_PARTY_STATS_OFFSET,
-                        original_slots[source_slot - 1][PK6_STORED_SIZE:PK6_STORED_SIZE + ORAS_PARTY_STATS_SIZE],
-                        bytes(ORAS_PARTY_STATS_SIZE),
-                    ))
+                    # La party queda COMPACTA: los miembros posteriores suben un
+                    # puesto (bytes copiados tal cual: almacenado + espejo) y el
+                    # final recibe el PK6 vacío CIFRADO canónico, idéntico byte a
+                    # byte al que escribe el propio juego (`oras_empty_party_slot`;
+                    # ceros en claro se dibujan como un Huevo, y un hueco a mitad
+                    # de equipo esconde al último miembro en el visor del PC —
+                    # ambos hallazgos físicos del 31-08-2026). Si la party ya
+                    # traía huecos intermedios, esta pasada también los repara.
+                    vacio_canonico = oras_empty_party_slot()
+                    restantes = [
+                        slot for slot in sorted(occupied_slots) if slot != source_slot
+                    ]
+                    disposicion_esperada: dict[int, tuple[bytes, bytes]] = {}
+                    for destino, origen in enumerate(restantes, start=1):
+                        raw = original_slots[origen - 1]
+                        disposicion_esperada[destino] = (
+                            raw[:PK6_STORED_SIZE],
+                            raw[PK6_STORED_SIZE:PK6_STORED_SIZE + ORAS_PARTY_STATS_SIZE],
+                        )
+                    for destino in range(len(restantes) + 1, 7):
+                        disposicion_esperada[destino] = (
+                            vacio_canonico[:PK6_STORED_SIZE],
+                            vacio_canonico[PK6_STORED_SIZE:PK6_STORED_SIZE + ORAS_PARTY_STATS_SIZE],
+                        )
+                    for destino in range(1, 7):
+                        stored_deseado, stats_deseado = disposicion_esperada[destino]
+                        actual = original_slots[destino - 1]
+                        if actual[:PK6_STORED_SIZE] != stored_deseado:
+                            planned.append((
+                                self._slot_address(destino),
+                                actual[:PK6_STORED_SIZE],
+                                stored_deseado,
+                            ))
+                        if actual[PK6_STORED_SIZE:PK6_STORED_SIZE + ORAS_PARTY_STATS_SIZE] != stats_deseado:
+                            planned.append((
+                                self._slot_address(destino) + ORAS_PARTY_STATS_OFFSET,
+                                actual[PK6_STORED_SIZE:PK6_STORED_SIZE + ORAS_PARTY_STATS_SIZE],
+                                stats_deseado,
+                            ))
                     expected_count = original_count - 1
                 else:  # box-to-party
                     if original_count >= 6:
@@ -4739,7 +5273,25 @@ class ORASLiveWriter(_ORASLiveWriterExtendedMixin):
                         ),
                         full_encoded[PK6_STORED_SIZE:PK6_STORED_SIZE + ORAS_PARTY_STATS_SIZE],
                     ))
-                    planned.append((pc_address, pc_original, bytes(PK6_STORED_SIZE)))
+                    # El hueco que deja el retirado recibe el blank legítimo
+                    # del juego, cosechado de la matriz viva — nunca ceros, que
+                    # el juego dibuja como un Huevo (bug físico del 31-08-2026).
+                    plantilla = self._plantilla_de_hueco_pc(client, pc_base)
+                    planned.append((
+                        pc_address, pc_original,
+                        plantilla if plantilla is not None else bytes(PK6_STORED_SIZE),
+                    ))
+                    disposicion_esperada = {
+                        index: (
+                            original_slots[index - 1][:PK6_STORED_SIZE],
+                            original_slots[index - 1][PK6_STORED_SIZE:PK6_STORED_SIZE + ORAS_PARTY_STATS_SIZE],
+                        )
+                        for index in range(1, 7)
+                    }
+                    disposicion_esperada[target_slot] = (
+                        full_encoded[:PK6_STORED_SIZE],
+                        full_encoded[PK6_STORED_SIZE:PK6_STORED_SIZE + ORAS_PARTY_STATS_SIZE],
+                    )
                     expected_count = original_count + 1
 
                 # Reverificación justo antes de escribir: nada de lo capturado
@@ -4793,12 +5345,14 @@ class ORASLiveWriter(_ORASLiveWriterExtendedMixin):
                                 f"{verified_count}."
                             )
                         for index, raw in enumerate(verified_slots, start=1):
-                            if index == (source_slot if operation == "party-to-box" else target_slot):
-                                continue
-                            if raw != original_slots[index - 1]:
+                            stored_deseado, stats_deseado = disposicion_esperada[index]
+                            if (
+                                raw[:PK6_STORED_SIZE] != stored_deseado
+                                or raw[PK6_STORED_SIZE:PK6_STORED_SIZE + ORAS_PARTY_STATS_SIZE] != stats_deseado
+                            ):
                                 raise ORASLiveError(
-                                    f"El slot {index}, ajeno a esta operación, cambió durante la "
-                                    "escritura. Se restaurará el contenido original."
+                                    f"El slot {index} no coincide con la disposición esperada "
+                                    "tras la escritura. Se restaurará el contenido original."
                                 )
                         return verified_slots, verified_count, attempt
 
@@ -4823,6 +5377,190 @@ class ORASLiveWriter(_ORASLiveWriterExtendedMixin):
                 except Exception as exc:
                     rollback_errors = self._rollback(client, attempted)
                     detail = f" Además falló la restauración: {'; '.join(rollback_errors)}" if rollback_errors else " Los bytes originales se restauraron y se verificaron."
+                    raise ORASLiveError(f"{exc}{detail}") from exc
+        except AzaharRPCError as exc:
+            raise ORASLiveError(str(exc)) from exc
+
+    def _apply_pc_move(
+        self, current: SaveGameData, change: PendingTeamChange,
+    ) -> ORASLiveWriteResult:
+        """Mueve un PK6 entre dos casillas exactas del PC, sin tocar el equipo.
+
+        Las 31 cajas son una tabla contigua de PK6 almacenados, así que origen y
+        destino pueden estar en cajas distintas: solo cambia el índice. El
+        origen ocupado es el ancla —nunca el destino vacío— y el destino se
+        exige libre antes de escribir.
+
+        El "vacío" que se deja en el origen NO son ceros (eso quedó desmentido
+        físicamente el 31-08-2026: el juego dibuja los ceros como un Huevo).
+        El juego INTERCAMBIA al mover: el Pokémon va al destino y el blank
+        canónico que ocupaba el destino vuelve al origen. Ese blank depende
+        del idioma del cartucho (lleva el mote de huevo localizado, ver
+        ``es_hueco_pc_canonico``), así que se cosecha de la matriz viva con
+        ``_plantilla_de_hueco_pc`` en vez de fabricarse — la misma familia de
+        solución que ``XYLiveWriter._validated_empty_pc_slot`` en X/Y.
+
+        Se escribe primero el destino y solo después se vacía el origen, de
+        modo que ningún fallo intermedio puede hacer desaparecer al Pokémon.
+        Cualquier error restaura y verifica los dos bloques originales.
+        """
+        source_box = int(change.box or 0)
+        source_slot = int(change.box_slot or 0)
+        destination_box = int(change.destination_box or 0)
+        destination_slot = int(change.destination_box_slot or 0)
+        if min(source_box, source_slot, destination_box, destination_slot) <= 0:
+            raise ORASLiveError(
+                "El movimiento PC→PC de ORAS no contiene un origen y un destino completos."
+            )
+        if (source_box, source_slot) == (destination_box, destination_slot):
+            raise ORASLiveError(
+                "El origen y el destino del movimiento PC→PC de ORAS son la misma casilla."
+            )
+        expected_identity = str(change.incoming_identity or "")
+        if not expected_identity:
+            raise ORASLiveError(
+                "El movimiento PC→PC de ORAS no contiene una identidad estable del Pokémon."
+            )
+
+        try:
+            with self.reader.client_factory() as client:
+                process = self.reader._find_oras_process(client.process_list())
+                client.set_process(process.process_id)
+                party_capture, party_attempt = self._capture_stable_party(client)
+                pc_base = self._locate_pc_base(client, process, [change])
+                source_address = self._box_slot_address(
+                    source_box, source_slot, base_address=pc_base,
+                )
+                destination_address = self._box_slot_address(
+                    destination_box, destination_slot, base_address=pc_base,
+                )
+
+                def stable_pair() -> tuple[bytes, bytes, int]:
+                    for attempt in range(1, self.reader.snapshot_attempts + 1):
+                        first = (
+                            bytes(client.read_memory(source_address, PK6_STORED_SIZE)),
+                            bytes(client.read_memory(destination_address, PK6_STORED_SIZE)),
+                        )
+                        if self.reader.stable_delay:
+                            time.sleep(self.reader.stable_delay)
+                        second = (
+                            bytes(client.read_memory(source_address, PK6_STORED_SIZE)),
+                            bytes(client.read_memory(destination_address, PK6_STORED_SIZE)),
+                        )
+                        if first == second:
+                            return second[0], second[1], attempt
+                    raise ORASLiveError(
+                        "Las casillas del PC de ORAS cambiaron durante todas las lecturas; "
+                        "no se escribió ningún byte."
+                    )
+
+                source_original, destination_original, pc_attempt = stable_pair()
+                source_pokemon = parse_pk6_boxed(
+                    source_original, source_box, source_slot, self.reader.move_names,
+                )
+                if source_pokemon is None or self._pokemon_identity(source_pokemon) != expected_identity:
+                    raise ORASLiveError(
+                        "El Pokémon de origen ya no coincide con el que se arrastró; "
+                        "no se escribió ningún byte. Pulsa F5 y vuelve a intentarlo."
+                    )
+                # El destino se comprueba en modo tolerante: un hueco que la
+                # partida nunca ha tocado puede no ser cero puro (memoria del
+                # emulador sin inicializar) sin ser por eso un Pokémon real.
+                if parse_pk6_boxed_lenient(
+                    destination_original, destination_box, destination_slot, self.reader.move_names,
+                ) is not None:
+                    raise ORASLiveError(
+                        f"La casilla {destination_box}:{destination_slot} del PC de ORAS ya está "
+                        "ocupada; no se escribió ningún byte."
+                    )
+
+                # Precondición inmediata: la captura anterior no vale si el
+                # juego o el usuario movieron algo mientras se preparaba.
+                if bytes(client.read_memory(source_address, PK6_STORED_SIZE)) != source_original:
+                    raise ORASLiveError(
+                        "La casilla de origen cambió antes de escribir; no se escribió ningún byte."
+                    )
+                if bytes(client.read_memory(destination_address, PK6_STORED_SIZE)) != destination_original:
+                    raise ORASLiveError(
+                        "La casilla de destino cambió antes de escribir; no se escribió ningún byte."
+                    )
+
+                # El juego no borra al mover: INTERCAMBIA. El Pokémon va al
+                # destino y el blank que ocupaba el destino vuelve al origen.
+                # Un cero puro en su lugar hace que el juego marque el hueco
+                # como anómalo y lo dibuje como un Huevo (bug físico del
+                # 31-08-2026); el blank legítimo depende del idioma, así que
+                # se cosecha de la matriz viva en vez de fabricarse.
+                plantilla = self._plantilla_de_hueco_pc(
+                    client, pc_base, preferidos=(destination_original,),
+                )
+                empty_stored = plantilla if plantilla is not None else bytes(PK6_STORED_SIZE)
+                attempted: list[tuple[int, bytes]] = []
+                try:
+                    attempted.append((destination_address, destination_original))
+                    client.write_memory(destination_address, source_original)
+                    if bytes(client.read_memory(destination_address, PK6_STORED_SIZE)) != source_original:
+                        raise ORASLiveError(
+                            "Azahar no confirmó el PK6 exacto en la casilla de destino."
+                        )
+
+                    attempted.append((source_address, source_original))
+                    client.write_memory(source_address, empty_stored)
+                    if bytes(client.read_memory(source_address, PK6_STORED_SIZE)) != empty_stored:
+                        raise ORASLiveError("Azahar no confirmó la casilla de origen vacía.")
+
+                    def verify_once() -> tuple[bytes, bytes, int]:
+                        verified_source, verified_destination, attempt = stable_pair()
+                        if verified_source != empty_stored or parse_pk6_boxed(
+                            verified_source, source_box, source_slot, self.reader.move_names,
+                        ) is not None:
+                            raise ORASLiveError("ORAS no confirmó semánticamente el origen vacío.")
+                        moved = parse_pk6_boxed(
+                            verified_destination, destination_box, destination_slot,
+                            self.reader.move_names,
+                        )
+                        if (
+                            verified_destination != source_original
+                            or moved is None
+                            or self._pokemon_identity(moved) != expected_identity
+                        ):
+                            raise ORASLiveError(
+                                "ORAS no confirmó el Pokémon exacto en la casilla de destino."
+                            )
+                        return verified_source, verified_destination, attempt
+
+                    verified_source, verified_destination, verified_attempt = verify_once()
+
+                    # Mismo hallazgo que en Equipo↔PC: Azahar puede devolver los
+                    # bytes recién escritos mientras el juego todavía no los ha
+                    # adoptado. Solo se publica éxito si el estado sobrevive a
+                    # una segunda lectura tras el asentamiento.
+                    time.sleep(max(0.60, float(getattr(self.reader, "stable_delay", 0.06)) * 5.0))
+                    settled_source, settled_destination, settled_attempt = verify_once()
+                    if (
+                        settled_source != verified_source
+                        or settled_destination != verified_destination
+                    ):
+                        raise ORASLiveError(
+                            "El juego restauró las casillas del PC después del readback "
+                            "inmediato; el movimiento no quedó comprometido."
+                        )
+
+                    return ORASLiveWriteResult(
+                        game=self._build_game(party_capture, current, process, live_write=True),
+                        process=process,
+                        attempts=max(
+                            party_attempt, pc_attempt, verified_attempt, settled_attempt,
+                        ),
+                        applied_count=1,
+                    )
+                except Exception as exc:
+                    rollback_errors = self._rollback(client, attempted)
+                    detail = (
+                        f" Además falló la restauración: {'; '.join(rollback_errors)}"
+                        if rollback_errors else
+                        " Los bytes originales se restauraron y se verificaron."
+                    )
                     raise ORASLiveError(f"{exc}{detail}") from exc
         except AzaharRPCError as exc:
             raise ORASLiveError(str(exc)) from exc
@@ -4857,6 +5595,28 @@ class ORASLiveWriter(_ORASLiveWriterExtendedMixin):
                     "El cambio de rol y EV de ORAS debe ejecutarse separado de PC, bolsa y curación."
                 )
             return self._apply_party_role_evs(current, changes)
+        pc_swap_changes = [
+            change for change in changes
+            if isinstance(change, PendingTeamChange) and change.operation == "swap-box-slots"
+        ]
+        if pc_swap_changes:
+            if len(pc_swap_changes) != 1 or len(changes) != 1:
+                raise ORASLiveError(
+                    "Cada intercambio PC→PC de ORAS se confirma como una transacción "
+                    "independiente. No se escribió ningún byte."
+                )
+            return self._apply_pc_swap(current, pc_swap_changes[0])
+        pc_move_changes = [
+            change for change in changes
+            if isinstance(change, PendingTeamChange) and change.operation == "move-box-slot"
+        ]
+        if pc_move_changes:
+            if len(pc_move_changes) != 1 or len(changes) != 1:
+                raise ORASLiveError(
+                    "Cada movimiento PC→PC de ORAS se confirma como una transacción "
+                    "independiente. No se escribió ningún byte."
+                )
+            return self._apply_pc_move(current, pc_move_changes[0])
         resize_changes = [
             change for change in changes
             if isinstance(change, PendingTeamChange) and change.operation in {"party-to-box", "box-to-party"}

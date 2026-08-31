@@ -96,6 +96,20 @@ class RunProject:
     # Identidades ya retiradas al Cementerio. Evita descontar
     # dos veces la misma baja si un estado de UI se reconstruye.
     graveyard_pokemon: list[str] = field(default_factory=list)
+    # Últimas coordenadas de PC demostradas en la RAM del juego:
+    # ``{"box", "box_slot", "species_id", "pid", "tid", "sid"}``.
+    #
+    # La matriz viva del PC se localiza en memoria buscando Pokémon en sus
+    # posiciones conocidas. Esas posiciones salían solo del archivo ``main``, y
+    # un traslado hecho desde RoleRun vive en la RAM hasta que el jugador guarda
+    # dentro del juego: al reabrir, las únicas anclas disponibles apuntaban a
+    # huecos viejos y el PC no se podía leer hasta guardar la partida. Con una
+    # caja de dos Pokémon bastaba con haber movido esos dos.
+    #
+    # Estas anclas se AÑADEN a las del ``main``; nunca lo sustituyen. Una que
+    # haya caducado simplemente no cuenta: el localizador exige coincidencias,
+    # no ausencia de fallos.
+    pc_anchor_memory: list[dict[str, Any]] = field(default_factory=list)
     # Drafteos tirados y guardados para enseñar más tarde. Guardar ya costó su
     # drafteo, así que enseñarlos después no vuelve a cobrar. Ver
     # `app/drafteos_guardados.py`.

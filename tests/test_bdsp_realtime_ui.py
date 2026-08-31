@@ -1112,7 +1112,7 @@ def test_bdsp_party_to_pc_reconcile_uses_full_matrix_and_preserves_live_role(
             f"{pokemon.species_id}:{pokemon.pid}:{pokemon.tid}:{pokemon.sid}"
         ),
         _pending_team_changes=lambda: [],
-        _project_pc_box_pokemon=lambda data, box: [],
+        _project_pc_box_pokemon=lambda data, box, solo_confirmado=False: [],
         _save_file_signature=RoleRunManager._save_file_signature,
         _floating_bar_is_visible=lambda: False,
         _main_ui_dirty_while_floating=False, active_page="team",
@@ -1438,7 +1438,7 @@ def test_bdsp_pc_to_pc_poll_repaints_only_when_the_projection_changes(tmp_path) 
             f"{pokemon.species_id}:{pokemon.pid}:{pokemon.tid}:{pokemon.sid}"
         ),
         _pending_team_changes=lambda: [],
-        _project_pc_box_pokemon=lambda data, box: [],
+        _project_pc_box_pokemon=lambda data, box, solo_confirmado=False: [],
         _save_file_signature=RoleRunManager._save_file_signature,
         _floating_bar_is_visible=lambda: False,
         _main_ui_dirty_while_floating=False, active_page="pc",
@@ -1585,7 +1585,7 @@ def test_bdsp_pc_reconcile_publishes_live_metadata_when_identity_did_not_move(
             f"{pokemon.species_id}:{pokemon.pid}:{pokemon.tid}:{pokemon.sid}"
         ),
         _pending_team_changes=lambda: [],
-        _project_pc_box_pokemon=lambda data, box: list(data.boxes[box - 1].pokemon),
+        _project_pc_box_pokemon=lambda data, box, solo_confirmado=False: list(data.boxes[box - 1].pokemon),
         _save_file_signature=RoleRunManager._save_file_signature,
         _floating_bar_is_visible=lambda: False,
         _main_ui_dirty_while_floating=False, active_page="pc",

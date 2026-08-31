@@ -16,6 +16,193 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
 
+### Corrección posterior 30-08-2026 (3) — el depósito no sabía calibrar su propia caja
+
+Diagnosticado con `Logs/escrituras_vivas.jsonl`: tras las dos correcciones de
+abajo, arrastrar del equipo a una casilla concreta del PC seguía terminando en
+"No se pudo confirmar el hueco vacío del PC de ORAS con los testigos de esa
+caja" (y la barra volvía a verde en cuanto el monitor confirmaba que la party
+seguía intacta, así que el fallo se leía como un cambio realizado).
+
+Causa: `ORASLiveWriter._locate_empty_pc_destination` solo probaba la caché del
+**escritor** y las dos direcciones conocidas (`ORAS_PC_KNOWN_ADDRESSES`). Si la
+matriz de cajas de la partida no está en ninguna de ellas —el caso normal— el
+depósito solo funcionaba cuando alguna operación previa de PC (`_locate_pc_base`,
+que sí escanea) había dejado la base en esa caché. El **lector** encontraba la
+dirección buena escaneando en cada lectura del PC, pero la guardaba en su propia
+caché, que este camino no consultaba.
+
+Corregido sin relajar ninguna garantía: el destino vacío sigue sin identificar
+nada por sí solo. Ahora se prueban, en orden, caché del escritor → caché del
+lector → direcciones conocidas, y si ninguna casa se calibra con
+`_scan_empty_pc_destination`, que ancla siempre en un **testigo ocupado** de la
+misma caja (el vecino real que la UI capta al arrastrar), exige dos testigos
+—mismo listón que `_scan_pc_base`— y solo acepta la base si
+`_empty_pc_destination_matches` confirma todos los testigos y que el hueco
+elegido sigue libre.
+
+El Pokémon cae en la casilla exacta donde se suelta (no en el primer hueco
+libre): ya lo hacían el gesto (`_team_pc_drop` → `send_pokemon_to_pc`
+`destination`), el escritor (`change.box_slot` → `_box_slot_address`) y la
+proyección visual; lo único que faltaba era poder localizar la matriz.
+
+Suite completa: 2188 passed, 1 skipped.
+
+### Corrección posterior 30-08-2026 (5) — Caja → Caja en ORAS
+
+PC→PC no fallaba: estaba **deshabilitado**. ORAS no figuraba en
+`PC_A_PC_GAME_KEYS`, así que al arrastrar dentro del PC todas las casillas se
+pintaban en rojo y al soltar salía «DESTINO NO HABILITADO», en cualquier caja.
+
+Añadido `ORASLiveWriter._apply_pc_move`, con el mismo contrato que el de X/Y:
+
+- El origen ocupado es el ancla (`_locate_pc_base`); el destino vacío nunca
+  identifica nada y se exige libre con `parse_pk6_boxed_lenient`.
+- Se escribe el **destino antes** de vaciar el origen, así que ningún fallo
+  intermedio puede hacer desaparecer al Pokémon.
+- Readback inmediato + segundo readback tras el asentamiento (mismo hallazgo
+  que en Equipo↔PC: Azahar confirma bytes que el juego todavía no ha adoptado)
+  y rollback verificado de las dos casillas.
+- El hueco que queda en el origen son los 0xE8 bytes a cero, exactamente lo que
+  `_apply_party_resize` ya escribe en la casilla de origen al incorporar del PC
+  al equipo (validado físicamente el 30-08-2026). ORAS no necesita la plantilla
+  de vacío cifrado que sí exige X/Y (`XYLiveWriter._validated_empty_pc_slot`).
+
+Origen y destino pueden estar en cajas distintas: la matriz es contigua y solo
+cambia el índice. En la UI se añadió `oras` a `PC_A_PC_GAME_KEYS`, a la
+compuerta de aplicación inmediata y a las operaciones soportadas por el
+adaptador; los testigos de PC→PC en ORAS pasan a salir de `_pc_box_witnesses`
+(proyección viva) en vez de `_pc_role_witnesses` (solo el `main`), que en una
+caja recién estrenada no aportaba ningún acompañante.
+
+Suite completa: 2199 passed, 1 skipped.
+
+### Corrección 31-08-2026 (3) — la lectura viva del PC reintenta sola
+
+«NO SE PUDO LEER EL PC DE ORAS · No se pudo localizar de forma segura la matriz
+viva del PC de ORAS para leerla», con un botón REINTENTAR que **funcionaba a la
+primera**. Es decir: el fallo era transitorio —la matriz no se deja localizar
+mientras el juego reconstruye sus cajas, típicamente justo después de una
+escritura— y el aviso rojo estaba pidiendo al usuario que hiciera a mano lo que
+RoleRun puede hacer sola.
+
+`_schedule_oras_external_pc_reconcile` reintenta ahora la lectura antes de
+publicar el error, con los retardos de `LIVE_PC_READ_RETRY_DELAYS_MS`
+(260 ms y 700 ms). Cada reintento queda registrado como `pc-reconcile-reread`.
+El aviso solo aparece si ninguno lo consigue, y una lectura buena reinicia el
+contador. No se relaja ninguna garantía: sigue sin publicarse jamás una caja
+vacía como si fuera el estado real, y una lectura no forzada mantiene su
+`fallback_inference` de siempre.
+
+Suite completa: 2250 passed, 1 skipped.
+
+### Corrección 31-08-2026 (2) — Equipo ↔ PC moría tras mover algo en el PC
+
+Diagnosticado con `Logs/escrituras_vivas.jsonl`: varias operaciones de PC en
+vivo seguidas y, justo después, un intercambio Equipo ↔ PC fallando con «No se
+pudo localizar y validar la caja viva de ORAS con los Pokémon de esa caja».
+
+Causa: `_pc_role_witnesses` —la que alimenta `swap-party-box` y
+`box-to-party`— construía los vecinos leyendo solo `data.boxes`, es decir el
+último `main`. En cuanto una operación de PC en vivo movía un Pokémon, esos
+testigos apuntaban a huecos que ya no lo contenían; ninguna base candidata
+casaba en `_pc_base_matches` (ni en el escaneo, que usa los mismos testigos) y
+`_locate_pc_base` abortaba sin escribir un byte.
+
+Es exactamente la corrección que `_pc_box_witnesses` ya llevaba —su comentario
+la documenta— y que esta función no recibió. Ahora los vecinos salen de
+`_project_pc_box_pokemon`, la misma proyección viva que pinta la cuadrícula.
+Cuando no hay ninguna operación viva pendiente, la proyección coincide con el
+guardado y el resultado es idéntico al de antes: solo cambia el caso que estaba
+roto.
+
+Suite completa: 2248 passed, 1 skipped.
+
+### Novedad 31-08-2026 — intercambiar dos casillas ocupadas del PC (ORAS)
+
+Soltar sobre una casilla **ocupada** del PC dejó de estar prohibido. Antes,
+`resolve_team_pc_drop` devolvía `None` para ese gesto («El intercambio entre dos
+casillas PC ocupadas no está habilitado») en todos los backends.
+
+Ahora el resolutor distingue dos operaciones PC→PC y deja la decisión de quién
+sabe escribir cada una a la interfaz:
+
+- `move-box-slot` — llevar a un hueco libre (`PC_A_PC_GAME_KEYS`).
+- `swap-box-slots` — intercambiar dos ocupadas (`PC_SWAP_GAME_KEYS`, hoy solo
+  ORAS). En los demás backends la casilla se sigue pintando en rojo.
+
+`ORASLiveWriter._apply_pc_swap` es una transacción independiente: captura
+estable de los dos bloques de 0xE8 bytes, verificación de que cada casilla
+contiene exactamente el Pokémon que la interfaz declaró, precondición inmediata
+antes de escribir, escritura cruzada con readback por bloque, verificación
+semántica de ambas casillas, segundo readback tras el asentamiento y rollback
+verificado de las dos. Ninguna casilla se vacía en ningún momento del plan.
+
+Aquí no hay ningún hueco vacío del que desconfiar y, a cambio, **las dos
+identidades son ancla**: `_pc_swap_witnesses` las aporta como testigos, así que
+el escaneo de calibración ya tiene sus dos identidades sin depender de vecinos.
+Efecto colateral útil: si una de las dos ha dejado de estar donde decía la
+interfaz, ninguna base candidata confirma y se aborta antes de leer la pareja.
+
+Refactor asociado: `_pc_witnesses_match`, `_scan_pc_base_with_witnesses` y
+`_locate_pc_base_with_witnesses` unifican la localización de la matriz para las
+tres rutas de PC (depósito en hueco vacío, traslado e intercambio), con
+`empty_slot` como única diferencia. El depósito conserva su comportamiento.
+
+Origen y destino pueden estar en cajas distintas. Corregido de paso el rótulo
+de REVISAR CAMBIOS, que describía las operaciones PC→PC como «· EQUIPO».
+
+Suite completa: 2247 passed, 1 skipped.
+
+### Ajuste 30-08-2026 (6) — cadencia del cambio de caja durante el arrastre
+
+Corrección de una afirmación equivocada del punto (5): el cambio de caja sin
+soltar el Pokémon YA existía —`UnifiedTeamPCView._update_drag_box_hover`, con
+sus propios tests desde `v0.2.6-alpha.14`—, así que arrastrar entre cajas nunca
+dependió de un gesto nuevo.
+
+Lo que sí era impracticable era su cadencia: cada entrada en la flecha ‹ o ›
+provocaba un único salto (`_drag_box_hover_consumed`) y había que salir y
+volver a entrar una vez por caja. Con 31 cajas, llegar a la 15 eran catorce
+idas y venidas con el Pokémon cogido.
+
+Ahora el primer salto sigue esperando `DRAG_BOX_HOVER_DELAY_MS` (420 ms, para
+no dispararse al pasar por encima) y, mientras el puntero siga en la flecha, se
+repite cada `DRAG_BOX_HOVER_REPEAT_MS` (520 ms). Cada repetición vuelve a
+comprobar que el arrastre sigue vivo y que el puntero no se ha ido, y mover el
+ratón dentro de la flecha no reinicia el temporizador. La intención original
+del guardia —no encadenar cajas sin control— se mantiene: la cadencia es fija y
+visible, no un encadenado a velocidad de eventos.
+
+Suite completa: 2200 passed, 1 skipped.
+
+### Corrección posterior 30-08-2026 (4) — soltar en una caja vacía del PC
+
+La corrección anterior seguía exigiendo testigos de la MISMA caja
+(`box_witnesses`), así que una caja de destino vacía no aportaba ni una
+identidad y el depósito se rechazaba sin escribir nada.
+
+Las 31 cajas son una sola tabla contigua en RAM: un Pokémon real de la caja 1
+demuestra la dirección base exactamente igual que un vecino de la caja 5. Se
+añade `PendingTeamChange.pc_anchor_witnesses` —`(caja, hueco, identidad)`, de
+cualquier caja— que la interfaz rellena con `_pc_anchor_witnesses` (recorre las
+cajas empezando por la de destino y abriéndose a las más cercanas, así que en la
+práctica proyecta una o dos, y nunca aporta la casilla que va a recibir al
+Pokémon). Solo lo consume el escritor de ORAS.
+
+En el escritor, `_empty_destination_witnesses` reúne primero los vecinos de la
+caja de destino y después los de cualquier otra; `_empty_pc_destination_matches`
+y `_scan_empty_pc_destination` verifican cada testigo en SU posición exacta
+(caja + hueco). Las garantías no se relajan: el hueco vacío nunca es ancla, el
+escaneo sigue exigiendo dos testigos y la base solo se acepta si todos casan y
+el destino sigue libre.
+
+Limitación restante: un PC entero sin un solo Pokémon no puede demostrar nada
+—ni el lector ni el escritor— y ese primer depósito se sigue rechazando sin
+escribir. Es el único caso que queda.
+
+Suite completa: 2192 passed, 1 skipped.
+
 ### Corrección posterior 30-08-2026 (2) — el mismo problema, del lado del PC
 
 Con la lectura de la party ya reparada (entrada de abajo), "Equipo → casilla

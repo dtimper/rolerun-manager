@@ -22,7 +22,12 @@ from app.save_engine_client import SaveGameData, SavePokemon
 from app.ui import RoleRunManager
 from app.ui_views.draft_flow import IntegratedDraftFlow, _draft_result_layout
 from app.ui_views.global_tm_view import GlobalTMView
-from app.ui_views.team_pc_view import UnifiedTeamPCView, _move_issue_map
+from app.ui_views.team_pc_view import (
+    DRAG_BOX_HOVER_DELAY_MS,
+    DRAG_BOX_HOVER_REPEAT_MS,
+    UnifiedTeamPCView,
+    _move_issue_map,
+)
 from app.ui_views.tm_teach_flow import IntegratedTMTeachFlow
 from app.ui_components.loading_indicator import CenteredLoadingIndicator
 from app.ui_components.operation_bar import OperationStatusBar
@@ -363,19 +368,26 @@ def test_drag_routes_to_the_same_existing_team_pc_operations() -> None:
     ).operation == "swap-party-box"
 
 
-def test_pc_move_to_empty_slot_is_distinct_from_unproved_pc_swap() -> None:
+def test_pc_move_to_empty_slot_is_distinct_from_pc_swap() -> None:
+    """Dos operaciones distintas, no una permitida y otra prohibida.
+
+    Llevar a un hueco libre conserva un solo PK6; intercambiar dos casillas
+    ocupadas conserva dos y no dispone de ninguna casilla vacía donde apoyar la
+    calibración. Qué backend sabe escribir cada una lo decide la interfaz
+    (`PC_A_PC_GAME_KEYS` y `PC_SWAP_GAME_KEYS`), no este resolutor.
+    """
     assert resolve_team_pc_drop(
         "pc", "pc", target_occupied=False, team_count=4,
     ).operation == "move-box-slot"
     assert resolve_team_pc_drop(
         "pc", "pc", target_occupied=True, team_count=4,
-    ).operation is None
+    ).operation == "swap-box-slots"
     assert resolve_team_pc_drop(
         "team", "team", target_occupied=True, team_count=6,
     ).operation is None
 
 
-def test_drag_hover_changes_one_box_and_requires_leaving_arrow_before_repeating() -> None:
+def test_drag_hover_repeats_box_changes_at_a_fixed_cadence() -> None:
     class _Widget:
         def __init__(self, left: int, top: int, width: int, height: int) -> None:
             self.bounds = (left, top, width, height)
@@ -399,9 +411,10 @@ def test_drag_hover_changes_one_box_and_requires_leaving_arrow_before_repeating(
         def __init__(self) -> None:
             self.callback = None
             self.pointer = (125, 20)
+            self.delays: list[int] = []
 
         def after(self, delay: int, callback):
-            assert delay == 420
+            self.delays.append(int(delay))
             self.callback = callback
             return "hover"
 
@@ -424,7 +437,6 @@ def test_drag_hover_changes_one_box_and_requires_leaving_arrow_before_repeating(
     view._next_box_button = _Widget(100, 0, 40, 40)
     view._drag_box_hover_after_id = None
     view._drag_box_hover_direction = None
-    view._drag_box_hover_consumed = None
     view._drag_started = True
     view._drag_source = ("pc", object())
     changed: list[int] = []
@@ -436,17 +448,26 @@ def test_drag_hover_changes_one_box_and_requires_leaving_arrow_before_repeating(
     view.frame.run_after()
     assert changed == [1]
 
-    # Permanecer encima de la misma flecha no encadena cajas sin control.
+    # Con 31 cajas, un salto por cada entrada en la flecha obligaba a entrar y
+    # salir una vez por caja. Se repite solo, a cadencia fija, mientras el
+    # puntero siga encima: el movimiento del ratón no reinicia el temporizador.
+    assert view.frame.delays == [DRAG_BOX_HOVER_DELAY_MS, DRAG_BOX_HOVER_REPEAT_MS]
     view._update_drag_box_hover(125, 20)
-    assert view.frame.callback is None
-    assert changed == [1]
-
-    # Salir y volver a entrar arma exactamente un cambio adicional.
-    view._update_drag_box_hover(70, 70)
-    view._update_drag_box_hover(125, 20)
-    assert view.frame.callback is not None
+    assert view.frame.delays == [DRAG_BOX_HOVER_DELAY_MS, DRAG_BOX_HOVER_REPEAT_MS]
     view.frame.run_after()
     assert changed == [1, 1]
+
+    # Sacar el puntero de la flecha corta la repetición en seco.
+    view._update_drag_box_hover(70, 70)
+    assert view.frame.callback is None
+    assert changed == [1, 1]
+
+    # Soltar el Pokémon (o cancelar) tampoco deja el temporizador vivo.
+    view._update_drag_box_hover(125, 20)
+    view._drag_source = None
+    view.frame.run_after()
+    assert changed == [1, 1]
+    assert view.frame.callback is None
 
 
 def test_drag_continuation_uses_toplevel_bindtag_without_retargeting_pointer() -> None:
@@ -872,13 +893,31 @@ def test_pc_loader_retires_only_after_three_confirmed_final_frames() -> None:
     assert hidden == ["pc-load"]
 
 
-def test_verified_realtime_writes_keep_the_centered_loader_until_finish() -> None:
+def test_una_escritura_verificada_ya_no_tapa_la_aplicacion() -> None:
+    """La escritura viva no levanta la superficie opaca sobre ``content``.
+
+    Esa superficie era literalmente lo que obligaba al usuario a esperar de pie
+    los segundos de escritura + verificación. La actividad se comunica ahora por
+    la barra inferior y por la cola, que informan sin secuestrar la ventana. El
+    ``hide_busy`` del final se conserva solo por compatibilidad: un flujo
+    anterior pudo dejar puesta la superficie y no debe quedarse.
+    """
     start = inspect.getsource(RoleRunManager._save_oras_live_changes)
     finish = inspect.getsource(RoleRunManager._finish_oras_live_write)
 
-    assert '_show_busy_indicator(' in start
-    assert '"live-write"' in start
+    assert '_show_busy_indicator(' not in start
     assert 'hide_busy("live-write")' in finish
+
+
+def test_un_cambio_durante_una_escritura_se_encola_en_vez_de_rechazarse() -> None:
+    start = inspect.getsource(RoleRunManager._save_oras_live_changes)
+
+    assert "_encolar_cambios_en_vivo(" in start
+    assert "_cola_debe_esperar()" in start
+    # El bombeo es el ÚNICO punto que saca trabajos de la cola.
+    bombeo = inspect.getsource(RoleRunManager._bombear_cola_de_cambios)
+    assert "cola.siguiente()" in bombeo
+    assert "desde_cola=True" in bombeo
 
 
 def test_tm_inventory_io_for_every_realtime_game_runs_outside_tk() -> None:

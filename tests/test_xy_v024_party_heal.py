@@ -879,8 +879,9 @@ def test_xy_ui_accepts_exact_pc_to_pc_drop_only_for_demonstrated_backends() -> N
 
     assert can_drop("xy") is True
     assert can_drop("usum") is True
+    # ORAS se sumó el 30-08-2026 con ORASLiveWriter._apply_pc_move.
+    assert can_drop("oras") is True
     assert can_drop("sm") is False
-    assert can_drop("oras") is False
 
 
 def test_xy_ui_enables_party_resize_and_oras_too() -> None:
@@ -946,10 +947,13 @@ def test_xy_pc_to_pc_drop_queues_exact_coordinates_and_requests_live_apply() -> 
     assert change.incoming_identity == "261:2309737967:12345:54321"
     assert change.box_witnesses == ((4, 2, "companion"),)
     assert requested == [set()]
+    # El movimiento se pinta por adelantado en el hueco de destino, así que el
+    # aviso tiene que decir exactamente eso: todavía no lo ha confirmado nadie.
     assert statuses == [(
         "applying",
         "MOVIENDO EN EL PC",
-        "Verificando Caja 4, posición 1 → Caja 3, posición 5.",
+        "Caja 4, posición 1 → Caja 3, posición 5. "
+        "Mostrado por adelantado; falta la confirmación del juego.",
     )]
 
 

@@ -155,6 +155,13 @@ class PendingTeamChange:
     incoming_identity: str = ""
     outgoing_identity: str = ""
     box_witnesses: tuple[tuple[int, str], ...] = ()
+    # Testigos de CUALQUIER caja: ``(caja, hueco, identidad)``. La matriz de
+    # cajas es una sola tabla contigua, así que un Pokémon real de otra caja
+    # demuestra su dirección base exactamente igual que un vecino de la misma
+    # caja. Es lo único que permite soltar en una caja vacía, donde
+    # ``box_witnesses`` no puede aportar nada y un hueco vacío nunca vale como
+    # ancla.
+    pc_anchor_witnesses: tuple[tuple[int, int, str], ...] = ()
     # Operación especial de baja: el sustituto sale de ``box/box_slot`` y el
     # Pokémon debilitado se deposita en esta posición de la caja de Cementerio.
     graveyard_box: int | None = None

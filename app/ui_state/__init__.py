@@ -4,6 +4,7 @@ Este paquete no contiene reglas de juego, acceso a memoria ni decisiones de
 persistencia.  Solo describe qué debe comunicar la interfaz.
 """
 
+from .cola_de_cambios import ColaDeCambios, EstadoCola, Trabajo
 from .operation_status import OperationMessage, OperationStatusStore
 from .path_actions import ExplorerTarget, resolve_explorer_target
 from .navigation import DEFAULT_PAGE, PRIMARY_NAVIGATION, normalize_navigation_target, primary_page_for
@@ -19,6 +20,9 @@ from .team_pc_state import (
 __all__ = [
     "DEFAULT_PAGE",
     "PRIMARY_NAVIGATION",
+    "ColaDeCambios",
+    "EstadoCola",
+    "Trabajo",
     "OperationMessage",
     "OperationStatusStore",
     "ExplorerTarget",

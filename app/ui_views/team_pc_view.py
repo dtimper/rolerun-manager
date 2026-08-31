@@ -15,6 +15,13 @@ from app.ui_state.spatial_navigation import event_targets_text_input, keypress_s
 from app.ui_state.team_pc_state import TeamPCSelectionState
 
 
+# Cambio de caja sin soltar el Pokémon: el primer salto espera lo bastante
+# como para no dispararse al pasar por encima, y a partir de ahí se repite a
+# una cadencia fija mientras el puntero siga en la flecha. Con 31 cajas, un
+# único salto por cada entrada obligaba a entrar y salir una vez por caja.
+DRAG_BOX_HOVER_DELAY_MS = 420
+DRAG_BOX_HOVER_REPEAT_MS = 520
+
 SELECTED = "#73A9FF"
 FOCUS = "#E9EEF7"
 PREPARATION = "#D7B972"
@@ -228,7 +235,6 @@ class UnifiedTeamPCView:
         self._drag_capture_bindings: list[tuple[Any, str, str]] = []
         self._drag_box_hover_after_id: str | None = None
         self._drag_box_hover_direction: int | None = None
-        self._drag_box_hover_consumed: int | None = None
         self._previous_box_button: Any | None = None
         self._next_box_button: Any | None = None
         self._suppress_click_once = False
@@ -2057,6 +2063,15 @@ class UnifiedTeamPCView:
                 pass
 
     def _update_drag_box_hover(self, x_root: int, y_root: int) -> None:
+        """Cambia de caja sin soltar el Pokémon mientras el puntero está en ‹ ›.
+
+        Con 31 cajas, un solo cambio por cada entrada en la flecha obligaba a
+        entrar y salir una vez por caja para llegar a la 15. Ahora el primer
+        cambio tarda ``DRAG_BOX_HOVER_DELAY_MS`` y, mientras el puntero siga
+        encima, se repite cada ``DRAG_BOX_HOVER_REPEAT_MS``: una cadencia fija
+        y visible, no un encadenado incontrolado. Cada repetición vuelve a
+        comprobar que el arrastre sigue vivo y que el puntero no se ha ido.
+        """
         direction = None
         if self._point_inside_widget(self._previous_box_button, x_root, y_root):
             direction = -1
@@ -2065,9 +2080,6 @@ class UnifiedTeamPCView:
 
         if direction is None:
             self._cancel_drag_box_hover()
-            self._drag_box_hover_consumed = None
-            return
-        if direction == self._drag_box_hover_consumed:
             return
         if direction == self._drag_box_hover_direction and self._drag_box_hover_after_id is not None:
             return
@@ -2086,11 +2098,18 @@ class UnifiedTeamPCView:
             button = self._previous_box_button if expected_direction < 0 else self._next_box_button
             if not self._point_inside_widget(button, int(pointer_x), int(pointer_y)):
                 return
-            self._drag_box_hover_consumed = expected_direction
             self._change_box(expected_direction)
             self._highlight_drop_target(int(pointer_x), int(pointer_y))
+            # Rearmado explícito: el puntero sigue sobre la flecha y el
+            # arrastre sigue vivo, así que la siguiente caja llega sola.
+            self._drag_box_hover_direction = expected_direction
+            self._drag_box_hover_after_id = self.frame.after(
+                DRAG_BOX_HOVER_REPEAT_MS, change_box_after_hover,
+            )
 
-        self._drag_box_hover_after_id = self.frame.after(420, change_box_after_hover)
+        self._drag_box_hover_after_id = self.frame.after(
+            DRAG_BOX_HOVER_DELAY_MS, change_box_after_hover,
+        )
 
     def _move_drag(self, event) -> str | None:
         if self._drag_source is None or self._drag_origin is None:

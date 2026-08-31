@@ -21,9 +21,11 @@ def resolve_team_pc_drop(
 ) -> TeamPCDropIntent:
     """Traduce un gesto a una operación existente, sin reglas de escritura.
 
-    El orden físico Equipo→Equipo no existe en los writers actuales. PC→PC se
-    limita a mover una criatura a un hueco vacío exacto; los swaps entre dos
-    huecos ocupados siguen bloqueados hasta demostrar esa operación distinta.
+    El orden físico Equipo→Equipo no existe en los writers actuales. PC→PC
+    distingue dos operaciones distintas: llevar una criatura a un hueco vacío
+    (``move-box-slot``) e intercambiar dos huecos ocupados
+    (``swap-box-slots``). Qué backend sabe escribir cada una lo decide la
+    interfaz, no este resolutor.
     """
     source = str(source_context)
     target = str(target_context)
@@ -37,7 +39,7 @@ def resolve_team_pc_drop(
         return TeamPCDropIntent("box-to-party")
     if source == target == "pc":
         if target_occupied:
-            return TeamPCDropIntent(None, "El intercambio entre dos casillas PC ocupadas no está habilitado.")
+            return TeamPCDropIntent("swap-box-slots")
         return TeamPCDropIntent("move-box-slot")
     if source == target == "team":
         return TeamPCDropIntent(None, "El backend actual no declara reordenación física Equipo→Equipo.")

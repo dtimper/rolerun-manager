@@ -87,13 +87,13 @@ def test_la_vista_unificada_se_declara_en_un_solo_sitio() -> None:
 # El sondeo del PC vivo
 # --------------------------------------------------------------------------
 
-@pytest.mark.parametrize("live_key", ["b2w2", "bdsp"])
+@pytest.mark.parametrize("live_key", ["b2w2", "bdsp", "oras"])
 def test_el_sondeo_esta_activo_en_la_pagina_real_del_usuario(live_key: str) -> None:
     manager = _poll_manager(active_page="team", live_key=live_key)
     assert RoleRunManager._bdsp_pc_poll_is_active(manager) is True
 
 
-@pytest.mark.parametrize("live_key", ["b2w2", "bdsp"])
+@pytest.mark.parametrize("live_key", ["b2w2", "bdsp", "oras"])
 def test_el_sondeo_se_arma_desde_la_pagina_real_del_usuario(live_key: str) -> None:
     manager = _poll_manager(active_page="team", live_key=live_key)
 
@@ -118,8 +118,13 @@ def test_el_sondeo_no_corre_fuera_de_equipo_y_pc() -> None:
         assert RoleRunManager._bdsp_pc_poll_is_active(manager) is False, pagina
 
 
-def test_el_sondeo_sigue_reservado_a_los_backends_con_matriz_viva() -> None:
-    for live_key in ("oras", "xy", "sm", "usum"):
+def test_el_sondeo_llego_a_oras_pero_no_a_los_demas_backends_azahar() -> None:
+    """ORAS demuestra la matriz viva sin anclas frescas (estructura + memoria de
+    anclas entre sesiones); X/Y, Sol/Luna y Ultrasol/Ultraluna todavía no."""
+    manager = _poll_manager(active_page="team", live_key="oras")
+    assert RoleRunManager._bdsp_pc_poll_is_active(manager) is True
+
+    for live_key in ("xy", "sm", "usum"):
         manager = _poll_manager(active_page="team", live_key=live_key)
         assert RoleRunManager._bdsp_pc_poll_is_active(manager) is False, live_key
 
@@ -177,3 +182,50 @@ def test_moverse_dentro_de_la_vista_unificada_no_reinicia_nada() -> None:
 
     assert manager.cancelaciones == 0
     assert manager.refrescos == []
+
+
+# --------------------------------------------------------------------------
+# El sondeo no pisa un traslado que RoleRun acaba de adelantar en pantalla
+# --------------------------------------------------------------------------
+
+def test_el_sondeo_se_aplaza_mientras_hay_una_escritura_en_curso() -> None:
+    """Un traslado desde RoleRun se ve al instante, antes de que el juego lo
+    confirme. Si el sondeo leyera la RAM justo entonces, traería el estado
+    ANTERIOR y deshacía ese adelanto un instante: el mismo parpadeo que ya se
+    arregló una vez, solo que por otra puerta.
+    """
+    manager = _poll_manager(active_page="team", live_key="oras")
+    manager._live_write_in_progress = True
+
+    RoleRunManager._schedule_bdsp_pc_poll(manager, 200)
+    _delay, callback = manager.armados[0]
+    callback()
+
+    assert manager.reconciliaciones == []
+    # Se aplaza, no se cancela: hay un segundo timer esperando su turno.
+    assert len(manager.armados) == 2
+
+
+def test_el_sondeo_se_aplaza_mientras_hay_un_traslado_en_cola() -> None:
+    from app.ui_state.cola_de_cambios import ColaDeCambios
+
+    manager = _poll_manager(active_page="team", live_key="oras")
+    manager.cola_de_cambios = ColaDeCambios()
+    manager.cola_de_cambios.encolar(["algo"])
+
+    RoleRunManager._schedule_bdsp_pc_poll(manager, 200)
+    _delay, callback = manager.armados[0]
+    callback()
+
+    assert manager.reconciliaciones == []
+    assert len(manager.armados) == 2
+
+
+def test_sin_nada_pendiente_el_sondeo_lee_con_normalidad() -> None:
+    manager = _poll_manager(active_page="team", live_key="oras")
+
+    RoleRunManager._schedule_bdsp_pc_poll(manager, 200)
+    _delay, callback = manager.armados[0]
+    callback()
+
+    assert manager.reconciliaciones == [True]

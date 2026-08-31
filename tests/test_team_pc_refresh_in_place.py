@@ -76,6 +76,8 @@ def _gestor(vista: _VistaFalsa):
         _team_pc_box_members=lambda data, box: {1: _Mono("GASTLY")},
         _party_health_signature=lambda party: "firma",
     )
+    yo._pc_ultima_matriz_pintada = None
+    yo._pc_matriz_para_pintar = lambda datos: RoleRunManager._pc_matriz_para_pintar(yo, datos)
     yo._forma_del_pc = lambda datos: RoleRunManager._forma_del_pc(yo, datos)
     yo._asegurar_lectura_del_pc = (
         lambda datos: RoleRunManager._asegurar_lectura_del_pc(yo, datos)

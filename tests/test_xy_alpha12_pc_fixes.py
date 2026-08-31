@@ -124,7 +124,7 @@ def test_xy_alpha12_external_deposit_populates_pc_when_last_main_was_empty(tmp_p
         _oras_live_pc_overrides={}, _oras_live_pc_empty_overrides=set(),
         _pokemon_identity=lambda p: "" if p is None else f"{p.species_id}:{p.pid}",
         _pending_team_changes=lambda: [],
-        _project_pc_box_pokemon=lambda data, box: RoleRunManager._project_pc_box_pokemon(manager, data, box),
+        _project_pc_box_pokemon=lambda data, box, solo_confirmado=False: RoleRunManager._project_pc_box_pokemon(manager, data, box, solo_confirmado=solo_confirmado),
         _save_file_signature=RoleRunManager._save_file_signature,
         _floating_bar_is_visible=lambda: False,
         _main_ui_dirty_while_floating=False, active_page="pc",
@@ -200,13 +200,14 @@ def test_oras_party_resize_crosses_the_live_ui_gate() -> None:
     """
     manager = SimpleNamespace(_active_azahar_realtime_key=lambda: "oras")
 
-    for operation in ("swap-party-box", "party-to-box", "box-to-party", "replace-fainted"):
+    # move-box-slot se sumó el 30-08-2026 con ORASLiveWriter._apply_pc_move.
+    for operation in (
+        "swap-party-box", "party-to-box", "box-to-party", "replace-fainted", "move-box-slot",
+    ):
         change = PendingTeamChange(operation=operation, party_slot=1)
         assert RoleRunManager._oras_live_unsupported_changes(manager, [change]) == []
 
-    # move-box-slot (PC↔PC sin pasar por el equipo) sigue sin escritura
-    # viva validada en ORAS.
-    change = PendingTeamChange(operation="move-box-slot", party_slot=1)
+    change = PendingTeamChange(operation="operacion-inexistente", party_slot=1)
     assert RoleRunManager._oras_live_unsupported_changes(manager, [change]) == [
         "entradas/salidas que cambian el tamaño del equipo",
     ]
@@ -222,8 +223,8 @@ def test_xy_pc_witnesses_use_the_live_matrix_shown_by_the_ui() -> None:
         _pending_team_changes=lambda: [],
         _pokemon_identity=lambda pokemon: f"{pokemon.species_id}:{pokemon.pid}",
     )
-    manager._project_pc_box_pokemon = lambda data, box: (
-        RoleRunManager._project_pc_box_pokemon(manager, data, box)
+    manager._project_pc_box_pokemon = lambda data, box, solo_confirmado=False: (
+        RoleRunManager._project_pc_box_pokemon(manager, data, box, solo_confirmado=solo_confirmado)
     )
 
     assert RoleRunManager._pc_box_witnesses(manager, 1, 5) == ((1, "133:200"),)

@@ -106,6 +106,8 @@ from .ui_components import (
 from .ui_state import (
     DEFAULT_PAGE,
     PRIMARY_NAVIGATION,
+    ColaDeCambios,
+    EstadoCola,
     OperationStatusStore,
     normalize_navigation_target,
     primary_page_for,
@@ -183,6 +185,22 @@ MELONDS_REALTIME_GAME_KEYS = (
     MELONDS_GEN5_REALTIME_GAME_KEYS | MELONDS_GEN4_REALTIME_GAME_KEYS
 )
 FULL_MATRIX_LIVE_PC_GAME_KEYS = {"sm", "usum", "bdsp"} | MELONDS_REALTIME_GAME_KEYS
+# Backends que sondean el PC vivo en segundo plano, sin que el usuario tenga
+# que reabrir la Run ni pulsar nada, en las dos direcciones: un traslado hecho
+# EN EL JUEGO llega solo a RoleRun, y uno hecho DESDE RoleRun ya se escribía en
+# RAM (ver `move-box-slot`). Cada backend nuevo necesita dos cosas: localizar
+# la matriz sin depender de anclas frescas del guardado —ORAS ya lo demuestra
+# con `_pc_base_looks_like_the_matrix`—, y que el coste de leerla en bucle no
+# compita de forma audible con el emulador; el backoff de
+# `BDSP_PC_POLL_MIN_MS..MAX_MS` (2,5s→20s, y vuelve al mínimo en cuanto algo
+# cambia) es lo que ya demostró hacer ese coste tolerable para BDSP.
+PC_LIVE_POLL_GAME_KEYS = {"bdsp", "oras"} | MELONDS_REALTIME_GAME_KEYS
+# Una lectura viva del PC puede caer justo mientras una escritura se asienta
+# o mientras el juego reconstruye sus cajas: la matriz no se deja localizar
+# durante esa fracción de segundo. Pulsar REINTENTAR funcionaba, así que el
+# error rojo estaba pidiendo al usuario que hiciera a mano lo que RoleRun
+# puede hacer sola. Solo se avisa si el reintento tampoco lo consigue.
+LIVE_PC_READ_RETRY_DELAYS_MS = (260, 700)
 LIVE_PC_READ_GAME_KEYS = (
     GEN6_REALTIME_GAME_KEYS | GEN7_REALTIME_GAME_KEYS | {"bdsp"}
     | MELONDS_REALTIME_GAME_KEYS
@@ -200,7 +218,21 @@ AUTOMATIC_BADGE_GAME_KEYS = {"oras", "xy", "sm", "usum"} | MELONDS_REALTIME_GAME
 # vale, no. El resultado era que en BDSP TODAS las casillas del PC se marcaban
 # en rojo mientras arrastrabas —tanto las que iban a funcionar como las que
 # no— y solo lo descubrias al soltar.
-PC_A_PC_GAME_KEYS = {"usum", "xy", "bdsp"} | MELONDS_REALTIME_GAME_KEYS
+#: Reintentar no arregla una matriz que no se localiza: nada cambia solo. Lo que
+#: sí la arregla es guardar dentro del juego, porque así las posiciones nuevas
+#: llegan al archivo y vuelven a servir de ancla.
+PISTA_GUARDAR_PARA_LOCALIZAR_EL_PC = (
+    "\n\nSi acabas de mover Pokémon del PC desde RoleRun, guarda la partida "
+    "dentro del juego: así las posiciones nuevas quedan también en el archivo "
+    "y RoleRun vuelve a localizar las cajas."
+)
+
+PC_A_PC_GAME_KEYS = {"usum", "xy", "oras", "bdsp"} | MELONDS_REALTIME_GAME_KEYS
+# Intercambiar dos casillas OCUPADAS del PC es una escritura distinta de
+# llevar una criatura a un hueco libre: hay dos PK6 que conservar y ninguna
+# casilla vacía donde apoyarse. Solo lo declara quien tiene writer propio
+# (`ORASLiveWriter._apply_pc_swap`).
+PC_SWAP_GAME_KEYS = {"oras"}
 # Backends cuyo writer de rol escribe además el reparto de EV del rol. Estaba
 # repetido como literal en siete sitios, y olvidar uno bastaba para que un
 # juego escribiera la marca del rol pero no sus EV: exactamente lo que le
@@ -486,6 +518,23 @@ class RoleRunManager(ctk.CTk):
         # activa nunca sola: el usuario decide cuándo capturar una reproducción.
         self._live_sync_in_progress = False
         self._live_write_in_progress = False
+        # Cola de cambios: el usuario no espera a que termine una escritura para
+        # seguir navegando ni para pedir la siguiente. Solo sale UN trabajo a la
+        # vez hacia el emulador —dos escrituras simultáneas sobre la misma RAM se
+        # pisan—, pero encolar nunca se rechaza.
+        self.cola_de_cambios = ColaDeCambios(al_cambiar=self._al_cambiar_la_cola)
+        self._ultimo_estado_de_cola = self.cola_de_cambios.estado()
+        #: True en cuanto el PC se ha mostrado con cajas reales. Mientras sea
+        #: False, una carga sí levanta el cargador: no hay nada que tapar.
+        self._pc_mostrado_con_datos = False
+        self._pc_ultima_matriz_pintada = None
+        self._bombeo_de_cola_after_id: str | None = None
+        #: Identificador del trabajo cuyo hilo de escritura está en marcha.
+        self._trabajo_en_vuelo_id: int | None = None
+        #: Lo pone a True ``_save_oras_live_changes`` justo antes de lanzar el
+        #: hilo. Sin esta señal, un preflight que corta la operación dejaría el
+        #: trabajo en vuelo para siempre y la cola no volvería a avanzar.
+        self._trabajo_lanzo_hilo = False
         # 1.13 alpha.30: al abrir una Run ORAS, RoleRun enlaza automáticamente
         # con Azahar y, después de la primera captura estable, mantiene un monitor
         # permanente juego → programa para Equipo, orden, roles y movimientos.
@@ -520,6 +569,7 @@ class RoleRunManager(ctk.CTk):
         # pero un intercambio hecho desde el PC de ORAS se refleja como override
         # vivo hasta que el jugador guarde dentro del juego.
         self._oras_pc_reconcile_token = 0
+        self._oras_pc_read_retries = 0
         self._oras_pc_reconcile_in_progress = False
         self._oras_pc_reconcile_last_key: tuple | None = None
         # BDSP no emite un cambio de party cuando el jugador mueve un Pokémon
@@ -4708,6 +4758,11 @@ class RoleRunManager(ctk.CTk):
         except Exception:
             pass
         self._live_write_in_progress = False
+        # Los trabajos en cola pertenecen a la partida que se abandona. Su
+        # resultado tardio ya no debe cerrar nada ni reabrir la cola.
+        self._olvidar_cola_de_cambios()
+        self._pc_mostrado_con_datos = False
+        self._pc_ultima_matriz_pintada = None
         self.hotkey_manager.stop()
         self.save_watcher.stop()
         self._cancel_pending_ds_install(restore_changes=False)
@@ -6262,6 +6317,8 @@ class RoleRunManager(ctk.CTk):
 
     def _handle_operation_bar_action(self, action: str) -> None:
         key = str(action).strip().casefold()
+        if self._accion_de_cola(action):
+            return
         if key in {"reintentar", "resincronizar"}:
             self.sync_oras_live()
         elif key in {"revisar", "revisar cambios"}:
@@ -6285,12 +6342,20 @@ class RoleRunManager(ctk.CTk):
         current = store.message
         if current.stays_visible and current.kind in {"failed", "intervention"}:
             return
-        if self._live_write_in_progress:
-            if current.kind not in {"applying", "verifying"}:
+        # Barrera defensiva: la recuperación de una sesión anterior (y los
+        # fixtures previos a la cola) pueden llegar aquí sin ella montada.
+        cola = getattr(self, "cola_de_cambios", None)
+        estado_cola = cola.estado() if cola is not None else EstadoCola()
+        if self._live_write_in_progress or estado_cola.hay_trabajo:
+            if estado_cola.hay_trabajo:
+                # Con cola, el mensaje tiene que decir CUÁNTO queda; si no, el
+                # usuario no sabe si puede irse a otra pantalla o no.
+                self._publicar_estado_de_cola()
+            elif current.kind not in {"applying", "verifying"}:
                 self._set_operation_status(
                     "applying",
                     "APLICANDO CAMBIO",
-                    "RoleRun está enviando la operación al juego.",
+                    "RoleRun está enviando la operación al juego. Puedes seguir usando la aplicación.",
                 )
             return
         ready_faint = self._pending_faint_for_reopen()
@@ -6403,11 +6468,10 @@ class RoleRunManager(ctk.CTk):
 
         count = len(self.run.pending_changes)
         live_review_count = sum(len(batch) for batch in self._oras_live_review_batches)
-        review_state = (
-            "normal"
-            if (count or live_review_count) and not self._live_write_in_progress
-            else "disabled"
-        )
+        # Revisar solo lee. Bloquearlo durante una escritura era justo lo
+        # contrario de lo que hace falta: es cuando más quiere el usuario ver
+        # qué se está enviando y qué queda esperando en la cola.
+        review_state = "normal" if (count or live_review_count) else "disabled"
         review_button = getattr(self, "review_changes_button", None)
         if self._widget_alive(review_button):
             review_button.configure(state=review_state)
@@ -6433,8 +6497,12 @@ class RoleRunManager(ctk.CTk):
 
         if self.project and self.current_game:
             if self._live_write_in_progress:
+                resumen_cola = self.cola_de_cambios.estado().resumen()
                 top_status.configure(
-                    text=f"RUN: {self.project.name}\n◷ Aplicando cambios en Azahar…",
+                    text=(
+                        f"RUN: {self.project.name}\n◷ Aplicando cambios en Azahar…"
+                        + (f" · {resumen_cola}" if resumen_cola else "")
+                    ),
                     text_color=GOLD,
                 )
             elif self._pending_ds_install is not None:
@@ -6636,7 +6704,9 @@ class RoleRunManager(ctk.CTk):
             outgoing_id = outgoing_ids[0] if outgoing_ids else ""
             source: SavePokemon | None = None
             for box_no in range(1, int(pc_data.box_count) + 1):
-                for candidate in self._project_pc_box_pokemon(pc_data, box_no):
+                for candidate in self._project_pc_box_pokemon(
+                    pc_data, box_no, solo_confirmado=True,
+                ):
                     if self._pokemon_identity(candidate) == incoming_id:
                         source = candidate
                         break
@@ -6676,17 +6746,47 @@ class RoleRunManager(ctk.CTk):
                 if not force:
                     fallback_inference(pc_data)
                 elif error:
+                    intentos = int(getattr(self, "_oras_pc_read_retries", 0))
+                    if intentos < len(LIVE_PC_READ_RETRY_DELAYS_MS):
+                        # La matriz no se deja localizar mientras el juego
+                        # reconstruye sus cajas. Volver a leer un momento después
+                        # es exactamente lo que hacía el botón REINTENTAR.
+                        self._oras_pc_read_retries = intentos + 1
+                        record_bdsp(
+                            "pc-reconcile-reread",
+                            intento=intentos + 1, error=str(error),
+                        )
+                        self.sync_status = (
+                            f"◌ {self._active_azahar_realtime_label()} · reintentando la "
+                            "lectura del PC…"
+                        )
+                        self._update_top_status()
+                        try:
+                            self.after(
+                                LIVE_PC_READ_RETRY_DELAYS_MS[intentos],
+                                lambda: self._schedule_oras_external_pc_reconcile(
+                                    self.current_game, self.current_game, force=True,
+                                ),
+                            )
+                        except Exception:
+                            self._oras_pc_read_retries = 0
+                        else:
+                            return
                     # Alpha.13: una lectura fallida al abrir CAJAS PC ya no se
                     # disfraza visualmente de "caja vacía". Conservamos la última
                     # vista conocida y exponemos el motivo técnico al usuario.
+                    self._oras_pc_read_retries = 0
                     show_toast = getattr(self, "_show_live_sync_toast", None)
                     if callable(show_toast):
                         show_toast(
                             f"NO SE PUDO LEER EL PC DE {self._active_azahar_realtime_label()}",
-                            str(error) + "\n\nRoleRun no ha publicado una caja vacía como si fuera el estado real.",
+                            str(error)
+                            + "\n\nRoleRun no ha publicado una caja vacía como si fuera el estado real."
+                            + PISTA_GUARDAR_PARA_LOCALIZAR_EL_PC,
                             False,
                         )
             else:
+                self._oras_pc_read_retries = 0
                 # Alpha.28: barrera de coherencia entre dos lecturas asíncronas.
                 # La party y el PC se capturan en workers distintos; si el usuario
                 # mueve un Pokémon justo entre ambas dobles lecturas, una captura
@@ -6738,6 +6838,9 @@ class RoleRunManager(ctk.CTk):
                     pc_data = live_pc_data
                     self._oras_live_pc_overrides.clear()
                     self._oras_live_pc_empty_overrides.clear()
+                    recordar = getattr(self, "_recordar_anclas_del_pc_vivo", None)
+                    if callable(recordar):
+                        recordar(live_pc_data)
                     new_overrides: dict[tuple[int, int], SavePokemon] = {}
                     new_empty: set[tuple[int, int]] = set()
                 else:
@@ -6829,7 +6932,7 @@ class RoleRunManager(ctk.CTk):
                 self._flush_sm_role_transition_after_pc_proof()
 
             should_render = bool(
-                live_key not in ({"bdsp"} | MELONDS_REALTIME_GAME_KEYS)
+                live_key not in PC_LIVE_POLL_GAME_KEYS
                 or error
                 or live_slots is None
                 or projection_changed
@@ -6844,7 +6947,7 @@ class RoleRunManager(ctk.CTk):
             # lectura anterior ya terminó y publicó (o rechazó) su captura. Ante
             # error detenemos el bucle para no castigar el emulador ni repetir avisos;
             # volver a entrar en CAJAS PC permite rearmarlo explícitamente.
-            if live_key in ({"bdsp"} | MELONDS_REALTIME_GAME_KEYS) and not error and live_slots is not None:
+            if live_key in PC_LIVE_POLL_GAME_KEYS and not error and live_slots is not None:
                 scheduler = getattr(self, "_schedule_bdsp_pc_poll", None)
                 if callable(scheduler):
                     scheduler()
@@ -6867,7 +6970,17 @@ class RoleRunManager(ctk.CTk):
                         anchors.extend(list(box.pokemon))
                 else:
                     for box_no in range(1, int(pc_data.box_count) + 1):
-                        anchors.extend(self._project_pc_box_pokemon(pc_data, box_no))
+                        # Un traslado aún sin escribir apuntaría a un hueco que
+                        # la RAM no tiene, y entonces la matriz viva no se
+                        # localiza: la lectura entera se rechaza.
+                        anchors.extend(self._project_pc_box_pokemon(
+                            pc_data, box_no, solo_confirmado=True,
+                        ))
+                # Sirven en las dos ramas: son coordenadas que la RAM ya
+                # demostró y que el ``main`` puede haber dejado de reflejar.
+                recordadas = getattr(self, "_anclas_del_pc_recordadas", None)
+                if callable(recordadas):
+                    anchors.extend(recordadas())
 
                 # Si la party acaba de perder un Pokémon, esa
                 # identidad constituye evidencia adicional de presencia en el PC
@@ -6965,7 +7078,7 @@ class RoleRunManager(ctk.CTk):
             getattr(self, "active_page", "") not in TEAM_PC_PAGES
             or not getattr(self, "_oras_live_active", False)
             or not getattr(self, "current_game", None)
-            or self._active_azahar_realtime_key() not in ({"bdsp"} | MELONDS_REALTIME_GAME_KEYS)
+            or self._active_azahar_realtime_key() not in PC_LIVE_POLL_GAME_KEYS
             or self._floating_bar_is_visible()
         ):
             return False
@@ -6982,9 +7095,9 @@ class RoleRunManager(ctk.CTk):
         """Sondea PC↔PC solo mientras la página live compatible está visible.
 
         No hay escaneo: reutiliza la matriz completa y el doble read demostrados
-        por el backend activo (BDSP 40×30 o B2/W2 24×30).
+        por el backend activo (BDSP 40×30, B2/W2 24×30 u ORAS 31×30).
         El siguiente tick se programa al terminar el anterior, por lo que nunca
-        se acumulan workers aunque Ryujinx tarde más de lo habitual.
+        se acumulan workers aunque el emulador tarde más de lo habitual.
         """
         self._cancel_bdsp_pc_poll()
         if not self._bdsp_pc_poll_is_active():
@@ -6996,6 +7109,19 @@ class RoleRunManager(ctk.CTk):
             if generation != self._session_generation or not self._bdsp_pc_poll_is_active():
                 return
             if self._oras_pc_reconcile_in_progress:
+                self._schedule_bdsp_pc_poll(350)
+                return
+            # Un traslado hecho DESDE RoleRun se ve al instante en pantalla antes
+            # de que el juego lo confirme (ver `move-box-slot`). Si el sondeo
+            # leyera la RAM justo en ese hueco, traía el estado ANTERIOR y
+            # deshacía ese adelanto visual un instante, para que la escritura lo
+            # volviera a corregir enseguida: el mismo parpadeo que ya se arregló
+            # una vez, solo que por otra puerta. Mientras haya una escritura o un
+            # traslado esperando turno, el sondeo se aplaza sin gastar el ciclo.
+            cola = getattr(self, "cola_de_cambios", None)
+            if getattr(self, "_live_write_in_progress", False) or (
+                cola is not None and cola.estado().hay_trabajo
+            ):
                 self._schedule_bdsp_pc_poll(350)
                 return
             self._record_bdsp_ui_event("pc-poll")
@@ -7185,11 +7311,30 @@ class RoleRunManager(ctk.CTk):
         live_key = key_getter() if callable(key_getter) else None
         live_auto = bool(auto_getter()) if callable(auto_getter) else False
         if live_key in (GEN7_REALTIME_GAME_KEYS | {"bdsp"}) and live_auto:
-            return []
+            # Un traslado PC→PC sí se adelanta incluso aquí: no afirma nada del
+            # equipo, de los PS ni de la mochila —solo que el Pokémon ocupa otro
+            # hueco de la misma tabla de cajas— y si la escritura falla, retirar
+            # el cambio pendiente lo devuelve solo a su hueco original.
+            return [
+                change for change in changes
+                if change.operation == "move-box-slot"
+            ]
         return changes
 
-    def _project_pc_box_pokemon(self, pc_data: SavePCData, box_number: int) -> list[SavePokemon]:
-        """Proyecta una caja aplicando, en orden, todos los cambios Equipo ↔ PC."""
+    def _project_pc_box_pokemon(
+        self, pc_data: SavePCData, box_number: int, *, solo_confirmado: bool = False,
+    ) -> list[SavePokemon]:
+        """Proyecta una caja aplicando, en orden, todos los cambios Equipo ↔ PC.
+
+        ``solo_confirmado`` distingue los dos usos, que dejaron de coincidir en
+        cuanto un traslado PC→PC empezó a adelantarse en pantalla:
+
+        - **Pintar** (por defecto): lo que el usuario debe ver, adelanto incluido.
+        - **Demostrar la RAM** (``True``): lo que el juego tiene AHORA. Los
+          testigos que localizan la matriz viva salen de aquí, y un traslado
+          todavía sin escribir apuntaría a un hueco que la RAM no tiene: el
+          lector no encontraría la matriz y la operación se rechazaría entera.
+        """
         original = [replace(p) for p in pc_data.boxes[box_number - 1].pokemon]
         for pokemon in original:
             pokemon.moves = list(pokemon.moves)
@@ -7214,6 +7359,33 @@ class RoleRunManager(ctk.CTk):
             by_slot[int(override_slot)] = replacement
 
         for team_change in RoleRunManager._projectable_team_changes(self):
+            if team_change.operation == "move-box-slot":
+                if solo_confirmado:
+                    # Sin escribir todavía: para la RAM, este Pokémon sigue en
+                    # su hueco de origen.
+                    continue
+                # Adelanto visual del traslado dentro del PC. El hueco de origen
+                # se vacía y el de destino se ocupa en cuanto el usuario suelta,
+                # sin esperar a que el juego confirme; así puede volver a mover
+                # al mismo Pokémon sin quedarse mirando el hueco viejo.
+                origen = (int(team_change.box or 0), int(team_change.box_slot or 0))
+                destino = (
+                    int(team_change.destination_box or 0),
+                    int(team_change.destination_box_slot or 0),
+                )
+                if min(origen[1], destino[0], destino[1]) <= 0:
+                    continue
+                if origen[0] == box_number:
+                    by_slot.pop(origen[1], None)
+                if destino[0] == box_number and team_change.incoming_snapshot:
+                    movido = self._pokemon_from_snapshot(
+                        team_change.incoming_snapshot, slot=destino[1], projected=False,
+                    )
+                    movido.box = destino[0]
+                    movido.box_slot = destino[1]
+                    movido.slot = destino[1]
+                    by_slot[destino[1]] = movido
+                continue
             if team_change.box != box_number or not team_change.box_slot:
                 continue
             target = int(team_change.box_slot)
@@ -7254,6 +7426,14 @@ class RoleRunManager(ctk.CTk):
         occupied.difference_update(self._oras_live_pc_empty_overrides)
         occupied.update(self._oras_live_pc_overrides)
         for change in RoleRunManager._projectable_team_changes(self):
+            if change.operation == "move-box-slot":
+                if change.box is not None and change.box_slot:
+                    occupied.discard((int(change.box), int(change.box_slot)))
+                if change.destination_box is not None and change.destination_box_slot:
+                    occupied.add(
+                        (int(change.destination_box), int(change.destination_box_slot))
+                    )
+                continue
             if change.box is None or change.box_slot is None:
                 continue
             pos = (int(change.box), int(change.box_slot))
@@ -8658,6 +8838,15 @@ class RoleRunManager(ctk.CTk):
                     supported_ids.add(id(change))
                 elif isinstance(change, PendingTeamChange) and change.operation in {
                     "swap-party-box", "party-to-box", "box-to-party", "replace-fainted",
+                    # PC→PC (`ORASLiveWriter._apply_pc_move`): el origen ocupado
+                    # es el ancla, el destino se exige vacío, se escribe destino
+                    # antes que origen y hay readback asentado con rollback.
+                    "move-box-slot",
+                    # Intercambio entre dos casillas ocupadas
+                    # (`ORASLiveWriter._apply_pc_swap`): las dos identidades se
+                    # conocen, así que ambas son ancla y ninguna casilla vacía
+                    # interviene en la calibración.
+                    "swap-box-slots",
                 }:
                     # ORASLiveWriter._apply_party_resize (30-08-2026) ya valida
                     # el cambio de tamaño 5↔6 (contador, identidades, testigos
@@ -8734,20 +8923,26 @@ class RoleRunManager(ctk.CTk):
         # retira de la proyección en ``_finish_oras_live_write``. Esto evita el
         # antiguo bucle de "requiere flujo manual" tras un error transitorio.
 
-        if (
+        if getattr(self, "_sm_tm_inventory_load_in_progress", False):
+            # La carga de la mochila de Gen 7 sí es un requisito previo del
+            # propio lote, no una simple ocupación del canal de escritura.
+            perf.mark("ui.live.reprogramado", mts=True)
+            self._schedule_oras_live_auto_apply(220)
+            return
+        debe_esperar = getattr(self, "_cola_debe_esperar", None)
+        ocupado = bool(debe_esperar()) if callable(debe_esperar) else bool(
             self._live_write_in_progress
             or self._live_sync_in_progress
             or self._oras_live_monitor_in_progress
-            or getattr(self, "_sm_tm_inventory_load_in_progress", False)
-        ):
-            # Cada reprogramación son 220 ms de espera. Si se encadenan varias,
-            # el usuario las cuenta como parte de los segundos que tarda.
+        )
+        if ocupado and not RoleRunManager._solo_son_movimientos_de_caja(requested):
+            # Un movimiento dentro del PC entra en la cola más abajo. Lo demás
+            # sigue reprogramándose hasta que el canal quede libre.
             perf.mark(
                 "ui.live.reprogramado",
                 escritura=bool(self._live_write_in_progress),
                 sincronizacion=bool(self._live_sync_in_progress),
                 monitor=bool(self._oras_live_monitor_in_progress),
-                mts=bool(getattr(self, "_sm_tm_inventory_load_in_progress", False)),
             )
             self._schedule_oras_live_auto_apply(220)
             return
@@ -8798,6 +8993,7 @@ class RoleRunManager(ctk.CTk):
         self._oras_pc_reconcile_token += 1
         self._oras_pc_reconcile_in_progress = False
         self._oras_pc_reconcile_last_key = None
+        self._oras_pc_read_retries = 0
         self._cancel_bdsp_pc_poll()
         self._sm_pending_role_transition = None
         self._cancel_delayed_faint_callbacks()
@@ -11597,6 +11793,7 @@ class RoleRunManager(ctk.CTk):
                     continue
                 if isinstance(change, PendingTeamChange) and change.operation in {
                     "swap-party-box", "party-to-box", "box-to-party", "replace-fainted",
+                    "move-box-slot", "swap-box-slots",
                 }:
                     continue
                 label = {
@@ -11625,15 +11822,242 @@ class RoleRunManager(ctk.CTk):
             pass
         return parent
 
+    # ---------- COLA DE CAMBIOS ----------
+
+    def _cola_debe_esperar(self) -> bool:
+        """¿Hay ahora mismo algo que impida escribir en la RAM del juego?
+
+        Una escritura en vuelo, una lectura o el monitor. Todas son razones para
+        ESPERAR TURNO, no para rechazar la acción del usuario.
+        """
+        return bool(
+            self._live_write_in_progress
+            or self._live_sync_in_progress
+            or self._oras_live_monitor_in_progress
+            or self.cola_de_cambios.en_vuelo is not None
+        )
+
+    @staticmethod
+    def _solo_son_movimientos_de_caja(changes) -> bool:
+        """¿El lote entero son traslados PC→PC y nada más?
+
+        Es la única operación que se encola. El motivo no es técnico sino de
+        honestidad visual: origen y destino son ambos huecos del PC, así que
+        RoleRun puede adelantar el movimiento en pantalla y devolver al Pokémon
+        a su sitio si la escritura falla, sin haber afirmado nunca nada del
+        equipo, de la mochila ni de los PS. Cualquier otro cambio sigue
+        esperando a que el juego confirme.
+        """
+        lote = list(changes)
+        return bool(lote) and all(
+            isinstance(change, PendingTeamChange) and change.operation == "move-box-slot"
+            for change in lote
+        )
+
+    def _encolar_cambios_en_vivo(self, changes, *, automatic: bool = False) -> bool:
+        """Registra el lote y devuelve el control a la interfaz de inmediato."""
+        lote = [
+            change for change in changes
+            if not self.cola_de_cambios.contiene_cambio(change)
+        ]
+        if not lote:
+            # El flujo automático y el botón manual pueden pedir lo mismo. Ya
+            # está encolado; volver a encolarlo lo escribiría dos veces.
+            return True
+        trabajo_id = self.cola_de_cambios.encolar(
+            lote,
+            etiqueta=self._etiqueta_de_trabajo(lote),
+            automatico=bool(automatic),
+        )
+        perf.mark("ui.cola.encolado", trabajo=trabajo_id, cambios=len(lote))
+        self._publicar_estado_de_cola()
+        self._programar_bombeo_de_cola(180)
+        return True
+
+    @staticmethod
+    def _etiqueta_de_trabajo(changes) -> str:
+        """Nombre corto y honesto del lote, para la barra y para 'Revisar'."""
+        nombres = {
+            "PendingChange": "movimiento",
+            "PendingTMTeach": "MT",
+            "PendingRoleChange": "rol",
+            "PendingPartyHeal": "curación",
+            "PendingInventoryChange": "utilidades",
+            "PendingPCRoleChange": "rol en el PC",
+            "PendingTeamChange": "equipo",
+        }
+        tipos: list[str] = []
+        for change in changes:
+            nombre = nombres.get(type(change).__name__, "cambio")
+            if nombre not in tipos:
+                tipos.append(nombre)
+        return " + ".join(tipos) if tipos else "cambio"
+
+    def _programar_bombeo_de_cola(self, delay_ms: int = 180) -> None:
+        if getattr(self, "_bombeo_de_cola_after_id", None):
+            return
+        self._bombeo_de_cola_after_id = None
+        try:
+            self._bombeo_de_cola_after_id = self.after(
+                max(30, int(delay_ms)), self._bombear_cola_de_cambios,
+            )
+        except Exception:
+            self._bombeo_de_cola_after_id = None
+
+    def _bombear_cola_de_cambios(self) -> None:
+        """Despacha el siguiente trabajo si el juego ya admite una escritura.
+
+        Es el único punto que saca trabajos de la cola. Se le llama al encolar y
+        al terminar cada escritura; si todavía no se puede, se reprograma.
+        """
+        self._bombeo_de_cola_after_id = None
+        cola = self.cola_de_cambios
+        if cola.en_vuelo is not None or cola.pausada or not cola.pendientes:
+            return
+        if self._live_write_in_progress or self._live_sync_in_progress or self._oras_live_monitor_in_progress:
+            self._programar_bombeo_de_cola(220)
+            return
+        trabajo = cola.siguiente()
+        if trabajo is None:
+            return
+        self._trabajo_en_vuelo_id = trabajo.id
+        self._publicar_estado_de_cola()
+        try:
+            lanzado = self._save_oras_live_changes(
+                trabajo.cambios, automatic=trabajo.automatico, desde_cola=True,
+            )
+        except Exception as exc:  # el preflight no debe dejar la cola colgada
+            lanzado = False
+            self._trabajo_lanzo_hilo = False
+            cola.terminar(trabajo.id, error=str(exc))
+            self._trabajo_en_vuelo_id = None
+            self._publicar_estado_de_cola()
+            return
+        if not self._trabajo_lanzo_hilo:
+            # El preflight cortó la operación (ROM ausente, cambio no
+            # compatible, confirmación denegada). Ya avisó por su cuenta: aquí
+            # solo cerramos el trabajo para que la cola vuelva a avanzar.
+            cola.terminar(
+                trabajo.id,
+                error=None if lanzado else "el cambio no llegó a enviarse al juego",
+            )
+            self._trabajo_en_vuelo_id = None
+            self._publicar_estado_de_cola()
+            self._programar_bombeo_de_cola(120)
+
+    def _resolver_pausa_de_cola(self, cola) -> None:
+        """Decide si un fallo detiene la cola o si basta la política de siempre."""
+        if not cola.pausada:
+            self._programar_bombeo_de_cola(120)
+            return
+        if cola.pendientes:
+            # Hay trabajos detrás esperando. Sus testigos se capturaron dando
+            # por supuesto un estado que esta escritura fallida ya no garantiza:
+            # no seguimos escribiendo a ciegas sobre una partida viva.
+            self._publicar_estado_de_cola()
+            return
+        # Nada detrás que proteger. La política de recuperación que sigue a esta
+        # llamada (sustitución, normalización de roles, ruta automática) se basta
+        # sola; una pausa aquí solo sería una alarma vacía.
+        cola.reanudar()
+
+    def _olvidar_cola_de_cambios(self) -> None:
+        """Vacía la cola al cambiar de partida, proyecto o sesión."""
+        after_id = getattr(self, "_bombeo_de_cola_after_id", None)
+        self._bombeo_de_cola_after_id = None
+        if after_id:
+            try:
+                self.after_cancel(after_id)
+            except Exception:
+                pass
+        self._trabajo_en_vuelo_id = None
+        self._trabajo_lanzo_hilo = False
+        cola = getattr(self, "cola_de_cambios", None)
+        if cola is not None:
+            cola.olvidar_todo()
+
+    def _al_cambiar_la_cola(self, estado) -> None:
+        """Enganche del modelo. La barra se refresca desde el hilo de Tk."""
+        self._ultimo_estado_de_cola = estado
+
+    def _publicar_estado_de_cola(self) -> None:
+        """Refleja la cola en la barra inferior, sin afirmar nunca un éxito."""
+        estado = self.cola_de_cambios.estado()
+        set_status = getattr(self, "_set_operation_status", None)
+        if not callable(set_status):
+            return
+        if estado.pausada:
+            set_status(
+                "failed",
+                "COLA EN PAUSA",
+                (
+                    f"{estado.motivo_pausa} · Quedan {estado.en_cola} cambio(s) sin enviar. "
+                    "RoleRun no seguirá escribiendo hasta que decidas."
+                ),
+                actions=("Reanudar cola", "Descartar cola"),
+            )
+            return
+        if estado.aplicando is not None:
+            set_status(
+                "applying",
+                "APLICANDO CAMBIO",
+                (
+                    f"RoleRun está enviando «{estado.aplicando.etiqueta}» al juego · {estado.resumen()}. "
+                    "Puedes seguir usando la aplicación."
+                ),
+            )
+            return
+        if estado.en_cola:
+            set_status(
+                "pending",
+                "CAMBIOS EN COLA",
+                f"{estado.resumen()}. Se aplicarán en orden en cuanto el juego lo permita.",
+            )
+
+    def _accion_de_cola(self, action: str) -> bool:
+        """Atiende los botones que publica la barra cuando la cola se pausa."""
+        normal = str(action).strip().lower()
+        if normal == "reanudar cola":
+            self.cola_de_cambios.reanudar()
+            self._publicar_estado_de_cola()
+            self._programar_bombeo_de_cola(80)
+            return True
+        if normal == "descartar cola":
+            descartados = self.cola_de_cambios.descartar_pendientes()
+            olvidados = {id(c) for t in descartados for c in t.cambios}
+            if olvidados:
+                self.run.pending_changes = [
+                    change for change in self.run.pending_changes
+                    if id(change) not in olvidados
+                ]
+                self._oras_live_auto_apply_ids.difference_update(olvidados)
+            self._set_operation_status(
+                "warning",
+                "COLA DESCARTADA",
+                (
+                    f"Se retiraron {len(descartados)} cambio(s) sin enviarlos. "
+                    "No se escribió ningún byte por ellos."
+                ),
+            )
+            self._refresh_main_after_oras_live_write()
+            return True
+        return False
+
     @perf.timed("ui.save_live_changes")
     def _save_oras_live_changes(
         self, changes, *, automatic: bool = False, base_game: SaveGameData | None = None,
+        desde_cola: bool = False,
     ) -> bool:
         """Envía el subconjunto seguro de cambios al emulador activo en RAM.
 
         La ruta automática reutiliza exactamente la misma doble captura,
         preflight, verificación y rollback que el botón manual; solo omite el
         diálogo porque la acción ya fue confirmada en la interfaz que la creó.
+
+        Si el emulador está ocupado, el lote NO se rechaza: entra en
+        ``cola_de_cambios`` y saldrá en su turno. ``desde_cola`` distingue la
+        reentrada del bombeo, que ya pasó por ese filtro y no debe volver a
+        encolarse a sí misma.
         """
         if automatic and self._defer_automatic_libero_role_until_ev_choice(
             changes, base_game=base_game,
@@ -11642,17 +12066,24 @@ class RoleRunManager(ctk.CTk):
 
         live_key = self._active_azahar_realtime_key()
         emulator_label = "Ryujinx" if live_key == "bdsp" else "Azahar"
-        if self._live_write_in_progress:
-            if automatic:
-                self._schedule_oras_live_auto_apply(220)
-            else:
-                self._show_live_sync_toast(
-                    "CAMBIOS EN CURSO",
-                    f"Espera a que termine la comprobación de {emulator_label}.",
-                    False,
-                )
-            return False
-        if self._live_sync_in_progress or self._oras_live_monitor_in_progress:
+        if not desde_cola and self._cola_debe_esperar():
+            # Solo los movimientos dentro del PC se encolan. Son la única
+            # operación que se puede adelantar visualmente sin mentir: el hueco
+            # de origen y el de destino son ambos del PC, y si la escritura falla
+            # el Pokémon vuelve solo a su sitio al retirarse el cambio pendiente.
+            # El resto (equipo, MT, roles, mochila) sigue esperando turno.
+            if self._solo_son_movimientos_de_caja(changes):
+                return self._encolar_cambios_en_vivo(changes, automatic=automatic)
+            if self._live_write_in_progress:
+                if automatic:
+                    self._schedule_oras_live_auto_apply(220)
+                else:
+                    self._show_live_sync_toast(
+                        "CAMBIOS EN CURSO",
+                        f"Espera a que termine la comprobación de {emulator_label}.",
+                        False,
+                    )
+                return False
             if automatic:
                 self._schedule_oras_live_auto_apply(220)
             else:
@@ -11662,6 +12093,7 @@ class RoleRunManager(ctk.CTk):
                     False,
                 )
             return False
+        self._trabajo_lanzo_hilo = False
         _anotar_intento_vivo(
             self, "enviando",
             tipos=[type(c).__name__ for c in changes],
@@ -11780,7 +12212,11 @@ class RoleRunManager(ctk.CTk):
                 )
                 return False
 
-        if not automatic:
+        if not automatic and not desde_cola:
+            # `desde_cola` es la reentrada del bombeo: este lote ya se confirmó
+            # cuando el usuario lo pidió. Volver a preguntarlo al despacharlo
+            # sería pedir permiso dos veces por la misma acción, y además con la
+            # ventana ya en otra pantalla.
             parent = self._dialog_parent()
             if not messagebox.askyesno(
                 "Aplicar cambios en tiempo real",
@@ -11801,10 +12237,10 @@ class RoleRunManager(ctk.CTk):
         # RPC simultánea justo al empezar la operación.
         self._cancel_oras_live_reconciliation_timer()
         self._live_write_in_progress = True
-        self._show_busy_indicator(
-            "live-write",
-            f"Aplicando y verificando el cambio en {emulator_label}…",
-        )
+        # Aquí había una superficie opaca sobre `content`. Era literalmente lo
+        # que impedía navegar durante los segundos que tarda una escritura +
+        # verificación. La actividad se comunica ahora por la barra inferior,
+        # que informa sin secuestrar la ventana.
         self.sync_status = (
             f"◷ Aplicando cambio automáticamente en {emulator_label}…"
             if automatic else f"◷ Aplicando cambios verificados en {emulator_label}…"
@@ -11851,6 +12287,7 @@ class RoleRunManager(ctk.CTk):
                 generation, project_slug, changes, result, error, automatic,
             ))
 
+        self._trabajo_lanzo_hilo = True
         threading.Thread(target=worker, daemon=True, name="RoleRunRealtimeWrite").start()
         return True
 
@@ -11887,7 +12324,24 @@ class RoleRunManager(ctk.CTk):
         self._live_write_in_progress = False
         hide_busy = getattr(self, "_hide_busy_indicator", None)
         if callable(hide_busy):
+            # Compatibilidad: esta escritura ya no levanta la superficie opaca,
+            # pero un flujo antiguo pudo dejarla puesta y no debe quedarse.
             hide_busy("live-write")
+        # Cierra el trabajo en la cola ANTES de la política de errores de abajo:
+        # cualquier `return` temprano de esa política dejaría la cola colgada.
+        # Barrera defensiva: un fixture o una sesión anterior a la cola llega
+        # aquí sin ella montada, y la política de errores de abajo se basta sola.
+        cola = getattr(self, "cola_de_cambios", None)
+        trabajo_id = getattr(self, "_trabajo_en_vuelo_id", None)
+        self._trabajo_en_vuelo_id = None
+        if cola is not None:
+            if trabajo_id is not None:
+                cola.terminar(
+                    trabajo_id,
+                    resultado=result,
+                    error=(error or None) if result is not None else (error or "escritura no confirmada"),
+                )
+            self._resolver_pausa_de_cola(cola)
         # Barrera defensiva para sesiones/fixtures creados antes de alpha.43.
         # En la aplicación normal el set existe desde __init__, pero no debe
         # romper la recuperación de una escritura por faltar metadato migratorio.
@@ -12169,6 +12623,44 @@ class RoleRunManager(ctk.CTk):
                     "output": "RAM",
                 }
             elif isinstance(change, PendingTeamChange):
+                if change.operation == "swap-box-slots":
+                    # Las dos casillas siguen ocupadas: cada Pokémon pasa a la
+                    # del otro. Nada se vacía, así que aquí no interviene
+                    # `_oras_live_pc_empty_overrides` más que para retirar un
+                    # vacío antiguo que ya no es cierto.
+                    source_pos = (int(change.box or 0), int(change.box_slot or 0))
+                    destination_pos = (
+                        int(change.destination_box or 0), int(change.destination_box_slot or 0),
+                    )
+                    dragged = self._pokemon_from_snapshot(
+                        change.incoming_snapshot, slot=destination_pos[1], projected=False,
+                    )
+                    dragged.box, dragged.box_slot, dragged.slot = (
+                        destination_pos[0], destination_pos[1], destination_pos[1],
+                    )
+                    displaced = self._pokemon_from_snapshot(
+                        change.outgoing_snapshot, slot=source_pos[1], projected=False,
+                    )
+                    displaced.box, displaced.box_slot, displaced.slot = (
+                        source_pos[0], source_pos[1], source_pos[1],
+                    )
+                    self._oras_live_pc_empty_overrides.discard(source_pos)
+                    self._oras_live_pc_empty_overrides.discard(destination_pos)
+                    self._oras_live_pc_overrides[destination_pos] = dragged
+                    self._oras_live_pc_overrides[source_pos] = displaced
+                    event = {
+                        "type": "pc_swapped",
+                        "pokemon": change.incoming_pokemon,
+                        "species": change.incoming_species,
+                        "old_pokemon": change.outgoing_pokemon,
+                        "source_box": source_pos[0], "source_box_slot": source_pos[1],
+                        "box": destination_pos[0], "box_slot": destination_pos[1],
+                        "source": "Azahar en vivo", "output": "RAM",
+                    }
+                    if not system_generated:
+                        self.run.history.append(event)
+                        self.project_service.append_history(self.project, event)
+                    continue
                 if change.operation == "move-box-slot":
                     source_pos = (int(change.box or 0), int(change.box_slot or 0))
                     destination_pos = (
@@ -14298,7 +14790,10 @@ class RoleRunManager(ctk.CTk):
         """Pone los datos de ahora en la vista ya construida."""
         vista = self._team_pc_view
         pc_data = self._team_pc_cached_data()
-        cajas, _huecos = self._forma_del_pc(pc_data)
+        # `_asegurar_lectura_del_pc` sigue recibiendo el estado REAL de la
+        # caché más abajo: si no, una relectura pendiente no se pediría nunca.
+        pintable = self._pc_matriz_para_pintar(pc_data)
+        cajas, _huecos = self._forma_del_pc(pintable)
         projected_party = list(self._projected_party())
         team_slots = build_fixed_team_slots(
             projected_party,
@@ -14306,7 +14801,7 @@ class RoleRunManager(ctk.CTk):
             self._pokemon_identity,
         )
         box_number = max(1, min(int(self._pc_page_box or 1), cajas))
-        members = self._team_pc_box_members(pc_data, box_number)
+        members = self._team_pc_box_members(pintable, box_number)
         fallo = vista.refrescar_en_sitio(team_slots, members, box_number)
         if fallo is not None:
             perf.mark("ui.render.reconstruye", motivo=str(fallo))
@@ -14342,15 +14837,18 @@ class RoleRunManager(ctk.CTk):
         with perf.span("ui.team_pc.datos_del_pc") as medida:
             pc_data = self._team_pc_cached_data()
             medida.add(hay_datos=pc_data is not None)
-        box_count, slot_count = self._forma_del_pc(pc_data)
-        requested_box = int(self._pc_page_box or (pc_data.current_box if pc_data is not None else 1) or 1)
+        # Igual que el refresco en sitio: mientras una relectura está en vuelo
+        # se conservan las cajas ya confirmadas en vez de vaciarlas.
+        pintable = self._pc_matriz_para_pintar(pc_data)
+        box_count, slot_count = self._forma_del_pc(pintable)
+        requested_box = int(self._pc_page_box or (pintable.current_box if pintable is not None else 1) or 1)
         faint_mode = self._faint_replacement_mode
         if faint_mode is not None and requested_box == ORAS_GRAVEYARD_BOX:
             requested_box = 1 if box_count >= 1 else requested_box
         box_number = max(1, min(requested_box, box_count))
         self._pc_page_box = box_number
         with perf.span("ui.team_pc.miembros_de_la_caja") as medida:
-            members = self._team_pc_box_members(pc_data, box_number)
+            members = self._team_pc_box_members(pintable, box_number)
             medida.add(cuantos=len(members or ()))
 
         # El estado inferior ya comunica la sustitución. El segundo aviso rojo
@@ -14483,6 +14981,99 @@ class RoleRunManager(ctk.CTk):
             return self._pc_cache
         return None
 
+    #: Cuantas anclas de PC se recuerdan entre sesiones. El localizador exige
+    #: dos coincidencias, asi que un puñado sobra; guardar las 930 casillas solo
+    #: engordaria el config.json de la Run sin localizar nada mejor.
+    LIMITE_ANCLAS_PC_RECORDADAS = 12
+
+    def _recordar_anclas_del_pc_vivo(self, data: SavePCData | None) -> None:
+        """Guarda en la Run las coordenadas que la RAM acaba de demostrar.
+
+        Un traslado hecho desde RoleRun vive en la RAM hasta que el jugador
+        guarda dentro del juego. Sin esta memoria, al reabrir solo quedaban las
+        anclas del ``main`` —ya caducadas— y la matriz viva no se podía
+        localizar: el PC quedaba ilegible hasta guardar la partida.
+        """
+        if data is None or not self.project:
+            return
+        recordadas: list[dict[str, int]] = []
+        for box in data.boxes:
+            for pokemon in box.pokemon:
+                if pokemon.box is None or pokemon.box_slot is None:
+                    continue
+                if int(pokemon.species_id or 0) <= 0:
+                    continue
+                recordadas.append({
+                    "box": int(pokemon.box),
+                    "box_slot": int(pokemon.box_slot),
+                    "species_id": int(pokemon.species_id),
+                    "pid": int(pokemon.pid or 0),
+                    "tid": int(pokemon.tid or 0),
+                    "sid": int(pokemon.sid or 0),
+                })
+                if len(recordadas) >= self.LIMITE_ANCLAS_PC_RECORDADAS:
+                    break
+            if len(recordadas) >= self.LIMITE_ANCLAS_PC_RECORDADAS:
+                break
+        if not recordadas or recordadas == list(self.project.pc_anchor_memory):
+            return
+        self.project.pc_anchor_memory = recordadas
+        try:
+            self.run_service.save(self.project)
+        except Exception:
+            # Recordar anclas es una ayuda, no un requisito: si no se puede
+            # persistir, la sesion actual sigue funcionando igual.
+            pass
+
+    def _anclas_del_pc_recordadas(self) -> list[SavePokemon]:
+        """Reconstruye las anclas persistidas como Pokémon mínimos.
+
+        Solo se usan para localizar la matriz: el comparador mira especie, PID,
+        TID y SID, nada más. Una ancla caducada no cuenta y ya está; el
+        localizador exige coincidencias, no ausencia de fallos.
+        """
+        if not self.project:
+            return []
+        anclas: list[SavePokemon] = []
+        for raw in list(getattr(self.project, "pc_anchor_memory", ()) or ()):
+            try:
+                box = int(raw["box"])
+                box_slot = int(raw["box_slot"])
+                species_id = int(raw["species_id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if species_id <= 0 or box <= 0 or box_slot <= 0:
+                continue
+            anclas.append(SavePokemon(
+                slot=box_slot, species_id=species_id, species="", nickname="",
+                level=0, held_item="", ability="", moves=[], move_ids=[],
+                is_egg=False, markings=[], role="SIN ROL", role_symbol="",
+                box=box, box_slot=box_slot,
+                pid=int(raw.get("pid", 0) or 0),
+                tid=int(raw.get("tid", 0) or 0),
+                sid=int(raw.get("sid", 0) or 0),
+            ))
+        return anclas
+
+    def _pc_matriz_para_pintar(self, pc_data: SavePCData | None) -> SavePCData | None:
+        """La matriz que se enseña mientras una relectura está en vuelo.
+
+        Una escritura viva invalida ``_pc_cache`` a propósito para releer el PC
+        del juego. Durante esos milisegundos ``_team_pc_cached_data`` devuelve
+        ``None``, y pintar con ``None`` no dibuja una caja «pendiente»: dibuja
+        una caja VACÍA. Ese era el parpadeo tras mover un Pokémon —todas las
+        casillas desaparecían unos frames y volvían—, y además afirmaba algo
+        falso: que ahí no había nada.
+
+        Mientras llega la lectura nueva se conserva la última matriz confirmada.
+        Las proyecciones pendientes se aplican encima igual que siempre, así que
+        el movimiento recién hecho se sigue viendo en su destino.
+        """
+        if pc_data is not None:
+            self._pc_ultima_matriz_pintada = pc_data
+            return pc_data
+        return getattr(self, "_pc_ultima_matriz_pintada", None)
+
     def _ensure_live_pc_matrix_loaded(self) -> bool:
         """Agenda la matriz PC viva cuando la vista aún conserva datos del save.
 
@@ -14509,6 +15100,20 @@ class RoleRunManager(ctk.CTk):
             return True
         return False
 
+    def _hay_cajas_ya_en_pantalla(self) -> bool:
+        """¿La vista Equipo/PC está montada y mostrando cajas ahora mismo?
+
+        Distingue la primera carga —donde no hay nada que enseñar y el cargador
+        sí ayuda— de una relectura posterior, donde tapar la pantalla es la
+        única razón por la que un cambio ya aplicado se siente como una espera.
+        """
+        if not getattr(self, "_pc_mostrado_con_datos", False):
+            return False
+        if self.active_page not in {"team", "pc"}:
+            return False
+        view = getattr(self, "_team_pc_view", None)
+        return view is not None and self._widget_alive(getattr(view, "frame", None))
+
     @perf.timed("ui.start_team_pc_load")
     def _start_team_pc_load(self) -> None:
         if self._team_pc_pc_loading or not self.current_save or not self.current_game or not self.project:
@@ -14517,7 +15122,14 @@ class RoleRunManager(ctk.CTk):
             self.after(180, self._start_team_pc_load)
             return
         self._team_pc_pc_loading = True
-        self._show_busy_indicator("pc-load", "Cargando las cajas del PC…")
+        hay_cajas = getattr(self, "_hay_cajas_ya_en_pantalla", None)
+        if not (callable(hay_cajas) and hay_cajas()):
+            # La superficie opaca solo tiene sentido cuando NO hay nada que
+            # mirar todavía. Al releer el PC después de un movimiento ya
+            # aplicado, las cajas están en pantalla y son correctas: taparlas
+            # con «Cargando las cajas del PC…» es justo lo contrario de lo que
+            # hace falta, porque convierte un cambio instantáneo en una espera.
+            self._show_busy_indicator("pc-load", "Cargando las cajas del PC…")
         self._set_operation_status(
             "applying",
             "CARGANDO CAJAS PC",
@@ -14580,6 +15192,9 @@ class RoleRunManager(ctk.CTk):
     def _finish_team_pc_load(self, data: SavePCData) -> None:
         self._team_pc_pc_loading = False
         self._pc_cache = data
+        # A partir de aquí el usuario ya tiene cajas delante. Las relecturas
+        # posteriores no vuelven a taparlas (ver `_hay_cajas_ya_en_pantalla`).
+        self._pc_mostrado_con_datos = True
         if getattr(self, "_initial_shell_waiting", False):
             # La barrera inicial debe componer y publicar exactamente la matriz
             # live que acaba de ser demostrada, nunca la lectura antigua del save.
@@ -14643,7 +15258,7 @@ class RoleRunManager(ctk.CTk):
         self._set_operation_status(
             "failed",
             "NO SE PUDIERON ABRIR LAS CAJAS",
-            str(error),
+            str(error) + PISTA_GUARDAR_PARA_LOCALIZAR_EL_PC,
             actions=("Reintentar",),
             persistent=True,
         )
@@ -15058,6 +15673,57 @@ class RoleRunManager(ctk.CTk):
                 target_role=str(target.get("slot_role") or "") or None,
             )
             return
+        if intent.operation == "swap-box-slots":
+            if self._active_azahar_realtime_key() not in PC_SWAP_GAME_KEYS:
+                game_label = self._active_azahar_realtime_label()
+                self._set_operation_status(
+                    "warning", "INTERCAMBIO NO HABILITADO",
+                    f"{game_label} todavía no tiene una escritura validada para "
+                    "intercambiar dos casillas ocupadas del PC. No se proyectó ningún cambio.",
+                    persistent=True,
+                )
+                return
+            source_box = int(getattr(source, "box", 0) or 0)
+            source_slot = int(getattr(source, "box_slot", 0) or getattr(source, "slot", 0) or 0)
+            destination_box = int(target.get("box") or 0)
+            destination_slot = int(target.get("slot") or 0)
+            if (
+                target_pokemon is None
+                or min(source_box, source_slot, destination_box, destination_slot) <= 0
+            ):
+                self._set_operation_status(
+                    "failed", "DESTINO INVÁLIDO",
+                    "La ocupación cambió antes de soltar. No se preparó nada.", persistent=True,
+                )
+                return
+            if (source_box, source_slot) == (destination_box, destination_slot):
+                return
+            pending_ids_before = {id(change) for change in self.run.pending_changes}
+            self.run.pending_changes.append(PendingTeamChange(
+                operation="swap-box-slots", party_slot=0,
+                box=source_box, box_slot=source_slot,
+                destination_box=destination_box, destination_box_slot=destination_slot,
+                # `incoming` es el que se arrastra y acaba en el destino;
+                # `outgoing`, el que estaba allí y pasa al hueco de origen.
+                incoming_pokemon=source.nickname or source.species,
+                incoming_species=source.species,
+                incoming_snapshot=self._pokemon_snapshot(source),
+                incoming_identity=self._pokemon_identity(source),
+                outgoing_pokemon=target_pokemon.nickname or target_pokemon.species,
+                outgoing_species=target_pokemon.species,
+                outgoing_snapshot=self._pokemon_snapshot(target_pokemon),
+                outgoing_identity=self._pokemon_identity(target_pokemon),
+                # Las dos identidades del intercambio ya son testigos por sí
+                # mismas; estos vecinos solo refuerzan la calibración.
+                box_witnesses=self._pc_box_witnesses(source_box, source_slot),
+            ))
+            self._request_oras_live_auto_apply_since(pending_ids_before)
+            self._set_operation_status(
+                "applying", "INTERCAMBIANDO EN EL PC",
+                f"Verificando Caja {source_box}, posición {source_slot} ↔ "
+                f"Caja {destination_box}, posición {destination_slot}.",
+            )
+            return
         if intent.operation == "move-box-slot":
             if self._active_azahar_realtime_key() not in PC_A_PC_GAME_KEYS:
                 game_label = self._active_azahar_realtime_label()
@@ -15090,15 +15756,31 @@ class RoleRunManager(ctk.CTk):
                 incoming_snapshot=self._pokemon_snapshot(source),
                 incoming_identity=self._pokemon_identity(source),
                 box_witnesses=(
+                    # `_pc_box_witnesses` sale de la proyección viva; los
+                    # vecinos que se acaban de depositar en RAM y todavía no
+                    # están en el `main` también cuentan. `_pc_role_witnesses`
+                    # solo mira el guardado, y en una caja recién estrenada no
+                    # aportaba ningún acompañante con el que calibrar.
                     self._pc_box_witnesses(source_box, source_slot)
-                    if self._active_azahar_realtime_key() == "xy"
+                    if self._active_azahar_realtime_key() in {"xy", "oras"}
                     else self._pc_role_witnesses(source)
                 ),
             ))
             self._request_oras_live_auto_apply_since(pending_ids_before)
+            # Adelanto visual: el Pokémon aparece YA en su destino, sin esperar
+            # a que el juego confirme. Es lo que permite volver a moverlo de
+            # inmediato en vez de quedarse mirando el hueco viejo. Si la
+            # escritura falla, `_finish_oras_live_write` retira este cambio
+            # pendiente y la proyección lo devuelve sola a su hueco original.
+            refrescar = getattr(self, "_refrescar_team_pc_en_sitio", None)
+            if not (callable(refrescar) and refrescar()):
+                repintar = getattr(self, "_refresh_main_after_oras_live_write", None)
+                if callable(repintar):
+                    repintar()
             self._set_operation_status(
                 "applying", "MOVIENDO EN EL PC",
-                f"Verificando Caja {source_box}, posición {source_slot} → Caja {destination_box}, posición {destination_slot}.",
+                f"Caja {source_box}, posición {source_slot} → Caja {destination_box}, posición {destination_slot}. "
+                "Mostrado por adelantado; falta la confirmación del juego.",
             )
             return
         if source_context == "team":
@@ -15135,6 +15817,11 @@ class RoleRunManager(ctk.CTk):
         if intent.operation == "move-box-slot":
             return (
                 self._active_azahar_realtime_key() in PC_A_PC_GAME_KEYS
+                and self._oras_live_auto_apply_available()
+            )
+        if intent.operation == "swap-box-slots":
+            return (
+                self._active_azahar_realtime_key() in PC_SWAP_GAME_KEYS
                 and self._oras_live_auto_apply_available()
             )
         if (
@@ -17730,6 +18417,11 @@ class RoleRunManager(ctk.CTk):
                     pass
                 anchors.extend(tuple(self.current_game.party))
                 anchors.extend(tuple(self._oras_live_pc_overrides.values()))
+                # Coordenadas que la RAM ya demostró en una sesión anterior. Un
+                # traslado hecho desde RoleRun no llega al ``main`` hasta que el
+                # jugador guarda dentro del juego; sin estas anclas, al reabrir
+                # solo quedaban las del guardado, ya caducadas.
+                anchors.extend(self._anclas_del_pc_recordadas())
                 realtime_core = getattr(self, "realtime_core", None)
                 kwargs = {
                     "box_count": int(base.box_count),
@@ -17799,6 +18491,9 @@ class RoleRunManager(ctk.CTk):
             self._pc_cache_signature = signature
             self._oras_live_pc_overrides.clear()
             self._oras_live_pc_empty_overrides.clear()
+            recordar = getattr(self, "_recordar_anclas_del_pc_vivo", None)
+            if callable(recordar):
+                recordar(data)
             self._record_bdsp_ui_event(
                 "pc-selector-live-ready",
                 occupied_slots=sum(len(box.pokemon) for box in data.boxes),
@@ -17917,6 +18612,15 @@ class RoleRunManager(ctk.CTk):
             box_witnesses=(
                 self._pc_box_witnesses(int(destination_box), int(destination_slot))
                 if live_key in {"xy", "oras"} and destination_box is not None and destination_slot is not None
+                else ()
+            ),
+            # Soltar en una caja vacía no deja ni un vecino que aportar. Estos
+            # testigos vienen de cualquier caja: la matriz es contigua, así que
+            # demuestran la misma dirección base sin usar nunca el hueco vacío
+            # como ancla. Solo los consume el escritor de ORAS.
+            pc_anchor_witnesses=(
+                self._pc_anchor_witnesses(int(destination_box), int(destination_slot))
+                if live_key == "oras" and destination_box is not None and destination_slot is not None
                 else ()
             ),
         ))
@@ -18533,6 +19237,14 @@ class RoleRunManager(ctk.CTk):
         RAM. Para no elegir una dirección por aproximación, ORASLiveWriter
         exige que al menos otro Pokémon de esta misma caja conserve su identidad
         PK6 en las posiciones contiguas esperadas.
+
+        Los vecinos salen de la MISMA proyección viva que pinta la cuadrícula,
+        no del último ``main``. Es la corrección que ``_pc_box_witnesses`` ya
+        llevaba y esta se quedó sin recibir: en cuanto una operación de PC en
+        vivo movía algo, el guardado dejaba de describir la caja real y estos
+        testigos apuntaban a Pokémon que ya no estaban en esos huecos. Ninguna
+        base candidata casaba, y un intercambio Equipo↔PC posterior moría con
+        «No se pudo localizar y validar la caja viva de ORAS».
         """
         if pokemon.box is None or pokemon.box_slot is None:
             return ()
@@ -18542,7 +19254,9 @@ class RoleRunManager(ctk.CTk):
         data = self._pc_cache or self._read_pc_data()
         if data is None or not 1 <= int(pokemon.box) <= len(data.boxes):
             return tuple(result)
-        candidates = list(data.boxes[int(pokemon.box) - 1].pokemon)
+        candidates = list(self._project_pc_box_pokemon(
+            data, int(pokemon.box), solo_confirmado=True,
+        ))
         candidates.sort(key=lambda item: (
             0 if int(item.box_slot or item.slot or 0) == target_slot else 1,
             abs(int(item.box_slot or item.slot or 0) - target_slot),
@@ -18574,7 +19288,10 @@ class RoleRunManager(ctk.CTk):
         # ocupados pero enviase cero testigos al writer. Reutilizamos exactamente
         # la misma proyección viva que alimenta la pantalla de PC.
         candidates = [
-            pokemon for pokemon in self._project_pc_box_pokemon(data, int(box))
+            pokemon
+            for pokemon in self._project_pc_box_pokemon(
+                data, int(box), solo_confirmado=True,
+            )
             if int(pokemon.box_slot or pokemon.slot or 0) != int(exclude_slot)
         ]
         candidates.sort(key=lambda pokemon: (
@@ -18588,6 +19305,41 @@ class RoleRunManager(ctk.CTk):
             )
             for pokemon in candidates[:3]
         )
+
+    def _pc_anchor_witnesses(
+        self, box: int, exclude_slot: int, limit: int = 4,
+    ) -> tuple[tuple[int, int, str], ...]:
+        """Identidades ocupadas de CUALQUIER caja, con su posición exacta.
+
+        Las 31 cajas son una sola tabla contigua en RAM, así que un Pokémon
+        real de la caja 7 demuestra la dirección base igual de bien que un
+        vecino de la caja 1. Sin esto, soltar en una caja vacía no tenía ni un
+        solo testigo que aportar y el depósito se rechazaba siempre.
+
+        Se recorren las cajas empezando por la de destino y abriéndose a las
+        más cercanas, así que en la práctica basta con proyectar una o dos. La
+        casilla que va a recibir al Pokémon nunca se aporta como testigo.
+        """
+        data = self._pc_cache or self._read_pc_data()
+        if data is None:
+            return ()
+        target_box = int(box)
+        order = sorted(
+            range(1, len(data.boxes) + 1),
+            key=lambda number: (abs(number - target_box), number),
+        )
+        witnesses: list[tuple[int, int, str]] = []
+        for box_number in order:
+            for pokemon in self._project_pc_box_pokemon(
+                data, box_number, solo_confirmado=True,
+            ):
+                slot = int(pokemon.box_slot or pokemon.slot or 0)
+                if slot <= 0 or (box_number == target_box and slot == int(exclude_slot)):
+                    continue
+                witnesses.append((box_number, slot, self._pokemon_identity(pokemon)))
+                if len(witnesses) >= int(limit):
+                    return tuple(witnesses)
+        return tuple(witnesses)
 
     def _queue_pc_role_change(self, pokemon: SavePokemon, role: str) -> None:
         if not self.project or pokemon.box is None or pokemon.box_slot is None:
@@ -22379,6 +23131,9 @@ class RoleRunManager(ctk.CTk):
         except Exception:
             pass
         self._live_write_in_progress = False
+        self._olvidar_cola_de_cambios()
+        self._pc_mostrado_con_datos = False
+        self._pc_ultima_matriz_pintada = None
         self.save_watcher.stop()
         self.hotkey_manager.stop()
         loading_overlay = self._show_loading_overlay("Leyendo partida y cargando equipo...")
@@ -23177,6 +23932,24 @@ class RoleRunManager(ctk.CTk):
             elif change.operation == "box-to-party":
                 headline = change.incoming_pokemon or change.incoming_species or "Pokémon"
                 before, after = f"CAJA {change.box or '—'}", f"EQUIPO · {change.incoming_role or 'SIN ROL'}"
+            elif change.operation in {"move-box-slot", "swap-box-slots"}:
+                # Estas dos no tocan el equipo. El rótulo genérico de abajo las
+                # describía como «· EQUIPO», que es sencillamente falso.
+                origen = f"CAJA {change.box or '—'} · {change.box_slot or '—'}"
+                destino = (
+                    f"CAJA {change.destination_box or '—'} · "
+                    f"{change.destination_box_slot or '—'}"
+                )
+                subtitle = "MOVIMIENTO EN EL PC"
+                if change.operation == "swap-box-slots":
+                    subtitle = "INTERCAMBIO EN EL PC"
+                    headline = (
+                        f"{change.incoming_pokemon or 'Pokémon'} ↔ "
+                        f"{change.outgoing_pokemon or 'Pokémon'}"
+                    )
+                else:
+                    headline = change.incoming_pokemon or change.incoming_species or "Pokémon"
+                before, after = origen, destino
             else:
                 headline = f"{change.outgoing_pokemon or 'Equipo'} ↔ {change.incoming_pokemon or 'PC'}"
                 before = f"{change.outgoing_pokemon or 'Pokémon'} · EQUIPO"

@@ -53,7 +53,7 @@ def _manager(tmp_path: Path, pc: SavePCData, live_slots: dict[tuple[int, int], S
         _oras_live_pc_overrides={}, _oras_live_pc_empty_overrides=set(),
         _pokemon_identity=lambda p: "" if p is None else f"{p.species_id}:{p.pid}",
         _pending_team_changes=lambda: [],
-        _project_pc_box_pokemon=lambda data, box: RoleRunManager._project_pc_box_pokemon(manager, data, box),
+        _project_pc_box_pokemon=lambda data, box, solo_confirmado=False: RoleRunManager._project_pc_box_pokemon(manager, data, box, solo_confirmado=solo_confirmado),
         _save_file_signature=RoleRunManager._save_file_signature,
         _floating_bar_is_visible=lambda: False,
         _main_ui_dirty_while_floating=False, active_page="team",
