@@ -119,12 +119,21 @@ def test_floating_status_uses_pkhex_status_condition_values(status: int, expecte
 
 
 def test_all_hotkey_actions_require_emulator_foreground() -> None:
+    """``floating_menu`` (botón guide, el central) sigue abriendo el menú.
+
+    ``open_full_app`` (botón back, dos cuadrados a la izquierda del central)
+    es la acción NUEVA del 31-08-2026: abre RoleRun completo, igual que
+    pulsar el logo de la barra flotante con el ratón. Son botones distintos
+    a propósito — el primer intento repuso "guide" por error y el usuario lo
+    corrigió: "guide" era y sigue siendo el menú.
+    """
     calls: list[str] = []
     manager = SimpleNamespace(
         _foreground_is_supported_emulator=lambda: False,
         after=lambda _delay, callback: callback(),
         _heal_bdsp_party=lambda: calls.append("heal"),
         _toggle_floating_launcher=lambda: calls.append("menu"),
+        _floating_logo_to_dashboard=lambda: calls.append("app_completa"),
         _counter_is_automatic=lambda _counter: False,
         project=SimpleNamespace(hotkeys={"vidas_mas": "num 7"}),
         adjust_run_counter=lambda counter, amount, **_kwargs: calls.append(f"{counter}:{amount}"),
@@ -132,14 +141,16 @@ def test_all_hotkey_actions_require_emulator_foreground() -> None:
 
     RoleRunManager._hotkey_action(manager, "heal_party")
     RoleRunManager._hotkey_action(manager, "floating_menu")
+    RoleRunManager._hotkey_action(manager, "open_full_app")
     RoleRunManager._hotkey_action(manager, "vidas_mas")
     assert calls == []
 
     manager._foreground_is_supported_emulator = lambda: True
     RoleRunManager._hotkey_action(manager, "heal_party")
     RoleRunManager._hotkey_action(manager, "floating_menu")
+    RoleRunManager._hotkey_action(manager, "open_full_app")
     RoleRunManager._hotkey_action(manager, "vidas_mas")
-    assert calls == ["heal", "menu", "vidas:1"]
+    assert calls == ["heal", "menu", "app_completa", "vidas:1"]
 
 
 def test_enabling_floating_preference_opens_the_bar_immediately() -> None:
@@ -914,6 +925,44 @@ def test_bdsp_send_to_pc_queues_a_physically_demonstrated_middle_compaction() ->
     assert requested == [set()]
 
 
+def test_bdsp_send_to_pc_respects_the_exact_dropped_slot() -> None:
+    """Hallazgo del usuario el 31-08-2026: arrastrar a una casilla concreta
+    del PC en BDSP la ignoraba y el Pokémon acababa siempre en el primer
+    hueco libre. El escritor (``_apply_party_box_resize``) ya aceptaba un
+    destino exacto — solo faltaba que la interfaz se lo pasara.
+    """
+    first = _pokemon(21)
+    tail = _pokemon(21)
+    tail.slot = 2
+    requested: list[set[int]] = []
+    manager = SimpleNamespace(
+        current_game=_game(21),
+        save_engine=SimpleNamespace(key="bdsp"),
+        run=SimpleNamespace(pending_changes=[]),
+        _pc_cache=object(),
+        active_page="team",
+        _active_azahar_realtime_key=lambda: "bdsp",
+        _active_azahar_realtime_label=lambda: "Perla Reluciente",
+        _oras_live_auto_apply_available=lambda: True,
+        _projected_party=lambda: [first, tail],
+        _pokemon_snapshot=lambda pokemon: {"species_id": pokemon.species_id},
+        _effective_role=lambda _pokemon: ("Asesino", "▲"),
+        _pokemon_identity=lambda pokemon: f"{pokemon.species_id}:{pokemon.pid}:{pokemon.tid}:{pokemon.sid}",
+        _request_oras_live_auto_apply_since=lambda before: requested.append(set(before)),
+        _update_top_status=lambda: None,
+        _sync_live_layout=lambda: None,
+        _smooth_render_page=lambda **_kwargs: None,
+    )
+
+    RoleRunManager.send_pokemon_to_pc(manager, tail, ask=False, destination=(3, 12))
+
+    assert len(manager.run.pending_changes) == 1
+    change = manager.run.pending_changes[0]
+    assert change.operation == "party-to-box"
+    assert (change.box, change.box_slot) == (3, 12)
+    assert requested == [set()]
+
+
 def test_bdsp_box_to_party_appends_with_the_first_free_role() -> None:
     current = _pokemon(21)
     incoming = _pokemon(21)
@@ -1479,17 +1528,32 @@ def test_bdsp_pc_to_pc_poll_repaints_only_when_the_projection_changes(tmp_path) 
 
 @pytest.mark.parametrize("game_key", ["oras", "xy", "sm", "usum", "bdsp"])
 def test_save_watcher_rearms_every_registered_realtime_backend(tmp_path, game_key: str) -> None:
+    """Con el monitor en vivo activo, el disco deja de ser autoridad de la party.
+
+    Hallazgo del usuario 01-09-2026: en BDSP, el autoguardado de una simple
+    transición de zona (entrar/salir de un edificio) también dispara este
+    watcher, pero no siempre es un guardado completo — el archivo en disco
+    puede seguir sin reflejar cambios que ya viven solo en la RAM vigilada en
+    vivo. Publicar esa instantánea de disco pisaba la vista en vivo, ya
+    correcta, con un Pokémon que en la party actual ya no está, durante el
+    segundo que tardaba la siguiente reconciliación (más abajo) en corregirlo.
+    Con el monitor activo la reconciliación sigue reprogramándose, pero
+    `current_game` no se toca hasta que esa reconciliación en vivo confirme el
+    contenido real.
+    """
     save_path = tmp_path / "main"
     save_path.write_bytes(b"save")
     game = _game(21)
+    original_game = _game(7)
     scheduled: list[int] = []
     ui_events: list[tuple[str, dict[str, object]]] = []
+    render_calls: list[str] = []
     manager = SimpleNamespace(
         _session_generation=5,
         _shell_built=True,
         active_page="team",
         current_save=SimpleNamespace(path=save_path),
-        current_game=_game(7),
+        current_game=original_game,
         save_engine=SimpleNamespace(
             key=game_key,
             read=lambda _path: game,
@@ -1510,15 +1574,15 @@ def test_save_watcher_rearms_every_registered_realtime_backend(tmp_path, game_ke
         ),
         _clear_oras_live_auto_apply=lambda: None,
         _clear_oras_live_reconciliation=lambda: None,
-        _sync_obs_state=lambda _game: {"status": "ok"},
+        _sync_obs_state=lambda _game: render_calls.append("sync_obs") or {"status": "ok"},
         sync_status="",
         sprite_pil_cache={300: object()},
-        _load_sprite_async=lambda _pokemon: None,
-        _retry_placeholder_sprites=lambda: None,
+        _load_sprite_async=lambda _pokemon: render_calls.append("load_sprite"),
+        _retry_placeholder_sprites=lambda: render_calls.append("retry_sprites"),
         _pc_cache=object(),
         _pc_cache_signature=object(),
-        _smooth_render_page=lambda **_kwargs: None,
-        _schedule_team_integrity_check=lambda: None,
+        _smooth_render_page=lambda **_kwargs: render_calls.append("smooth_render"),
+        _schedule_team_integrity_check=lambda: render_calls.append("integrity_check"),
         _schedule_oras_live_reconciliation=lambda delay: scheduled.append(delay),
         _update_top_status=lambda: None,
     )
@@ -1530,15 +1594,70 @@ def test_save_watcher_rearms_every_registered_realtime_backend(tmp_path, game_ke
     RoleRunManager._reload_from_watched_save(manager, save_path, generation=5)
 
     assert scheduled == [650]
-    assert manager.current_game is game
+    # El monitor en vivo sigue activo para estos cinco backends: la party de
+    # disco no se publica, y nada relacionado con pintarla se dispara. La
+    # reconciliación en vivo programada arriba es quien confirmará el estado.
+    assert manager.current_game is original_game
+    assert render_calls == []
     if game_key == "bdsp":
         assert ui_events == [("save-watcher-reload", {
             "live_active": True,
             "monitor_scheduled": True,
             "monitor_in_progress": False,
+            "live_tracking_active": True,
         })]
     else:
         assert ui_events == []
+
+
+def test_save_watcher_still_publishes_disk_reload_without_live_tracking(tmp_path) -> None:
+    """Sin monitor en vivo, el disco sigue siendo la única fuente: se publica igual."""
+    save_path = tmp_path / "main"
+    save_path.write_bytes(b"save")
+    game = _game(21)
+    original_game = _game(7)
+    scheduled: list[int] = []
+    render_calls: list[str] = []
+    manager = SimpleNamespace(
+        _session_generation=5,
+        _shell_built=True,
+        active_page="team",
+        current_save=SimpleNamespace(path=save_path),
+        current_game=original_game,
+        save_engine=SimpleNamespace(
+            key="bdsp",
+            read=lambda _path: game,
+            valid_moves=lambda _path: {1, 2, 3},
+        ),
+        save_service=SimpleNamespace(inspect=lambda _path: SimpleNamespace(path=save_path)),
+        run=SimpleNamespace(pending_changes=[], save_path=save_path),
+        engine=SimpleNamespace(set_allowed_moves=lambda _moves: None),
+        _oras_live_active=False,
+        _oras_live_monitor_after_id=None,
+        _oras_live_monitor_in_progress=False,
+        bdsp_realtime_adapter=SimpleNamespace(record_ui_event=lambda _event, **_fields: None),
+        _active_azahar_realtime_key=lambda: "bdsp",
+        _record_bdsp_ui_event=lambda _event, **_fields: None,
+        _clear_oras_live_auto_apply=lambda: None,
+        _clear_oras_live_reconciliation=lambda: None,
+        _sync_obs_state=lambda _game: render_calls.append("sync_obs") or {"status": "ok"},
+        sync_status="",
+        sprite_pil_cache={300: object()},
+        _load_sprite_async=lambda _pokemon: render_calls.append("load_sprite"),
+        _retry_placeholder_sprites=lambda: render_calls.append("retry_sprites"),
+        _pc_cache=object(),
+        _pc_cache_signature=object(),
+        _smooth_render_page=lambda **_kwargs: render_calls.append("smooth_render"),
+        _schedule_team_integrity_check=lambda: render_calls.append("integrity_check"),
+        _schedule_oras_live_reconciliation=lambda delay: scheduled.append(delay),
+        _update_top_status=lambda: None,
+    )
+
+    RoleRunManager._reload_from_watched_save(manager, save_path, generation=5)
+
+    assert scheduled == []
+    assert manager.current_game is game
+    assert render_calls == ["retry_sprites", "sync_obs", "smooth_render", "integrity_check"]
 
 
 def test_bdsp_pc_reconcile_publishes_live_metadata_when_identity_did_not_move(

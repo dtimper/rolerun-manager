@@ -122,6 +122,29 @@ def test_un_aviso_de_arrastre_no_se_queda_ahi_para_siempre() -> None:
     )
 
 
+def test_soltar_en_una_casilla_concreta_de_equipo_a_pc_llega_hasta_el_writer() -> None:
+    """Hallazgo del usuario el 31-08-2026: arrastrar un Pokémon del equipo a
+    una casilla concreta del PC en BDSP la ignoraba y siempre acababa en el
+    primer hueco libre. El escritor (``_apply_party_box_resize``) ya acepta
+    un destino exacto — bastaba con que las dos mitades de la interfaz se lo
+    pasaran. Estaban escritas dos veces, igual que ``move-box-slot`` antes, y
+    a BDSP le faltaba en la segunda.
+    """
+    computa_destino = inspect.getsource(RoleRunManager._team_pc_drop)
+    indice = computa_destino.index('intent.operation == "party-to-box"')
+    trozo_computa = computa_destino[indice:indice + 700]
+    assert '"bdsp"' in trozo_computa, (
+        "_team_pc_drop ya no calcula la casilla exacta para BDSP"
+    )
+
+    usa_destino = inspect.getsource(RoleRunManager.send_pokemon_to_pc)
+    indice2 = usa_destino.index("GEN7_REALTIME_GAME_KEYS | {")
+    trozo_usa = usa_destino[indice2:indice2 + 200]
+    assert '"bdsp"' in trozo_usa, (
+        "send_pokemon_to_pc ya no usa el destino exacto que le pasa BDSP"
+    )
+
+
 def test_un_fallo_de_verdad_sigue_sin_irse_solo() -> None:
     from app.ui_state.operation_status import OperationStatusStore
 

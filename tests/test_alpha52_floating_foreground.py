@@ -98,3 +98,49 @@ def test_alpha52_restore_from_floating_requests_foreground_and_two_bounded_retri
     delays = [entry[1] for entry in manager.calls if isinstance(entry, tuple) and entry[0] == "after"]
     assert delays == [60, 180]
     assert manager.calls.index("foreground") > manager.calls.index("lift")
+
+
+def test_hacer_clic_en_el_emulador_durante_el_arranque_si_flota() -> None:
+    """Hallazgo del usuario el 31-08-2026.
+
+    Mientras BDSP/Sol-Luna validan los PS iniciales, la shell principal puede
+    tardar en terminar de componerse (`_shell_built` sigue en False). Antes,
+    ``_on_main_focus_out`` exigía la shell terminada para siquiera programar
+    el auto-float, así que RoleRun se quedaba en primer plano ese rato entero
+    aunque el usuario clicase en el emulador. ``_render_floating_bar`` no
+    depende de la shell principal —solo de ``_projected_party``/``project``,
+    ya disponibles antes—, así que no hacía falta esperar a eso.
+    """
+    programados: list[tuple[int, object]] = []
+    manager = types.SimpleNamespace(
+        _auto_floating_guard=False,
+        _shell_built=False,  # la shell principal todavía no ha terminado
+        current_game=object(),
+        _faint_picker_blocks_floating=lambda: False,
+        floating_bar=None,
+        _focus_out_after_id=None,
+        _auto_float_if_background=lambda: None,
+        after=lambda ms, callback: programados.append((ms, callback)) or "id",
+    )
+
+    RoleRunManager._on_main_focus_out(manager)
+
+    assert programados and programados[0][0] == 220
+
+
+def test_el_auto_float_tampoco_exige_la_shell_terminada() -> None:
+    llamadas: list[str] = []
+    manager = types.SimpleNamespace(
+        _auto_floating_guard=False,
+        _shell_built=False,
+        current_game=object(),
+        _faint_picker_blocks_floating=lambda: False,
+        _foreground_belongs_to_this_process=lambda: False,
+        state=lambda: "normal",
+        _foreground_is_supported_emulator=lambda: True,
+        open_floating_bar=lambda: llamadas.append("flotar"),
+    )
+
+    RoleRunManager._auto_float_if_background(manager)
+
+    assert llamadas == ["flotar"]

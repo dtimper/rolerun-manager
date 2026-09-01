@@ -169,6 +169,39 @@ class RunProjectServiceTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+class RunProjectControllerHotkeyBackfillTests(unittest.TestCase):
+    """Una Run guardada antes del 31-08-2026 recibe "open_full_app" sola.
+
+    ``raw.setdefault("controller_hotkeys", {"floating_menu": "guide"})`` no
+    tocaba una Run que YA tenía ``controller_hotkeys`` (aunque le faltara la
+    acción nueva): setdefault del diccionario completo no entra si la clave
+    ya existe. El backfill tiene que ser por CLAVE dentro del diccionario.
+    """
+
+    def test_una_run_vieja_recibe_open_full_app_sin_perder_su_boton_personalizado(self) -> None:
+        import json
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            save = root / "main"
+            save.write_bytes(b"save")
+            service = RunProjectService(root / "Runs", root / "OBS")
+            project = service.open_or_create("AS", "Timper", save)
+
+            # Simula una Run guardada ANTES de que "open_full_app" existiera,
+            # con el botón de "floating_menu" ya personalizado por el usuario.
+            config_path = root / "Runs" / project.slug / "config.json"
+            raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
+            raw["controller_hotkeys"] = {"floating_menu": "start"}
+            config_path.write_text(json.dumps(raw), encoding="utf-8")
+
+            reloaded = service.load(project.slug)
+
+            assert reloaded is not None
+            self.assertEqual(reloaded.controller_hotkeys["floating_menu"], "start")
+            self.assertEqual(reloaded.controller_hotkeys["open_full_app"], "back")
+
+
 class RunProjectFaintRearmTests(unittest.TestCase):
     def test_graveyard_history_does_not_block_a_later_real_faint_occurrence(self) -> None:
         with TemporaryDirectory() as directory:

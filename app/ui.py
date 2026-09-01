@@ -99,6 +99,7 @@ from .ui_components import fundido_de_tarjeta
 from .ui_components import (
     IntegratedRoleInfoPopover,
     IntegratedWindowSurface,
+    TransparentWindowSurface,
     OperationStatusBar,
     RoleIconProvider,
     configurar_si_cambia,
@@ -2086,8 +2087,16 @@ class RoleRunManager(ctk.CTk):
         # justo tras pulsar minimizar.
 
     def _on_main_focus_out(self, _event=None) -> None:
+        # `_shell_built` deliberadamente NO es una condición aquí (hallazgo del
+        # usuario 31-08-2026): mientras BDSP/Sol-Luna validan los PS iniciales,
+        # RoleRun puede tardar en soltar la barrera de arranque, y hasta ahora
+        # eso bloqueaba también poder mandarlo a segundo plano — la ventana se
+        # quedaba en primer plano "un rato" aunque el usuario clicase en el
+        # emulador. `_render_floating_bar` solo depende de `_projected_party`/
+        # `self.project`, ya disponibles antes de que la shell principal
+        # termine de componerse, así que no hace falta esperar a eso.
         if (
-            self._auto_floating_guard or not self._shell_built or not self.current_game
+            self._auto_floating_guard or not self.current_game
             or self._faint_picker_blocks_floating()
         ):
             return
@@ -2103,8 +2112,9 @@ class RoleRunManager(ctk.CTk):
 
     def _auto_float_if_background(self) -> None:
         self._focus_out_after_id = None
+        # Mismo motivo que en `_on_main_focus_out`: no exigir `_shell_built`.
         if (
-            self._auto_floating_guard or not self.current_game or not self._shell_built
+            self._auto_floating_guard or not self.current_game
             or self._faint_picker_blocks_floating()
         ):
             return
@@ -2519,8 +2529,16 @@ class RoleRunManager(ctk.CTk):
         except Exception:
             release_opening_guard()
 
-    def _force_native_main_maximize(self) -> bool:
-        """Fuerza SW_MAXIMIZE sobre el HWND real de Tk y su wrapper en Windows."""
+    def _force_native_main_maximize(self, *, steal_foreground: bool = True) -> bool:
+        """Fuerza SW_MAXIMIZE sobre el HWND real de Tk y su wrapper en Windows.
+
+        ``steal_foreground=False`` (hallazgo del usuario 31-08-2026) hace lo
+        mismo pero SIN ``SetForegroundWindow``: cargar una partida puede
+        maximizar la raíz varias veces mientras el usuario ya está en el
+        emulador, y cada una la traía de vuelta al frente. El tamaño/estado de
+        la ventana sigue corrigiéndose igual; solo se deja de arrebatar el
+        foco cuando el usuario ya se fue a otra ventana.
+        """
         if os.name != "nt":
             return False
         try:
@@ -2549,8 +2567,9 @@ class RoleRunManager(ctk.CTk):
                 # seguido maximizamos ambos HWND.
                 user32.ShowWindow(ctypes.c_void_p(target), SW_RESTORE)
                 user32.ShowWindow(ctypes.c_void_p(target), SW_MAXIMIZE)
-            foreground = parent or hwnd
-            user32.SetForegroundWindow(ctypes.c_void_p(foreground))
+            if steal_foreground:
+                foreground = parent or hwnd
+                user32.SetForegroundWindow(ctypes.c_void_p(foreground))
             return any(bool(user32.IsZoomed(ctypes.c_void_p(target))) for target in targets)
         except Exception:
             return False
@@ -5158,12 +5177,30 @@ class RoleRunManager(ctk.CTk):
             RoleRunManager._set_content_navigation_focus(self, False)
             entries = tuple(getattr(self, "_sidebar_keyboard_entries", ()))
             if entries:
-                page = entries[int(self._sidebar_keyboard_index) % len(entries)][0]
-                self.navigate(page)
+                index = int(self._sidebar_keyboard_index) % (len(entries) + 1)
+                # Hallazgo del usuario 31-08-2026: no había forma de alcanzar la
+                # flecha "‹" de cerrar navegando con flechas/mando, solo con el
+                # botón de "back" configurado. La posición extra, al final del
+                # ciclo arriba/abajo, la representa: aceptar ahí cierra en vez
+                # de navegar.
+                if index == len(entries):
+                    self._set_sidebar_expanded(False)
+                else:
+                    self.navigate(entries[index][0])
             return True
         if not bool(getattr(self, "_sidebar_navigation_selected", False)):
             return False
         self._sidebar_navigation_selected = False
+        # Hallazgo del usuario 01-09-2026: aceptar aquí abría el drawer pero
+        # nunca apagaba el borde dorado del chevrón "›" colapsado (solo lo
+        # apagaba la rama "right"/"back" de `_handle_sidebar_navigation`).
+        # Si en vez de eso el usuario aceptaba para entrar al drawer y luego
+        # navegaba a una página, se quedaban DOS cosas marcadas como
+        # seleccionadas a la vez: el chevrón y la tarjeta de la página nueva.
+        try:
+            self.sidebar_toggle.configure(fg_color="transparent", border_width=0)
+        except Exception:
+            pass
         self._set_sidebar_expanded(True)
         return True
 
@@ -5184,7 +5221,7 @@ class RoleRunManager(ctk.CTk):
 
     def _paint_sidebar_keyboard_selection(self) -> None:
         entries = tuple(getattr(self, "_sidebar_keyboard_entries", ()))
-        selected = int(getattr(self, "_sidebar_keyboard_index", 0)) if entries else -1
+        selected = int(getattr(self, "_sidebar_keyboard_index", 0)) % (len(entries) + 1) if entries else -1
         for index, (page, button) in enumerate(entries):
             try:
                 configurar_si_cambia(
@@ -5195,6 +5232,18 @@ class RoleRunManager(ctk.CTk):
                     border_width=2 if index == selected else 0,
                     border_color="#F2C45E",
                     text_color=TEXT if index == selected else MUTED,
+                )
+            except Exception:
+                pass
+        drawer_toggle = getattr(self, "sidebar_drawer_toggle", None)
+        if drawer_toggle is not None:
+            try:
+                cerrar_seleccionado = bool(entries) and selected == len(entries)
+                configurar_si_cambia(
+                    drawer_toggle,
+                    fg_color="#2A2417" if cerrar_seleccionado else "transparent",
+                    border_width=2 if cerrar_seleccionado else 0,
+                    border_color="#F2C45E",
                 )
             except Exception:
                 pass
@@ -5210,15 +5259,35 @@ class RoleRunManager(ctk.CTk):
             entries = tuple(getattr(self, "_sidebar_keyboard_entries", ()))
             if not entries:
                 return True
+            # +1: una posición extra al final del ciclo representa la flecha
+            # "‹" de cerrar, para poder alcanzarla con arriba/abajo/mando y no
+            # solo con el botón de "back" configurado.
+            ciclo = len(entries) + 1
             if direction == "up":
-                self._sidebar_keyboard_index = (self._sidebar_keyboard_index - 1) % len(entries)
+                self._sidebar_keyboard_index = (self._sidebar_keyboard_index - 1) % ciclo
             elif direction == "down":
-                self._sidebar_keyboard_index = (self._sidebar_keyboard_index + 1) % len(entries)
+                self._sidebar_keyboard_index = (self._sidebar_keyboard_index + 1) % ciclo
             elif direction == "back":
                 self._set_sidebar_expanded(False)
+            elif direction == "right":
+                # Pedido del usuario 01-09-2026: "derecha" pone el cursor sobre
+                # la flecha de cerrar; "derecha" otra vez (ya sobre ella) cierra
+                # el drawer y entrega el foco al primer botón de la pestaña.
+                if self._sidebar_keyboard_index != len(entries):
+                    self._sidebar_keyboard_index = len(entries)
+                else:
+                    self._set_sidebar_expanded(False)
+                    self._focus_first_content_item()
+                    return True
             self._paint_sidebar_keyboard_selection()
             return True
         if bool(getattr(self, "_sidebar_navigation_selected", False)):
+            if direction == "left":
+                # Pedido del usuario 01-09-2026: con el chevrón "›" colapsado
+                # ya seleccionado, "izquierda" abre el menú — lo mismo que
+                # aceptar sobre él.
+                self._accept_sidebar_from_content()
+                return True
             if direction in {"right", "back"}:
                 self._sidebar_navigation_selected = False
                 self._set_content_navigation_focus(True)
@@ -5230,6 +5299,25 @@ class RoleRunManager(ctk.CTk):
                     pass
             return True
         return False
+
+    def _focus_first_content_item(self) -> None:
+        """Entrega el foco a la pestaña activa, seleccionando su primer ítem.
+
+        Pedido del usuario 01-09-2026: no basta con restaurar lo que
+        estuviera marcado antes de abrir el menú — debe ser SIEMPRE el
+        primero. `TeamPCSelectionState.move_direction` ya resuelve "primero"
+        cuando `active` es `False`, cualquiera que sea la dirección — apagar
+        `active` y reenviar un movimiento cualquiera reutiliza esa regla en
+        vez de duplicarla aquí.
+        """
+        self._set_content_navigation_focus(True)
+        view = RoleRunManager._active_navigation_view(self)
+        selection = getattr(view, "selection", None)
+        if selection is not None and hasattr(selection, "active"):
+            selection.active = False
+        mover = getattr(view, "_move_direction_key", None)
+        if callable(mover):
+            mover(None, "down")
 
     def _set_collapsed_sidebar_hover(self, hovered: bool) -> None:
         if bool(getattr(self, "sidebar_expanded", False)):
@@ -5281,6 +5369,7 @@ class RoleRunManager(ctk.CTk):
                 height = max(1, min(
                     int(content.winfo_height()), int(self.winfo_height()) - content_y,
                 ))
+                marca = time.perf_counter() if perf.ENABLED else 0.0
                 capture = ImageGrab.grab(bbox=(
                     int(content.winfo_rootx()), int(content.winfo_rooty()),
                     int(content.winfo_rootx()) + width,
@@ -5288,6 +5377,13 @@ class RoleRunManager(ctk.CTk):
                 ), all_screens=True).convert("RGB")
                 if capture.size != (width, height):
                     capture = capture.resize((width, height), Image.Resampling.LANCZOS)
+                if perf.ENABLED:
+                    perf.record(
+                        "ui.sidebar.apertura.captura",
+                        (time.perf_counter() - marca) * 1000.0,
+                        ancho=int(width), alto=int(height),
+                    )
+                    marca = time.perf_counter()
                 # Conservamos también el frame limpio, anterior al oscurecido.
                 # Si el usuario navega desde el drawer, esta será la autoridad
                 # visual de la transición: recapturar tras retirar el scrim podía
@@ -5295,6 +5391,13 @@ class RoleRunManager(ctk.CTk):
                 self.sidebar_source_capture = capture.copy()
                 capture = ImageEnhance.Brightness(capture).enhance(0.28)
                 self.sidebar_scrim_image = ImageTk.PhotoImage(capture)
+                if perf.ENABLED:
+                    # Lo que costaría UN fotograma de un fundido por imagen:
+                    # oscurecer a otro nivel y volver a subirlo a Tk.
+                    perf.record(
+                        "ui.sidebar.apertura.oscurecer_y_subir",
+                        (time.perf_counter() - marca) * 1000.0,
+                    )
                 scrim = tk.Label(
                     self, image=self.sidebar_scrim_image,
                     borderwidth=0, highlightthickness=0, background="#080808",
@@ -5339,11 +5442,22 @@ class RoleRunManager(ctk.CTk):
         duration_ms = 140
         started = time.perf_counter()
         drawer = self.sidebar_drawer
+        # Instrumentación del tirón al cerrar (01-09-2026). Con `ROLERUN_PERF`
+        # apagado —el caso normal— `perf.ENABLED` es False y esto no cuesta
+        # nada: ni un `perf_counter` de más.
+        ultimo_fotograma = [started]
 
         def frame() -> None:
             if bool(getattr(self, "sidebar_expanded", False)) != bool(opening):
                 return
-            elapsed = (time.perf_counter() - started) * 1000.0
+            ahora = time.perf_counter()
+            if perf.ENABLED:
+                perf.record(
+                    "ui.sidebar.frame", (ahora - ultimo_fotograma[0]) * 1000.0,
+                    opening=bool(opening),
+                )
+                ultimo_fotograma[0] = ahora
+            elapsed = (ahora - started) * 1000.0
             progress = max(0.0, min(1.0, elapsed / duration_ms))
             # Ease-out cúbico: respuesta inmediata al click y desaceleración
             # continua al llegar, sin el arranque lento de smoothstep.
@@ -5369,6 +5483,7 @@ class RoleRunManager(ctk.CTk):
             self.sidebar_drawer_x = target_x
             self.sidebar_animation_width = 285 if opening else 0
             if not opening:
+                marca = time.perf_counter() if perf.ENABLED else 0.0
                 # Sacar el drawer del gestor de geometría elimina también su
                 # superficie de dibujo. Dejarlo simplemente en x=-285 conservaba
                 # en algunos frames los píxeles del tirador «‹» junto al «›» real.
@@ -5378,9 +5493,30 @@ class RoleRunManager(ctk.CTk):
                     self.sidebar.lift()
                 except Exception:
                     pass
+                if perf.ENABLED:
+                    perf.record(
+                        "ui.sidebar.cierre.soltar_drawer",
+                        (time.perf_counter() - marca) * 1000.0,
+                    )
+                    marca = time.perf_counter()
                 scrim = getattr(self, "sidebar_scrim", None)
                 if self._widget_alive(scrim):
                     scrim.destroy()
+                if perf.ENABLED:
+                    perf.record(
+                        "ui.sidebar.cierre.destruir_velo",
+                        (time.perf_counter() - marca) * 1000.0,
+                    )
+                    # `update_idletasks()` (01-09-2026) no reveló ningún coste
+                    # — la cola de Tk está vacía a los 2 ms. El vídeo sigue
+                    # mostrando una reconstrucción visible de todos modos, así
+                    # que el retraso no está en Tk: puede ser el propio
+                    # compositor de Windows (fuera de Python) o del hilo Tk
+                    # ejecutando algo que ninguna de las marcas de arriba
+                    # cubre. Esto muestrea la pila del hilo Tk cada 5 ms
+                    # durante los 400 ms siguientes para ver qué hay
+                    # realmente en marcha, en vez de seguir adivinando.
+                    self._muestrear_pila_tras_cerrar_menu()
                 self.sidebar_scrim = None
                 self.sidebar_scrim_image = None
                 self._sidebar_navigation_selected = False
@@ -5398,6 +5534,34 @@ class RoleRunManager(ctk.CTk):
                     self.sidebar_source_capture = None
 
         frame()
+
+    def _muestrear_pila_tras_cerrar_menu(self) -> None:
+        """Diagnóstico temporal (01-09-2026): qué ejecuta el hilo Tk durante
+        los ~400 ms en los que el vídeo del usuario muestra Equipo/PC
+        reconstruyéndose tras cerrar el menú. Un hilo aparte lee la pila del
+        hilo principal desde fuera — no se ejecuta EN el hilo medido, así que
+        no puede alterar su tiempo real. Si las muestras no encuentran nada
+        (todas caen en el propio `mainloop`), el retraso no está en Python.
+        """
+        import traceback
+
+        hilo_principal = threading.main_thread().ident
+        fin = time.perf_counter() + 0.4
+
+        def muestrear() -> None:
+            while time.perf_counter() < fin:
+                marco = sys._current_frames().get(hilo_principal)
+                if marco is not None:
+                    pila = traceback.extract_stack(marco, limit=3)
+                    cima = " < ".join(
+                        f"{c.name}:{c.lineno}" for c in reversed(pila)
+                    )
+                    perf.mark("ui.sidebar.cierre.muestra_de_pila", cima=cima)
+                time.sleep(0.005)
+
+        threading.Thread(
+            target=muestrear, name="RoleRunSidebarCloseSampler", daemon=True,
+        ).start()
 
     def _return_to_welcome_from_sidebar(self) -> None:
         self._set_sidebar_expanded(False)
@@ -8050,6 +8214,14 @@ class RoleRunManager(ctk.CTk):
                 self.after(0, self._heal_bdsp_party)
             else:
                 self.after(0, self._toggle_floating_launcher)
+            return
+        if action == "open_full_app":
+            # Botón de mando con dos cuadrados apilados (View/"back" en SDL),
+            # a la izquierda del botón central. Pedido del usuario
+            # 31-08-2026: abre RoleRun completo, lo mismo que pulsar el logo
+            # de la barra flotante con el ratón. "guide" (el botón central)
+            # sigue siendo el menú flotante, sin tocar.
+            self.after(0, self._floating_logo_to_dashboard)
             return
         if action == "sync_live_game":
             self.after(0, self.sync_oras_live)
@@ -13095,13 +13267,27 @@ class RoleRunManager(ctk.CTk):
             self._update_top_status()
             return
         self.current_save = info
-        self.current_game = data
         live_key = self._active_azahar_realtime_key()
+        # Hallazgo del usuario 01-09-2026: en BDSP, el autoguardado de una
+        # transición de zona (entrar/salir de un edificio) también dispara este
+        # watcher, pero no es el guardado completo del jugador — el archivo en
+        # disco puede seguir sin reflejar cambios que ya viven solo en la RAM
+        # vigilada en vivo (p. ej. una sustitución de equipo hecha desde
+        # RoleRun). Publicar ese `data` de disco pisaba la vista en vivo, ya
+        # correcta, con un Pokémon que en la party actual ya no está, hasta que
+        # la siguiente reconciliación en vivo (más abajo) lo corregía sola. Con
+        # el monitor en vivo activo, el disco deja de ser la fuente de verdad de
+        # la party/PC: se sigue reprogramando la reconciliación, pero sin
+        # publicar antes esta instantánea.
+        live_tracking_active = bool(self._oras_live_active) and live_key in REALTIME_READ_GAME_KEYS
+        if not live_tracking_active:
+            self.current_game = data
         self._record_bdsp_ui_event(
             "save-watcher-reload",
             live_active=bool(self._oras_live_active),
             monitor_scheduled=bool(self._oras_live_monitor_after_id),
             monitor_in_progress=bool(self._oras_live_monitor_in_progress),
+            live_tracking_active=live_tracking_active,
         )
         # El propio juego ya ha consolidado (o sustituido) main. Desde este
         # momento no debemos conservar como actual la instantánea de RAM previa.
@@ -13109,18 +13295,19 @@ class RoleRunManager(ctk.CTk):
         self._clear_oras_live_reconciliation()
         self.engine.set_allowed_moves(allowed_move_ids)
         self.run.save_path = info.path
-        # Recargar la partida es el momento prometido en el aviso: si antes
-        # faltó Internet, se vuelve a intentar la descarga de esas imágenes.
-        self._retry_placeholder_sprites()
-        result = self._sync_obs_state(data)
-        self.sync_status = "⚠ Conflicto de roles" if result.get("status") == "conflict" else "✓ Sincronizado con el guardado"
-        for pokemon in data.party:
-            if pokemon.species_id not in self.sprite_pil_cache:
-                self._load_sprite_async(pokemon)
-        self._pc_cache = None
-        self._pc_cache_signature = None
-        self._smooth_render_page(preserve_scroll=(self.active_page == "team"))
-        self._schedule_team_integrity_check()
+        if not live_tracking_active:
+            # Recargar la partida es el momento prometido en el aviso: si antes
+            # faltó Internet, se vuelve a intentar la descarga de esas imágenes.
+            self._retry_placeholder_sprites()
+            result = self._sync_obs_state(data)
+            self.sync_status = "⚠ Conflicto de roles" if result.get("status") == "conflict" else "✓ Sincronizado con el guardado"
+            for pokemon in data.party:
+                if pokemon.species_id not in self.sprite_pil_cache:
+                    self._load_sprite_async(pokemon)
+            self._pc_cache = None
+            self._pc_cache_signature = None
+            self._smooth_render_page(preserve_scroll=(self.active_page == "team"))
+            self._schedule_team_integrity_check()
         # El watcher sustituye la vista viva por la copia consolidada y
         # _clear_oras_live_reconciliation cancela el timer/baseline. Todos los
         # backends realtime registrados deben rearmar su reader; limitarlo a
@@ -15658,7 +15845,11 @@ class RoleRunManager(ctk.CTk):
         if intent.operation == "party-to-box":
             exact_destination = None
             if self._active_azahar_realtime_key() in (
-                *GEN7_REALTIME_GAME_KEYS, "xy", "oras", *MELONDS_REALTIME_GAME_KEYS,
+                # BDSP faltaba aquí: soltar sobre una casilla concreta del PC
+                # se ignoraba y el Pokémon acababa siempre en el primer hueco
+                # libre, aunque el escritor de BDSP sí acepta un destino exacto
+                # (`_apply_party_box_resize`, hallazgo del usuario 31-08-2026).
+                *GEN7_REALTIME_GAME_KEYS, "xy", "oras", "bdsp", *MELONDS_REALTIME_GAME_KEYS,
             ):
                 box = int(target.get("box") or 0)
                 slot = int(target.get("slot") or 0)
@@ -18561,7 +18752,15 @@ class RoleRunManager(ctk.CTk):
                 *GEN7_REALTIME_GAME_KEYS, "xy", "oras", "bdsp", *MELONDS_REALTIME_GAME_KEYS,
             )
         ) and self._oras_live_auto_apply_available():
-            if live_key in GEN7_REALTIME_GAME_KEYS and destination is not None:
+            if live_key in (GEN7_REALTIME_GAME_KEYS | {"bdsp"}) and destination is not None:
+                # BDSP faltaba aquí (hallazgo del usuario 31-08-2026): sin
+                # entrar en esta rama, el destino exacto que ya calculaba
+                # `_team_pc_drop` se descartaba dos líneas más abajo, en el
+                # `else` que pone box/slot a `None`, y el Pokémon acababa
+                # siempre en el primer hueco libre aunque se soltara sobre
+                # uno concreto. Sin destino explícito, BDSP conserva su
+                # comportamiento de siempre: `_apply_party_box_resize` elige
+                # el hueco libre dentro de la propia transacción viva.
                 destination_box, destination_slot = map(int, destination)
             elif live_key in ({"xy", "oras"} | MELONDS_REALTIME_GAME_KEYS):
                 if destination is None:
@@ -20961,7 +21160,10 @@ class RoleRunManager(ctk.CTk):
         if not self.project:
             return
         current_role, current_symbol = self._effective_role(pokemon)
-        window = IntegratedWindowSurface(self)
+        # Pedido del usuario 31-08-2026: Equipo y PC oscurecidos detrás, no
+        # tapados — a diferencia del resto de diálogos, que siguen con
+        # IntegratedWindowSurface sin tocar.
+        window = TransparentWindowSurface(self)
         self._apply_window_icon(window)
         window.title(f"Rol de {pokemon.nickname or pokemon.species}")
         window.geometry("760x720")
@@ -22277,6 +22479,7 @@ class RoleRunManager(ctk.CTk):
             ("sync_live_game", "Resincronizar juego desde Azahar"),
             ("heal_party", "Curar por completo el equipo"),
             ("floating_menu", "Abrir/cerrar menú flotante"),
+            ("open_full_app", "Abrir RoleRun completo desde la barra flotante"),
             ("reportar_bug", "Guardar un fallo para revisarlo después"),
             ("vidas_mas", "Sumar vida"), ("vidas_menos", "Restar vida"),
             ("pociones_mas", "Sumar curación"), ("pociones_menos", "Restar curación"),
@@ -22945,7 +23148,16 @@ class RoleRunManager(ctk.CTk):
         """Alinea una barrera viva con la geometría actual de su superficie."""
         if not self._widget_alive(overlay):
             return False
+        # Hallazgo del usuario 31-08-2026: esta barrera es "-topmost", así que
+        # un `lift()` la trae encima de CUALQUIER ventana, incluso de otro
+        # proceso — si el usuario ya se fue al emulador, cada llamada (esto se
+        # invoca cada 35 ms mientras carga) la hacía "reaparecer" sobre lo que
+        # estuviera mirando. Solo se relifta mientras el foco siga siendo de
+        # esta aplicación.
+        propio = self._foreground_belongs_to_this_process()
         if bool(getattr(overlay, "_rolerun_lock_geometry", False)):
+            if not propio:
+                return True
             try:
                 overlay.lift()
                 return True
@@ -22968,7 +23180,8 @@ class RoleRunManager(ctk.CTk):
             if geometry != getattr(overlay, "_rolerun_surface_geometry", None):
                 overlay.geometry(geometry)
                 overlay._rolerun_surface_geometry = geometry
-            overlay.lift()
+            if propio:
+                overlay.lift()
             return True
         except Exception:
             return False
@@ -22988,9 +23201,11 @@ class RoleRunManager(ctk.CTk):
                     self.attributes("-zoomed", True)
                 except Exception:
                     pass
-            self._force_native_main_maximize()
+            self._force_native_main_maximize(
+                steal_foreground=self._foreground_belongs_to_this_process(),
+            )
             self.update_idletasks()
-            if self._widget_alive(overlay):
+            if self._widget_alive(overlay) and self._foreground_belongs_to_this_process():
                 overlay.attributes("-topmost", False)
                 overlay.lift()
             self._smooth_render_page()
@@ -22999,7 +23214,7 @@ class RoleRunManager(ctk.CTk):
 
     def _finish_initial_shell_reveal(self, overlay) -> None:
         """Retira la barrera después de que DWM haya presentado la raíz final."""
-        if self._widget_alive(overlay):
+        if self._widget_alive(overlay) and self._foreground_belongs_to_this_process():
             try:
                 overlay.attributes("-topmost", False)
                 overlay.lift()
@@ -23012,7 +23227,7 @@ class RoleRunManager(ctk.CTk):
         try:
             self.attributes("-alpha", 1.0)
             self.update_idletasks()
-            if self._widget_alive(overlay):
+            if self._widget_alive(overlay) and self._foreground_belongs_to_this_process():
                 overlay.attributes("-topmost", False)
                 overlay.lift()
         finally:
@@ -23146,7 +23361,8 @@ class RoleRunManager(ctk.CTk):
         if self._widget_alive(loading_overlay):
             try:
                 loading_overlay.attributes("-topmost", False)
-                loading_overlay.lift()
+                if self._foreground_belongs_to_this_process():
+                    loading_overlay.lift()
                 loading_overlay.update_idletasks()
                 self.withdraw()
             except Exception:
@@ -23291,7 +23507,8 @@ class RoleRunManager(ctk.CTk):
             if self._widget_alive(loading_overlay):
                 try:
                     loading_overlay.attributes("-topmost", False)
-                    loading_overlay.lift()
+                    if self._foreground_belongs_to_this_process():
+                        loading_overlay.lift()
                 except Exception:
                     pass
             self._enter_app_shell()
@@ -23421,13 +23638,21 @@ class RoleRunManager(ctk.CTk):
         indicator = getattr(self, "_busy_indicator", None)
         if self._widget_alive(indicator):
             # Una activación de Ryujinx o un relayout de la raíz no puede dejar
-            # la barrera detrás de la aplicación mientras aún protege el inicio.
-            try:
-                self._sync_activity_overlay_geometry(indicator)
-                indicator.attributes("-topmost", False)
-                indicator.lift()
-            except Exception:
-                pass
+            # la barrera detrás de la aplicación mientras aún protege el inicio
+            # — pero eso es distinto de PERSEGUIR el primer plano. Antes esta
+            # rueda de 35 ms volvía a alzar la barrera en cada ciclo sin mirar
+            # quién tenía el foco, así que hacer clic en Ryujinx mientras se
+            # cargaba una partida no servía de nada: RoleRun volvía a taparlo
+            # a los 35 ms (hallazgo del usuario 31-08-2026). Si el usuario ya
+            # se fue a otra ventana, se respeta: la barrera solo se re-alza
+            # cuando el foco sigue siendo de este proceso.
+            if self._foreground_belongs_to_this_process():
+                try:
+                    self._sync_activity_overlay_geometry(indicator)
+                    indicator.attributes("-topmost", False)
+                    indicator.lift()
+                except Exception:
+                    pass
         pc_data = self._initial_shell_pc_data
         live_key_getter = getattr(self, "_active_azahar_realtime_key", None)
         live_key = live_key_getter() if callable(live_key_getter) else ""

@@ -72,11 +72,34 @@ class SaveFileWatcher:
             if signature is None or signature == self._signature:
                 continue
             self._signature = signature
-            time.sleep(0.45)
-            stable = self._stat_signature(path)
+            stable = self._wait_until_stable(path)
             if stable is not None:
                 self._signature = stable
                 self.callback(path)
+
+    @staticmethod
+    def _wait_until_stable(
+        path: Path, *, checks: int = 6, interval: float = 0.15,
+    ) -> tuple[int, int] | None:
+        """Espera a que el fichero deje de moverse antes de fiarse de su contenido.
+
+        Un guardado no es instantáneo para el sistema de archivos: el hallazgo
+        del usuario 01-09-2026 fue que, justo tras el autoguardado de una
+        transición de zona en BDSP, la party volvía a mostrar un Pokémon que ya
+        no estaba durante un segundo. Un único sondeo a los 0,45 s fijos podía
+        caer en mitad de esa escritura y leer bloques nuevos mezclados con
+        bloques todavía viejos. Aquí se exige la MISMA firma en dos sondeos
+        seguidos antes de avisar; si nunca se estabiliza dentro del tope, se
+        devuelve la última muestra en vez de bloquear la vigilancia para siempre.
+        """
+        previous = SaveFileWatcher._stat_signature(path)
+        for _ in range(checks):
+            time.sleep(interval)
+            current = SaveFileWatcher._stat_signature(path)
+            if current is not None and current == previous:
+                return current
+            previous = current
+        return previous
 
 
 class ObsSyncService:

@@ -23,6 +23,26 @@ def test_controller_shortcuts_use_the_individually_assigned_button() -> None:
     assert RoleRunManager._controller_action_for_button(manager, "x") == "heal_party"
 
 
+def test_open_full_app_defaults_to_the_back_button() -> None:
+    """"back" = las dos casillas apiladas, a la izquierda del botón central.
+
+    Pedido del usuario 31-08-2026: ese botón abre RoleRun completo, distinto
+    de "guide" (el central), que sigue siendo el menú flotante.
+    """
+    from app.run_service import RunProject
+
+    project = RunProject(
+        slug="s", name="n", game="g", trainer="t", save_path="p",
+        created_at="", updated_at="",
+    )
+    assert project.controller_hotkeys["floating_menu"] == "guide"
+    assert project.controller_hotkeys["open_full_app"] == "back"
+
+    manager = SimpleNamespace(project=project)
+    assert RoleRunManager._controller_action_for_button(manager, "back") == "open_full_app"
+    assert RoleRunManager._controller_action_for_button(manager, "guide") == "floating_menu"
+
+
 def test_controller_ui_does_not_expose_a_hidden_guide_chord() -> None:
     import inspect
 

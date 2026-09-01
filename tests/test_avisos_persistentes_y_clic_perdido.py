@@ -425,6 +425,72 @@ def test_cerrar_el_popover_de_rol_sobre_la_pagina_real_es_barato() -> None:
         root.destroy()
 
 
+def test_la_ficha_de_rol_con_texto_largo_no_tiembla_para_siempre() -> None:
+    """Hallazgo del usuario 31-08-2026: "todos los paneles excepto el de
+    Líbero se buguean y empieza a temblar el texto".
+
+    Causa: 5 etiquetas compitiendo por una altura fija de ventana en las que
+    el texto de cualquier rol más largo que el de Líbero no siempre cabe —
+    cada `<Configure>` reparte el sobrante distinto, y nuestro propio
+    `configure(wraplength=...)` disparaba el siguiente `<Configure>` sin
+    converger nunca. Medido en vivo con el texto más largo de ROLE_GUIDE
+    ("Prisma"): más de 500 disparos sin parar. La ventana de la ficha es fija
+    tras crearse (`overrideredirect`, sin redimensionado del usuario), así
+    que corregir el layout un puñado de veces y dejar de escuchar basta.
+    """
+    ctk = __import__("customtkinter")
+    from app.role_content import ROLE_GUIDE
+    from app.ui_components.role_info_popover import IntegratedRoleInfoPopover
+
+    try:
+        root = ctk.CTk()
+    except Exception as exc:  # pragma: no cover - según entorno
+        import pytest
+        pytest.skip(f"Sin entorno gráfico para Tk: {exc}")
+
+    try:
+        root.geometry("1600x1000+0+0")
+        root.update_idletasks()
+
+        rol_mas_largo = max(
+            ROLE_GUIDE, key=lambda rol: sum(len(ROLE_GUIDE[rol][clave])
+                                             for clave in ("summary", "allowed", "limits", "preparation"))
+        )
+        popover = IntegratedRoleInfoPopover(root, rol_mas_largo, on_close=lambda: None)
+
+        disparos = {"n": 0}
+        # Instrumentamos cada etiqueta real de la ficha para contar cuántas
+        # veces se sigue reconfigurando tras asentar: debe estabilizarse,
+        # nunca crecer sin límite.
+        for hijo in popover.card.winfo_children():
+            widgets = [hijo] if isinstance(hijo, ctk.CTkLabel) else list(getattr(hijo, "winfo_children", lambda: [])())
+            for widget in widgets:
+                if not isinstance(widget, ctk.CTkLabel):
+                    continue
+                original = widget.configure
+
+                def contador(*args, _original=original, **kwargs):
+                    if "wraplength" in kwargs:
+                        disparos["n"] += 1
+                    return _original(*args, **kwargs)
+
+                widget.configure = contador
+
+        for _ in range(60):
+            root.update()
+
+        tras_60 = disparos["n"]
+        for _ in range(60):
+            root.update()
+
+        assert disparos["n"] == tras_60, (
+            "los reajustes de wraplength siguen creciendo tras asentar "
+            f"({tras_60} -> {disparos['n']}): el ciclo no ha terminado"
+        )
+    finally:
+        root.destroy()
+
+
 def test_cerrar_el_scrim_de_la_ficha_de_rol_no_selecciona_la_tarjeta_de_abajo() -> None:
     """La prueba de verdad: un clic real (SendInput) sobre una ventana propia.
 
@@ -460,7 +526,11 @@ def test_cerrar_el_scrim_de_la_ficha_de_rol_no_selecciona_la_tarjeta_de_abajo() 
 
     origen = cursor()
     try:
-        root.geometry("900x620+120+120")
+        # Ventana grande a propósito: desde el 31-08-2026 la ficha ocupa una
+        # proporción del tamaño real de `master` (mucho más grande que antes),
+        # así que hace falta margen de sobra para tener un punto del scrim
+        # fiable que no dependa de un tamaño de ficha concreto.
+        root.geometry("1600x1000+80+80")
         root.attributes("-topmost", True)
         root.update()
         root.lift()
@@ -468,8 +538,10 @@ def test_cerrar_el_scrim_de_la_ficha_de_rol_no_selecciona_la_tarjeta_de_abajo() 
 
         contenido = ctk.CTkFrame(root, fg_color="#101010")
         contenido.pack(fill="both", expand=True)
+        # La tarjeta de prueba va en la esquina inferior derecha: la ficha,
+        # centrada, no llega ahí con ningún tamaño razonable.
         tarjeta = ctk.CTkFrame(contenido, width=520, height=110, fg_color="#1B1B1B")
-        tarjeta.place(x=40, y=40)
+        tarjeta.place(x=1000, y=800)
         seleccionada = []
         tarjeta.bind("<ButtonRelease-1>", lambda _e: seleccionada.append(True), add="+")
         root.update()
@@ -480,9 +552,10 @@ def test_cerrar_el_scrim_de_la_ficha_de_rol_no_selecciona_la_tarjeta_de_abajo() 
         )
         root.update()
 
-        # Un punto del scrim que NO está cubierto por la ficha (610x474
-        # centrada) ni por la tarjeta de prueba (520x110 en 40,40).
-        px, py = root.winfo_rootx() + 780, root.winfo_rooty() + 560
+        # Un punto del scrim que NO está cubierto por la ficha (centrada,
+        # proporcional a `master`) ni por la tarjeta de prueba (esquina
+        # opuesta): la esquina superior izquierda de la ventana.
+        px, py = root.winfo_rootx() + 30, root.winfo_rooty() + 30
         assert root.winfo_containing(px, py) is not None, "el punto cae fuera de la ventana"
 
         user32.SetCursorPos(int(px), int(py))

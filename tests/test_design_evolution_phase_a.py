@@ -206,6 +206,151 @@ def test_draft_focus_uses_shared_gold_and_libero_has_no_false_selection() -> Non
     assert 'border_color=GOLD if role == "Líbero"' not in pokemon_step
 
 
+def test_sidebar_down_past_the_last_entry_reaches_the_close_arrow() -> None:
+    """Hallazgo del usuario 31-08-2026: no había forma de llegar a la flecha
+    "‹" de cerrar navegando con flechas/mando, solo con el botón de "back"
+    configurado. Bajar una vez más allá de la última página debe seleccionar
+    la flecha, resaltarla, y aceptar ahí debe cerrar el drawer en vez de
+    navegar."""
+    configured: list[dict[str, object]] = []
+    toggle_configured: list[dict[str, object]] = []
+    navigated: list[str] = []
+    closed: list[bool] = []
+
+    class Button:
+        def configure(self, **kwargs):
+            configured.append(kwargs)
+
+    class Toggle:
+        def configure(self, **kwargs):
+            toggle_configured.append(kwargs)
+
+    manager = SimpleNamespace(
+        sidebar_expanded=True,
+        _sidebar_keyboard_entries=(("team", Button()), ("tms", Button())),
+        _sidebar_keyboard_index=0,
+        active_page="team",
+        sidebar_drawer_toggle=Toggle(),
+        navigate=navigated.append,
+        _navigation_owner=SimpleNamespace(
+            set_external_navigation_focus=lambda active: None,
+        ),
+    )
+    manager._paint_sidebar_keyboard_selection = lambda: RoleRunManager._paint_sidebar_keyboard_selection(manager)
+    manager._set_sidebar_expanded = lambda expanded: closed.append(expanded)
+
+    assert RoleRunManager._handle_sidebar_navigation(manager, "down") is True
+    assert RoleRunManager._handle_sidebar_navigation(manager, "down") is True
+    assert manager._sidebar_keyboard_index == 2
+    assert toggle_configured[-1]["fg_color"] == "#2A2417"
+
+    assert RoleRunManager._accept_sidebar_from_content(manager) is True
+    assert navigated == []
+    assert closed == [False]
+
+
+def test_accepting_the_collapsed_chevron_clears_its_own_gold_border() -> None:
+    """Hallazgo del usuario 01-09-2026: seleccionar el chevrón "›" colapsado
+    con "izquierda" y luego ACEPTAR (en vez de "derecha"/"back") abría el
+    drawer sin apagar el borde dorado del chevrón — al navegar después a una
+    página, quedaban dos cosas marcadas como seleccionadas a la vez."""
+    configured: list[dict[str, object]] = []
+
+    class Toggle:
+        def configure(self, **kwargs):
+            configured.append(kwargs)
+
+    expanded: list[bool] = []
+    manager = SimpleNamespace(
+        sidebar_expanded=False,
+        _sidebar_navigation_selected=True,
+        sidebar_toggle=Toggle(),
+        _sidebar_keyboard_entries=(),
+    )
+    manager._set_sidebar_expanded = lambda value: expanded.append(value)
+
+    assert RoleRunManager._accept_sidebar_from_content(manager) is True
+    assert manager._sidebar_navigation_selected is False
+    assert expanded == [True]
+    assert configured[-1] == {"fg_color": "transparent", "border_width": 0}
+
+
+def test_sidebar_right_selects_the_close_arrow_then_the_first_content_item() -> None:
+    """Pedido del usuario 01-09-2026: con el menú lateral abierto, "derecha"
+    debe poner el cursor sobre la flecha "‹"; "derecha" otra vez (ya sobre
+    ella) debe cerrar el drawer y seleccionar el primer botón de la pestaña
+    activa, sin importar qué estuviera seleccionado antes de abrir el menú."""
+    toggle_configured: list[dict[str, object]] = []
+    moved: list[tuple[object, str]] = []
+    focus_events: list[bool] = []
+
+    class Toggle:
+        def configure(self, **kwargs):
+            toggle_configured.append(kwargs)
+
+    class Button:
+        def configure(self, **kwargs):
+            pass
+
+    view = SimpleNamespace(
+        selection=SimpleNamespace(active=True),
+        set_external_navigation_focus=lambda active: focus_events.append(active),
+        _move_direction_key=lambda event, direction: moved.append((event, direction)),
+    )
+    manager = SimpleNamespace(
+        sidebar_expanded=True,
+        _sidebar_keyboard_entries=(("team", Button()), ("tms", Button())),
+        _sidebar_keyboard_index=0,
+        active_page="team",
+        sidebar_drawer_toggle=Toggle(),
+        _navigation_owner=view,
+    )
+    manager._set_sidebar_expanded = lambda expanded: setattr(manager, "sidebar_expanded", expanded)
+    manager._paint_sidebar_keyboard_selection = lambda: RoleRunManager._paint_sidebar_keyboard_selection(manager)
+    manager._focus_first_content_item = lambda: RoleRunManager._focus_first_content_item(manager)
+    manager._set_content_navigation_focus = lambda active: RoleRunManager._set_content_navigation_focus(manager, active)
+
+    assert RoleRunManager._handle_sidebar_navigation(manager, "right") is True
+    assert manager._sidebar_keyboard_index == 2
+    assert toggle_configured[-1]["fg_color"] == "#2A2417"
+
+    assert RoleRunManager._handle_sidebar_navigation(manager, "right") is True
+    assert manager.sidebar_expanded is False
+    assert view.selection.active is False
+    assert moved == [(None, "down")]
+    # `_set_content_navigation_focus(True)` invierte el booleano al llamar al
+    # setter (`active` de la vista = "el foco externo manda", ver docstring
+    # de `_set_content_navigation_focus`): la última llamada real debe
+    # devolverle su propio cursor a la vista, o sea `False`.
+    assert focus_events[-1] is False
+
+
+def test_left_on_the_selected_collapsed_chevron_opens_the_sidebar() -> None:
+    """Pedido del usuario 01-09-2026: con el chevrón "›" colapsado ya
+    seleccionado (tras pulsar "izquierda" desde el contenido), pulsar
+    "izquierda" otra vez debe abrir el menú — lo mismo que aceptar sobre él."""
+    toggle_configured: list[dict[str, object]] = []
+
+    class Toggle:
+        def configure(self, **kwargs):
+            toggle_configured.append(kwargs)
+
+    expanded: list[bool] = []
+    manager = SimpleNamespace(
+        sidebar_expanded=False,
+        _sidebar_navigation_selected=True,
+        sidebar_toggle=Toggle(),
+        _sidebar_keyboard_entries=(),
+    )
+    manager._set_sidebar_expanded = lambda value: expanded.append(value)
+    manager._accept_sidebar_from_content = lambda: RoleRunManager._accept_sidebar_from_content(manager)
+
+    assert RoleRunManager._handle_sidebar_navigation(manager, "left") is True
+    assert manager._sidebar_navigation_selected is False
+    assert expanded == [True]
+    assert toggle_configured[-1] == {"fg_color": "transparent", "border_width": 0}
+
+
 def test_open_sidebar_consumes_horizontal_arrows_without_restoring_content_focus() -> None:
     focus: list[bool] = []
     manager = SimpleNamespace(
@@ -1611,12 +1756,42 @@ def test_activity_overlay_tracks_the_final_shell_geometry() -> None:
     manager = SimpleNamespace(
         _widget_alive=lambda widget: widget in (overlay, surface),
         update_idletasks=lambda: None,
+        _foreground_belongs_to_this_process=lambda: True,
     )
 
     assert RoleRunManager._sync_activity_overlay_geometry(manager, overlay) is True
     assert geometries == ["1376x899+78+78"]
     assert lifts == [True]
     assert overlay._rolerun_surface_geometry == "1376x899+78+78"
+
+
+def test_activity_overlay_does_not_lift_when_the_user_left_to_another_window() -> None:
+    """Hallazgo del usuario 31-08-2026: la barrera de carga es "-topmost", así
+    que un `lift()` la trae por delante de CUALQUIER ventana, incluso de otro
+    proceso. Si el usuario ya se fue al emulador mientras carga, no debe
+    "reaparecer" sobre lo que esté mirando."""
+    geometries: list[str] = []
+    lifts: list[bool] = []
+    surface = SimpleNamespace(
+        winfo_width=lambda: 1376,
+        winfo_height=lambda: 899,
+        winfo_rootx=lambda: 78,
+        winfo_rooty=lambda: 78,
+    )
+    overlay = SimpleNamespace(
+        _rolerun_surface=surface,
+        geometry=geometries.append,
+        lift=lambda: lifts.append(True),
+    )
+    manager = SimpleNamespace(
+        _widget_alive=lambda widget: widget in (overlay, surface),
+        update_idletasks=lambda: None,
+        _foreground_belongs_to_this_process=lambda: False,
+    )
+
+    assert RoleRunManager._sync_activity_overlay_geometry(manager, overlay) is True
+    assert geometries == ["1376x899+78+78"]
+    assert lifts == []
 
 
 def test_initial_shell_barrier_requires_pc_layout_and_first_live_probe() -> None:
@@ -1691,7 +1866,8 @@ def test_initial_loader_stays_windowed_and_does_not_monopolize_desktop() -> None
     assert 'overlay.state("zoomed")' not in create
     assert 'overlay.attributes("-topmost", False)' in create
     assert 'self.state("zoomed")' in reveal
-    assert "self._force_native_main_maximize()" in reveal
+    assert "self._force_native_main_maximize(" in reveal
+    assert "steal_foreground=self._foreground_belongs_to_this_process()" in reveal
     assert 'self.attributes("-fullscreen", True)' not in reveal
     assert 'overlay.attributes("-topmost", True)' not in reveal
 

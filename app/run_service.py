@@ -138,6 +138,10 @@ class RunProject:
     })
     controller_hotkeys: dict[str, str] = field(default_factory=lambda: {
         "floating_menu": "guide",
+        # "back" es el botón de mando Xbox con dos cuadrados superpuestos, a
+        # la izquierda del botón central (guide). Pedido del usuario
+        # 31-08-2026: abre RoleRun completo; "guide" sigue siendo el menú.
+        "open_full_app": "back",
     })
     menu_keys: dict[str, str] = field(default_factory=lambda: {
         "accept": "z", "back": "x",
@@ -310,7 +314,13 @@ class RunProjectService:
                 if "prompt_contract" not in pending:
                     pending["prompt_shown"] = True
                     pending["prompt_contract"] = 27
-            raw.setdefault("controller_hotkeys", {"floating_menu": "guide"})
+            raw.setdefault("controller_hotkeys", {})
+            raw["controller_hotkeys"].setdefault("floating_menu", "guide")
+            # Backfill para Runs guardadas antes de este atajo (31-08-2026):
+            # sin esto, una Run con "controller_hotkeys" ya presente nunca
+            # habria recibido "open_full_app", porque setdefault del diccionario
+            # completo no toca uno que ya existe.
+            raw["controller_hotkeys"].setdefault("open_full_app", "back")
             raw.setdefault("menu_keys", {"accept": "z", "back": "x"})
             raw.setdefault("controller_menu_buttons", {"accept": "a", "back": "b"})
             project = RunProject(**raw)
@@ -385,7 +395,13 @@ class RunProjectService:
                 raw["hotkeys"].setdefault("heal_party", "")
                 raw["hotkeys"].setdefault("floating_menu", "")
                 raw["hotkeys"].setdefault("reportar_bug", "f8")
-                raw.setdefault("controller_hotkeys", {"floating_menu": "guide"})
+                raw.setdefault("controller_hotkeys", {})
+                raw["controller_hotkeys"].setdefault("floating_menu", "guide")
+                # Backfill para Runs guardadas antes de este atajo (31-08-2026):
+                # sin esto, una Run con "controller_hotkeys" ya presente nunca
+                # habria recibido "open_full_app", porque setdefault del
+                # diccionario completo no toca uno que ya existe.
+                raw["controller_hotkeys"].setdefault("open_full_app", "back")
                 raw.setdefault("menu_keys", {"accept": "z", "back": "x"})
                 raw.setdefault("controller_menu_buttons", {"accept": "a", "back": "b"})
                 projects.append(RunProject(**raw))
@@ -410,7 +426,13 @@ class RunProjectService:
             raw["hotkeys"].setdefault("heal_party", "")
             raw["hotkeys"].setdefault("floating_menu", "")
             raw["hotkeys"].setdefault("reportar_bug", "f8")
-            raw.setdefault("controller_hotkeys", {"floating_menu": "guide"})
+            raw.setdefault("controller_hotkeys", {})
+            raw["controller_hotkeys"].setdefault("floating_menu", "guide")
+            # Backfill para Runs guardadas antes de este atajo (31-08-2026):
+            # sin esto, una Run con "controller_hotkeys" ya presente nunca
+            # habria recibido "open_full_app", porque setdefault del diccionario
+            # completo no toca uno que ya existe.
+            raw["controller_hotkeys"].setdefault("open_full_app", "back")
             raw.setdefault("menu_keys", {"accept": "z", "back": "x"})
             raw.setdefault("controller_menu_buttons", {"accept": "a", "back": "b"})
             project = RunProject(**raw)
