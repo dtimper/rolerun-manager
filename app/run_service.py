@@ -674,6 +674,10 @@ class RunProjectService:
             "battle_seen": False,
             "battle_ended": False,
             "battle_exit_samples": 0,
+            # Si el juego se reinicia sin guardar, la sonda de combate puede no
+            # volver a resolver nunca "fin de combate" para esta baja concreta:
+            # necesitamos una vía de recuperación que no dependa de ella.
+            "alive_confirm_samples": 0,
         }
         project.pending_faints.append(normalized)
         old_value = max(0, int(project.counters.get("vidas", 0)))
@@ -747,12 +751,25 @@ class RunProjectService:
             self.save(project)
         return bool(pending.get("battle_ended", False))
 
-    def clear_stale_detected_faint_for_alive_party(self, project: RunProject, identity: str) -> bool:
+    def clear_stale_detected_faint_for_alive_party(
+        self, project: RunProject, identity: str, *, confirm_samples_required: int = 2,
+    ) -> bool:
         """Libera una baja vieja si ese mismo Pokémon reaparece vivo en el equipo.
 
-        Es una limpieza técnica para cargas de estado/pruebas y no devuelve la
-        vida ya consumida: evita únicamente que una notificación antigua bloquee
-        una futura transición PS>0→0 de la misma identidad.
+        Es una limpieza técnica para cargas de estado/pruebas, y sobre todo para
+        un reinicio del juego SIN GUARDAR: la baja nunca llegó al save y el
+        Pokémon vuelve a aparecer con PS > 0. No devuelve la vida ya consumida,
+        evita únicamente que una notificación antigua bloquee una futura
+        transición PS>0→0 de la misma identidad.
+
+        Si el selector ya se mostró o el combate ya se dio por terminado, un
+        solo avistamiento vivo basta. En cualquier otro caso NO esperamos a
+        ``battle_ended``: tras un reinicio del juego y del programa la sonda de
+        combate puede no volver a resolver "fin de combate" nunca, y la baja
+        quedaría huérfana para siempre. En su lugar exigimos
+        ``confirm_samples_required`` avistamientos vivos consecutivos (esta
+        función solo se invoca desde lecturas ya fuera de combate) para no
+        cancelar una baja recién ocurrida por un fallo de lectura puntual.
         """
         identity = str(identity or "")
         pending = next((
@@ -762,7 +779,11 @@ class RunProjectService:
         if pending is None:
             return False
         if not (bool(pending.get("prompt_shown", False)) or bool(pending.get("battle_ended", False))):
-            return False
+            samples = int(pending.get("alive_confirm_samples", 0) or 0) + 1
+            if samples < max(1, int(confirm_samples_required)):
+                pending["alive_confirm_samples"] = samples
+                self.save(project)
+                return False
         project.pending_faints = [
             item for item in project.pending_faints
             if str(item.get("identity", "")) != identity

@@ -545,7 +545,16 @@ class SMRealTimeAdapter(RealTimeGameAdapter):
         # dos roles se prepara y verifica como UNA única transacción del writer.
         # La serialización introducida en alpha.7 creaba un estado intermedio que
         # no existía en la última build validada físicamente por el usuario.
-        return self.writer.apply(current, list(changes))
+        result = self.writer.apply(current, list(changes))
+        # `_last_game` solo se refrescaba en el sondeo periódico (`_convert`).
+        # `read_pc` la usa como lado "party viva" de su comprobación de
+        # solapamiento con el PC recién leído; sin este refresco inmediato, abrir
+        # las cajas justo después de mover Equipo<->PC comparaba el PC ya escrito
+        # contra una party todavía anterior a la escritura y rechazaba una
+        # candidatura perfectamente coherente. Mismo arreglo que USUM.
+        if getattr(result, "game", None) is not None:
+            self._last_game = result.game
+        return result
 
     def runtime_state(self) -> dict[str, object]:
         return {

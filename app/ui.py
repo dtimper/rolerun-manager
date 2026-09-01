@@ -19635,6 +19635,27 @@ class RoleRunManager(ctk.CTk):
         ).pack(padx=24, pady=(0, 14))
 
         selected_role = ctk.StringVar(value=current_role)
+
+        def accept() -> None:
+            self._queue_pc_role_change(pokemon, selected_role.get())
+            if window.winfo_exists():
+                window.destroy()
+            if callable(on_changed):
+                on_changed()
+            self._show_team_management_toast("ROL DEL PC PREPARADO", f"{pokemon.nickname or pokemon.species} · {selected_role.get()}")
+
+        # ACEPTAR ROL/CANCELAR se reservan primero, ancladas abajo. Igual que en
+        # `open_role_editor`: si se empaquetaban después de `preview` (que pide
+        # `expand=True`), la vista previa se comía todo el alto disponible y los
+        # botones quedaban fuera del área visible.
+        actions = ctk.CTkFrame(window, fg_color="transparent")
+        actions.pack(side="bottom", fill="x", padx=24, pady=(0, 18))
+        ctk.CTkButton(actions, text="CANCELAR", command=window.destroy, height=42,
+                      fg_color="transparent", border_width=1, border_color="#4A4A4A", hover_color=PANEL_ALT, text_color=MUTED).pack(side="left", fill="x", expand=True, padx=(0, 5))
+        ctk.CTkButton(actions, text="ACEPTAR ROL", command=accept, height=42,
+                      fg_color=GOLD, hover_color="#D3AF70", text_color="#111111",
+                      font=ctk.CTkFont("Segoe UI", 11, "bold")).pack(side="left", fill="x", expand=True, padx=(5, 0))
+
         occupied_active_roles = {
             self._effective_role(member)[0] for member in self._projected_party()
             if self._effective_role(member)[0] != "SIN ROL"
@@ -19648,7 +19669,7 @@ class RoleRunManager(ctk.CTk):
         roles_grid = ctk.CTkFrame(window, fg_color="transparent")
         roles_grid.pack(fill="x", padx=24)
         roles_grid.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="pcroles")
-        preview = ctk.CTkFrame(window, fg_color=PANEL, corner_radius=16, border_width=1, border_color="#3A3A3A")
+        preview = ctk.CTkScrollableFrame(window, fg_color=PANEL, corner_radius=16)
         preview.pack(fill="both", expand=True, padx=24, pady=(16, 12))
 
         def render_preview(role: str) -> None:
@@ -19708,21 +19729,6 @@ class RoleRunManager(ctk.CTk):
             button.grid(row=index//4, column=index%4, sticky="ew", padx=4, pady=4)
             buttons[role] = button
 
-        def accept() -> None:
-            self._queue_pc_role_change(pokemon, selected_role.get())
-            if window.winfo_exists():
-                window.destroy()
-            if callable(on_changed):
-                on_changed()
-            self._show_team_management_toast("ROL DEL PC PREPARADO", f"{pokemon.nickname or pokemon.species} · {selected_role.get()}")
-
-        actions = ctk.CTkFrame(window, fg_color="transparent")
-        actions.pack(fill="x", padx=24, pady=(0, 18))
-        ctk.CTkButton(actions, text="CANCELAR", command=window.destroy, height=42,
-                      fg_color="transparent", border_width=1, border_color="#4A4A4A", hover_color=PANEL_ALT, text_color=MUTED).pack(side="left", fill="x", expand=True, padx=(0, 5))
-        ctk.CTkButton(actions, text="ACEPTAR ROL", command=accept, height=42,
-                      fg_color=GOLD, hover_color="#D3AF70", text_color="#111111",
-                      font=ctk.CTkFont("Segoe UI", 11, "bold")).pack(side="left", fill="x", expand=True, padx=(5, 0))
         render_preview(current_role)
 
     def open_pc_selector(
@@ -21189,6 +21195,28 @@ class RoleRunManager(ctk.CTk):
         }
         if len(selected_libero_stats) != 2:
             selected_libero_stats.clear()
+
+        # ACEPTAR ROL/CANCELAR se reservan primero, ancladas abajo. Si se
+        # empaquetaban después de `preview` (que pide `expand=True`), la vista
+        # previa se comía todo el alto disponible en 760x720 y los botones
+        # quedaban fuera del área visible: se podía elegir Líbero, pero no
+        # había con qué confirmarlo salvo agrandando la ventana a mano.
+        actions = ctk.CTkFrame(window, fg_color="transparent")
+        actions.pack(side="bottom", fill="x", padx=24, pady=(0, 18))
+        ctk.CTkButton(
+            actions, text="CANCELAR", command=window.destroy, height=42,
+            fg_color="transparent", border_width=1, border_color="#4A4A4A", hover_color=PANEL_ALT, text_color=MUTED,
+        ).pack(side="left", fill="x", expand=True, padx=(0, 5))
+        ctk.CTkButton(
+            actions, text="ACEPTAR ROL",
+            command=lambda: self.assign_role(
+                pokemon, selected_role.get(), window,
+                tuple(key for key in STAT_KEYS if key in selected_libero_stats),
+            ),
+            height=42, fg_color=GOLD, hover_color="#D3AF70", text_color="#111111",
+            font=ctk.CTkFont("Segoe UI", 11, "bold"),
+        ).pack(side="left", fill="x", expand=True, padx=(5, 0))
+
         pokemon_identity = self._pokemon_identity(pokemon)
         occupied_by_others = {
             self._effective_role(member)[0]
@@ -21205,7 +21233,11 @@ class RoleRunManager(ctk.CTk):
         grid.pack(fill="x", padx=24)
         grid.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="roles")
 
-        preview = ctk.CTkFrame(window, fg_color=PANEL, corner_radius=16, border_width=1, border_color="#3A3A3A")
+        # Se desplaza: con la barra de acciones anclada abajo, el contenido de
+        # la vista previa (movimientos + fila de EV) no siempre cabía entero en
+        # 760x720. Un `CTkFrame` fijo lo recortaba en silencio; con scroll,
+        # todo sigue alcanzable pase lo que pase con el tamaño de la ventana.
+        preview = ctk.CTkScrollableFrame(window, fg_color=PANEL, corner_radius=16)
         preview.pack(fill="both", expand=True, padx=24, pady=(16, 12))
 
         def render_preview(role: str) -> None:
@@ -21305,21 +21337,6 @@ class RoleRunManager(ctk.CTk):
             button.grid(row=index // 4, column=index % 4, sticky="ew", padx=4, pady=4)
             buttons[role] = button
 
-        actions = ctk.CTkFrame(window, fg_color="transparent")
-        actions.pack(fill="x", padx=24, pady=(0, 18))
-        ctk.CTkButton(
-            actions, text="CANCELAR", command=window.destroy, height=42,
-            fg_color="transparent", border_width=1, border_color="#4A4A4A", hover_color=PANEL_ALT, text_color=MUTED,
-        ).pack(side="left", fill="x", expand=True, padx=(0, 5))
-        ctk.CTkButton(
-            actions, text="ACEPTAR ROL",
-            command=lambda: self.assign_role(
-                pokemon, selected_role.get(), window,
-                tuple(key for key in STAT_KEYS if key in selected_libero_stats),
-            ),
-            height=42, fg_color=GOLD, hover_color="#D3AF70", text_color="#111111",
-            font=ctk.CTkFont("Segoe UI", 11, "bold"),
-        ).pack(side="left", fill="x", expand=True, padx=(5, 0))
         render_preview(current_role)
 
     def assign_role(
