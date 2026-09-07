@@ -259,12 +259,19 @@ def test_el_aviso_explica_la_incompatibilidad_al_pasar_el_raton(
     escritorio (mismo hallazgo que con el clic de abrir la ficha, ver
     `test_pulsar_el_movimiento_abre_su_ficha`): se comprueba el enganche y el
     texto en el código en vez de disparar `<Enter>`/`<Leave>` de verdad.
+
+    Desde el 2026-09-07 el tooltip enseña el motivo concreto de
+    `_collect_pokemon_move_issues` (Líbero puede avisar por «movimiento
+    drafteado con otro rol», no solo por incompatibilidad de tipo) en vez de
+    un texto fijo; el texto genérico de antes solo sigue de respaldo si el
+    issue no trae motivo.
     """
     import inspect
 
     from app.ui_views import team_pc_view
 
     fuente = inspect.getsource(team_pc_view)
-    assert "self._show_move_issue_tooltip(boton)" in fuente
+    assert 'self._show_move_issue_tooltip(boton, motivo)' in fuente
+    assert 'motivo=str(issue.get("reason") or "")' in fuente
     assert "self._hide_move_issue_tooltip()" in fuente
     assert "Movimiento incompatible con el rol de este Pokémon" in fuente

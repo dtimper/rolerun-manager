@@ -1814,7 +1814,9 @@ class UnifiedTeamPCView:
                 aviso.place(relx=0.0, rely=0.0, anchor="nw", x=3, y=3)
                 aviso.bind(
                     "<Enter>",
-                    lambda _event, boton=aviso: self._show_move_issue_tooltip(boton),
+                    lambda _event, boton=aviso, motivo=str(issue.get("reason") or ""): (
+                        self._show_move_issue_tooltip(boton, motivo)
+                    ),
                     add="+",
                 )
                 aviso.bind("<Leave>", lambda _event: self._hide_move_issue_tooltip(), add="+")
@@ -2589,12 +2591,17 @@ class UnifiedTeamPCView:
         except Exception:
             pass
 
-    def _show_move_issue_tooltip(self, button) -> None:
+    def _show_move_issue_tooltip(self, button, reason: str = "") -> None:
+        """``reason`` es el motivo concreto de `_collect_pokemon_move_issues`
+        (2026-09-07): Líbero puede avisar por un motivo distinto -movimiento
+        drafteado con otro rol- del resto de roles -incompatible por tipo-, y
+        el tooltip debe reflejar cuál de los dos es en cada caso en vez de un
+        texto genérico que solo describía el primero."""
         self._hide_move_issue_tooltip()
         try:
             tooltip = ctk.CTkLabel(
                 self.frame,
-                text="Movimiento incompatible con el rol de este Pokémon",
+                text=str(reason) or "Movimiento incompatible con el rol de este Pokémon",
                 fg_color="#111111",
                 corner_radius=7,
                 text_color=DANGER,

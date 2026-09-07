@@ -1,6 +1,37 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+## Líbero avisa si conserva un movimiento drafteado con OTRO rol (07-09-2026)
+
+Reporte de diseño del usuario: Líbero no restringe movimientos por su cuenta
+(`allowed_status_move_ids` devuelve `None` para él), lo que dejaba abierto un
+abuso -cambiar a Support solo para garantizarse un drafteo de Hazards con
+certeza (Support sí exige esa categoría; el sorteo de Líbero solo saca 3
+categorías auxiliares al azar de entre todos los roles) y volver a Líbero
+después a quedarse el movimiento sin más, ya que Líbero no tenía forma de
+distinguir un movimiento "propio" de uno prestado.
+
+Solución acordada tras varias vueltas con el usuario: no bloquear el
+drafteo cruzado -sigue siendo un manager de seguimiento con un humano
+detrás, no un enforcement automático-, sino hacerlo visible con el mismo
+mecanismo que ya usa cualquier otra incompatibilidad de rol -rojo en Equipo
+y PC, papelera/MT para resolverlo-, cambiando solo el motivo mostrado. Se
+añadió un historial nuevo, `RunProject.drafted_move_origin`
+(`run_service.py`), que recuerda bajo qué rol se drafteó cada movimiento,
+clave por identidad estable de Pokémon (mismo criterio que
+`oras_levelup_move_history`, sobrevive a evoluciones). `queue_draft_change`
+(`ui.py`) lo anota en el "momento definitivo del drafteo" -junto al resto
+de mutaciones de `self.project` de esa función-. La regla pura nueva vive
+en `role_rules.libero_foreign_move_reason`: sin registro no hay aviso
+-nunca se inventa una incompatibilidad sin poder demostrarla-, y
+`_collect_pokemon_move_issues` la consulta solo para Líbero, junto a su
+cláusula de evasión de siempre. El tooltip del aviso «i» en Equipo
+(`team_pc_view.py`) pasó de un texto fijo a mostrar el motivo real de cada
+issue, para que sirva tanto para la incompatibilidad de tipo de los otros 5
+roles como para este caso nuevo. Test nuevo:
+`test_libero_movimiento_de_otro_rol.py`. Suite completa verde (2807 passed,
+18 skipped).
+
 ## Tarjeta de emuladores compatibles en el selector, y se retira el soporte de Citra nunca habilitado (07-09-2026)
 
 Con Diamante/Perla, Platino y HGSS ocultos, el selector de juegos dejaba un

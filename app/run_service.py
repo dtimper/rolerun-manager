@@ -119,6 +119,14 @@ class RunProject:
     # tenía en ese momento. Clave por PID:TID:SID, sin la especie, para que
     # sobreviva a una evolución. Ver ``app/oras_levelup_moves.py``.
     oras_levelup_move_history: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    # Origen de cada movimiento drafteado (2026-09-07): bajo qué rol estaba el
+    # Pokémon cuando lo drafteó. Sirve para avisar si Líbero -que no restringe
+    # movimientos por su cuenta- conserva uno drafteado con OTRO rol activo
+    # (p. ej. cambiar a Support solo para garantizarse un hazard y volver a
+    # Líbero después). Clave por identidad estable de Pokémon (mismo criterio
+    # que ``oras_levelup_move_history``, sobrevive a evoluciones); valor
+    # ``{"<move_id>": "<rol>"}``. Ver ``role_rules.libero_foreign_move_reason``.
+    drafted_move_origin: dict[str, dict[str, str]] = field(default_factory=dict)
     hotkeys: dict[str, str] = field(default_factory=lambda: {
         "sync_live_game": "f5",
         "vidas_mas": "num 7",

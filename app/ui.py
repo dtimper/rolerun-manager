@@ -58,7 +58,7 @@ from .pc_browser import filter_pc_pokemon, reset_scrollable_to_top
 from .role_rules import (
     ROLE_ORDER, ROLE_OPTIONS, ROLE_SYMBOLS, ROLE_TO_KEY,
     allowed_status_move_ids, canonical_role, damage_move_issue_reason,
-    is_evasion_move, role_from_markings,
+    is_evasion_move, libero_foreign_move_reason, role_from_markings,
 )
 from .models import PendingChange, PendingDraft, PendingInventoryChange, PendingPartyHeal, PendingPCRoleChange, PendingRoleChange, PendingTMTeach, PendingTeamChange, RunSession
 from .save_engine_client import SaveEngineClient, SaveEngineError, SaveGameData, SavePokemon, SavePCData, SaveBox
@@ -21897,8 +21897,10 @@ class RoleRunManager(ctk.CTk):
         if role == "SIN ROL":
             return []
         # Líbero no tiene más restricción de rol que la evasión (2026-09-04,
-        # absoluta para cualquier rol): se sigue comprobando eso, pero no el
-        # resto de reglas de daño/estado que no le aplican.
+        # absoluta para cualquier rol) y, desde el 2026-09-07, quedarse con un
+        # movimiento drafteado con OTRO rol activo -ver
+        # `role_rules.libero_foreign_move_reason`-: se sigue comprobando eso,
+        # pero no el resto de reglas de daño/estado que no le aplican.
         solo_evasion = role == "Líbero"
 
         fallback_physical = {int(move_id) for move_id in self.engine.pools.get("extra_ataque_fisico", [])}
@@ -21906,6 +21908,14 @@ class RoleRunManager(ctk.CTk):
         allowed_status = set() if solo_evasion else (self._allowed_move_ids_for_role(role) or set())
         move_names, move_ids = self._effective_moves_for_review(pokemon)
         issues: list[dict] = []
+
+        origin_by_move_id: dict[int, str] = {}
+        if solo_evasion and self.project is not None:
+            pokemon_identity = self._pokemon_identity(pokemon)
+            origin_by_move_id = {
+                int(move_key): str(origin_role)
+                for move_key, origin_role in self.project.drafted_move_origin.get(pokemon_identity, {}).items()
+            }
 
         for move_index, (move_name, move_id) in enumerate(zip(move_names, move_ids), start=1):
             move_id = int(move_id or 0)
@@ -21922,6 +21932,16 @@ class RoleRunManager(ctk.CTk):
                 })
                 continue
             if solo_evasion:
+                foreign_reason = libero_foreign_move_reason(origin_by_move_id.get(move_id))
+                if foreign_reason:
+                    issues.append({
+                        "pokemon": pokemon,
+                        "role": role,
+                        "move_slot": move_index,
+                        "move_name": move_name,
+                        "move_id": move_id,
+                        "reason": foreign_reason,
+                    })
                 continue
 
             category = self._damage_class_for_move(move_id)
@@ -28580,6 +28600,16 @@ class RoleRunManager(ctk.CTk):
             new_move_id=draft.move_id,
             pokemon_identity=pokemon_identity,
         )
+        # Registra bajo qué rol se drafteó este movimiento (2026-09-07): es lo
+        # que permite avisar más tarde si Líbero conserva un movimiento que en
+        # realidad se drafteó con otro rol activo. Se anota aquí, junto al
+        # resto de mutaciones de `self.project` de esta función -"el momento
+        # definitivo del drafteo"-, para que quede escrito en el mismo guardado
+        # que ya dispara `adjust_run_counter`/`saved_drafts` más abajo.
+        if self.project is not None:
+            self.project.drafted_move_origin.setdefault(pokemon_identity, {})[
+                str(int(draft.move_id))
+            ] = canonical_role(draft.role)
         # Un mismo Pokémon/hueco solo puede tener una edición pendiente. Si ese
         # hueco acababa de rellenarse con una MT, el drafteo pasa a ser la última
         # decisión y la MT deja de consumirse.

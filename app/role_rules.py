@@ -232,6 +232,30 @@ def damage_move_issue_reason(
     return ""
 
 
+# Decidido por el usuario el 2026-09-07: Líbero no restringe movimientos por
+# su cuenta (ver ``allowed_status_move_ids`` devolviendo ``None``), pero eso
+# es precisamente lo que hacía abusable cambiar a OTRO rol solo para
+# garantizarse un drafteo concreto (p. ej. Support para asegurar un hazard) y
+# volver a Líbero después a quedarse el movimiento sin más. Un movimiento de
+# Líbero sigue sin ser ilegal, pero si el registro demuestra que se drafteó
+# con un rol distinto se avisa igual que cualquier otra incompatibilidad, con
+# papelera/MT como salida -mismo flujo que ya usa la cláusula de evasión-.
+def libero_foreign_move_reason(origin_role: str | None) -> str:
+    """Motivo de aviso si Líbero conserva un movimiento drafteado como OTRO rol.
+
+    ``origin_role`` es el rol activo cuando se drafteó el movimiento, o
+    ``None``/cadena vacía si no hay registro -aprendido por otra vía: nivel,
+    MT, migración, o drafteado antes de que este historial existiera-. Sin
+    registro no se avisa: no hay prueba de que sea ajeno a Líbero, y esta
+    función sigue el mismo criterio que el resto de RoleRun de no inventar
+    incompatibilidades sin poder demostrarlas.
+    """
+    role = canonical_role(origin_role) if origin_role else "Líbero"
+    if role == "Líbero":
+        return ""
+    return f"Movimiento drafteado del {role}, no del Líbero"
+
+
 def engine_role_name(role: str, *, legacy_engine: bool = False) -> str:
     """Nombre enviado al SaveEngine.
 
