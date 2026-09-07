@@ -7,19 +7,22 @@ en tiempo real desde el emulador, calcula el drafteo por roles, vigila el
 guardado y refleja el estado de la Run en pantalla (incluida una capa lista
 para OBS).
 
-> Proyecto en desarrollo activo. La versión actual está en fase alpha — se
-> puede jugar, pero puede cambiar de una sesión a otra. El historial completo
-> de cambios está en [CHANGELOG.md](CHANGELOG.md).
+> Proyecto en desarrollo activo — funciona, pero puede cambiar de una versión
+> a otra. El historial completo de cambios está en
+> [CHANGELOG.md](CHANGELOG.md).
 
 ## Juegos soportados
 
-Diamante/Perla · Platino · HeartGold/SoulSilver · Negro/Blanco · Negro 2/Blanco 2
-· X/Y · Rubí Omega/Zafiro Alfa · Sol/Luna · Ultrasol/Ultraluna · Diamante
-Brillante/Perla Reluciente
+Negro/Blanco · Negro 2/Blanco 2 · X/Y · Rubí Omega/Zafiro Alfa · Sol/Luna ·
+Ultrasol/Ultraluna · Diamante Brillante/Perla Reluciente
 
-Cada juego se lee en vivo desde el emulador correspondiente (Azahar/Citra para
-3DS, o Ryujinx para Switch, según el título) — no hace falta cerrar la partida
+Cada juego se lee en vivo desde el emulador correspondiente (Azahar para 3DS,
+o Ryujinx para Switch, según el título) — no hace falta cerrar la partida
 para consultar el estado.
+
+Diamante/Perla, Platino y HeartGold/SoulSilver tienen motor propio en el
+código pero están ocultos del selector por ahora, a la espera de estabilizar
+la detección de combate en tiempo real (ver [CHANGELOG.md](CHANGELOG.md)).
 
 ## Primeros pasos
 
