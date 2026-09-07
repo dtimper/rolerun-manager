@@ -167,13 +167,18 @@ def test_los_roles_defensivos_siguen_sin_boosts_ofensivos() -> None:
 DOBLE_EQUIPO, REDUCCION, FOCO_ENERGIA = 104, 107, 116
 
 
-def test_evasion_y_critico_no_cuentan_como_estadistica() -> None:
+def test_el_critico_no_cuenta_como_estadistica_pero_la_evasion_si() -> None:
     """Decisión del formato, tomada a la vista de la lista completa.
 
-    El Support se valida por resta sobre `global_self_boosts`, así que dejar
-    estos tres fuera es dejarlos **legales** para él. No es un olvido como el de
-    Tambor: se preguntó y se decidió que la evasión y el ratio de crítico no
-    cuentan como «aumentar sus propias estadísticas».
+    El Support se valida por resta sobre `global_self_boosts`, así que ninguno
+    de los tres estar ahí los dejaría **legales** para él por defecto. No es
+    un olvido como el de Tambor: se preguntó y se decidió que el ratio de
+    crítico no cuenta como «aumentar sus propias estadísticas» -Foco Energía
+    sigue siendo legal-.
+
+    La evasión, en cambio, SÍ cuenta -decisión posterior, 2026-09-04, y
+    además absoluta: ni siquiera Support puede usar Doble Equipo o
+    Reducción, aunque por la regla de «no autoboost» sola no le tocarían-.
 
     Esta prueba existe para que no se «arreglen» por parecido con Tambor.
     """
@@ -182,8 +187,9 @@ def test_evasion_y_critico_no_cuentan_como_estadistica() -> None:
         assert move_id not in conjunto, move_id
 
     legales = permitidos("Support")
-    for move_id in (DOBLE_EQUIPO, REDUCCION, FOCO_ENERGIA):
-        assert move_id in legales, move_id
+    assert FOCO_ENERGIA in legales
+    assert DOBLE_EQUIPO not in legales
+    assert REDUCCION not in legales
 
 
 def test_los_demas_roles_no_los_heredan() -> None:
@@ -199,4 +205,5 @@ def test_la_ficha_del_support_dice_la_excepcion() -> None:
     texto = ROLE_GUIDE["Support"]["limits"]
 
     assert "evasión" in texto.casefold()
-    assert "Doble Equipo, Reducción y Foco Energía" in texto
+    assert "Foco Energía" in texto
+    assert "Doble Equipo, Reducción y Foco Energía" not in texto  # ya no son legales los dos primeros

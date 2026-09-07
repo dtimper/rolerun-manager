@@ -289,6 +289,9 @@ def _monitor(probe) -> SimpleNamespace:
     manager._reconcile_pending_faints_against_party = lambda game: (
         manager.reconciliaciones.append(game)
     )
+    # 06-09-2026: la reconciliación pasiva de quinta ajusta además la tabla de
+    # aprendizajes por rol dentro de la RAM de melonDS.
+    manager._sync_gen5_levelup_moves = lambda game: None
 
     def procesar(game, *, source="overworld"):
         publicados.append((game, source))

@@ -363,6 +363,19 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
         live.game.raw["live_write"] = True
         return B2W2RealTimeWriteResult(live.game, live.process, 2, len(changes))
 
+    @staticmethod
+    def _identidad_declarada(instantanea, etiqueta: str) -> tuple[int, int, int]:
+        """(pid, tid, sid) de una instantánea, exigiendo que esté completa."""
+        datos = dict(instantanea or {})
+        identidad = tuple(
+            int(datos.get(clave, 0) or 0) for clave in ("pid", "tid", "sid")
+        )
+        if not all(identidad):
+            raise B2W2LiveError(
+                f"El cambio PC B2/W2 no trae la identidad del {etiqueta}."
+            )
+        return identidad
+
     def _move_target_for(self, party_read, change):
         """Resuelve (slot, identidad, hueco, movimiento) sin fiarse del slot.
 
@@ -433,8 +446,8 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
             raise B2W2LiveError("B2/W2 solo admite un movimiento PC→PC por transacción.")
         change = changes[0]
         if change.operation not in {
-            "move-box-slot", "swap-party-box", "party-to-box", "box-to-party",
-            "replace-fainted",
+            "move-box-slot", "swap-box-slots", "swap-party-box", "party-to-box",
+            "box-to-party", "replace-fainted",
         }:
             raise B2W2LiveError("La operación B2/W2 todavía no tiene writer validado.")
         if change.operation in {"party-to-box", "box-to-party"}:
@@ -566,17 +579,33 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
         )
         party_read = self.reader.read_party()
         before = self.reader.read_pc(party_read)
-        plan = self.reader.prepare_pc_move(before.raw, *coordinates)
-        snapshot = dict(change.incoming_snapshot or {})
-        expected = (
-            int(snapshot.get("pid", 0) or 0), int(snapshot.get("tid", 0) or 0),
-            int(snapshot.get("sid", 0) or 0),
-        )
-        if not all(expected) or expected != (plan.pokemon.pid, plan.pokemon.tid, plan.pokemon.sid):
-            raise B2W2LiveError("La identidad del origen PC B2/W2 ha cambiado.")
-        self.reader.move_pc_slot(
-            party_read, *coordinates, expected_identity=expected,
-        )
+        if change.operation == "swap-box-slots":
+            # Las dos casillas están ocupadas y las dos identidades se conocen:
+            # ambas son ancla, y ninguna casilla vacía interviene.
+            plan = self.reader.prepare_pc_swap(before.raw, *coordinates)
+            origen = self._identidad_declarada(change.incoming_snapshot, "origen")
+            destino = self._identidad_declarada(change.outgoing_snapshot, "destino")
+            if origen != (
+                plan.source_pokemon.pid, plan.source_pokemon.tid, plan.source_pokemon.sid,
+            ):
+                raise B2W2LiveError("La identidad del origen PC B2/W2 ha cambiado.")
+            if destino != (
+                plan.destination_pokemon.pid, plan.destination_pokemon.tid,
+                plan.destination_pokemon.sid,
+            ):
+                raise B2W2LiveError("La identidad del destino PC B2/W2 ha cambiado.")
+            self.reader.swap_pc_slots(
+                party_read, *coordinates,
+                source_identity=origen, destination_identity=destino,
+            )
+        else:
+            plan = self.reader.prepare_pc_move(before.raw, *coordinates)
+            expected = self._identidad_declarada(change.incoming_snapshot, "origen")
+            if expected != (plan.pokemon.pid, plan.pokemon.tid, plan.pokemon.sid):
+                raise B2W2LiveError("La identidad del origen PC B2/W2 ha cambiado.")
+            self.reader.move_pc_slot(
+                party_read, *coordinates, expected_identity=expected,
+            )
         live = self._capture(current, 0)
         live.game.raw["writes_enabled"] = True
         live.game.raw["live_write"] = True
@@ -704,6 +733,14 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
                             por_slot[member.slot].status_condition
                             if member.slot in por_slot else member.status_condition
                         ),
+                        # 06-09-2026: quien no tiene fila propia arrastra los PS
+                        # del bloque de equipo, y en quinta está DEMOSTRADO que
+                        # ese bloque no se actualiza hasta que acaba el combate.
+                        # Sin marcarlo, la barra pintaba en verde a un Pokémon
+                        # que podía estar a la mitad. En Negro 2 esto afecta a
+                        # cinco de los seis (su `battle_stride` no está medido);
+                        # en Blanco, solo a las filas que no se validan.
+                        hp_is_live=member.slot in por_slot,
                     )
                     for member in game.party
                 ]

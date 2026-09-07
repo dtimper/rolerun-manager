@@ -5,6 +5,8 @@ from collections.abc import Callable
 
 import customtkinter as ctk
 
+from .window_focus import guard_topmost_on_focus_loss, hide_from_taskbar_and_alttab, release_focus_guard
+
 
 class TransparentWindowSurface(ctk.CTkFrame):
     """Como ``IntegratedWindowSurface``, pero oscurece el fondo sin ocultarlo.
@@ -44,6 +46,17 @@ class TransparentWindowSurface(ctk.CTkFrame):
         self._window = ctk.CTkToplevel(master)
         self._window.overrideredirect(True)
         self._window.attributes("-topmost", True)
+        # Pedido del usuario 02-09-2026: cambiar de aplicación con este editor
+        # abierto dejaba el velo y el diálogo por delante de la app nueva. El
+        # ancla es la ventana PRINCIPAL, no `self._window`: ver el porqué en
+        # `guard_topmost_on_focus_loss`.
+        self._focus_guard = guard_topmost_on_focus_loss(
+            master.winfo_toplevel(), self._scrim, self._window,
+        )
+        # Mismo día, segundo hallazgo: el velo y el diálogo, al ser dos
+        # `CTkToplevel` sin dueño declarado, contaban como dos ventanas de
+        # RoleRun en Alt+Tab.
+        hide_from_taskbar_and_alttab(self._scrim, self._window)
 
         self._requested_width = 760
         self._requested_height = 610
@@ -181,6 +194,7 @@ class TransparentWindowSurface(ctk.CTkFrame):
                 root.unbind("<Escape>", self._escape_binding)
         except Exception:
             pass
+        release_focus_guard(getattr(self, "_focus_guard", None))
         try:
             super().destroy()
         finally:

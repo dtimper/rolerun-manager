@@ -140,6 +140,11 @@ class Gen5RomProfile:
         move = self.move(move_id)
         return int(move.accuracy) if move is not None else 0
 
+    def type_id(self, move_id: int) -> int | None:
+        """Tipo tal cual lo declara la ROM (0=normal…16=siniestro, sin hueco «???»)."""
+        move = self.move(move_id)
+        return int(move.type_id) if move is not None else None
+
 
 def _parse_personal(archivos: list[bytes], juego: Gen5Game) -> bytes:
     tamano = juego.personal_record_size

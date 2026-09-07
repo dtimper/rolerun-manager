@@ -20,6 +20,7 @@ from .oras_rom_service import (
     _ncch_offset,
     _read_exact,
     _read_ncch,
+    _read_romfs_file_from_ncch_path,
     _u16,
     _u32,
     azahar_user_roots,
@@ -48,6 +49,12 @@ SM_PERSONAL_RECORD_SIZE = 0x54
 SM_SPECIES_COUNT = 807
 SM_PERSONAL_FORM_OFFSET = 0x1C
 SM_PERSONAL_FORM_COUNT_OFFSET = 0x20
+# Confirmado el 2026-09-04 leyendo la ROM real del usuario: GARC válido, 961
+# ficheros — coincide con el número de registros de la tabla Personal
+# efectiva de SM. Mismo formato que USUM (app/usum_rom_service.py): el
+# índice de fichero es un ``personal_id`` (formas incluidas), no
+# directamente el species_id como en ORAS.
+SM_LEVELUP_MOVES_PATH = "a/0/1/3"
 
 _GARC_MAGICS = {b"GARC", b"CRAG"}
 _FATO_MAGICS = {b"OTAF", b"FATO"}
@@ -163,10 +170,51 @@ def _sm_personal_flat_from_garc(raw: bytes) -> bytes:
     return flat
 
 
+def sm_personal_id_map(flat: bytes) -> dict[tuple[int, int], int]:
+    """``{(species_id, form): personal_id}`` (``form=0`` para la base).
+
+    ``personal_id`` es el índice dentro de la tabla Personal aplanada — el
+    MISMO identificador que usa la tabla de aprendizajes por nivel de SM
+    (``a/0/1/3``, confirmado el 2026-09-04 contra la ROM real del usuario:
+    Venusaur/Mega Venusaur, ``personal_id=843`` calculado aquí, decodifican
+    listas de aprendizajes completas y con los mismos niveles en ambos).
+    Mirror de ``usum_rom_service.usum_personal_id_map`` — mismas constantes.
+    """
+    count = len(flat) // SM_PERSONAL_RECORD_SIZE
+
+    def record(index: int) -> bytes:
+        if not 0 <= int(index) < count:
+            raise SMRomProfileError(f"El registro Personal #{index} queda fuera de la tabla efectiva.")
+        start = int(index) * SM_PERSONAL_RECORD_SIZE
+        return flat[start:start + SM_PERSONAL_RECORD_SIZE]
+
+    result: dict[tuple[int, int], int] = {}
+    for species_id in range(1, SM_SPECIES_COUNT + 1):
+        base = record(species_id)
+        result[(species_id, 0)] = species_id
+        form_count = int(base[SM_PERSONAL_FORM_COUNT_OFFSET])
+        first_form = int.from_bytes(
+            base[SM_PERSONAL_FORM_OFFSET:SM_PERSONAL_FORM_OFFSET + 2], "little"
+        )
+        if form_count <= 1 or first_form <= 0:
+            continue
+        if form_count > 64:
+            raise SMRomProfileError(f"La especie {species_id} declara demasiadas formas ({form_count}).")
+        for form in range(1, form_count):
+            index = first_form + form - 1
+            if not 1 <= index < count:
+                raise SMRomProfileError(
+                    f"La forma {form} de la especie {species_id} apunta fuera de PersonalTable."
+                )
+            result[(species_id, form)] = index
+    return result
+
+
 def _sm_stats_from_personal_garc(raw: bytes) -> dict[int | tuple[int, int], ORASPersonalStats]:
     """Extrae base stats + curva EXP de la tabla Personal efectiva de SM."""
     flat = _sm_personal_flat_from_garc(raw)
     count = len(flat) // SM_PERSONAL_RECORD_SIZE
+    id_map = sm_personal_id_map(flat)
 
     def record(index: int) -> bytes:
         if not 0 <= int(index) < count:
@@ -184,26 +232,13 @@ def _sm_stats_from_personal_garc(raw: bytes) -> dict[int | tuple[int, int], ORAS
         return ORASPersonalStats(base_stats, growth)
 
     result: dict[int | tuple[int, int], ORASPersonalStats] = {}
-    for species_id in range(1, SM_SPECIES_COUNT + 1):
-        base = record(species_id)
-        result[species_id] = stats(base, f"Personal SM especie {species_id}")
-        form_count = int(base[SM_PERSONAL_FORM_COUNT_OFFSET])
-        first_form = int.from_bytes(
-            base[SM_PERSONAL_FORM_OFFSET:SM_PERSONAL_FORM_OFFSET + 2], "little"
+    for (species_id, form), personal_id in id_map.items():
+        label = (
+            f"Personal SM especie {species_id}" if form == 0
+            else f"Personal SM especie {species_id}, forma {form}"
         )
-        if form_count <= 1 or first_form <= 0:
-            continue
-        if form_count > 64:
-            raise SMRomProfileError(f"La especie {species_id} declara demasiadas formas ({form_count}).")
-        for form in range(1, form_count):
-            index = first_form + form - 1
-            if not 1 <= index < count:
-                raise SMRomProfileError(
-                    f"La forma {form} de la especie {species_id} apunta fuera de PersonalTable."
-                )
-            result[(species_id, form)] = stats(
-                record(index), f"Personal SM especie {species_id}, forma {form}",
-            )
+        key: int | tuple[int, int] = species_id if form == 0 else (species_id, form)
+        result[key] = stats(record(personal_id), label)
     if sum(1 for key in result if isinstance(key, int)) != SM_SPECIES_COUNT:
         raise SMRomProfileError("Las estadísticas Personal de SM no cubren todas las especies.")
     return result
@@ -447,3 +482,82 @@ def load_sm_rom_tm_profile(
         source_detail=detail,
         personal_stats=personal_stats,
     )
+
+
+def sm_personal_id_map_for_rom(
+    path: str | Path, *, azahar_root: str | Path | None = None,
+) -> dict[tuple[int, int], int]:
+    """``{(species_id, form): personal_id}`` para la ROM SM activa.
+
+    Usa la misma tabla Personal EFECTIVA (base → actualización → mod →
+    sidecar) que ``load_sm_rom_tm_profile``, para que el mapa nunca diverja
+    de las estadísticas Personal ya validadas. Mirror de
+    ``usum_rom_service.usum_personal_id_map_for_rom``.
+    """
+    source = Path(path).expanduser().resolve()
+    if not source.is_file():
+        raise SMRomProfileError("No se encuentra la ROM de Sol/Luna configurada.")
+    image = _read_ncch(source)
+    if int(image.title_id) not in SM_TITLE_IDS:
+        raise SMRomProfileError(
+            f"La ROM seleccionada no es Pokémon Sol/Luna retail (Title ID {int(image.title_id):016X})."
+        )
+    roots: list[Path] = []
+    if azahar_root is not None:
+        root = Path(azahar_root).expanduser().resolve()
+        if root.is_dir():
+            roots.append(root)
+    for root in azahar_user_roots():
+        if root not in roots:
+            roots.append(root)
+    personal_raw, _detail = _effective_personal(source, int(image.title_id), tuple(roots))
+    flat = _sm_personal_flat_from_garc(personal_raw)
+    return sm_personal_id_map(flat)
+
+
+def load_sm_levelup_moves_blob(
+    path: str | Path,
+    *,
+    process_name: str | None = None,
+    azahar_root: str | Path | None = None,
+) -> tuple[bytes, int]:
+    """Devuelve el GARC vainilla de aprendizajes por nivel de SM y su Title ID.
+
+    Análoga a ``usum_rom_service.load_usum_levelup_moves_blob``: deliberadamente
+    NO consulta ``load/mods/<título>/romfs/a/0/1/3`` (ese archivo lo gestiona
+    ``app/sm_levelup_moves.py`` para aplicar los roles), y sí respeta una
+    actualización oficial del juego si la contiene.
+    """
+    source = Path(path).expanduser().resolve()
+    if not source.is_file():
+        raise SMRomProfileError("No se encuentra la ROM de Sol/Luna configurada.")
+    try:
+        base = _read_ncch(source)
+    except ORASRomProfileError as exc:
+        raise SMRomProfileError(str(exc).replace("ORAS", "Sol/Luna")) from exc
+    if int(base.title_id) not in SM_TITLE_IDS:
+        raise SMRomProfileError(
+            f"La ROM seleccionada no es Pokémon Sol/Luna retail (Title ID {int(base.title_id):016X})."
+        )
+    base_title = int(base.title_id)
+    blob = _read_romfs_file_from_ncch_path(source, SM_LEVELUP_MOVES_PATH)
+
+    roots: list[Path] = []
+    if azahar_root is not None:
+        root = Path(azahar_root).expanduser().resolve()
+        if root.is_dir():
+            roots.append(root)
+    for root in azahar_user_roots():
+        if root not in roots:
+            roots.append(root)
+    update_path = _find_sm_update(base_title, roots)
+    if update_path is not None:
+        updated = _read_romfs_file_from_ncch_path(update_path, SM_LEVELUP_MOVES_PATH)
+        if updated is not None:
+            blob = updated
+
+    if blob is None:
+        raise SMRomProfileError(
+            "La ROM Sol/Luna activa no contiene la tabla de aprendizajes por nivel."
+        )
+    return blob, base_title

@@ -6,7 +6,9 @@ import re
 import struct
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Protocol
+from typing import Iterable, Mapping, Protocol, TypeVar
+
+_ScanKey = TypeVar("_ScanKey")
 
 
 RYUJINX_HOST_ADDRESS_SPACE_SIZE = 1 << 39
@@ -280,6 +282,104 @@ class RyujinxHostMappedClient:
                 search_from = position + 1
             tail = haystack[-overlap:] if overlap else b""
             offset += amount
+
+    def scan_regions_multi(
+        self, patterns: Mapping[_ScanKey, bytes],
+    ) -> dict[_ScanKey, tuple[int, ...]]:
+        """Busca varios patrones a la vez en un único paso sobre las vistas
+        HostMapped emparejadas, en vez de re-leer la misma región una vez por
+        patrón. Devuelve TODAS las coincidencias guest encontradas por clave
+        (0, 1 o más) — a diferencia de la huella principal de ``connect()``,
+        aquí no se exige unicidad: esa decisión es del llamador.
+        """
+        if self._handle is None:
+            self.connect()
+        assert self._handle is not None
+        handle = self._handle
+        active = {key: pattern for key, pattern in patterns.items() if pattern}
+        results: dict[_ScanKey, list[int]] = {key: [] for key in active}
+        if not active:
+            return {key: () for key in patterns}
+        overlap = max(len(pattern) for pattern in active.values()) - 1
+        for region in paired_hostmapped_regions(self.backend.regions(handle)):
+            offset = 0
+            tail = b""
+            while offset < int(region.size):
+                amount = min(self.chunk_size, int(region.size) - offset)
+                try:
+                    block = self.backend.read(handle, int(region.base) + offset, amount)
+                except RyujinxHostMemoryError:
+                    break
+                haystack = tail + block
+                for key, pattern in active.items():
+                    search_from = 0
+                    while True:
+                        position = haystack.find(pattern, search_from)
+                        if position < 0:
+                            break
+                        absolute = int(region.base) + offset - len(tail) + position
+                        if (
+                            int(region.base) <= absolute
+                            and absolute + len(pattern) <= int(region.base) + int(region.size)
+                        ):
+                            results[key].append(absolute)
+                        search_from = position + 1
+                tail = haystack[-overlap:] if overlap else b""
+                offset += amount
+        return {key: tuple(value) for key, value in results.items()} | {
+            key: () for key in patterns if key not in active
+        }
+
+    def scan_regions_multi_regex(
+        self, patterns: Mapping[_ScanKey, tuple[bytes, int]],
+    ) -> dict[_ScanKey, tuple[int, ...]]:
+        """Como ``scan_regions_multi``, pero con comodines de bytes.
+
+        ``patterns`` mapea cada clave a ``(fuente_del_regex, longitud_del_acierto)``:
+        la longitud va aparte porque un byte especial puede expandirse en la
+        fuente del regex (``re.escape``) sin cambiar cuántos bytes ocupa el
+        acierto real en memoria. Usado cuando el contenido exacto puede haber
+        cambiado (p. ej. una fila ya parcheada en una sesión anterior) pero
+        ciertos campos siguen siendo estables — ver
+        ``bdsp_levelup_table_live.build_species_anchor``.
+        """
+        if self._handle is None:
+            self.connect()
+        assert self._handle is not None
+        handle = self._handle
+        active = {
+            key: (re.compile(source, re.DOTALL), int(length))
+            for key, (source, length) in patterns.items()
+            if source and int(length) > 0
+        }
+        results: dict[_ScanKey, list[int]] = {key: [] for key in active}
+        if not active:
+            return {key: () for key in patterns}
+        overlap = max(length for _compiled, length in active.values()) - 1
+        for region in paired_hostmapped_regions(self.backend.regions(handle)):
+            offset = 0
+            tail = b""
+            while offset < int(region.size):
+                amount = min(self.chunk_size, int(region.size) - offset)
+                try:
+                    block = self.backend.read(handle, int(region.base) + offset, amount)
+                except RyujinxHostMemoryError:
+                    break
+                haystack = tail + block
+                for key, (compiled, length) in active.items():
+                    for match in compiled.finditer(haystack):
+                        position = match.start()
+                        absolute = int(region.base) + offset - len(tail) + position
+                        if (
+                            int(region.base) <= absolute
+                            and absolute + length <= int(region.base) + int(region.size)
+                        ):
+                            results[key].append(absolute)
+                tail = haystack[-overlap:] if overlap else b""
+                offset += amount
+        return {key: tuple(value) for key, value in results.items()} | {
+            key: () for key in patterns if key not in active
+        }
 
     def read_memory(self, guest_address: int, size: int) -> bytes:
         if size < 0:

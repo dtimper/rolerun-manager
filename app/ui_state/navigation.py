@@ -15,9 +15,9 @@ PRIMARY_NAVIGATION: tuple[tuple[str, str], ...] = (
 
 SECONDARY_GROUPS: dict[str, tuple[str, ...]] = {
     "team": ("team", "pc"),
-    "tms": ("tms",),
+    "tms": ("tms", "moves"),
     "settings": ("settings", "history"),
-    "help": ("help", "moves"),
+    "help": ("help",),
     "drafts": ("drafts",),
 }
 

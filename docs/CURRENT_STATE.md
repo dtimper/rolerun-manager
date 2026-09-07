@@ -16,6 +16,271 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
 
+### 06-09-2026 (5) — Retomados Diamante/Perla, Platino y HeartGold; primer carril de combate de HGSS
+
+A petición explícita del usuario, se retoma el trabajo en los tres juegos
+ocultos desde alpha.97 (cuatro incidentes reales de «Huevo malo» al escribir
+cuarta generación). `GAMES_OCULTOS` queda vacío: los diez juegos vuelven a ser
+seleccionables. Estado real por juego:
+
+- **HeartGold**: lee todo en vivo de forma fiable. Escribir sigue apagado
+  (`MELONDS_GEN4_ESCRIBE = False`) — el último incidente (alpha.96) tiene una
+  causa sin explicar (un campo `sanity`), y no se reactiva sin investigarla.
+  **Primer carril de combate implementado y VALIDADO FÍSICAMENTE**: a
+  diferencia de Gen5, cuarta no mantiene una tabla de seis filas, solo
+  demuestra al que está en el campo (`HgssMelonDSReader.read_battle_probe`,
+  direcciones `0x022CC4EC`/`0x022CC484`, ver `CHANGELOG.md`).
+- **Diamante/Perla y Platino**: parten de cero — ninguna dirección de RAM
+  medida todavía. Las ROM del usuario existen pero sin save en curso; hace
+  falta arrancar una partida antes de poder buscar anclas.
+
+Pendiente inmediato: aprendizajes por rol y escritura en vivo para HGSS
+(ninguno existe hoy); descubrimiento completo de direcciones para DP/Pt desde
+cero, con el mismo método que ya funcionó en Blanco/Negro 2 y ahora en HGSS.
+
+### 06-09-2026 (4) — Negro 2/Blanco 2: medido el paso de combate
+
+Pendiente de alpha.32. Medido sobre la partida real: **0x224, igual que
+Blanco**. Hallazgo de camino: `battle_presentation`/`battle_logical` no son
+dos tablas independientes en este juego (a diferencia de Blanco) — son la
+MISMA tabla de seis filas, una por puesto del equipo, sin intercambio de
+activo a la fila 0. Cada fila sigue el PS real de su miembro tanto activo
+como banqueado, confirmado con dos cambios de combatiente seguidos.
+
+Encontrado de camino un bug real: la validación exigía que el campo "nivel"
+también coincidiera, y ese campo sale con valores imposibles en cualquier
+fila que no sea la del recién activo — descartaba las cinco filas enteras.
+Especie + PS máximo + habilidad ya identifican sin ambigüedad; se quitó el
+nivel de la comparación.
+
+Ver `CHANGELOG.md` v0.3.1-alpha.34. **VALIDADO FÍSICAMENTE** (06-09-2026) con
+el equipo real del usuario a mitad de combate. Suite completa: 2746 passed,
+2 skipped.
+
+### 06-09-2026 (3) — X/Y: la tabla de combate no es fiable; el bug real estaba en el respaldo
+
+Pendiente de alpha.32: comprobar si X/Y tiene la tabla de combate de seis
+filas de ORAS. La tiene (mismo paso de 580 bytes, mismo intercambio del
+activo a la fila 0), pero **no es fiable**: tras el segundo cambio de
+combatiente un miembro desapareció de la tabla y apareció una fila que no
+correspondía a nadie, de forma estable. Descartada; X/Y sigue demostrando
+solo la fila del activo.
+
+Persiguiendo esa tabla, el usuario capturó en vivo tres bugs reales de fondo,
+los tres **VALIDADOS FÍSICAMENTE** tras cada arreglo:
+
+1. El respaldo de un Pokémon benqueado usaba el bloque de equipo, que NO
+   sigue el daño de un miembro ya benqueado (se queda congelado en su valor
+   de antes de esa pelea) — un solo cambio de combatiente ya lo mostraba
+   "curado". Arreglado cacheando el último PS confirmado por partida doble
+   mientras cada uno estuvo en el campo (`XYLiveReader._battle_confirmed_hp`):
+   un banquillo no puede perder ni ganar PS por nada ajeno al combate activo,
+   así que ese valor sigue siendo exacto mientras siga fuera.
+2. Con (1) resuelto, los cinco que nunca habían salido se quedaban en gris
+   hasta que les tocaba turno uno a uno. Arreglado sembrando esa misma caché
+   con el bloque de equipo COMPLETO en el primer instante resuelto de cada
+   combate: fuera de combate el bloque de equipo sí es la verdad, así que no
+   hace falta esperar a que cada uno pise el campo.
+3. El puntero del rival, con la misma indirección que el del jugador, podía
+   leerse inválido durante el instante de transición de un K.O. Un solo tick
+   así declaraba el combate terminado y publicaba el bloque de equipo crudo
+   -sin el daño de esa pelea- como la verdad, "curando" a todo el mundo.
+   Arreglado exigiendo que la ausencia se repita dos tics seguidos
+   (`_battle_opponent_absent_streak`).
+
+Ver `CHANGELOG.md` v0.3.1-alpha.33. Suite completa: 2746 passed, 1 skipped.
+
+### 06-09-2026 (2) — aprendizajes por rol en quinta, con UNA sola capa
+
+B2/W2 y Blanco/Negro eran los últimos juegos con escritura viva sin
+aprendizajes por rol. Ya lo tienen, y con menos capas que ningún otro.
+
+**Lo demostrado antes de escribir ningún writer**: la tabla vive en `a/0/1/8`
+(709 archivos = las 709 especies de la tabla personal; valida contra
+aprendizajes conocidos y 709/709 con niveles crecientes); melonDS mantiene la
+imagen entera de la ROM en su memoria, en región `READWRITE`, con la cabecera
+en la base y la tabla idéntica byte a byte a la del .nds; y no hay ninguna
+copia cacheada en los 16 MB de RAM del DS. **Prueba física**: cambiado el
+aprendizaje de nivel 5 de Lillipup (`Rastreo` → `Hidrobomba`, nivel intacto),
+el juego **anunció y aprendió Hidrobomba** con su tipo y sus PP.
+
+**Consecuencia**: quinta relee la tabla en cada aprendizaje, así que basta el
+Enfoque A. No hace falta ni la red de seguridad reactiva ni el parcheo del
+cartel que sí necesitan X/Y, Sol/Luna y UltraSol/UltraLuna — el juego anuncia
+el nombre correcto por sí solo, como en ORAS.
+
+Módulos nuevos: `app/gen5_levelup_moves.py` (decodificar y calcular) y
+`app/gen5_levelup_memory.py` (localizar y escribir). `app/nds_rom.py` gana las
+posiciones absolutas de cada archivo de un NARC. La ROM del usuario **se abre
+siempre en solo lectura**: se parchea la copia en memoria. Incluye historial
+para RECUERDA MOVIMIENTOS, que quinta también gana. Localizar la imagen pasó
+de 48 s a 0,07 s agrupando por asignación y buscando la cabecera al principio,
+sin relajar ninguna verificación. Ver `CHANGELOG.md` v0.3.1-alpha.29.
+
+Suite completa: 2720 passed, 1 skipped. **VALIDADO FÍSICAMENTE** (06-09-2026).
+
+La validación destapó un bug transversal, corregido en alpha.30: el historial
+de RECUERDA-MOVIMIENTOS calculaba el sustituto sobre el subconjunto de
+entradas recién cruzadas, mientras que el parche lo calcula sobre la tabla
+COMPLETA de la especie. Como `compute_species_patch` excluye los movimientos
+que la especie ya tiene, los dos conjuntos de exclusión diferían y elegían
+sustitutos distintos: 13 de las 14 entradas de Patrat discrepaban. Afectaba a
+ORAS, X/Y, Sol/Luna, USUM y quinta -no a BDSP, que registra el movimiento ya
+confirmado en RAM-. Los cinco calculan ya sobre la tabla completa.
+
+### 06-09-2026 — BDSP: el vacío del JUEGO no es el vacío que escribe RoleRun
+
+Validación física de alpha.27: SM, USUM, B2/W2 y Blanco/Negro **funcionan**.
+BDSP falló, pero no por el intercambio nuevo -sus tres escrituras salieron
+bien- sino por `move-box-slot`, que ya estaba en producción: no se podía
+mover un Pokémon a otra caja.
+
+Medido leyendo los 1.200 huecos de la partida real: de los 1.189 vacíos,
+**1.185 no coinciden byte a byte con el vacío canónico**. La diferencia está
+entera en los 16 bytes de cola (espejo de stats de party, que no describe al
+Pokémon): el juego deja un residuo constante y RoleRun escribe ceros. Los 328
+bytes del Pokémon están a cero en los 1.189. La representación «canónica»
+resultó ser la minoritaria: los 4 huecos que RoleRun misma había vaciado.
+
+`_box_slot_is_clean_empty` pasa a comprobar los 328 bytes del bloque
+guardado, no los 344. Sigue siendo más estricto que `party-to-box` y
+`replace-fainted`, que solo exigen `species == 0`. Corregido además que los
+bytes originales del destino guardados para el rollback eran el canónico y no
+los reales. Ver `CHANGELOG.md` v0.3.1-alpha.28. Suite: 2689 passed.
+
+**VALIDADO FÍSICAMENTE** el mismo día: el usuario confirma que ya puede mover
+un Pokémon entre cajas en Perla Reluciente. Con esto, el estado del
+intercambio PC↔PC queda: SM, USUM, B2/W2 y Blanco/Negro **validados**; BDSP
+validado en la misma caja (sus tres escrituras salieron bien desde el primer
+intento) y **pendiente entre cajas distintas**, que hasta ahora no se podía
+ni montar; ORAS y X/Y ya lo estaban; HGSS implementado y sin poder probarse.
+
+### 05-09-2026 (2) — intercambiar dos casillas del PC, en los ocho juegos
+
+Pedido del usuario tras revisar la matriz de funcionalidades: el intercambio
+entre dos casillas **ocupadas** del PC existía solo en ORAS y X/Y. Ahora lo
+tienen los ocho backends con escritura viva (SM, USUM, BDSP, B2/W2,
+Blanco/Negro y HGSS se suman).
+
+No es una escritura nueva en ningún juego: es la misma transacción que su
+`move-box-slot` ya tenía demostrada, sobre la misma matriz PC, sin ningún
+vacío de por medio —las dos casillas están ocupadas— y con las **dos**
+identidades como ancla, que es una garantía más fuerte que la del traslado.
+Writers: `SMLiveWriter._apply_pc_swap`, `USUMLiveWriter._apply_pc_swap`,
+`BDSPLiveWriter._apply_box_swap`, `B2W2MelonDSReader.swap_pc_slots` y
+`HgssWriter.swap_pc_slots`. `PC_SWAP_GAME_KEYS` pasa a igualar a
+`PC_A_PC_GAME_KEYS`. Ver `CHANGELOG.md` v0.3.1-alpha.27.
+
+Corregido de paso un fallo real encontrado revisando el port: en SM y USUM el
+apunte para el rollback se hacía DESPUÉS de escribir, y
+`WindowsProcessMemory.write` lanza también con `ERROR_PARTIAL_COPY`, cuando
+parte de los bytes ya han caído. Una escritura parcial dejaba una casilla
+corrupta fuera del rollback —informando además de que se había restaurado
+todo—. Corregido también en los dos `_apply_pc_move` hermanos, donde estaba
+latente. Cubierto con un doble de memoria que escribe la mitad y luego falla.
+
+Suite completa: 2686 passed, 1 skipped. **Pendiente de validación física**,
+juego por juego. HGSS queda escrito pero sigue sin poder probarse: sus
+escrituras están apagadas en bloque (`MELONDS_GEN4_ESCRIBE = False`).
+
+Deuda conocida heredada (no introducida por este cambio, no bloquea): el
+intercambio de HGSS reescribe el bloque de equipo y el contador desde una
+captura previa, porque reutiliza el marco transaccional de `move_pc_slot`;
+B2/W2 y HGSS no comprueban «no durante un combate» como sí hace BDSP; y la
+verificación de BDSP no repite tras un asentamiento ni compara byte a byte,
+solo identidad. Los tres vienen de sus hermanos ya validados.
+
+### 05-09-2026 — X/Y: aprendizajes por rol completos, con las tres capas
+
+X/Y alcanza la paridad de USUM/SM en aprendizajes por nivel según el rol:
+archivo del mod (Enfoque A, `a/2/1/4`), red de seguridad reactiva (Enfoque B,
+`_sync_xy_levelup_moves_backup`) y parcheo en RAM del cartel del juego
+(Enfoque C, `_sync_xy_levelup_announcement_cache`). **Validado físicamente**
+por el usuario.
+
+Cuatro causas raíz reales encontradas leyendo `escrituras_vivas.jsonl`, todas
+con su prueba de regresión:
+
+1. El parcheo de RAM recibía las evoluciones adelantadas del archivo del mod
+   —especies sin ningún búfer real asignado—, y buscar uno ahí tumbó el
+   emulador. Ahora solo recibe la party real.
+2. El búfer del cartel de X/Y vive a ~13 MiB de la party, muy fuera de la
+   ventana de 8 MiB heredada de Gen 7: no se encontraba nada, en silencio.
+   `XY_ANNOUNCEMENT_CACHE_SCAN_SPAN` la amplía a 40 MiB.
+3. El parcheo solo se disparaba al reescribir el archivo (un cambio de rol).
+   Un cruce de nivel sin cambio de rol no lo activaba nunca.
+4. Un barrido preventivo de 5-6 especies por cambio de rol tardaba 10+
+   segundos y el aviso urgente del cruce de nivel se descartaba en silencio al
+   encontrar el candado ocupado. El candado ya no descarta —encola—, y el
+   barrido preventivo se retiró: solo dispara el cruce de nivel.
+
+### 04-09-2026 (4) — Sol/Luna: destino exacto Equipo→PC, y un clic sin diagnosticar del todo
+
+Dos hallazgos del usuario tras validar los anteriores:
+
+- **Corregido**: `SMLiveWriter._apply_team_swap` ignoraba
+  `change.box`/`change.box_slot` para `"party-to-box"` y siempre buscaba el
+  primer hueco libre, aunque la UI ya calculara un destino exacto desde la
+  matriz live (no desde un save desfasado, la razón original de ese
+  comportamiento). Réplica del contrato ya validado de USUM. Ver
+  `CHANGELOG.md` v0.3.1-alpha.24. Pendiente de validación física.
+- **Mitigado, sin causa raíz demostrada**: tras un intercambio PC↔Equipo, la
+  tarjeta del Pokémon entrante podía dejar de responder al clic -sin abrir
+  su ficha ni avisar-. Se sospecha una carrera entre el repintado proyectado
+  del intercambio y el confirmado por la RAM, pero no se ha podido
+  reproducir para demostrarlo. `_click_team_card` ya no revienta en silencio
+  en ese caso y deja diagnóstico (`perf.mark`); la causa real sigue abierta.
+
+### 04-09-2026 (3) — Gen 7: el testigo "recién salido al PC" era imposible de cumplir
+
+Causa raíz real de que CAJAS PC de Sol/Luna nunca se abriera (ni con
+REINTENTAR, ni tras guardar la partida): `_open_pc_selector_from_live_matrix`
+mete el equipo vivo entero como anchors con `box=None/box_slot=None`, igual
+que un testigo real de "recién salido al PC". Los resolutores exigen a la
+vez que ningún anchor así aparezca en el PC (`boxpokemon-overlaps-live-party`)
+Y que al menos uno aparezca (`missing-recent-party-to-pc-witness`) —una
+contradicción que ninguna dirección, ni la correcta, podía superar nunca.
+Corregido restando la party viva del conjunto de testigos exigidos, en
+`sm_live.py` (tres funciones) y `usum_live.py` (dos funciones equivalentes).
+Ver `CHANGELOG.md` v0.3.1-alpha.23. **Pendiente de validación física**:
+confirmar que CAJAS PC de Sol/Luna se abre en la partida del usuario.
+
+### 04-09-2026 (2) — Sol/Luna se quedaba estancado en "Preparando Equipo y PC…"
+
+Causa raíz demostrada con el log real del usuario: la party se leía bien,
+pero la matriz PC en vivo no se demostraba esa sesión (sin testigo party→PC
+reciente). `_retire_initial_shell_when_ready` tenía una condición exclusiva
+de `"sm"` que no publicaba la primera página hasta demostrar esa matriz, y la
+barrera no publica por timeout a propósito -así que no abría nunca-. USUM y
+Perla Reluciente usan el mismo mecanismo y no bloquean el arranque por esto:
+la degradación (aviso "NO SE PUDIERON ABRIR LAS CAJAS · REINTENTAR" sin
+tapar el resto de la app) ya existía y ya funcionaba para ellos. Se retira la
+excepción de `"sm"`. Ver detalle en `CHANGELOG.md` v0.3.1-alpha.22.
+**Pendiente de validación física**: confirmar que la Run afectada del
+usuario ya abre.
+
+### 04-09-2026 — Sol/Luna: mover dentro del PC (a hueco vacío)
+
+Pedido del usuario: mover un Pokémon del PC a otro hueco del PC no existía
+para Sol/Luna -solo Equipo→PC-, aunque ORAS, BDSP y USUM ya lo tenían.
+
+`SMLiveWriter._apply_pc_move` (réplica del contrato ya probado de
+`USUMLiveWriter._apply_pc_move`) sobre la matriz PC de SM que
+`_ensure_pc_live_cache_for_team_write`/`_read_proven_pc_matrix` ya demuestran
+para `party-to-box`/`box-to-party` -no una dirección nueva ni prestada de
+otro juego-. `apply()` despacha `"move-box-slot"` a este writer; `"sm"` se
+añade a `PC_A_PC_GAME_KEYS` en `app/ui.py`. Solo mueve a un hueco **vacío**:
+el intercambio con un Pokémon ya presente en el destino queda fuera de
+alcance, igual que en UltraSol/UltraLuna (`PC_SWAP_GAME_KEYS` solo tiene
+`"oras"`).
+
+Tests sintéticos en `tests/test_sm_alpha30_pc_swap_write.py`
+(`test_sm_pc_to_pc_moves_exact_pk7_to_requested_box_and_slot`,
+`test_sm_pc_to_pc_rejects_occupied_destination_without_writing`). **Pendiente
+de validación física** en Sol/Luna con Azahar: mover un Pokémon del PC a un
+hueco vacío de otra caja, confirmar en el juego que llega intacto y que el
+origen queda vacío.
+
 ### Corrección posterior 30-08-2026 (3) — el depósito no sabía calibrar su propia caja
 
 Diagnosticado con `Logs/escrituras_vivas.jsonl`: tras las dos correcciones de
@@ -128,8 +393,9 @@ Ahora el resolutor distingue dos operaciones PC→PC y deja la decisión de qui�
 sabe escribir cada una a la interfaz:
 
 - `move-box-slot` — llevar a un hueco libre (`PC_A_PC_GAME_KEYS`).
-- `swap-box-slots` — intercambiar dos ocupadas (`PC_SWAP_GAME_KEYS`, hoy solo
-  ORAS). En los demás backends la casilla se sigue pintando en rojo.
+- `swap-box-slots` — intercambiar dos ocupadas (`PC_SWAP_GAME_KEYS`; ORAS y,
+  desde el 05-09-2026, X/Y con `XYLiveWriter._apply_pc_swap`, misma
+  transacción). En los demás backends la casilla se sigue pintando en rojo.
 
 `ORASLiveWriter._apply_pc_swap` es una transacción independiente: captura
 estable de los dos bloques de 0xE8 bytes, verificación de que cada casilla
@@ -4050,14 +4316,16 @@ está en `app/realtime/`; offsets y validadores permanecen en cada backend.
 | DP, Pt, HGSS, BW, B2W2 | Sí | No |
 | BDSP | Sí; proveedor Unity para MT randomizadas y PP base | Ryujinx HostMapped; party/PC/inventario/HP live; writer transaccional de roles y movimientos/MT de party |
 | ORAS | Sí | Azahar RPC |
-| X/Y | Sí | Azahar RPC y Citra GDB/broker |
+| X/Y | Sí | Azahar RPC |
 | Sol/Luna | Sí | Azahar RPC |
 | UltraSol/UltraLuna | Sí | Azahar RPC |
 
 Los adaptadores registrados en `app/ui.py` son ORAS, XY, SM, USUM y BDSP. Los
-bridges activos son Azahar RPC, Citra GDB y Ryujinx HostMapped; Citra se usa
-actualmente para X/Y y HostMapped para Perla Reluciente 1.3.0. La frontera
-Ryujinx GDB se conserva solo para diagnóstico. No existe bridge RAM para DS.
+bridges activos son Azahar RPC y Ryujinx HostMapped, este último para Perla
+Reluciente 1.3.0. X/Y tuvo en su día un bridge Citra GDB/broker alternativo,
+pero nunca llegó a habilitarse en la práctica y se retiró el 07-09-2026. La
+frontera Ryujinx GDB se conserva solo para diagnóstico. No existe bridge RAM
+para DS.
 
 Estado funcional relevante:
 

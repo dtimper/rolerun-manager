@@ -109,6 +109,56 @@ def test_alpha25_livehex_reference_is_candidate_but_requires_full_host_guest_pro
     assert any(x.get('accepted') is True for x in evaluated)
 
 
+def test_pc_selector_anchors_including_the_live_party_do_not_block_a_valid_match() -> None:
+    """Reportado por el usuario 04-09-2026: RoleRun no abría CAJAS PC de Sol/Luna
+    ni siquiera tras guardar la partida (descartando el archivo desfasado).
+
+    Causa real: `_open_pc_selector_from_live_matrix` (app/ui.py) mete el equipo
+    vivo completo entre los anchors -para dar nombre/nivel localizado a testigos
+    con caja/slot conocidos, junto a los del guardado y las anclas recordadas-.
+    Como un Pokémon de equipo llega con box=None/box_slot=None igual que un
+    testigo real "recién salido al PC", sin restar la party viva el testigo
+    exigido era EXACTAMENTE lo que `boxpokemon-overlaps-live-party` ya prohíbe
+    encontrar en el PC: ninguna dirección, ni siquiera la correcta, podía
+    superar la prueba. Aquí se reproduce pasando el propio Charizard de la
+    party (`current.party[0]`) como único anchor -tal como hace esa función-, y
+    se comprueba que un PC válido, sin ningún solapamiento real, se acepta.
+    """
+    slots = 32 * 30
+    matrix = bytearray(slots * PK7_STORED_SIZE)
+    matrix[2 * PK7_STORED_SIZE:3 * PK7_STORED_SIZE] = _stored_pk7(25, 0x11112222)
+
+    party_guest = 0x34195E10
+    host_pc = 0x50010000
+    host_party = host_pc + (party_guest - SM_PC_LIVEHEX_B1S1_REFERENCE)
+    region_base = 0x50000000
+    region_size = 0x02000000
+    target = HostPartyTarget(77, 'azahar.exe', host_party)
+
+    writer = SMLiveWriter(SimpleNamespace(move_names={33: 'Placaje'}))
+    party_member = _party_mon()
+    current = SaveGameData('Pokémon Sol', 'SAV7SM', 7, 'T', [party_member], {})
+
+    pid, resolved_host, resolved_guest, parsed, evaluated = writer._resolve_pc_from_livehex_reference(
+        client=_Client(bytes(matrix)),
+        host_memory=_Memory(host_base=host_pc, matrix=bytes(matrix), region_base=region_base, region_size=region_size),
+        party_base=party_guest,
+        party_targets=[target],
+        current=current,
+        # Exactamente lo que `_open_pc_selector_from_live_matrix` añade: el
+        # propio equipo vivo, sin caja/slot -no un testigo real de salida-.
+        anchors=[party_member],
+        box_count=32,
+        box_slot_count=30,
+    )
+    assert pid == 77
+    assert resolved_host == host_pc
+    assert resolved_guest == SM_PC_LIVEHEX_B1S1_REFERENCE
+    assert parsed[(1, 3)] is not None and parsed[(1, 3)].species_id == 25
+    assert any(x.get('accepted') is True for x in evaluated)
+    assert not any(x.get('rejected') == 'missing-recent-party-to-pc-witness' for x in evaluated)
+
+
 def test_alpha25_livehex_reference_rejects_host_guest_mismatch() -> None:
     slots = 32 * 30
     guest_matrix = bytearray(slots * PK7_STORED_SIZE)

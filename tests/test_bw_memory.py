@@ -470,13 +470,14 @@ def test_el_paso_entre_filas_se_mide_de_inicio_a_inicio() -> None:
     )
 
 
-def test_negro_2_no_tiene_medido_ese_paso() -> None:
-    """Y por eso vale None: allí se sigue leyendo una sola fila.
+def test_negro_2_ya_tiene_medido_ese_paso() -> None:
+    """Medido el 06-09-2026 sobre la partida real: el mismo 0x224 de Blanco.
 
-    Suponerle el mismo 0x228 sería exactamente la analogía que este proyecto no
-    admite; ese paso se midió en Blanco, no en Negro 2.
+    No es una suposición heredada: se buscó especie+PS máximo de cada uno de
+    los seis miembros alrededor de `battle_presentation` y salió 0x224 de
+    forma independiente, con los seis encajando.
     """
-    assert B2W2.battle_stride is None
+    assert B2W2.battle_stride == 0x224
 
 
 # --------------------------------------------------------------------------
@@ -592,9 +593,86 @@ def test_una_fila_que_no_describe_a_su_miembro_se_descarta_sola() -> None:
     assert lectura[1] is None
 
 
-def test_negro_2_no_puede_leer_por_miembro() -> None:
-    """Su paso no está medido, así que pedirlo se niega con su motivo."""
-    from app.b2w2_live import B2W2LiveError, B2W2MelonDSReader
+def test_negro_2_lee_una_fila_por_miembro_del_equipo() -> None:
+    """Medido el 06-09-2026: mismo mecanismo que Blanco, ya sin bloquear."""
+    import struct
 
-    with pytest.raises(B2W2LiveError, match="no está medido"):
-        B2W2MelonDSReader(GEN5_MEMORY["b2w2"]).read_battle_party(object())
+    from app.b2w2_live import BATTLE_READ_SIZE, B2W2PartyRead
+    from test_b2w2_v026_foundation import _pk5_fixture
+    from app.b2w2_live import PK5_PARTY_SIZE, parse_pk5_party
+
+    crudo = b"".join(_pk5_fixture(pid=0x89E50000 + i * 0x10000) for i in range(2))
+    miembros = tuple(
+        parse_pk5_party(crudo[i * PK5_PARTY_SIZE:(i + 1) * PK5_PARTY_SIZE], i)
+        for i in range(2)
+    )
+    party = B2W2PartyRead(1, "melonDS.exe", 0x10000000, 2, crudo, miembros)
+
+    def fila(m, ps):
+        crudo = bytearray(BATTLE_READ_SIZE)
+        struct.pack_into(
+            "<7H", crudo, 0,
+            m.species_id, m.max_hp, ps, 0, 0, m.ability_id, m.level,
+        )
+        return bytes(crudo)
+
+    filas = {
+        B2W2.battle_presentation: fila(miembros[0], 5),
+        B2W2.battle_logical: fila(miembros[0], 5),
+        B2W2.battle_presentation + B2W2.battle_stride: fila(miembros[1], 9),
+        B2W2.battle_logical + B2W2.battle_stride: fila(miembros[1], 9),
+    }
+    lector, vivo = _lector_de_filas("b2w2", filas)
+    try:
+        lectura = lector.read_battle_party(party)
+    finally:
+        vivo._KERNEL32 = lector._kernel_original
+
+    assert len(lectura) == 2
+    assert [f.current_hp for f in lectura] == [5, 9]
+    assert [f.party_slot for f in lectura] == [0, 1]
+
+
+def test_negro_2_no_exige_que_el_nivel_coincida_en_filas_banqueadas() -> None:
+    """Reproduce el hallazgo real: especie+PS máximo+habilidad ya identifican
+
+    sin ambigüedad; exigir también el nivel descartaba toda fila que no fuera
+    la del recién activo -medido en la partida real con seis miembros: 260,
+    516, 773, 1027 y 1285 en vez del nivel real-.
+    """
+    import struct
+
+    from app.b2w2_live import BATTLE_READ_SIZE, PK5_PARTY_SIZE, B2W2PartyRead, parse_pk5_party
+    from test_b2w2_v026_foundation import _pk5_fixture
+
+    crudo = b"".join(_pk5_fixture(pid=0x89E50000 + i * 0x10000) for i in range(2))
+    miembros = tuple(
+        parse_pk5_party(crudo[i * PK5_PARTY_SIZE:(i + 1) * PK5_PARTY_SIZE], i)
+        for i in range(2)
+    )
+    party = B2W2PartyRead(1, "melonDS.exe", 0x10000000, 2, crudo, miembros)
+
+    def fila(m, ps, nivel):
+        crudo = bytearray(BATTLE_READ_SIZE)
+        struct.pack_into(
+            "<7H", crudo, 0, m.species_id, m.max_hp, ps, 0, 0, m.ability_id, nivel,
+        )
+        return bytes(crudo)
+
+    m0, m1 = miembros
+    filas = {
+        B2W2.battle_presentation: fila(m0, 5, m0.level),
+        B2W2.battle_logical: fila(m0, 5, m0.level),
+        # Banqueado: especie/PS máximo/habilidad correctos, nivel imposible.
+        B2W2.battle_presentation + B2W2.battle_stride: fila(m1, m1.max_hp, 1285),
+        B2W2.battle_logical + B2W2.battle_stride: fila(m1, m1.max_hp, 1285),
+    }
+    lector, vivo = _lector_de_filas("b2w2", filas)
+    try:
+        lectura = lector.read_battle_party(party)
+    finally:
+        vivo._KERNEL32 = lector._kernel_original
+
+    assert lectura[1] is not None, "el nivel imposible ya no debe descartar la fila"
+    assert lectura[1].current_hp == m1.max_hp
+    assert lectura[1].party_slot == 1

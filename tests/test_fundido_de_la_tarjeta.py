@@ -28,18 +28,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.ui import RoleRunManager  # noqa: E402
 from app.ui_components import fundido_de_tarjeta as fundido  # noqa: E402
 
-JUEGOS_CON_BANNER = ("bw", "b2w2", "xy", "oras", "sm", "usum", "bdsp")
+JUEGOS_CON_BANNER = (
+    "bw", "b2w2", "xy", "oras", "sm", "usum", "bdsp", "dp", "pt", "hgss",
+)
 
 
-def test_los_siete_juegos_visibles_tienen_su_banner() -> None:
+def test_los_diez_juegos_tienen_su_banner_aunque_tres_esten_ocultos() -> None:
+    """dp/pt/hgss vuelven a estar ocultos desde el 07-09-2026 (a petición
+
+    explícita del usuario, tras diez rondas de validación física del carril
+    de combate de HGSS sin estabilizar), pero sus banners no se borran: se
+    ocultan y se recuperan por `GAMES_OCULTOS`, no por perder el asset.
+    """
     from app.config import RESOURCES_DIR
 
     visibles = [
         clave for clave, _label, _activo in RoleRunManager.GAME_OPTIONS
         if clave not in RoleRunManager.GAMES_OCULTOS
     ]
-    assert sorted(visibles) == sorted(JUEGOS_CON_BANNER)
-    for clave in visibles:
+    assert sorted(visibles) == sorted(set(JUEGOS_CON_BANNER) - RoleRunManager.GAMES_OCULTOS)
+    for clave in JUEGOS_CON_BANNER:
         assert (Path(RESOURCES_DIR) / "game_cards" / f"{clave}.png").exists(), clave
 
 

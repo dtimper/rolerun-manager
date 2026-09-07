@@ -7,6 +7,8 @@ import customtkinter as ctk
 from app.config import DANGER, GOLD, MUTED, SUCCESS, TEXT
 from app.role_content import GLOBAL_ROLE_NOTE, ROLE_GUIDE
 
+from .window_focus import guard_topmost_on_focus_loss, hide_from_taskbar_and_alttab, release_focus_guard
+
 
 class IntegratedRoleInfoPopover:
     def __init__(
@@ -60,6 +62,15 @@ class IntegratedRoleInfoPopover:
         self.card_window.overrideredirect(True)
         self.card_window.attributes("-topmost", True)
         self.card_window.geometry(f"{card_w}x{card_h}+{card_x}+{card_y}")
+        # Pedido del usuario 02-09-2026 (visto en el editor de rol, mismo
+        # patrón aquí): sin esto, cambiar de aplicación deja esta ficha por
+        # delante de la app nueva, porque `-topmost` es global a Windows. El
+        # ancla es la ventana PRINCIPAL, no `self.card_window`: ver el porqué
+        # en `guard_topmost_on_focus_loss`.
+        self._focus_guard = guard_topmost_on_focus_loss(
+            master.winfo_toplevel(), self.scrim, self.card_window,
+        )
+        hide_from_taskbar_and_alttab(self.scrim, self.card_window)
 
         self.card = ctk.CTkFrame(
             self.card_window, fg_color="#171717",
@@ -192,6 +203,7 @@ class IntegratedRoleInfoPopover:
                 self.master.winfo_toplevel().unbind("<Escape>", self._escape_binding)
         except Exception:
             pass
+        release_focus_guard(getattr(self, "_focus_guard", None))
         # La ficha y el scrim son dos ventanas independientes: cerrar una no
         # destruye la otra sola.
         for window in (self.card_window, self.scrim):

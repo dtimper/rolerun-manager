@@ -284,6 +284,128 @@ def test_pc_move_plan_moves_one_pk5_and_preserves_every_other_byte() -> None:
     assert plan.expected[2 * PK5_STORED_SIZE:] == matrix[2 * PK5_STORED_SIZE:]
 
 
+def _pc_matrix_con_dos_ocupados() -> tuple[bytes, int, int]:
+    """La misma matriz, con un segundo PK5 distinto en Caja 1 · 2.
+
+    Devuelve (matriz, pid_origen, pid_destino). Los dos `pid` llevan el mismo
+    orden de bloques (`(pid >> 13) & 31`) para no depender de la permutación.
+    """
+    matrix = bytearray(_pc_matrix_fixture())
+    pid_origen = 3 << 13
+    pid_destino = (3 << 13) | 0x40000
+    matrix[PK5_STORED_SIZE:2 * PK5_STORED_SIZE] = _pk5_fixture(
+        pid=pid_destino,
+    )[:PK5_STORED_SIZE]
+    return bytes(matrix), pid_origen, pid_destino
+
+
+def test_pc_swap_plan_cruza_los_dos_pk5_y_conserva_el_resto_de_la_matriz() -> None:
+    """05-09-2026, pedido del usuario: intercambiar dos huecos OCUPADOS.
+
+    Misma aritmética que `prepare_pc_move` -que ya cruza los dos bloques-, pero
+    exigiendo el destino ocupado y devolviendo las dos criaturas para poder
+    verificar las dos identidades después de escribir.
+    """
+    matrix, pid_origen, pid_destino = _pc_matrix_con_dos_ocupados()
+
+    plan = B2W2MelonDSReader.prepare_pc_swap(matrix, 1, 1, 1, 2)
+
+    assert plan.source_pokemon.pid == pid_origen
+    assert plan.destination_pokemon.pid == pid_destino
+    # Cruzados: ninguno de los dos huecos queda vacío.
+    quedo = parse_pk5_boxed(plan.expected[:PK5_STORED_SIZE], 1, 1)
+    llego = parse_pk5_boxed(plan.expected[PK5_STORED_SIZE:2 * PK5_STORED_SIZE], 1, 2)
+    assert quedo is not None and quedo.pid == pid_destino
+    assert llego is not None and llego.pid == pid_origen
+    # Ni un byte más de la matriz se mueve.
+    assert plan.expected[2 * PK5_STORED_SIZE:] == matrix[2 * PK5_STORED_SIZE:]
+
+
+def test_pc_swap_plan_rechaza_un_destino_vacio() -> None:
+    """Un destino libre es un traslado (`prepare_pc_move`), no un intercambio."""
+    with pytest.raises(B2W2LiveError, match="destino.*vacío"):
+        B2W2MelonDSReader.prepare_pc_swap(_pc_matrix_fixture(), 1, 1, 1, 2)
+
+
+def test_pc_swap_plan_rechaza_un_origen_vacio() -> None:
+    matrix, _origen, _destino = _pc_matrix_con_dos_ocupados()
+    with pytest.raises(B2W2LiveError, match="origen.*vacío"):
+        B2W2MelonDSReader.prepare_pc_swap(matrix, 1, 3, 1, 2)
+
+
+def test_adapter_applies_only_validated_b2w2_pc_swap() -> None:
+    matrix, pid_origen, pid_destino = _pc_matrix_con_dos_ocupados()
+    empty, pokemon = B2W2MelonDSReader.parse_pc_matrix(matrix)
+    origen = next(p for p in pokemon if p.pid == pid_origen)
+    destino = next(p for p in pokemon if p.pid == pid_destino)
+
+    class Reader:
+        swapped = None
+
+        def read_party(self):
+            return _party_read()
+
+        def read_pc(self, party):
+            return B2W2PCRead(
+                party.process_id, party.process_name, party.allocation_base,
+                PC_BASE, matrix, empty, pokemon,
+            )
+
+        prepare_pc_swap = staticmethod(B2W2MelonDSReader.prepare_pc_swap)
+
+        def swap_pc_slots(
+            self, _party, *coordinates, source_identity=None, destination_identity=None,
+        ):
+            self.swapped = (coordinates, source_identity, destination_identity)
+
+    reader = Reader()
+    change = PendingTeamChange(
+        operation="swap-box-slots", party_slot=0, box=1, box_slot=1,
+        destination_box=1, destination_box_slot=2,
+        incoming_snapshot={"pid": origen.pid, "tid": origen.tid, "sid": origen.sid},
+        outgoing_snapshot={"pid": destino.pid, "tid": destino.tid, "sid": destino.sid},
+    )
+    result = B2W2RealTimeAdapter(reader=reader).apply_changes(_current_game(), [change])
+
+    assert reader.swapped == (
+        (1, 1, 1, 2),
+        (origen.pid, origen.tid, origen.sid),
+        (destino.pid, destino.tid, destino.sid),
+    )
+    assert result.applied_count == 1
+
+
+def test_adapter_rechaza_un_intercambio_con_identidad_desfasada() -> None:
+    """Las dos casillas son ancla: si una cambió, no se escribe nada."""
+    matrix, pid_origen, _pid_destino = _pc_matrix_con_dos_ocupados()
+    empty, pokemon = B2W2MelonDSReader.parse_pc_matrix(matrix)
+    origen = next(p for p in pokemon if p.pid == pid_origen)
+
+    class Reader:
+        def read_party(self):
+            return _party_read()
+
+        def read_pc(self, party):
+            return B2W2PCRead(
+                party.process_id, party.process_name, party.allocation_base,
+                PC_BASE, matrix, empty, pokemon,
+            )
+
+        prepare_pc_swap = staticmethod(B2W2MelonDSReader.prepare_pc_swap)
+
+        def swap_pc_slots(self, *_args, **_kwargs):
+            raise AssertionError("no debería llegar a escribir")
+
+    change = PendingTeamChange(
+        operation="swap-box-slots", party_slot=0, box=1, box_slot=1,
+        destination_box=1, destination_box_slot=2,
+        incoming_snapshot={"pid": origen.pid, "tid": origen.tid, "sid": origen.sid},
+        outgoing_snapshot={"pid": 12345, "tid": 1, "sid": 2},
+    )
+    with pytest.raises(B2W2LiveError, match="destino.*ha cambiado"):
+        B2W2RealTimeAdapter(reader=Reader()).apply_changes(_current_game(), [change])
+
+
 def test_empty_party_pk5_matches_the_physically_observed_freed_tail() -> None:
     empty = empty_pk5_party()
     assert len(empty) == PK5_PARTY_SIZE
@@ -396,6 +518,11 @@ def test_adapter_publishes_battle_health_from_validated_lane() -> None:
                 mirror_hp=8, immediate_hp=0, converged=False,
                 status_condition=64,
             )
+
+        def read_battle_party(self, _raw):
+            # 06-09-2026: Negro 2 ya tiene `battle_stride` medido, así que el
+            # adaptador prefiere esta vía sobre `read_battle`.
+            return (self.read_battle(_raw),)
 
     snapshot = B2W2RealTimeAdapter(reader=Reader()).capture_monitor(
         _current_game(), save_path=None,
@@ -510,6 +637,9 @@ def _ui_double(*, current_game: SaveGameData):
         _live_metadata_is_missing=lambda current, live: False,
         _process_oras_battle_state=lambda state: None,
         _reconcile_pending_faints_against_party=lambda game: None,
+        # 06-09-2026: la reconciliación de quinta ajusta también la
+        # tabla de aprendizajes por rol en la RAM de melonDS.
+        _sync_gen5_levelup_moves=lambda game: None,
         _publish_oras_live_snapshot=lambda snapshot, **kwargs: published.append((snapshot, kwargs)),
         _update_top_status=lambda: None,
         _schedule_oras_live_reconciliation=lambda delay: scheduled.append(delay),

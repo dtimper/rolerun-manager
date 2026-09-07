@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,7 @@ from app.hgss_live import (  # noqa: E402
 from app.hgss_write import HgssMelonDSWriter, HgssRoleWrite  # noqa: E402
 from app.pk4 import (  # noqa: E402
     PK4_PARTY_SIZE,
+    PK4_SANITY,
     STAT_ORDER_PERSONAL,
     STAT_ORDER_ROLERUN,
     Pk4Error,
@@ -266,8 +268,31 @@ class _MelonDSFalso:
         self.parpadea: int | None = None
         self.original = bytes(self.raw)
         self.process_id = 4242
+        # Simula al juego marcando huevo malo (bit 2 de PK4_SANITY) en una
+        # llamada concreta a `read_party` -para probar la segunda
+        # verificación sin depender de un reloj de verdad-.
+        self.llamadas_a_read_party = 0
+        self.huevo_malo_en_llamada: int | None = None
+        self.huevo_malo_hueco: int = 0
+        # Simula una lectura pillada a medias sobre la extensión de combate
+        # -sin checksum propio, ver `_extension_coherente` en pk4.py-: en esas
+        # llamadas concretas, el hueco indicado devuelve OTRO Pokémon válido
+        # (mismo formato, nivel y estadísticas distintos), sin tocar
+        # `self.raw`, porque un torn read de verdad no deja huella
+        # permanente, solo la ve quien lee justo en ese instante.
+        self.nivel_torcido_en_llamadas: set[int] = set()
+        self.nivel_torcido_hueco: int = 0
 
     def read_party(self) -> HgssPartyRead:
+        self.llamadas_a_read_party += 1
+        if self.huevo_malo_en_llamada == self.llamadas_a_read_party:
+            desde = self.huevo_malo_hueco * PK4_PARTY_SIZE + PK4_SANITY
+            self.raw[desde:desde + 2] = (0x0004).to_bytes(2, "little")
+        crudo_temporal: bytearray | None = None
+        if self.llamadas_a_read_party in self.nivel_torcido_en_llamadas:
+            crudo_temporal = bytearray(self.raw)
+            desde = self.nivel_torcido_hueco * PK4_PARTY_SIZE
+            crudo_temporal[desde:desde + PK4_PARTY_SIZE] = _bloque(2)
         if self.mueve_el_bloque:
             # El bloque del guardado cambia de sitio: se vio pasar de
             # 0x0227C26C a 0x0227C290, y luego a 0x0227C2FC y a 0x0227C2DC.
@@ -281,7 +306,7 @@ class _MelonDSFalso:
             self.raw[desde:desde + PK4_PARTY_SIZE] = _del_reves(
                 bytes(self.raw[desde:desde + PK4_PARTY_SIZE]),
             )
-        crudo = bytes(self.raw)
+        crudo = bytes(crudo_temporal) if crudo_temporal is not None else bytes(self.raw)
         return HgssPartyRead(
             self.process_id, "melonDS.exe", 0x1000, self.count, crudo,
             parse_party_block(crudo, self.count),
@@ -297,8 +322,8 @@ class _WriterDePrueba(HgssMelonDSWriter):
     """
 
     def __init__(self, emulador: _MelonDSFalso, *, corrompe: int = 0,
-                 rollback_roto: bool = False) -> None:
-        super().__init__(reader=emulador)
+                 rollback_roto: bool = False, segunda_verificacion_espera: float = 0.0) -> None:
+        super().__init__(reader=emulador, segunda_verificacion_espera=segunda_verificacion_espera)
         self.emulador = emulador
         self.corrompe = int(corrompe)
         self.rollback_roto = rollback_roto
@@ -705,6 +730,67 @@ def test_se_escribe_donde_se_leyo_aunque_el_bloque_se_haya_movido() -> None:
     assert len(emulador.read_party().pokemon) == emulador.count
 
 
+def test_un_nivel_inestable_entre_dos_lecturas_se_reintenta() -> None:
+    """El agujero real: la extensión de combate no lleva checksum propio.
+
+    Una lectura pillada a medias puede devolver un nivel "plausible" pero
+    equivocado -no hace falta que sea absurdo, basta con que pase el filtro
+    de `_extension_coherente`-. Si la INESTABILIDAD desaparece en el
+    siguiente intento, la escritura se completa igual que si nunca hubiera
+    pasado nada: solo se pierde un intento, no la operación entera.
+    """
+    emulador = _MelonDSFalso()
+    emulador.nivel_torcido_en_llamadas = {3}  # solo la `primera` del intento 1
+    emulador.nivel_torcido_hueco = 1
+    writer = _WriterDePrueba(emulador)
+    lectura = emulador.read_party()
+
+    despues = writer.write_party_roles(lectura, [_peticion(emulador, 1)])
+
+    assert despues.pokemon[1].evs == (252, 0, 0, 252, 6, 0)
+
+
+def test_un_nivel_que_nunca_se_estabiliza_no_escribe_nada() -> None:
+    """Si la inestabilidad no desaparece, no se escribe a ciegas.
+
+    Se agotan los tres intentos sin que ninguno vea dos lecturas de acuerdo,
+    así que no ha salido ni un solo byte hacia la partida.
+    """
+    emulador = _MelonDSFalso()
+    # Las llamadas `primera` de los tres intentos: 3, 5 y 7 -cada intento
+    # fallido consume solo dos lecturas, `primera` y `antes`-.
+    emulador.nivel_torcido_en_llamadas = {3, 5, 7}
+    emulador.nivel_torcido_hueco = 1
+    writer = _WriterDePrueba(emulador)
+    lectura = emulador.read_party()
+
+    with pytest.raises(HgssLiveError, match="no se estabilizó"):
+        writer.write_party_roles(lectura, [_peticion(emulador, 1)])
+
+    assert bytes(emulador.raw) == emulador.original
+
+
+def test_un_huevo_malo_ya_puesto_no_deja_escribir_nada() -> None:
+    """06-09-2026, sexto incidente: un Hoothoot que RoleRun leía perfecto.
+
+    Nivel, movimientos y estadísticas coherentes, checksum válido -y aun así
+    era un Huevo malo de verdad en la partida guardada-. El campo de sanidad
+    vive en la cabecera, FUERA del checksum, así que nada de lo que ya se
+    comprobaba lo veía. Si ya está puesto desde antes de leer nada -no una
+    lectura pillada a medias que se corrige sola-, no se escribe ni un byte.
+    """
+    emulador = _MelonDSFalso()
+    desde = 1 * PK4_PARTY_SIZE + PK4_SANITY
+    emulador.raw[desde:desde + 2] = (0x0004).to_bytes(2, "little")
+    writer = _WriterDePrueba(emulador)
+    lectura = emulador.read_party()
+
+    with pytest.raises(HgssLiveError, match="no se estabilizó"):
+        writer.write_party_roles(lectura, [_peticion(emulador, 1)])
+
+    assert bytes(emulador.raw) == emulador.original[:desde] + (0x0004).to_bytes(2, "little") + emulador.original[desde + 2:]
+
+
 def test_que_parpadee_la_ficha_que_se_escribe_tampoco_lo_impide() -> None:
     """El falso negativo que dejaba la curación sin hacer.
 
@@ -755,9 +841,22 @@ def test_si_el_juego_marca_la_ficha_al_escribirla_se_deshace() -> None:
     emulador = _MelonDSFalso()
 
     class _MarcaAlEscribir(_WriterDePrueba):
+        llamadas = 0
+
         def _write_process_bytes(self, process_id, host_address, payload):
             super()._write_process_bytes(process_id, host_address, payload)
-            # El juego pilla la ficha a medias y la marca.
+            self.llamadas += 1
+            # El juego pilla la ficha a medias y la marca en la escritura
+            # ORIGINAL de cada intento, nunca en la del propio rollback que
+            # la restaura justo después -si también marcara esa, dejaría de
+            # simular "el juego la tocó una vez por intento" para simular un
+            # hueco permanentemente inservible desde antes de escribir nada,
+            # que es el caso que ya cubre la comprobación de estabilidad
+            # (06-09-2026)-. Cada intento escribe exactamente dos veces
+            # cuando falla: la original y el rollback: impares marcan,
+            # pares no.
+            if self.llamadas % 2 == 0:
+                return
             desde = 1 * PK4_PARTY_SIZE + PK4_SANITY
             memoria = bytearray(self.emulador.raw)
             if memoria[desde:desde + 2] == bytes(2):
@@ -767,3 +866,57 @@ def test_si_el_juego_marca_la_ficha_al_escribirla_se_deshace() -> None:
     writer = _MarcaAlEscribir(emulador)
     with pytest.raises(HgssLiveError, match="tocó el miembro 2"):
         writer.write_party_roles(emulador.read_party(), [_peticion(emulador, 1)])
+
+
+def test_un_huevo_malo_tardio_lo_caza_la_segunda_verificacion() -> None:
+    """Identificado el 06-09-2026: lo que alpha.96 dejó sin cerrar.
+
+    El readback inmediato (`despues`) puede salir limpio y el juego marcar
+    huevo malo un instante después -exactamente lo que el propio alpha.96
+    reconoció sin poder ver-. `_peticion` y el `party_read` de la llamada leen
+    dos veces antes de entrar en la transacción; dentro, `primera` (la lectura
+    de estabilidad de 06-09-2026), `antes`, `despues` y `otra_vez` son las
+    llamadas 3, 4, 5 y 6. Se dispara el huevo malo justo en la 6 -un solo
+    disparo, como una marca real: no vuelve a aparecer sola-, con un solo
+    intento permitido para que el reintento no lo absorba y se pueda ver el
+    error de la segunda verificación llegar hasta quien llama.
+    """
+    import app.hgss_write as hgss_write
+
+    emulador = _MelonDSFalso()
+    emulador.huevo_malo_en_llamada = 6
+    emulador.huevo_malo_hueco = 1
+    writer = _WriterDePrueba(emulador)
+    original_intentos = hgss_write.INTENTOS_DE_ESCRITURA
+    hgss_write.INTENTOS_DE_ESCRITURA = 1
+    try:
+        with pytest.raises(HgssLiveError, match="tocó el miembro 2 después de confirmar"):
+            writer.write_party_roles(emulador.read_party(), [_peticion(emulador, 1)])
+    finally:
+        hgss_write.INTENTOS_DE_ESCRITURA = original_intentos
+    # Y el rollback dejó la partida exactamente como estaba.
+    assert emulador.read_party().pokemon == parse_party_block(
+        emulador.original, emulador.count,
+    )
+
+
+def test_la_segunda_verificacion_no_afirma_nada_si_todo_sigue_igual() -> None:
+    """El camino feliz: sin huevo malo tardío, se publica la segunda lectura."""
+    emulador = _MelonDSFalso()
+    writer = _WriterDePrueba(emulador)
+    despues = writer.write_party_roles(emulador.read_party(), [_peticion(emulador, 1)])
+    # `_peticion` y el `party_read` de la llamada leen dos veces antes de la
+    # transacción; dentro, la lectura de estabilidad (06-09-2026), `antes`,
+    # `despues` y la segunda verificación son cuatro lecturas más -seis en
+    # total-.
+    assert emulador.llamadas_a_read_party == 6
+    assert despues.pokemon == parse_party_block(bytes(emulador.raw), emulador.count)
+
+
+def test_la_espera_de_la_segunda_verificacion_es_configurable() -> None:
+    """Los tests no esperan de verdad; la partida real sí, medio segundo."""
+    emulador = _MelonDSFalso()
+    writer = _WriterDePrueba(emulador, segunda_verificacion_espera=0.01)
+    inicio = time.monotonic()
+    writer.write_party_roles(emulador.read_party(), [_peticion(emulador, 1)])
+    assert time.monotonic() - inicio >= 0.01

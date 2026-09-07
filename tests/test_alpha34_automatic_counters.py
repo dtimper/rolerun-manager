@@ -147,7 +147,7 @@ def test_saved_badges_can_recover_progress_upwards_without_ram() -> None:
 
 @pytest.mark.parametrize(("game_key", "expected"), [
     ("oras", "medallas"),
-    ("xy", "Azahar o Citra"),
+    ("xy", "Azahar"),
     ("sm", "progreso de Kahunas"),
     ("usum", "pendiente de su última prueba física"),
     ("bdsp", "SystemFlags"),

@@ -46,6 +46,7 @@ class BDSPTMProfile:
     move_accuracy: dict[int, int] = field(default_factory=dict)
     move_descriptions: dict[int, str] = field(default_factory=dict)
     description_language: str = ""
+    move_types: dict[int, int] = field(default_factory=dict)
 
     def tm(self, number: int) -> BDSPTM | None:
         return self.tms.get(int(number))
@@ -68,6 +69,10 @@ class BDSPTMProfile:
     def damage_class(self, move_id: int) -> str:
         value = self.move_damage_types.get(int(move_id))
         return {0: "status", 1: "physical", 2: "special"}.get(value, "unknown")
+
+    def type_id(self, move_id: int) -> int | None:
+        """Tipo de ``WazaTable.SheetWaza.type``, en el esquema de RoleRun."""
+        return self.move_types.get(int(move_id))
 
     def base_pp(self, move_id: int) -> int:
         """PP base de ``WazaTable.SheetWaza.basePP`` para la ROM activa."""
@@ -172,6 +177,27 @@ def load_bdsp_tm_profile(path: str | Path) -> BDSPTMProfile:
     return _load_cached(str(source), stat.st_mtime_ns, stat.st_size)
 
 
+@lru_cache(maxsize=4)
+def _load_objects_cached(path: str, _mtime_ns: int, _size: int) -> dict[str, list]:
+    source = Path(path)
+    serialized = _extract_unityfs(source.read_bytes())
+    return _parse_serialized_file(serialized)
+
+
+def load_personal_masterdatas_objects(path: str | Path) -> dict[str, list]:
+    """Los MonoBehaviour crudos de ``personal_masterdatas``, por nombre.
+
+    Pedido al portar el aprendizaje por rol a BDSP (2026-09-03):
+    ``_load_cached`` ya hace este mismo trabajo pero descarta ``objects`` en
+    cuanto construye ``BDSPTMProfile`` -no expone ``WazaOboeTable``, que no
+    usa ninguna tabla de MT. Esto reutiliza el mismo extractor/parser en vez
+    de escribir uno nuevo, cacheado igual (por ruta+mtime+tamaño).
+    """
+    source = Path(path).expanduser().resolve()
+    stat = source.stat()
+    return _load_objects_cached(str(source), stat.st_mtime_ns, stat.st_size)
+
+
 def _move_descriptions_from_objects(objects: dict[str, list]) -> dict[int, str]:
     key = next(
         name for name in objects
@@ -262,6 +288,7 @@ def _load_cached(path: str, _mtime_ns: int, _size: int) -> BDSPTMProfile:
             tms[machine_no] = BDSPTM(machine_no, item_id, move_id)
 
     move_damage_types: dict[int, int] = {}
+    move_types: dict[int, int] = {}
     move_base_pp: dict[int, int] = {}
     move_power: dict[int, int] = {}
     move_accuracy: dict[int, int] = {}
@@ -277,7 +304,12 @@ def _load_cached(path: str, _mtime_ns: int, _size: int) -> BDSPTMProfile:
         # OpenDPR 5b0cb0c8: XLSXContent.WazaTable.SheetWaza declara
         # wazaNo,isValid,type,category,damageType,power,hitPer,basePP. El
         # TypeTree del propio bundle conserva ese mismo orden y ``CoreParam``
-        # usa exactamente basePP al ejecutar SetWaza.
+        # usa exactamente basePP al ejecutar SetWaza. ``type`` ya viene en el
+        # esquema de RoleRun (0=normal…17=hada): BDSP es octava generación,
+        # posterior a la introducción de Hada, así que no arrastra el hueco
+        # «???» que sí tiene cuarta.
+        if len(row) > 2:
+            move_types[move_id] = int(row[2])
         if len(row) > 7:
             move_power[move_id] = int(row[5])
             move_accuracy[move_id] = int(row[6])
@@ -328,6 +360,7 @@ def _load_cached(path: str, _mtime_ns: int, _size: int) -> BDSPTMProfile:
         tms=tms,
         compatibility=compatibility,
         move_damage_types=move_damage_types,
+        move_types=move_types,
         move_base_pp=move_base_pp,
         valid_moves=valid_moves,
         personal_stats=personal_stats,

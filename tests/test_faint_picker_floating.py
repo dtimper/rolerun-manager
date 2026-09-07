@@ -168,6 +168,7 @@ def test_mapping_main_window_hides_a_still_visible_floating_bar_before_picker() 
     )
     manager = SimpleNamespace(
         floating_bar=bar,
+        _auto_floating_guard=False,
         _floating_bar_is_visible=lambda: True,
         _floating_bar_poll_id="poll-1",
         _floating_role_reordered=True,

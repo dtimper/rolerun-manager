@@ -121,10 +121,14 @@ def test_la_busqueda_de_drafteos_tambien_mira_el_rol() -> None:
 # ------------------------------------------------------------- previsualizar
 
 def test_pasar_el_raton_previsualiza_y_pulsar_selecciona() -> None:
+    """Pedido del usuario 02-09-2026, otra vuelta: «para que cambie de MT
+    tengo que ponerme encima del nombre» -antes el `<Enter>` solo estaba en
+    `card`, ahora está en toda la casilla."""
     fuente = inspect.getsource(GlobalTMView._fila)
 
     assert "self._select(value)" in fuente, "pulsar elige"
-    assert 'card.bind("<Enter>", lambda _event, value=clave: self._preview(value)' in fuente
+    assert "previsualizar_al_pasar = lambda _event, value=clave: self._preview(value)" in fuente
+    assert 'objetivo.bind("<Enter>", previsualizar_al_pasar, add="+")' in fuente
 
 
 def test_previsualizar_no_rehace_la_lista() -> None:
@@ -182,7 +186,7 @@ def test_la_papelera_aparece_al_pasar_el_raton() -> None:
     """Es un botón destructivo: no tiene que estar tentando en cada fila."""
     fuente = inspect.getsource(GlobalTMView._fila)
 
-    assert "boton.place(relx=1.0" in fuente
+    assert "boton.place(in_=card, x=6" in fuente
     assert "boton.place_forget()" in fuente
     assert 'widget.bind("<Enter>", mostrar, add="+")' in fuente
 

@@ -95,6 +95,7 @@ def _vista():
         _team_card_pokemon={"id-1": ANTES},
         _team_card_targets={"id-1": destino},
         move_issues_for=None,
+        effective_moves_for=None,
         support_damage_for=None,
         sprite_for=lambda pokemon, size: f"sprite:{pokemon.species}:{size}",
         update_team_health=lambda ident, actual, maximo, slot=None: True,

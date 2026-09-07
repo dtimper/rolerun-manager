@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import Callable
 
 from ..azahar_rpc import AzaharRPCClient
-from ..citra_broker import CitraBrokerClient
 from ..ryujinx_gdb import RyujinxGDBClient
 
 
@@ -38,23 +37,6 @@ class AzaharBridge(EmulatorBridge):
 
     def open(self) -> AbstractContextManager:
         return self.client_factory()
-
-
-class CitraBridge(EmulatorBridge):
-    info = EmulatorBridgeInfo("citra", "Citra", "GDB RSP")
-
-    def __init__(self, client_factory: Callable[[], object] = CitraBrokerClient) -> None:
-        self.client_factory = client_factory
-
-    def open(self) -> AbstractContextManager:
-        return self.client_factory()
-
-    def prepare_connection(self) -> None:
-        # Entrar en el cliente persistente realiza el handshake GDB y envía
-        # ``continue``. Al salir del ``with`` solo se libera el lease; el socket
-        # permanece vivo para que el Core lo reutilice en el snapshot siguiente.
-        with self.open():
-            pass
 
 
 class RyujinxBridge(EmulatorBridge):

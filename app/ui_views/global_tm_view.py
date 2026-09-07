@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import tkinter.font
 from collections.abc import Callable
 from typing import Any
 
 import customtkinter as ctk
 
-from app.config import DANGER, GOLD, MUTED, PANEL, PANEL_ALT, TEXT
+from app.config import DANGER, GOLD, MOVE_TYPE_INFO, MUTED, PANEL, PANEL_ALT, TEXT, move_type_fill
 from app.ui_components.repintado import configurar_si_cambia
 from app.ui_state.spatial_navigation import SpatialSelection, SpatialTarget, event_targets_text_input, keypress_sequences
 
@@ -41,11 +42,24 @@ class GlobalTMView:
                  sin_mt: str = "",
                  navigation_keys: dict[str, str] | None = None,
                  on_left_edge: Callable[[], None] | None = None,
-                 on_edge_accept: Callable[[], bool] | None = None) -> None:
+                 on_edge_accept: Callable[[], bool] | None = None,
+                 category_icons=None,
+                 on_open_levelup_history: Callable[[Any], None] | None = None,
+                 on_view_compatible_moves: Callable[[Any], None] | None = None) -> None:
         self.master, self.entries, self.party = master, entries, party
         self.drafts = tuple(drafts)
         self.identity_for, self.role_for, self.sprite_for = identity_for, role_for, sprite_for
         self.role_icon_for, self.on_choose, self.source_detail = role_icon_for, on_choose, source_detail
+        # Recuerda-movimientos (2026-09-03): siempre disponible, sin importar
+        # si el Pokémon puede aprender el movimiento seleccionado ahora mismo.
+        self.on_open_levelup_history = on_open_levelup_history
+        # Pedido del usuario el 2026-09-03: antes, ver qué MT admite cada
+        # Pokémon solo pasaba por retroceder desde el paso "qué hueco
+        # olvidará" después de elegir uno con ELEGIR —una pantalla que
+        # aparecía sin haberla pedido nunca. Este botón la abre directo,
+        # también siempre disponible.
+        self.on_view_compatible_moves = on_view_compatible_moves
+        self.category_icons = category_icons
         self.on_choose_draft, self.on_delete_draft = on_choose_draft, on_delete_draft
         #: Por qué no hay MT que listar, si es que no las hay.
         self.sin_mt = str(sin_mt or "")
@@ -63,6 +77,25 @@ class GlobalTMView:
         self._search_after = None
         self._images: list[Any] = []
         self._move_buttons: dict[tuple[str, int], Any] = {}
+        # El marco de cada fila lleva el color de su tipo; `_update_highlight`
+        # lo necesita para no pisarlo con el gris de siempre en cuanto cambia
+        # la fila seleccionada.
+        self._move_type_colors: dict[tuple[str, int], str] = {}
+        # El contenedor visual (borde + relleno teñido) es `fila`, no el botón
+        # `card` que hace clic/selección: pedido del usuario 02-09-2026, que
+        # el marco envuelva también la columna de la descripción.
+        self._move_frames: dict[tuple[str, int], Any] = {}
+        # Etiquetas de descripción de la fila actual, para poder corregir su
+        # `wraplength` en pasadas posteriores (ver `_reajustar_wraplengths`).
+        # Cada entrada guarda también el texto ORIGINAL sin recortar -para
+        # poder rehacer el recorte a como mucho 3 líneas contra el ancho
+        # nuevo, no encadenar recortes sobre un texto ya recortado antes.
+        self._description_labels: list[tuple[Any, str]] = []
+        # Una sola instancia para medir Y para pintar: así el recorte a 3
+        # líneas usa exactamente la misma fuente que se ve en pantalla
+        # -pedido del usuario 02-09-2026, «sube mucho el tamaño de todas las
+        # letras»-.
+        self._fuente_descripcion = ctk.CTkFont("Segoe UI", 13)
         self._tab_buttons: dict[str, Any] = {}
         self._team_cards: dict[str, Any] = {}
         self._team_widgets: dict[str, tuple[Any, ...]] = {}
@@ -73,7 +106,18 @@ class GlobalTMView:
 
         canvas = getattr(master, "_parent_canvas", None)
         viewport = int(canvas.winfo_height() or 0) if canvas is not None else 0
-        height = max(480, viewport, int(master.winfo_toplevel().winfo_height() or 720) - 245)
+        # Pedido del usuario el 2026-09-03: tomar el MÁXIMO entre el viewport
+        # real y la resta heurística (alto de la ventana menos una constante
+        # fija) solía quedarse con la heurística, que casi siempre
+        # sobrestima el hueco de verdad disponible dentro de `master` -un
+        # `CTkScrollableFrame`-. Ese sobrante hacía que este panel midiera
+        # más que lo visible, y con eso, que `master` tuviera scroll de
+        # verdad para revelar nada más que hueco vacío -«scrolleo y baja la
+        # página entera» aunque no había nada más que ver-. Con el viewport
+        # ya asentado (razonablemente grande) se usa ESE, no el mayor de los
+        # dos; la heurística queda solo para el primer instante, antes de
+        # que Tk resuelva la geometría real.
+        height = viewport if viewport >= 400 else max(480, int(master.winfo_toplevel().winfo_height() or 720) - 245)
         self.frame = ctk.CTkFrame(master, height=height, fg_color="#151515", corner_radius=16,
                                   border_width=1, border_color="#3A3A3A")
         self.frame.grid(row=0, column=0, sticky="nsew")
@@ -118,7 +162,12 @@ class GlobalTMView:
         self.team_title = ctk.CTkLabel(self.team_panel, text="POKÉMON COMPATIBLES", text_color=GOLD,
                                        font=ctk.CTkFont("Segoe UI", 14, "bold"))
         self.team_title.grid(row=0, column=0, sticky="w", padx=16, pady=(13, 4))
-        self.team_grid = ctk.CTkFrame(self.team_panel, fg_color="transparent")
+        # Pedido del usuario el 2026-09-03: con RECUERDA-MOVIMIENTOS y VER MT
+        # COMPATIBLES, cada tarjeta necesita más alto del que le tocaba en un
+        # reparto fijo de dos filas -se aplastaban los botones de la fila de
+        # arriba y los de la fila de abajo quedaban directamente fuera-. Con
+        # scroll propio, cada tarjeta mide lo que necesita de verdad.
+        self.team_grid = ctk.CTkScrollableFrame(self.team_panel, fg_color="transparent")
         self.team_grid.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
         self.team_grid.grid_columnconfigure((0, 1, 2), weight=1, uniform="tm_party")
         self.team_grid.grid_rowconfigure((0, 1), weight=1, uniform="tm_party")
@@ -130,7 +179,15 @@ class GlobalTMView:
             self._viewport_binding = canvas.bind(
                 "<Configure>",
                 lambda event: configurar_si_cambia(
-                    self.frame, height=max(480, int(event.height)),
+                    self.frame,
+                    # Pedido del usuario el 2026-09-03: `event.height` llega en
+                    # píxeles FÍSICOS, pero `configure(height=...)` de un
+                    # widget CTk ya establecido espera unidades LÓGICAS -sin
+                    # convertir, con el escalado de CTk encima (1.12 por
+                    # defecto), el marco salía más alto que el viewport real y
+                    # su borde inferior no llegaba a cerrar. Mismo criterio que
+                    # ya usa ``UnifiedTeamPCView`` (Equipo y PC, sin este fallo).
+                    height=max(480, int(self.frame._reverse_widget_scaling(event.height))),
                 ),
                 add="+")
         for delay in (0, 80, 180, 400):
@@ -143,7 +200,8 @@ class GlobalTMView:
         try:
             height = int(canvas.winfo_height() or 0) if canvas is not None else 0
             if height >= 480:
-                configurar_si_cambia(self.frame, height=height)
+                logical_height = int(self.frame._reverse_widget_scaling(height))
+                configurar_si_cambia(self.frame, height=max(480, logical_height))
         except Exception:
             pass
 
@@ -279,6 +337,9 @@ class GlobalTMView:
         for child in self.list_scroll.winfo_children():
             child.destroy()
         self._move_buttons.clear()
+        self._move_type_colors.clear()
+        self._move_frames.clear()
+        self._description_labels.clear()
         filtradas = self._filtradas()
         claves = {self._clave(item) for item in filtradas}
         if filtradas and self.preview_key not in claves:
@@ -296,64 +357,334 @@ class GlobalTMView:
                 self.list_scroll, text=vacio, text_color=MUTED, justify="center",
                 wraplength=330,
                 font=ctk.CTkFont("Segoe UI", 13, "bold")).grid(row=0, column=0, pady=70, padx=12)
+        ancho_descripcion = self._ancho_para_la_descripcion()
         for row, entry in enumerate(filtradas):
-            self._fila(row, entry)
+            self._fila(row, entry, ancho_descripcion)
         self._pintar_pestanas()
         self._update_highlight()
         self._rebuild_keyboard()
+        # Medir aquí puede llegar demasiado pronto: la primera vez que se
+        # construye esta vista, `self.frame` acaba de crearse y Tk todavía
+        # no resolvió su geometría real -el ancho medido cae al valor de
+        # reserva (420) y el `wraplength` sale mal calculado desde el
+        # principio. Se corrige en varias pasadas posteriores, igual que ya
+        # hace `_fit_to_viewport`. Pedido repetido del usuario 02-09-2026:
+        # «el borde sigue sin llegar al final».
+        for delay in (0, 80, 200, 450):
+            self.frame.after(delay, self._reajustar_wraplengths)
 
-    def _fila(self, row: int, entry: dict[str, Any]) -> None:
+    def _reajustar_wraplengths(self) -> None:
+        if not self._description_labels:
+            return
+        nuevo_ancho = self._ancho_para_la_descripcion()
+        for etiqueta, original in self._description_labels:
+            try:
+                configurar_si_cambia(
+                    etiqueta,
+                    wraplength=nuevo_ancho,
+                    text=self._texto_recortado_a_lineas(original, nuevo_ancho),
+                )
+            except Exception:
+                pass
+
+    def _fuente_de_medicion(self, tamano: int, *, negrita: bool = False) -> tkinter.font.Font:
+        """Fuente de MEDIDA al tamaño REAL que acaba pintando CustomTkinter
+        -no al lógico que se le da a `CTkFont`-. `ctk.set_widget_scaling(1.12)`
+        (en `ui.py`) hace que lo que de verdad se pinta sea
+        `round(tamaño * 1.12)`, un redondeo que NO coincide exactamente con
+        escalar el ancho de envoltura, que no se redondea. Esa diferencia de
+        ~3% bastaba para que una línea que «cabía» a mano no cupiera de
+        verdad, y Tk la partiera otra vez por su cuenta -pedido del usuario
+        02-09-2026, «hay saltos de línea innecesarios»-. Medir con el tamaño
+        REAL, la misma cuenta que hace CustomTkinter por dentro, lo evita."""
+        escala = self.list_scroll._get_widget_scaling()
+        return tkinter.font.Font(
+            family="Segoe UI", size=-abs(round(tamano * escala)),
+            weight="bold" if negrita else "normal",
+        )
+
+    def _ancho_real(self, ancho_px: int) -> int:
+        escala = self.list_scroll._get_widget_scaling()
+        return max(1, int(ancho_px * escala))
+
+    def _envolver_multilinea(self, texto: str, ancho_px: int, tamano: int, *, negrita: bool = False) -> str:
+        """Envuelve CADA línea de `texto` -puede llegar con saltos de línea
+        propios, como el título+detalle del botón- contra `ancho_px`, sin
+        recortar nada. Pedido del usuario 02-09-2026: «no puede ser que haya
+        una casilla más grande que otra» -`CTkButton` no admite `wraplength`,
+        así que el envoltorio hay que hacerlo a mano para que un título largo
+        no le pida a su columna más ancho del que le toca."""
+        fuente = self._fuente_de_medicion(tamano, negrita=negrita)
+        ancho_real_px = self._ancho_real(ancho_px)
+        resultado: list[str] = []
+        for parrafo in texto.split("\n"):
+            palabras = parrafo.split()
+            if not palabras:
+                resultado.append(parrafo)
+                continue
+            lineas = [palabras[0]]
+            for palabra in palabras[1:]:
+                candidato = f"{lineas[-1]} {palabra}"
+                if fuente.measure(candidato) <= ancho_real_px:
+                    lineas[-1] = candidato
+                else:
+                    lineas.append(palabra)
+            resultado.append("\n".join(lineas))
+        return "\n".join(resultado)
+
+    def _texto_recortado_a_lineas(self, texto: str, ancho_px: int, max_lineas: int = 3) -> str:
+        """Envuelve `texto` a mano contra `ancho_px` y lo recorta a como
+        mucho `max_lineas`, con «…» al final si sobra texto. Pedido del
+        usuario 02-09-2026: «si ocupa 4 líneas, que ponga puntos suspensivos
+        al final de la tercera» -el recorte por número de caracteres de
+        antes no correspondía a un número de líneas fijo, según lo larga que
+        fuera cada palabra."""
+        fuente = self._fuente_de_medicion(13)
+        ancho_real_px = self._ancho_real(ancho_px)
+        palabras = texto.split()
+        if not palabras:
+            return texto
+        lineas: list[str] = []
+        resto = list(palabras)
+        while resto and len(lineas) < max_lineas:
+            linea = resto.pop(0)
+            while resto and fuente.measure(f"{linea} {resto[0]}") <= ancho_real_px:
+                linea = f"{linea} {resto.pop(0)}"
+            lineas.append(linea)
+        if not resto:
+            return "\n".join(lineas)
+        ultima = lineas[-1] if lineas else ""
+        while ultima and fuente.measure(f"{ultima}…") > ancho_real_px:
+            partes = ultima.rsplit(" ", 1)
+            ultima = partes[0] if len(partes) == 2 else ultima[:-1]
+        lineas = lineas[:-1] + [f"{ultima}…"] if lineas else ["…"]
+        return "\n".join(lineas)
+
+    def _ancho_para_la_descripcion(self) -> int:
+        """Ancho en píxeles para el `wraplength` de la descripción, medido
+        contra el scroll real -no adivinado ni dependiente de que Tk dispare
+        un `<Configure>` a tiempo-. Pedido repetido del usuario 02-09-2026:
+        el borde se salía porque el ancho de la columna nunca se conocía de
+        verdad antes de fijar el envoltorio del texto.
+        """
+        self.list_scroll.update_idletasks()
+        canvas = getattr(self.list_scroll, "_parent_canvas", None)
+        ancho_total = int(canvas.winfo_width()) if canvas is not None else 0
+        if ancho_total <= 1:
+            ancho_total = max(1, int(self.frame.winfo_width() or 0)) * 5 // 12 or 420
+        # `fila` resta el padx (4 por lado) al ancho del scroll; sus dos
+        # columnas son iguales (weight=1 cada una), así que la mitad de eso
+        # es lo que le toca de verdad a la descripción, menos su propio padx
+        # y la esquina del tipo -que vive encima, no al lado, y necesita
+        # margen propio-. Un 0.8 de más colchón: pedido repetido del usuario
+        # 02-09-2026, «el borde sigue sin llegar al final» / «haz que el
+        # texto no pueda llegar tan lejos».
+        ancho_fila = max(120, ancho_total - 12)
+        return max(80, int((ancho_fila // 2 - 32) * 0.8))
+
+    def _fila(self, row: int, entry: dict[str, Any], ancho_descripcion: int) -> None:
         clave = self._clave(entry)
         es_drafteo = clave[0] == "draft"
         if es_drafteo:
             rol = str(entry.get("role", "")) or "cualquier rol"
             titulo = str(entry["move_name"])
-            detalle = (f"{rol}  ·  {entry['category']}  ·  Pot. {entry['power']}  ·  "
+            detalle = (f"{rol}  ·  Pot. {entry['power']}  ·  "
                        f"Prec. {entry['accuracy']}  ·  PP {entry['pp']}")
         else:
             titulo = f"MT{int(entry['number']):02d}   {entry['move_name']}"
-            detalle = (f"{entry['category']}  ·  Pot. {entry['power']}  ·  "
+            detalle = (f"Pot. {entry['power']}  ·  "
                        f"Prec. {entry['accuracy']}  ·  PP {entry['pp']}  ·  x{entry['quantity']}")
+        # Pedido del usuario 02-09-2026: la categoría como icono -el que
+        # aportó- en vez de la palabra "FÍSICO"/"ESPECIAL"/"ESTADO". Tamaño
+        # subido de 32 a 40 junto con el resto de letras -mismo pedido,
+        # «sube mucho el tamaño de todas las letras»-.
+        category_icon = (
+            self.category_icons.image(str(entry.get("category_key", "")), 40)
+            if self.category_icons else None
+        )
+        type_id = entry.get("type_id")
+        type_name, type_color = (
+            MOVE_TYPE_INFO.get(type_id, (None, None)) if isinstance(type_id, int) else (None, None)
+        )
+        if type_color:
+            self._move_type_colors[clave] = type_color
+        relleno = move_type_fill(type_color, PANEL) if type_color else PANEL
 
-        # Cada fila es un contenedor porque la papelera se pone ENCIMA del botón.
-        # Un `CTkButton` no admite hijos colocados sobre su lienzo sin estorbar
-        # a su propio texto, y el hueco reservado a la derecha es lo que evita
-        # que el nombre del movimiento pase por debajo del icono.
-        fila = ctk.CTkFrame(self.list_scroll, fg_color="transparent")
+        # Pedido del usuario 02-09-2026: en una columna a la derecha del
+        # título y el detalle, no debajo -la primera versión la metía como
+        # tercera línea dentro del propio botón-, y DENTRO del marco de tipo,
+        # no fuera de él -la segunda versión coloreaba solo el botón de la
+        # izquierda-. El recorte real a como mucho 3 líneas -con «…» si sobra-
+        # se hace más abajo, contra el ancho de columna ya calculado: aquí
+        # solo se guarda el texto ORIGINAL sin tocar.
+        descripcion = str(entry.get("description") or "").strip()
+
+        # `fila` es ahora el propio marco visible -borde y relleno teñidos
+        # del tipo-, no un envoltorio transparente: la papelera se sigue
+        # poniendo ENCIMA de todo porque un `CTkButton` no admite hijos
+        # colocados sobre su lienzo sin estorbar a su propio texto.
+        #
+        # Sin alto fijo ni `grid_propagate(False)`: con eso, una fila con
+        # descripción larga crecía por dentro pero el marco se quedaba en
+        # los 66 px de siempre -el borde no llegaba al final de la casilla,
+        # pedido del usuario 02-09-2026-. Ahora la fila mide lo que su
+        # contenido más alto necesite, y el marco crece con ella.
+        fila = ctk.CTkFrame(
+            self.list_scroll, fg_color=relleno, corner_radius=10,
+            border_width=2 if type_color else 1,
+            border_color=type_color or "#3A3A3A",
+            cursor="hand2",
+        )
         fila.grid(row=row, column=0, sticky="ew", padx=4, pady=4)
-        fila.grid_columnconfigure(0, weight=1)
+        # Pedido del usuario 02-09-2026: más margen para la descripción -era
+        # la mitad de ancho que el título/detalle; ahora se reparten igual-.
+        fila.grid_columnconfigure(0, weight=1, uniform="fila_movimiento")
+        fila.grid_columnconfigure(1, weight=1, uniform="fila_movimiento")
+        self._move_frames[clave] = fila
+        if category_icon is not None:
+            self._images.append(category_icon)
+        # `fg_color=relleno`, no "transparent": encontrado por fin -pedido
+        # repetido del usuario 02-09-2026, «el borde no envuelve todo»-. El
+        # rectángulo del botón (sin `padx`/`pady` propio) llega hasta el
+        # borde de `fila` arriba y abajo; "transparent" en un `CTkButton` no
+        # es una ausencia real de fondo, resuelve a un color congelado en el
+        # momento de crearse que puede no coincidir con el `relleno` teñido
+        # de `fila` -tapando su borde en la franja donde vive el botón.
+        # Pintar el mismo color a mano sí garantiza la coincidencia exacta.
+        # Sin `height` fijo: con 66 px puestos a mano, el botón se estiraba a
+        # ocupar toda la fila -que puede medir mucho más si la descripción
+        # es larga- y su texto quedaba pegado arriba en vez de centrado.
+        # Pedido del usuario 02-09-2026: «los textos estén alineados
+        # verticalmente en el centro»; sin un alto impuesto, el botón mide
+        # lo que su propio contenido pide y `grid` lo centra solo en el
+        # sobrante de la fila.
+        # Pedido del usuario 02-09-2026: «no puede ser que haya una casilla
+        # más grande que otra» -sin tope, un título largo podía pedir más
+        # ancho del que le tocaba a esta columna (las dos son `uniform`,
+        # iguales entre sí DENTRO de una fila), forzando esa fila entera a
+        # medir más que sus vecinas. `CTkButton` no admite `wraplength`
+        # -reventaba con un `ValueError`-, así que el envoltorio se hace a
+        # mano contra el mismo ancho que la descripción: son las dos mitades
+        # de la misma fila.
+        texto_boton = self._envolver_multilinea(f"{titulo}\n{detalle}", ancho_descripcion, 15, negrita=True)
         card = ctk.CTkButton(
-            fila, text=f"{titulo}\n{detalle}",
-            command=lambda value=clave: self._select(value), anchor="w", height=66,
-            fg_color=PANEL, hover_color=PANEL_ALT, border_width=1, border_color="#3A3A3A",
-            text_color=TEXT, font=ctk.CTkFont("Segoe UI", 12, "bold"))
-        card.grid(row=0, column=0, sticky="ew")
-        card.bind("<Enter>", lambda _event, value=clave: self._preview(value), add="+")
+            fila, text=texto_boton,
+            image=category_icon, compound="left",
+            command=lambda value=clave: self._select(value), anchor="w",
+            fg_color=relleno, hover_color=PANEL_ALT, border_width=0,
+            text_color=TEXT, font=ctk.CTkFont("Segoe UI", 15, "bold"),
+            cursor="hand2")
+        # Sin "n"/"s" en el sticky: si la fila crece por la descripción, el
+        # botón se centra en el alto sobrante en vez de quedarse pegado
+        # arriba -pedido del usuario 02-09-2026, «centra más el texto en
+        # cuanto a lo vertical»-. "w", no "center": centrado dejaba un hueco
+        # vacío a la izquierda -pedido del usuario 02-09-2026, «trae hacia
+        # ahí los iconos»-.
+        card.grid(row=0, column=0, sticky="ew", padx=(6, 0))
         self._move_buttons[clave] = card
+        etiqueta_descripcion = None
+        if descripcion:
+            # `wraplength` fijo, calculado antes de construir la fila contra
+            # el ancho real del scroll -no adivinado ni dependiente de un
+            # evento `<Configure>` que puede no llegar a tiempo-. Pedido
+            # repetido del usuario 02-09-2026: «sigue sin verse el marco
+            # completo».
+            #
+            # Pedido del usuario 02-09-2026, otra vuelta: «no está bien
+            # alineado en el centro verticalmente» -el intento anterior
+            # -anclarla arriba- solo maquillaba el síntoma real: el recorte
+            # a 3 líneas media mal (ver `_texto_recortado_a_lineas`) y
+            # dejaba una cuarta línea de más, alargando la fila mucho más de
+            # lo necesario. Arreglado el recorte, centrada -sin "n"/"s"- es
+            # lo que pidió el usuario la vez anterior a esa.
+            texto_recortado = self._texto_recortado_a_lineas(descripcion, ancho_descripcion)
+            etiqueta_descripcion = ctk.CTkLabel(
+                fila, text=texto_recortado, text_color=MUTED, anchor="w", justify="left",
+                wraplength=ancho_descripcion, font=self._fuente_descripcion,
+                cursor="hand2",
+            )
+            etiqueta_descripcion.grid(row=0, column=1, sticky="ew", padx=(14, 10), pady=(10, 10))
+            self._description_labels.append((etiqueta_descripcion, descripcion))
+        insignia_tipo = None
+        if type_name:
+            insignia_tipo = ctk.CTkLabel(
+                fila, text=type_name, text_color="#111111", fg_color=type_color,
+                corner_radius=5, font=ctk.CTkFont("Segoe UI", 9, "bold"),
+                cursor="hand2",
+            )
+            insignia_tipo.place(relx=1.0, rely=0.0, anchor="ne", x=-6, y=4)
+        # Pedido del usuario 02-09-2026: que se pueda pulsar la casilla
+        # entera, no solo la parte del botón -la columna de la descripción
+        # se quedaba sin reaccionar al clic-. El propio `.bind()` de
+        # `CTkFrame`/`CTkLabel` ya reenvía al `Canvas`/`Label` interno que de
+        # verdad recibe el clic (ver sus `bind()`, comprobado aparte); vincular
+        # también a mano esos internos duplicaría la llamada. `card` no hace
+        # falta aquí: su propio `command=` ya selecciona al pulsarlo.
+        #
+        # Pedido del usuario 02-09-2026, otra vuelta: «para que cambie de MT
+        # tengo que ponerme encima del nombre» -el aviso previo (pasar el
+        # ratón cambia qué Pokémon se ven a la derecha) solo estaba en
+        # `card`, no en el resto de la casilla-. Ahora pasar el ratón por
+        # cualquier punto de la fila también actualiza esa previsualización.
+        abrir_fila = lambda _event, value=clave: self._select(value)
+        previsualizar_al_pasar = lambda _event, value=clave: self._preview(value)
+        for objetivo in (fila, card, etiqueta_descripcion, insignia_tipo):
+            if objetivo is not None:
+                objetivo.bind("<Button-1>", abrir_fila, add="+")
+                objetivo.bind("<Enter>", previsualizar_al_pasar, add="+")
 
         if es_drafteo and self.on_delete_draft is not None:
             papelera = ctk.CTkButton(
-                fila, text="🗑", width=34, height=30, corner_radius=8,
+                fila, text="🗑", width=42, height=34, corner_radius=8,
                 command=lambda item=entry: self._descartar(item),
                 fg_color="#241818", hover_color=DANGER, border_width=1,
                 border_color="#4A2C2C", text_color=DANGER,
-                font=ctk.CTkFont("Segoe UI Symbol", 13, "bold"))
+                font=ctk.CTkFont("Segoe UI Symbol", 15, "bold"),
+                cursor="hand2")
             # Aparece solo al pasar por encima: es un botón destructivo y no
-            # tiene por qué estar tentando en cada fila de la lista.
-            def mostrar(_event=None, boton=papelera) -> None:
-                boton.place(relx=1.0, x=-10, rely=0.5, anchor="e")
+            # tiene por qué estar tentando en cada fila de la lista. Pedido
+            # del usuario 02-09-2026, otra vuelta: en vez de un tercer hueco
+            # en el borde derecho -que acababa solapando otras cosas según
+            # el ancho de la fila-, ocupa el sitio exacto del icono de
+            # categoría (medido a mano: 6 px desde el borde izquierdo del
+            # botón, centrado en su alto) y lo tapa mientras está encima; al
+            # salir, vuelve a verse el icono normal.
+            # Pedido del usuario 02-09-2026: «cuando paso el ratón de arriba
+            # abajo, se queda la papelera; de abajo arriba, se va bien».
+            # El fallo real: `ocultar` comprobaba `winfo_pointerxy()` en el
+            # mismo instante del `<Leave>`, y ese instante puede llegar con
+            # la posición todavía sin asentar según por dónde se sale -Tk no
+            # entrega el mismo punto de forma simétrica en las dos
+            # direcciones-. Igual que ya se corrigió para los iconos de
+            # Cambiar Rol: comprobar tras un pequeño respiro (`after`), no en
+            # el acto, da tiempo a que la posición real del cursor se asiente
+            # antes de mirarla, y así sale sea cual sea la dirección.
+            estado_papelera = {"after_id": None}
 
-            def ocultar(_event=None, boton=papelera, contenedor=fila) -> None:
-                try:
-                    x, y = contenedor.winfo_pointerxy()
-                    dentro = (
-                        contenedor.winfo_rootx() <= x <= contenedor.winfo_rootx() + contenedor.winfo_width()
-                        and contenedor.winfo_rooty() <= y <= contenedor.winfo_rooty() + contenedor.winfo_height()
-                    )
-                except Exception:
-                    dentro = False
-                if not dentro:
-                    boton.place_forget()
+            def mostrar(_event=None, boton=papelera, estado=estado_papelera) -> None:
+                if estado["after_id"] is not None:
+                    fila.after_cancel(estado["after_id"])
+                    estado["after_id"] = None
+                boton.place(in_=card, x=6, rely=0.5, anchor="w")
+
+            def ocultar(_event=None, boton=papelera, contenedor=fila, estado=estado_papelera) -> None:
+                if estado["after_id"] is not None:
+                    fila.after_cancel(estado["after_id"])
+
+                def _confirmar(estado=estado) -> None:
+                    estado["after_id"] = None
+                    try:
+                        x, y = contenedor.winfo_pointerxy()
+                        dentro = (
+                            contenedor.winfo_rootx() <= x <= contenedor.winfo_rootx() + contenedor.winfo_width()
+                            and contenedor.winfo_rooty() <= y <= contenedor.winfo_rooty() + contenedor.winfo_height()
+                        )
+                    except Exception:
+                        dentro = False
+                    if not dentro:
+                        boton.place_forget()
+
+                estado["after_id"] = fila.after(80, _confirmar)
 
             for widget in (fila, card, papelera):
                 widget.bind("<Enter>", mostrar, add="+")
@@ -365,18 +696,22 @@ class GlobalTMView:
         self.on_delete_draft(dict(entry.get("guardado", {})))
 
     def _update_highlight(self) -> None:
-        for clave, button in self._move_buttons.items():
+        for clave, marco in self._move_frames.items():
             activo = clave == self.preview_key
+            type_color = self._move_type_colors.get(clave)
             # Protegido como `_apply_keyboard`, y por el mismo motivo: escribir
             # un color sobre un widget ya destruido lanza `TclError`. Aquí no lo
             # estaba, y esa era la grieta por la que el mando se caía al salir de
             # esta página.
             try:
                 configurar_si_cambia(
-                    button,
-                    fg_color="#27231B" if activo else PANEL,
-                    border_color=GOLD if activo else "#3A3A3A",
-                    border_width=2 if activo else 1,
+                    marco,
+                    fg_color=(
+                        "#27231B" if activo
+                        else (move_type_fill(type_color, PANEL) if type_color else PANEL)
+                    ),
+                    border_color=GOLD if activo else (type_color or "#3A3A3A"),
+                    border_width=2 if (activo or type_color) else 1,
                 )
             except Exception:
                 pass
@@ -464,6 +799,28 @@ class GlobalTMView:
                                    fg_color="#242424", hover_color="#D3AF70", text_color="#111111",
                                    text_color_disabled="#777777", font=ctk.CTkFont("Segoe UI", 10, "bold"))
             action.pack(fill="x", padx=8, pady=(0, 5))
+            if self.on_view_compatible_moves is not None:
+                # Siempre activo, igual que RECUERDA-MOVIMIENTOS: no depende
+                # de qué MT esté seleccionada a la izquierda ahora mismo.
+                compatible_button = ctk.CTkButton(
+                    card, text="VER MT COMPATIBLES", height=26,
+                    fg_color="transparent", hover_color=PANEL_ALT,
+                    border_width=1, border_color="#3A3A3A", text_color=MUTED,
+                    font=ctk.CTkFont("Segoe UI", 9, "bold"),
+                    command=lambda member=pokemon: self.on_view_compatible_moves(member),
+                )
+                compatible_button.pack(fill="x", padx=8, pady=(0, 4))
+            if self.on_open_levelup_history is not None:
+                # Siempre activo: a diferencia de ELEGIR, no depende de si el
+                # movimiento seleccionado encaja con este Pokémon.
+                history_button = ctk.CTkButton(
+                    card, text="RECUERDA-MOVIMIENTOS", height=26,
+                    fg_color="transparent", hover_color=PANEL_ALT,
+                    border_width=1, border_color="#3A3A3A", text_color=MUTED,
+                    font=ctk.CTkFont("Segoe UI", 9, "bold"),
+                    command=lambda member=pokemon: self.on_open_levelup_history(member),
+                )
+                history_button.pack(fill="x", padx=8, pady=(0, 6))
             self._team_widgets[identity] = (
                 pokemon, card, name_label, species_label, role_label, tuple(move_labels), action,
             )
@@ -516,11 +873,17 @@ class GlobalTMView:
         targets: list[SpatialTarget] = []
         for row, entry in enumerate(self._filtradas()):
             clave = self._clave(entry)
-            widget = self._move_buttons.get(clave)
+            widget = self._move_frames.get(clave)
             if widget is None:
                 continue
+            # El color/ancho «en reposo» tiene que ser el mismo que pinta
+            # `_update_highlight`, o el mando pisaba el marco de tipo en
+            # cuanto reconstruía sus objetivos (que ocurre en cada refresco
+            # de la lista).
+            idle_color = self._move_type_colors.get(clave, "#3A3A3A")
+            idle_width = 2 if clave in self._move_type_colors else 1
             self._keyboard_targets[clave] = (
-                widget, lambda value=clave: self._select(value), "#3A3A3A", 1,
+                widget, lambda value=clave: self._select(value), idle_color, idle_width,
             )
             targets.append(SpatialTarget(clave, row, 0))
         entry = self._entry()

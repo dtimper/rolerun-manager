@@ -680,6 +680,105 @@ def test_xy_pc_to_pc_rejects_when_azahar_restores_pc_after_immediate_readback() 
     assert bytes(client.pc) == before
 
 
+def _pc_swap_setup():
+    """Dos casillas del PC ya ocupadas, con Pokémon distintos y conocidos.
+
+    2026-09-05: mismo montaje que ``_pc_move_setup``, pero el destino
+    también está ocupado -el caso que ``move-box-slot`` rechaza y que
+    ``swap-box-slots`` (``XYLiveWriter._apply_pc_swap``) sí cubre-.
+    """
+    party_raw = _coherent_role_member()
+    pc = bytearray(_EMPTY_XY_PC_SLOT * (XY_PC_SIZE // PK6_STORED_SIZE))
+    source_box, source_slot = 4, 1
+    destination_box, destination_slot = 3, 5
+    source_index = (source_box - 1) * 30 + source_slot - 1
+    destination_index = (destination_box - 1) * 30 + destination_slot - 1
+    source_address = XY_PC_KNOWN_ADDRESS + source_index * PK6_STORED_SIZE
+    destination_address = XY_PC_KNOWN_ADDRESS + destination_index * PK6_STORED_SIZE
+    source_raw = _coherent_role_member(pid=0x11110000, nickname="Origen")[:PK6_STORED_SIZE]
+    destination_raw = _coherent_role_member(pid=0x22220000, nickname="Destino")[:PK6_STORED_SIZE]
+    pc[source_index * PK6_STORED_SIZE:(source_index + 1) * PK6_STORED_SIZE] = source_raw
+    pc[destination_index * PK6_STORED_SIZE:(destination_index + 1) * PK6_STORED_SIZE] = destination_raw
+    client = _XYPartyPCClient(party_raw, pc)
+    reader = XYLiveReader(
+        Path("missing.json"), client_factory=lambda: client, stable_delay=0, snapshot_attempts=2,
+    )
+    writer = XYLiveWriter(reader, move_pp_for=lambda _move_id: 35)
+    party = parse_pk6_party(party_raw, 1, reader.move_names)
+    source = parse_pk6_boxed(source_raw, source_box, source_slot, reader.move_names)
+    destination = parse_pk6_boxed(destination_raw, destination_box, destination_slot, reader.move_names)
+    assert party is not None and source is not None and destination is not None
+    game = SaveGameData("X", "SAV6XY", 6, "Timper", [party], {})
+    change = PendingTeamChange(
+        operation="swap-box-slots",
+        party_slot=0,
+        box=source_box,
+        box_slot=source_slot,
+        destination_box=destination_box,
+        destination_box_slot=destination_slot,
+        incoming_pokemon=source.nickname,
+        incoming_species=source.species,
+        incoming_identity=writer._pokemon_identity(source),
+        outgoing_pokemon=destination.nickname,
+        outgoing_species=destination.species,
+        outgoing_identity=writer._pokemon_identity(destination),
+    )
+    return writer, client, game, change, source_address, destination_address, source_raw, destination_raw
+
+
+def test_xy_pc_swap_exchanges_two_occupied_slots() -> None:
+    """Bug real, 2026-09-05: 'INTERCAMBIO NO HABILITADO' al soltar un
+    Pokémon del PC sobre otro ya ocupado. X/Y ya tenía movimiento PC→PC a
+    hueco vacío; faltaba el mismo contrato para dos casillas ocupadas.
+    """
+    writer, client, game, change, source_address, destination_address, source_raw, destination_raw = (
+        _pc_swap_setup()
+    )
+
+    result = writer.apply(game, [change])
+
+    source_offset = source_address - XY_PC_KNOWN_ADDRESS
+    destination_offset = destination_address - XY_PC_KNOWN_ADDRESS
+    assert bytes(client.pc[source_offset:source_offset + PK6_STORED_SIZE]) == destination_raw
+    assert bytes(client.pc[destination_offset:destination_offset + PK6_STORED_SIZE]) == source_raw
+    at_source = parse_pk6_boxed(
+        bytes(client.pc[source_offset:source_offset + PK6_STORED_SIZE]), 4, 1, {},
+    )
+    at_destination = parse_pk6_boxed(
+        bytes(client.pc[destination_offset:destination_offset + PK6_STORED_SIZE]), 3, 5, {},
+    )
+    assert at_source is not None and writer._pokemon_identity(at_source) == change.outgoing_identity
+    assert at_destination is not None and writer._pokemon_identity(at_destination) == change.incoming_identity
+    assert result.applied_count == 1
+
+
+def test_xy_pc_swap_rejects_stale_destination_identity_without_writing() -> None:
+    writer, client, game, change, *_rest = _pc_swap_setup()
+    change.outgoing_identity = "identity-that-is-no-longer-current"
+    before = bytes(client.pc)
+
+    with pytest.raises(XYLiveError, match="ya no coincide con el que se"):
+        writer.apply(game, [change])
+
+    assert bytes(client.pc) == before
+
+
+def test_xy_pc_swap_rolls_back_both_slots_when_azahar_restores_pc_mid_verification() -> None:
+    """Si el juego revierte las casillas mientras se verifica el intercambio,
+    la comprobación de identidad exacta lo detecta y el rollback deja el PC
+    tal y como estaba, igual que ya hace ``_apply_pc_move``.
+    """
+    writer, client, game, change, *_rest = _pc_swap_setup()
+    writer.party_commit_settle_delay = 0
+    before = bytes(client.pc)
+    client.arm_pc_restore_after_write(6)
+
+    with pytest.raises(XYLiveError, match="RoleRun restauró y verificó ambas casillas"):
+        writer.apply(game, [change])
+
+    assert bytes(client.pc) == before
+
+
 def _party_resize_setup(operation: str, *, corrupt_count: bool = False, companion: bool = True):
     raw_a = _coherent_role_member(pid=0x11111111, nickname="Alpha")
     raw_b = _coherent_role_member(pid=0x22222222, nickname="Bravo")
@@ -796,6 +895,176 @@ def test_xy_party_to_box_compacts_party_writes_exact_destination_and_count_last(
     assert client.host_memory.closed is False
 
 
+def test_xy_party_to_box_ignores_noise_in_the_high_bytes_of_the_count(monkeypatch) -> None:
+    """Bug real, 2026-09-05, investigado en vivo con el usuario: los tres
+    bytes altos de ``XY_PARTY_COUNT_ADDRESS`` no siempre son cero -se demostró
+    leyendo antes/después de un cambio de orden del equipo ajeno a RoleRun,
+    que dejó el segundo byte en 0x01 durante varios minutos (probablemente
+    ligado a haber visitado la pantalla de Almacenamiento) antes de volver a
+    0x00-. Leer los 4 bytes como un único ``u32`` convertía un contador
+    válido (3) en uno disparatado (259 = 0x0103), y la operación se
+    rechazaba con "contador de equipo inválido" sin motivo real. Además de
+    ignorar esos bytes al leer, la escritura final no debe ponerlos a cero:
+    no se sabe qué representan de verdad, así que se conservan tal cual.
+    """
+    writer, client, game, change, target_address = _party_resize_setup("party-to-box")
+    ruido = bytes((0x00, 0x01, 0x00, 0x00))  # el mismo patrón visto en vivo
+    original_read_memory = client.read_memory
+
+    def read_memory_con_ruido(address: int, size: int):
+        valor = original_read_memory(address, size)
+        if int(address) == XY_PARTY_COUNT_ADDRESS and int(size) == 4:
+            contador_real = valor[0]
+            return bytes((contador_real,)) + ruido[1:]
+        return valor
+
+    monkeypatch.setattr(client, "read_memory", read_memory_con_ruido)
+
+    result = writer.apply(game, [change])
+
+    assert result.applied_count == 1
+    assert [pokemon.nickname for pokemon in result.game.party] == ["Alpha", "Charlie"]
+    target_offset = target_address - XY_PC_KNOWN_ADDRESS
+    moved = parse_pk6_boxed(
+        bytes(client.pc[target_offset:target_offset + PK6_STORED_SIZE]), 1, 5, {},
+    )
+    assert moved is not None and moved.nickname == "Bravo"
+    # El byte bajo es el contador real (2); los tres altos son el mismo
+    # ruido que ya había antes de escribir -nunca se ponen a cero a ciegas-.
+    assert client.writes[-1] == (XY_PARTY_COUNT_ADDRESS, bytes((2,)) + ruido[1:])
+
+
+def test_xy_party_to_box_ignores_the_live_drifting_byte_in_the_runtime_tail(monkeypatch) -> None:
+    """Bug real, 2026-09-05, investigado en vivo con el usuario: leyendo la
+    party en reposo, sin ninguna acción del jugador, se demostró que el byte
+    relativo 427 de un slot runtime cambia por sí solo con el tiempo -no
+    tiene relación con el contenido del Pokémon-. Comparar la party runtime
+    completa byte a byte (precondición, verificación inmediata y "settled")
+    declaraba un depósito con éxito real como revertido en cuanto ese byte
+    cambiaba entre dos lecturas, y el propio rollback fallaba a su vez por
+    el mismo motivo. El writer debe ignorar ese byte al decidir si algo
+    cambió, sin dejar de copiarlo tal cual al mover un miembro de slot.
+    """
+    writer, client, game, change, target_address = _party_resize_setup("party-to-box")
+    original_read_memory = client.read_memory
+    contador = {"lecturas": 0}
+
+    def read_memory_con_deriva(address: int, size: int):
+        valor = original_read_memory(address, size)
+        if int(address) == XY_PARTY_ADDRESS and int(size) == XY_PARTY_RUNTIME_SPAN:
+            contador["lecturas"] += 1
+            offset = 5 * XY_PARTY_STRIDE + 427
+            return valor[:offset] + bytes(((valor[offset] + contador["lecturas"]) & 0xFF,)) + valor[offset + 1:]
+        return valor
+
+    monkeypatch.setattr(client, "read_memory", read_memory_con_deriva)
+
+    result = writer.apply(game, [change])
+
+    assert result.applied_count == 1
+    assert [pokemon.nickname for pokemon in result.game.party] == ["Alpha", "Charlie"]
+    target_offset = target_address - XY_PC_KNOWN_ADDRESS
+    moved = parse_pk6_boxed(
+        bytes(client.pc[target_offset:target_offset + PK6_STORED_SIZE]), 1, 5, {},
+    )
+    assert moved is not None and moved.nickname == "Bravo"
+
+
+def _party_resize_setup_full_team():
+    """Los seis huecos ocupados: el caso que antes rechazaba el depósito.
+
+    Bug real, 2026-09-05, investigado en vivo con el usuario: con la party
+    llena no hay un séptimo slot que "ver" como plantilla para el hueco que
+    deja el saliente, y el código lo rechazaba sin más
+    ("X/Y no dispone de un slot runtime vacío observado..."). Decodificando
+    con las funciones reales del proyecto ese slot que queda fuera del
+    contador tras un depósito normal (con hueco), se demostró que sigue
+    pasando el checksum PK6 como un Pokémon válido -no es una plantilla
+    vacía deliberada, es simplemente lo último que hubiera ahí-, así que
+    compactar nunca necesitó verlo vacío de antemano: el último slot físico
+    puede dejarse tal cual está, sin escribirlo, porque el contador ya lo
+    excluye.
+    """
+    nombres = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"]
+    party_slots = [
+        _coherent_role_member(pid=0x11111100 + i, nickname=nombre)
+        for i, nombre in enumerate(nombres, start=1)
+    ]
+    companion_raw = _coherent_role_member(pid=0x44444444, nickname="Witness")
+    pc = bytearray(_EMPTY_XY_PC_SLOT * (XY_PC_SIZE // PK6_STORED_SIZE))
+    target_box, target_slot = 1, 5
+    target_index = target_slot - 1
+    companion_slot = 2
+    companion_index = companion_slot - 1
+    pc[companion_index * PK6_STORED_SIZE:(companion_index + 1) * PK6_STORED_SIZE] = (
+        companion_raw[:PK6_STORED_SIZE]
+    )
+    client = _XYPartyPCClient(
+        party_slots[0], pc, party_slots=party_slots, party_count=6,
+    )
+    host_memory = _XYHostMemory(client)
+    client.host_memory = host_memory
+    reader = XYLiveReader(
+        Path("missing.json"), client_factory=lambda: client, stable_delay=0, snapshot_attempts=2,
+    )
+    writer = XYLiveWriter(
+        reader,
+        move_pp_for=lambda move_id: {33: 35, 44: 25}.get(int(move_id), 0),
+        personal_for=lambda species, form: (
+            _POOCHYENA_PERSONAL if (int(species), int(form)) == (261, 0) else None
+        ),
+        party_commit_settle_delay=0,
+        host_memory_factory=lambda: host_memory,
+    )
+    party = [
+        parse_pk6_party(raw, index, reader.move_names)
+        for index, raw in enumerate(party_slots, start=1)
+    ]
+    assert all(pokemon is not None for pokemon in party)
+    game = SaveGameData("X", "SAV6XY", 6, "Timper", party, {})
+    witness = parse_pk6_boxed(
+        companion_raw[:PK6_STORED_SIZE], target_box, companion_slot, reader.move_names,
+    )
+    assert witness is not None
+    outgoing = party[2]  # Charlie, slot 3 -no el último físico, para probar el desplazamiento-
+    assert outgoing is not None
+    change = PendingTeamChange(
+        operation="party-to-box",
+        party_slot=3,
+        box=target_box,
+        box_slot=target_slot,
+        outgoing_pokemon=outgoing.nickname,
+        outgoing_species=outgoing.species,
+        outgoing_identity=writer._pokemon_identity(outgoing),
+        box_witnesses=((companion_slot, writer._pokemon_identity(witness)),),
+    )
+    target_address = XY_PC_KNOWN_ADDRESS + target_index * PK6_STORED_SIZE
+    return writer, client, game, change, target_address
+
+
+def test_xy_party_to_box_works_with_a_full_team() -> None:
+    writer, client, game, change, target_address = _party_resize_setup_full_team()
+    slot_six_before = bytes(client.slots[5])
+
+    result = writer.apply(game, [change])
+
+    assert result.applied_count == 1
+    assert client.party_count == 5
+    assert [pokemon.nickname for pokemon in result.game.party] == [
+        "Alpha", "Bravo", "Delta", "Echo", "Foxtrot",
+    ]
+    target_offset = target_address - XY_PC_KNOWN_ADDRESS
+    moved = parse_pk6_boxed(
+        bytes(client.pc[target_offset:target_offset + PK6_STORED_SIZE]), 1, 5, {},
+    )
+    assert moved is not None and moved.nickname == "Charlie"
+    # El último slot físico (el 6º) nunca se escribe: no hay un 7º slot del
+    # que copiar una "plantilla", así que se deja exactamente como estaba.
+    sixth_slot_address = writer._slot_address(6)
+    assert not any(address == sixth_slot_address for address, _payload in client.writes)
+    assert bytes(client.slots[5]) == slot_six_before
+
+
 def test_xy_pc_candidate_matches_native_pokemon_x_deposit_capture() -> None:
     """Budew apareció en caja 1/slot 11 solo desde esta base invitada."""
     assert XY_PC_KNOWN_ADDRESS == 0x08C861B8
@@ -881,7 +1150,10 @@ def test_xy_ui_accepts_exact_pc_to_pc_drop_only_for_demonstrated_backends() -> N
     assert can_drop("usum") is True
     # ORAS se sumó el 30-08-2026 con ORASLiveWriter._apply_pc_move.
     assert can_drop("oras") is True
-    assert can_drop("sm") is False
+    # SM se sumó el 04-09-2026 con SMLiveWriter._apply_pc_move, réplica del
+    # contrato de USUM sobre la matriz PC de SM ya demostrada por
+    # `_ensure_pc_live_cache_for_team_write`/`_read_proven_pc_matrix`.
+    assert can_drop("sm") is True
 
 
 def test_xy_ui_enables_party_resize_and_oras_too() -> None:
@@ -1097,6 +1369,65 @@ def test_xy_role_change_rolls_back_stored_and_runtime_regions_on_bad_readback() 
     assert bytes(client.slots[0][XY_PARTY_STATS_OFFSET:XY_PARTY_STATS_OFFSET + XY_PARTY_STATS_SIZE]) == (
         original[PK6_STORED_SIZE:PK6_STORED_SIZE + XY_PARTY_STATS_SIZE]
     )
+
+
+def test_xy_role_change_ignores_a_duplicate_identity_beyond_the_real_count() -> None:
+    """Bug real, 2026-09-05, investigado en vivo con el usuario: tras un
+    depósito, el slot que el contador excluye conserva lo último que hubo
+    ahí -sigue pasando el checksum PK6 como un Pokémon válido-. En este
+    caso concreto, ese sobrante resultó ser el MISMO individuo (mismo PID)
+    que uno real dentro del contador (dos Flabébé). El cambio de rol
+    reutiliza sin cambios la captura de party heredada de ORAS, que no
+    miraba el contador: encontraba la identidad dos veces y rechazaba la
+    operación en bucle con "la identidad de X aparece más de una vez en el
+    equipo vivo", sin escribir nunca nada -exactamente lo que le pasó al
+    usuario-.
+    """
+    others = [
+        _coherent_role_member(pid=0x11110000 + i, nickname=name)
+        for i, name in enumerate(("Alpha", "Bravo", "Charlie", "Delta"))
+    ]
+    duplicated = _coherent_role_member(pid=0x55555555, nickname="Flabebe")
+    party_slots = others + [duplicated]
+    client = _XYPartyClient(party_slots[0], party_slots=party_slots, party_count=5)
+    # El sexto slot físico, ya excluido del contador (party_count=5),
+    # conserva la misma identidad que el slot 5 -lo último que hubo ahí-.
+    client.slots[5][:PK6_STORED_SIZE] = duplicated[:PK6_STORED_SIZE]
+    client.slots[5][XY_PARTY_STATS_OFFSET:XY_PARTY_STATS_OFFSET + XY_PARTY_STATS_SIZE] = (
+        duplicated[PK6_STORED_SIZE:PK6_STORED_SIZE + XY_PARTY_STATS_SIZE]
+    )
+
+    reader = XYLiveReader(
+        Path("missing.json"), client_factory=lambda: client, stable_delay=0, snapshot_attempts=2,
+    )
+    writer = XYLiveWriter(
+        reader,
+        move_pp_for=lambda move_id: {33: 35, 44: 25}.get(int(move_id), 0),
+        personal_for=lambda species, form: (
+            _POOCHYENA_PERSONAL if (int(species), int(form)) == (261, 0) else None
+        ),
+    )
+    captured = reader._read_party(client)
+    target = parse_pk6_party(captured[4], 5, reader.move_names)
+    assert target is not None and target.nickname == "Flabebe"
+    game = SaveGameData("X", "SAV6XY", 6, "Timper", [target], {})
+    change = PendingRoleChange(
+        pokemon_slot=5,
+        pokemon=target.nickname,
+        species=target.species,
+        old_role=target.role,
+        new_role="Asesino",
+        pokemon_identity=writer._pokemon_identity(target),
+        old_evs=tuple(int(target.evs.get(key, 0)) for key in (
+            "hp", "attack", "defense", "sp_attack", "sp_defense", "speed",
+        )),
+        new_evs=(0, 252, 0, 0, 0, 252),
+    )
+
+    result = writer.apply(game, [change])
+
+    assert result.game.party[-1].role == "Asesino"
+    assert len(result.game.party) == 5
 
 
 def _ui_mon(*, species: int, pid: int, role: str, evs: tuple[int, ...]) -> SavePokemon:

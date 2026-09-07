@@ -114,6 +114,11 @@ class RunProject:
     # drafteo, así que enseñarlos después no vuelve a cobrar. Ver
     # `app/drafteos_guardados.py`.
     saved_drafts: list[dict[str, Any]] = field(default_factory=list)
+    # Recuerda-movimientos de ORAS (2026-09-03): cada movimiento que un
+    # Pokémon ha llegado a aprender por nivel de verdad, ajustado al rol que
+    # tenía en ese momento. Clave por PID:TID:SID, sin la especie, para que
+    # sobreviva a una evolución. Ver ``app/oras_levelup_moves.py``.
+    oras_levelup_move_history: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     hotkeys: dict[str, str] = field(default_factory=lambda: {
         "sync_live_game": "f5",
         "vidas_mas": "num 7",
@@ -445,12 +450,20 @@ class RunProjectService:
         return self.root / project.slug
 
     def save(self, project: RunProject) -> None:
-        project.updated_at = datetime.now().isoformat(timespec="seconds")
-        # `config.json` guarda TODO el estado de la Run y se reescribe decenas
-        # o cientos de veces por sesión. Truncarlo antes de escribir era
-        # jugarse la Run entera en cada guardado.
-        escribir_json_atomico(self.folder(project) / "config.json", asdict(project))
-        self._write_obs_placeholders(project)
+        with perf.span("run.save") as medida:
+            project.updated_at = datetime.now().isoformat(timespec="seconds")
+            # `config.json` guarda TODO el estado de la Run y se reescribe decenas
+            # o cientos de veces por sesión. Truncarlo antes de escribir era
+            # jugarse la Run entera en cada guardado.
+            with perf.span("run.save.asdict"):
+                datos = asdict(project)
+            with perf.span("run.save.escribir_json_atomico"):
+                escribir_json_atomico(self.folder(project) / "config.json", datos)
+            with perf.span("run.save.obs_placeholders"):
+                self._write_obs_placeholders(project)
+            medida.add(historial_levelup=sum(
+                len(v) for v in project.oras_levelup_move_history.values()
+            ))
 
     def _leer_historial(self, project: RunProject) -> list[dict[str, Any]]:
         """Los eventos guardados. Levanta `HistorialIlegible` si no puede leerlos."""

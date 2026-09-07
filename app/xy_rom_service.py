@@ -8,7 +8,6 @@ de la tabla TM/HM en ExeFS) viven aquí para evitar mezclar perfiles de juegos.
 """
 
 from pathlib import Path
-import os
 
 from .oras_tm_service import ORASTM, ORASTMProfile, oras_tm_item_id
 from .oras_rom_service import (
@@ -22,13 +21,13 @@ from .oras_rom_service import (
     _u32,
     _decompress_exefs_code,
     _find_romfs_file,
+    _read_romfs_file_from_ncch_path,
     _compatibility_from_personal,
     _stats_from_personal,
     _apply_ips,
     _apply_bps,
     azahar_user_roots,
 )
-from .citra_gdb import discover_citra_gdb_settings
 
 
 XY_X_TITLE_ID = 0x0004000000055D00
@@ -36,6 +35,12 @@ XY_Y_TITLE_ID = 0x0004000000055E00
 XY_TITLE_IDS = {XY_X_TITLE_ID, XY_Y_TITLE_ID}
 _UPDATE_MASK = 0x0000000E00000000
 XY_PERSONAL_PATH = "a/2/1/8"
+# Confirmado leyendo la ROM real del usuario el 2026-09-05: especie 1
+# (Bulbasaur) aprende Látigo Cepa a nivel 9, especie 25 (Pikachu) aprende
+# Nuzzle -movimiento propio de X/Y- a nivel 7. No es "a/1/9/1" como ORAS:
+# X/Y numera su carpeta de datos por especie de otra forma (el propio
+# Personal ya vive en "a/2/1/8", no en "a/1/9/5" como en ORAS).
+XY_LEVELUP_MOVES_PATH = "a/2/1/4"
 XY_TM_COUNT = 100
 XY_TM_FIRST_BLOCK = 92
 XY_TM_SECOND_BLOCK_OFFSET = 97
@@ -113,32 +118,6 @@ def _assert_xy_image(image: _NCCHData, process_name: str | None = None) -> int:
         raise XYRomProfileError("La ROM seleccionada no coincide con el X/Y que está ejecutándose ahora.")
     return base
 
-
-
-def citra_user_roots() -> tuple[Path, ...]:
-    """Rutas de datos de Citra sin recorrer el disco completo del usuario."""
-    candidates: list[Path] = []
-    settings = discover_citra_gdb_settings()
-    if settings.path is not None:
-        # .../<Citra>/config/qt-config.ini -> .../<Citra>
-        candidates.append(settings.path.parent.parent)
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        candidates.extend((Path(appdata) / "Citra", Path(appdata) / "citra-emu"))
-    home = Path.home()
-    candidates.extend((
-        home / ".local" / "share" / "citra-emu",
-        home / ".config" / "citra-emu",
-    ))
-    result: list[Path] = []
-    for candidate in candidates:
-        try:
-            resolved = candidate.expanduser().resolve()
-        except OSError:
-            continue
-        if resolved.is_dir() and resolved not in result:
-            result.append(resolved)
-    return tuple(result)
 
 
 def _xy_mod_root(base_title: int, roots: tuple[Path, ...]) -> Path | None:
@@ -301,21 +280,15 @@ def load_xy_rom_tm_profile(
 ) -> ORASTMProfile:
     """Lee el perfil MT/HM de la capa que realmente ejecuta X/Y.
 
-    Para Citra/Azahar se incluyen update y ``load/mods/<TitleID>``. De este modo
-    un randomizer que cambie ``a/2/1/8`` no queda oculto detrás del .3ds base.
+    Se incluyen update y ``load/mods/<TitleID>``. De este modo un randomizer
+    que cambie ``a/2/1/8`` no queda oculto detrás del .3ds base.
     """
     source = Path(path).expanduser().resolve()
     if not source.is_file():
         raise XYRomProfileError("No se encuentra el archivo de ROM X/Y asociado a esta Run.")
     image = _read_xy_ncch(source)
     base_title = _assert_xy_image(image, process_name)
-    key = str(emulator_key or "").casefold()
-    if key == "citra":
-        roots = citra_user_roots()
-    elif key == "azahar":
-        roots = azahar_user_roots()
-    else:
-        roots = tuple(dict.fromkeys((*citra_user_roots(), *azahar_user_roots())))
+    roots = azahar_user_roots()
     code, personal, detail = _effective_xy_assets(image, base_title, roots)
     try:
         compatibility = _compatibility_from_personal(personal)
@@ -331,3 +304,44 @@ def load_xy_rom_tm_profile(
         source_detail=detail or (source.name, "Pokémon X/Y"),
         personal_stats=personal_stats,
     )
+
+
+def load_xy_levelup_moves_blob(
+    path: str | Path,
+    *,
+    process_name: str | None = None,
+    azahar_root: str | Path | None = None,
+    emulator_key: str | None = None,
+) -> tuple[bytes, int]:
+    """Devuelve el GARC vainilla de aprendizajes por nivel de X/Y y su Title ID.
+
+    Mirror de ``oras_rom_service.load_oras_levelup_moves_blob``: deliberadamente
+    NO consulta ``load/mods/<título>/romfs/a/2/1/4`` -ese archivo lo gestiona
+    ``app/xy_levelup_moves.py`` para aplicar los roles-, y sí respeta una
+    actualización oficial del juego si la contiene, siempre en Azahar/AzaharPlus
+    (a diferencia de ORAS/SM/USUM, X/Y en este equipo también puede correr con
+    AzaharPlus, de ahí el ``azahar_root`` explícito más abajo).
+    """
+    source = Path(path).expanduser().resolve()
+    if not source.is_file():
+        raise XYRomProfileError("No se encuentra el archivo de ROM X/Y seleccionado.")
+    base = _read_xy_ncch(source)
+    base_title = _assert_xy_image(base, process_name)
+    blob = _read_romfs_file_from_ncch_path(source, XY_LEVELUP_MOVES_PATH)
+
+    roots = list(azahar_user_roots())
+    if azahar_root is not None:
+        root = Path(azahar_root).expanduser().resolve()
+        if root.is_dir() and root not in roots:
+            roots.insert(0, root)
+    update_path = _find_xy_update(base_title, tuple(roots))
+    if update_path is not None:
+        updated = _read_romfs_file_from_ncch_path(update_path, XY_LEVELUP_MOVES_PATH)
+        if updated is not None:
+            blob = updated
+
+    if blob is None:
+        raise XYRomProfileError(
+            "La ROM X/Y activa no contiene la tabla de aprendizajes por nivel."
+        )
+    return blob, base_title

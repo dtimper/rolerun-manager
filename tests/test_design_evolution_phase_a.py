@@ -456,7 +456,7 @@ def test_legacy_navigation_targets_land_in_the_new_information_architecture() ->
     assert normalize_navigation_target("dashboard") == "team"
     assert primary_page_for("pc") == "team"
     assert primary_page_for("history") == "settings"
-    assert primary_page_for("moves") == "help"
+    assert primary_page_for("moves") == "tms"
 
 
 def test_fixed_team_projection_never_creates_a_seventh_position() -> None:
@@ -956,7 +956,11 @@ def test_team_cards_expand_in_six_equal_rows_and_keep_content_inside_border() ->
     assert "nature_decreased" in card
     assert "HABILIDAD" in card
     assert "OBJETO" in card
-    assert "pokemon, \"moves\"" in card
+    # Los movimientos se leen a través de `_effective_moves`, que proyecta las
+    # bajas/sustituciones en cola (ver `tests/test_eliminar_movimiento_de_rol.py`)
+    # en vez de leer `pokemon.moves` en crudo.
+    assert "_effective_moves(" in card
+    assert "self.effective_moves_for" in card
 
 
 def test_draft_party_cards_use_large_portraits_and_structured_move_chips() -> None:
@@ -1139,27 +1143,72 @@ def test_team_vertical_navigation_visits_all_six_roles_without_skips() -> None:
     assert tuple(visited) == identities
 
 
-def test_bdsp_draft_metadata_uses_the_active_waza_and_message_profile() -> None:
-    profile = SimpleNamespace(
+def _bdsp_draft_metadata_profile(*, description_language="english"):
+    return SimpleNamespace(
         base_pp=lambda _move_id: 10,
         power=lambda _move_id: 90,
         accuracy=lambda _move_id: 100,
+        type_id=lambda _move_id: 13,
         description=lambda _move_id: "The target is hit by a strong force.",
-        description_language="english",
+        description_language=description_language,
     )
+
+
+def test_bdsp_draft_metadata_falls_back_to_english_when_no_spanish_source_exists() -> None:
+    """Ni el dump del usuario (solo inglés) ni el catálogo de Sol/Luna
+    (2026-09-04, ver el siguiente test) traen este movimiento en español."""
+    profile = _bdsp_draft_metadata_profile()
     manager = SimpleNamespace(
         save_engine=SimpleNamespace(key="bdsp"),
         _get_bdsp_tm_profile=lambda prompt=False: profile,
         _damage_class_for_move=lambda _move_id: "special",
         sm_live_move_pp={}, oras_live_move_pp={},
+        gen7_move_metadata={},
     )
 
     metadata = RoleRunManager._draft_move_metadata(manager, 94)
 
     assert metadata == {
         "category": "special", "pp": 10, "power": 90, "accuracy": 100,
+        "type_id": 13,
         "description": "EN · The target is hit by a strong force.",
     }
+
+
+def test_bdsp_draft_metadata_prefers_the_spanish_catalog_over_english_dump_text() -> None:
+    """Pedido por el usuario el 2026-09-04: si el dump del jugador solo trae
+    inglés (su carpeta Message real solo tiene 'english', sin 'spanish'/'es'),
+    se reutiliza la descripción en español ya cargada para Sol/Luna en vez
+    de mostrar el inglés crudo con el aviso 'EN ·'."""
+    profile = _bdsp_draft_metadata_profile()
+    manager = SimpleNamespace(
+        save_engine=SimpleNamespace(key="bdsp"),
+        _get_bdsp_tm_profile=lambda prompt=False: profile,
+        _damage_class_for_move=lambda _move_id: "special",
+        sm_live_move_pp={}, oras_live_move_pp={},
+        gen7_move_metadata={94: {"description_es": "Fuerte ataque telequinético."}},
+    )
+
+    metadata = RoleRunManager._draft_move_metadata(manager, 94)
+
+    assert metadata["description"] == "Fuerte ataque telequinético."
+
+
+def test_bdsp_draft_metadata_uses_the_dumps_own_spanish_text_when_available() -> None:
+    """Si el dump del jugador SÍ trae español (carpeta Message con 'spanish'
+    o 'es'), se usa tal cual — no hace falta ningún catálogo de repuesto."""
+    profile = _bdsp_draft_metadata_profile(description_language="spanish")
+    manager = SimpleNamespace(
+        save_engine=SimpleNamespace(key="bdsp"),
+        _get_bdsp_tm_profile=lambda prompt=False: profile,
+        _damage_class_for_move=lambda _move_id: "special",
+        sm_live_move_pp={}, oras_live_move_pp={},
+        gen7_move_metadata={94: {"description_es": "Este texto no debería usarse."}},
+    )
+
+    metadata = RoleRunManager._draft_move_metadata(manager, 94)
+
+    assert metadata["description"] == "The target is hit by a strong force."
 
 
 def test_gen7_draft_metadata_publishes_versioned_power_accuracy_and_description() -> None:
@@ -1177,6 +1226,7 @@ def test_gen7_draft_metadata_publishes_versioned_power_accuracy_and_description(
 
     assert metadata == {
         "category": "physical", "pp": 15, "power": 75, "accuracy": 100,
+        "type_id": None,
         "description": "Destruye barreras como Pantalla de Luz.",
     }
 
@@ -1197,6 +1247,7 @@ def test_xy_draft_metadata_uses_xy_values_instead_of_the_gen7_table() -> None:
 
     assert metadata == {
         "category": "physical", "pp": 35, "power": 50, "accuracy": 100,
+        "type_id": None,
         "description": "Embiste con todo el cuerpo.",
     }
 
@@ -1433,6 +1484,14 @@ def test_only_floating_surfaces_and_technical_drag_create_system_toplevels() -> 
         "ghost = ctk.CTkToplevel(self)",
         "bar = ctk.CTkToplevel(self)",
         "launcher = ctk.CTkToplevel(bar)",
+        # El velo y el diálogo de `_mostrar_confirmacion_integrada`: pedido
+        # del usuario 02-09-2026, «que tenga transparencia» / «la opción de
+        # borrar está tras un velo oscuro que no permite pulsarlo» -un
+        # `CTkFrame` normal no admite alfa real, y una tarjeta dentro de
+        # `contenedor` queda tapada por un velo que es una ventana aparte;
+        # los dos -velo y tarjeta- necesitan ser su propia ventana.
+        "velo = ctk.CTkToplevel(contenedor)",
+        "dialogo = ctk.CTkToplevel(contenedor)",
         "window = ctk.CTkToplevel(bar)",
     ]
 
@@ -1668,8 +1727,21 @@ def test_page_swap_keeps_the_previous_surface_until_the_new_one_is_ready() -> No
     assert "self.after(" in source and "140" in source
     assert "ImageGrab.grab" in overlay
     assert "ImageTk.PhotoImage(capture)" in overlay
-    assert "self.update()" not in overlay
-    assert source.index("self.render_page()") < source.index("_retire_page_transition_overlay")
+
+
+def test_page_transition_overlay_waits_for_the_compositor_before_capturing() -> None:
+    """Pedido del usuario 02-09-2026: «al hacer un reroll, se quedan los
+    iconos de categoría fijos en la pantalla» -incluso después de ocultarlos
+    antes en el desvanecido (`IntegratedDraftFlow._run_fade`), seguían
+    apareciendo. La foto de esta barrera es una captura NATIVA de Windows
+    (`ImageGrab.grab`), no un estado interno de Tk: `update_idletasks()`
+    solo garantiza que Tk mandó sus órdenes de dibujo, no que DWM ya las
+    volcó de verdad al framebuffer que lee `ImageGrab`. Sin un margen real
+    antes de la captura, la foto podía llevarse un fotograma todavía viejo."""
+    overlay = inspect.getsource(RoleRunManager._create_page_transition_overlay)
+
+    assert overlay.index("self.update_idletasks()") < overlay.index("time.sleep(0.02)")
+    assert overlay.index("time.sleep(0.02)") < overlay.index("capture = ImageGrab.grab(")
 
 
 def test_hidden_initial_shell_commits_its_composed_team_view() -> None:
@@ -1963,7 +2035,21 @@ def test_initial_shell_compares_the_projected_party_after_pending_faints() -> No
     assert callbacks
 
 
-def test_sm_initial_shell_waits_for_the_proven_live_pc_matrix() -> None:
+def test_sm_initial_shell_does_not_wait_for_the_proven_live_pc_matrix() -> None:
+    """Reportado por el usuario 04-09-2026: si la matriz PC en vivo de SM no
+    llegaba a demostrarse en la sesión (sin testigo party->PC reciente),
+    RoleRun no abría NUNCA -esta barrera no publica por timeout a propósito-,
+    aunque la party ya estuviese lista y compuesta.
+
+    USUM y Perla Reluciente usan el mismo mecanismo de matriz PC completa
+    (`FULL_MATRIX_LIVE_PC_GAME_KEYS`) y no bloquean el arranque por esto: si
+    la prueba falla, `_ensure_live_pc_matrix_loaded` la reintenta DESPUÉS de
+    publicar y, si sigue sin demostrarse, `_fail_team_pc_load` deja el aviso
+    «NO SE PUDIERON ABRIR LAS CAJAS · REINTENTAR» sin tapar el resto de la
+    app -la misma degradación que ya usan ORAS/XY/BDSP-. SM tenía aquí una
+    excepción que la privaba de esa degradación ya probada. Este test
+    reemplaza al anterior (`test_sm_initial_shell_waits_for_the_proven_live_pc_matrix`),
+    que fijaba el bloqueo indefinido como comportamiento esperado."""
     callbacks: list[object] = []
     live = SimpleNamespace(
         party=[SimpleNamespace(species_id=731, current_hp=15, max_hp=15)],
@@ -1976,6 +2062,8 @@ def test_sm_initial_shell_waits_for_the_proven_live_pc_matrix() -> None:
     manager = SimpleNamespace(
         _initial_shell_waiting=True,
         _initial_shell_live_probe_complete=True,
+        # La matriz PC en vivo NUNCA se demostró esta sesión (`raw={}`, sin
+        # "live_matrix"). Antes eso bastaba para no publicar jamás.
         _initial_shell_pc_data=SimpleNamespace(box_count=32, raw={}),
         _initial_shell_reveal_phase="hidden",
         _body_swap_in_progress=False,
@@ -1989,21 +2077,17 @@ def test_sm_initial_shell_waits_for_the_proven_live_pc_matrix() -> None:
         _widget_alive=lambda _widget: False,
         _sync_activity_overlay_geometry=lambda _widget: False,
         _record_bdsp_ui_event=lambda *_args, **_kwargs: None,
+        _reveal_initial_shell_behind_overlay=lambda _overlay: None,
         after=lambda _delay, callback: callbacks.append(callback),
     )
 
     _preparar_barrera(manager)
     RoleRunManager._retire_initial_shell_when_ready(manager)
 
-    assert manager._initial_shell_reveal_phase == "hidden"
-    assert callbacks
-
-    manager._initial_shell_pc_data = SimpleNamespace(
-        box_count=32, raw={"live_matrix": True},
-    )
-    manager._reveal_initial_shell_behind_overlay = lambda _overlay: None
-    RoleRunManager._retire_initial_shell_when_ready(manager)
+    # La party ya está compuesta y con PS resueltos: la barrera avanza a
+    # "mapping" en el primer intento, sin esperar la matriz PC en vivo.
     assert manager._initial_shell_reveal_phase == "mapping"
+    assert callbacks
 
 
 def test_initial_shell_rejects_a_composed_live_view_not_yet_presented() -> None:
@@ -2249,6 +2333,8 @@ def test_tm_destroy_releases_bindings_and_removes_its_frame() -> None:
         _release_keyboard_navigation=lambda: events.append("keys-released"),
         _escape_binding="escape-id",
         frame=frame,
+        master=SimpleNamespace(),
+        _viewport_binding=None,
     )
 
     IntegratedTMTeachFlow.destroy(flow)

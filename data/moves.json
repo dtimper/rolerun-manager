@@ -458,6 +458,14 @@
     294,
     367
   ],
+  "tanque_bajar_ataque": [
+    45,
+    204,
+    297,
+    608,
+    321,
+    589
+  ],
   "tanque_subir_defensa_fisica": [
     151,
     112,
@@ -471,7 +479,12 @@
     842,
     747,
     837,
-    110
+    110,
+    115
+  ],
+  "prisma_bajar_ataque_esp": [
+    445,
+    598
   ],
   "prisma_subir_defensa_especial": [
     133,
@@ -479,7 +492,8 @@
     268,
     601,
     483,
-    850
+    850,
+    113
   ],
   "defensa_recuperacion_pasiva": [
     392,

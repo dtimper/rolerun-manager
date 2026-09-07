@@ -58,6 +58,9 @@ class CandidateManager:
     def _damage_class_for_move(self, move_id):
         return "special"
 
+    def _draft_move_metadata(self, move_id):
+        return {"type_id": 12, "description": f"Descripción de {move_id}."}
+
 
 class QueueManager:
     _queue_tm_teach = RoleRunManager._queue_tm_teach

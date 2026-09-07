@@ -254,7 +254,18 @@ def test_oras_pc_swap_between_two_occupied_slots_queues_both_identities() -> Non
     assert statuses == ["INTERCAMBIANDO EN EL PC"]
 
 
-def test_pc_swap_stays_blocked_on_backends_without_a_writer() -> None:
+def test_pc_swap_esta_habilitado_en_todos_los_backends_con_writer() -> None:
+    """05-09-2026, pedido del usuario: el intercambio deja de ser de sexta.
+
+    Cada backend lo escribe con su propio writer sobre la MISMA matriz PC que
+    su traslado a hueco libre ya tenía demostrada, sin ninguna dirección nueva:
+    `SMLiveWriter._apply_pc_swap`, `USUMLiveWriter._apply_pc_swap`,
+    `BDSPLiveWriter._apply_box_swap`, `B2W2MelonDSReader.swap_pc_slots` (B2/W2
+    y Blanco/Negro) y `HgssWriter.swap_pc_slots`.
+
+    Un backend sin ninguna escritura viva sigue rechazando el gesto: la casilla
+    se pinta en rojo antes de soltar, no al soltar.
+    """
     dragged = _mon(2, 263, pid=200, box=1, box_slot=2)
     displaced = _mon(1, 261, pid=100, box=1, box_slot=1)
 
@@ -268,11 +279,55 @@ def test_pc_swap_stays_blocked_on_backends_without_a_writer() -> None:
             manager, "pc", dragged, "pc", {"pokemon": displaced, "box": 1, "slot": 1},
         )
 
-    assert can_drop("oras") is True
-    # Mover a un hueco libre sí lo tienen; intercambiar dos ocupadas, no.
-    assert can_drop("xy") is False
-    assert can_drop("usum") is False
-    assert can_drop("bdsp") is False
+    for live_key in ("oras", "xy", "sm", "usum", "bdsp", "b2w2", "bw", "hgss"):
+        assert can_drop(live_key) is True, live_key
+    # Platino no tiene ninguna escritura viva: sigue rechazando el gesto.
+    assert can_drop("pt") is False
+
+
+def test_el_intercambio_atraviesa_las_dos_compuertas_en_todos_los_juegos() -> None:
+    """Las dos compuertas que se tragan un cambio en silencio.
+
+    Es el fallo que ya costó caro varias veces en este proyecto: la UI proyecta
+    el cambio, el rótulo dice «INTERCAMBIANDO EN EL PC» y ahí se queda para
+    siempre porque una de estas dos listas no nombraba al juego, así que nadie
+    llegaba a pedir la escritura. Se comprueban las dos por cada backend con
+    writer, no solo una.
+    """
+    from app.models import PendingTeamChange
+    from app.ui import MELONDS_GEN4_ESCRIBE, PC_SWAP_GAME_KEYS
+
+    # HeartGold es un caso aparte, a propósito: entra en `PC_SWAP_GAME_KEYS`
+    # -el gesto de arrastrar se ofrece igual que en los demás- pero mientras
+    # `MELONDS_GEN4_ESCRIBE` esté apagada su escritura de equipo/PC (PK4)
+    # sigue detrás de esa bandera por el historial real de «Huevo malo» (ver
+    # `_oras_live_unsupported_changes`). Con la bandera encendida (06-09-2026,
+    # segunda verificación ya implementada) se comporta como el resto: no es
+    # el fallo de «compuerta que se olvida un juego» que esta prueba persigue.
+    for live_key in ("oras", "xy", "sm", "usum", "bdsp", "b2w2", "bw", "hgss"):
+        change = PendingTeamChange(
+            operation="swap-box-slots", party_slot=0,
+            box=1, box_slot=1, destination_box=1, destination_box_slot=2,
+            incoming_identity="263:200:1:2", outgoing_identity="261:100:1:2",
+        )
+        manager = SimpleNamespace(
+            _active_azahar_realtime_key=lambda key=live_key: key,
+            _oras_live_auto_apply_available=lambda: True,
+            run=SimpleNamespace(pending_changes=[change]),
+            _oras_live_auto_apply_ids=set(),
+            _schedule_oras_live_auto_apply=lambda: None,
+        )
+        assert live_key in PC_SWAP_GAME_KEYS, live_key
+        if live_key == "hgss" and not MELONDS_GEN4_ESCRIBE:
+            assert RoleRunManager._oras_live_unsupported_changes(manager, [change]) != [], live_key
+            RoleRunManager._request_oras_live_auto_apply(manager, [change])
+            assert manager._oras_live_auto_apply_ids == set(), live_key
+            continue
+        # 1) No debe aparecer como «operación no soportada».
+        assert RoleRunManager._oras_live_unsupported_changes(manager, [change]) == [], live_key
+        # 2) Y debe entrar en la cola de escritura automática.
+        RoleRunManager._request_oras_live_auto_apply(manager, [change])
+        assert manager._oras_live_auto_apply_ids == {id(change)}, live_key
 
 
 def test_oras_pc_to_pc_drop_keeps_the_original_box_after_navigating_mid_drag() -> None:

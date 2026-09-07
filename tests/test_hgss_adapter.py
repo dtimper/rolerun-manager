@@ -53,6 +53,7 @@ class _LectorFalso:
     kanto: int = 0b00000001
     pc_slots: tuple = ()
     olvidos: int = 0
+    battle: object = None
 
     def __post_init__(self):
         self.memory = HGSS
@@ -60,6 +61,15 @@ class _LectorFalso:
     def read_party(self):
         crudo, equipo = _party(self.cuantos)
         return HgssPartyRead(4242, "melonDS.exe", 0x1000, self.cuantos, crudo, equipo)
+
+    sin_sonda: bool = False
+
+    def read_battle_probe(self, _party_read):
+        if self.sin_sonda:
+            raise AttributeError("este lector falso no implementa la sonda")
+        from app.hgss_live import HgssBattleRead
+
+        return self.battle if self.battle is not None else HgssBattleRead(state="none")
 
     def read_trainer(self, party_read=None):
         return HgssTrainerRead(self.dinero, self.johto, self.kanto)
@@ -194,12 +204,48 @@ def test_si_las_medallas_fallan_no_se_inventa_un_cero(adaptador) -> None:
     assert avisos and "no se pudo leer" in avisos[0].message
 
 
-def test_se_avisa_de_que_el_combate_no_esta_demostrado(adaptador) -> None:
+def test_fuera_de_combate_se_publica_ok(adaptador) -> None:
+    """Localizado el 06-09-2026: ya no es "no demostrado", es una lectura real."""
+    from app.hgss_live import HgssBattleRead
+
     adapter, lector = adaptador
+    lector.battle = HgssBattleRead(state="none")
     _crudo, equipo = _party(lector.cuantos)
     snapshot = adapter.capture_monitor(_guardado(equipo), save_path=None)
     combate = [d for d in snapshot.diagnostics if d.lane == "battle"]
-    assert combate and "no está demostrada" in combate[0].message
+    assert combate and combate[0].level.value == "ok"
+    assert snapshot.battle.state == "none"
+
+
+def test_en_combate_el_activo_se_marca_medido_y_el_resto_no(adaptador) -> None:
+    from app.hgss_live import HgssBattleRead
+
+    adapter, lector = adaptador
+    _crudo, equipo = _party(lector.cuantos)
+    activo = equipo[0]
+    lector.battle = HgssBattleRead(
+        state="battle", party_slot=activo.slot,
+        current_hp=activo.max_hp - 5, max_hp=activo.max_hp,
+    )
+    snapshot = adapter.capture_monitor(_guardado(equipo), save_path=None)
+    assert snapshot.battle.state == "battle"
+    salud = snapshot.battle.health_game.party
+    publicado = next(p for p in salud if p.slot == activo.slot)
+    assert publicado.current_hp == activo.max_hp - 5
+    assert publicado.hp_is_live is True
+    otros = [p for p in salud if p.slot != activo.slot]
+    assert otros and all(p.hp_is_live is False for p in otros)
+
+
+def test_la_sonda_sin_responder_no_afirma_nada(adaptador) -> None:
+    """Un lector cuya sonda falla no rompe la captura ni finge un estado."""
+    adapter, lector = adaptador
+    lector.sin_sonda = True
+    _crudo, equipo = _party(lector.cuantos)
+    snapshot = adapter.capture_monitor(_guardado(equipo), save_path=None)
+    combate = [d for d in snapshot.diagnostics if d.lane == "battle"]
+    assert snapshot.battle.state == "unknown"
+    assert combate and combate[0].level.value == "warning"
 
 
 # --------------------------------------------------------------------------
@@ -563,6 +609,51 @@ def test_un_hueco_de_movimiento_imposible_se_rechaza(adaptador) -> None:
             move_slot=7, old_move="—", old_move_id=0, new_move="Rayo",
             new_move_id=85, pokemon_identity=_identidad_de_run(objetivo),
         )])
+
+
+# --------------------------------------------------------------------------
+# Dos lecturas del PC antes de construir lo que entra al equipo
+# --------------------------------------------------------------------------
+
+class _LectorPCInestable:
+    """Un PC cuyo hueco (1, 1) da otro Pokémon en la segunda lectura.
+
+    06-09-2026, corrupción real: sacar un Pokémon del PC al equipo dejó un
+    Huevo malo de verdad en la partida del usuario, con una sola lectura del
+    PC de por medio. `parse_pk4_boxed` ya rechaza un checksum roto, pero eso
+    no cubre una lectura que atrapó al juego a mitad de escribir algo ahí
+    mismo y aun así dio un checksum válido para OTRO contenido -no roto, solo
+    distinto del que se creía-.
+    """
+
+    def __init__(self, indice_primera: int, indice_segunda: int) -> None:
+        self.memory = HGSS
+        self._indices = [indice_primera, indice_segunda]
+
+    def read_pc(self, party_read=None):
+        indice = self._indices.pop(0)
+        crudo = bytes.fromhex(_CASOS[indice]["boxed_hex"])
+        relleno = crudo + bytes(PK4_STORED_SIZE)  # nunca se lee más allá del hueco 1
+        return HgssPCRead(4242, "melonDS.exe", 0x1000, HGSS.pc, relleno, 1, ())
+
+
+def test_dos_lecturas_del_pc_que_no_coinciden_no_dejan_construir_nada() -> None:
+    lector = _LectorPCInestable(0, 1)
+    adapter = HgssRealTimeAdapter(reader=lector)
+
+    with pytest.raises(HgssLiveError, match="dos lecturas distintas"):
+        adapter._pc_en_confirmado(None, 1, 1)
+
+
+def test_dos_lecturas_del_pc_que_coinciden_se_aceptan() -> None:
+    lector = _LectorPCInestable(1, 1)
+    adapter = HgssRealTimeAdapter(reader=lector)
+
+    entrante, guardado = adapter._pc_en_confirmado(None, 1, 1)
+
+    esperado = parse_pk4_boxed(bytes.fromhex(_CASOS[1]["boxed_hex"]), 0)
+    assert entrante == esperado
+    assert guardado == bytes.fromhex(_CASOS[1]["boxed_hex"])
 
 
 def test_el_selector_de_mt_usa_un_conjunto_y_no_una_lista_a_mano() -> None:

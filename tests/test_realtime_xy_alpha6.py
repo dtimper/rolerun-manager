@@ -6,14 +6,17 @@ from pathlib import Path
 from app.azahar_rpc import AzaharProcess
 from app.oras_live import PK6_PARTY_SIZE, PK6_STORED_SIZE, _checksum, encrypt_pk6, parse_pk6_boxed
 from app.oras_tm_service import oras_tm_item_id
+from app.save_engine_client import SaveGameData
 from app.xy_live import (
     XYLiveReader, XYLiveWriter, XY_PC_SCAN_START, XY_PC_SIZE,
     XY_TM_POUCH_SIZE, XY_INVENTORY_SCAN_START, XY_TITLE_IDS,
+    XY_PARTY_ADDRESS, XY_PARTY_COUNT_ADDRESS, XY_PARTY_STRIDE,
+    XY_PARTY_STATS_OFFSET, XY_PARTY_STATS_SIZE,
     load_xy_move_metadata,
 )
 
 
-def _pk6(*, species=25, pid=0x11223344, tid=123, sid=456, nickname="Pika", marking=0) -> bytes:
+def _pk6(*, species=25, pid=0x11223344, tid=123, sid=456, nickname="Pika", marking=0, level=50) -> bytes:
     data = bytearray(PK6_PARTY_SIZE)
     struct.pack_into("<I", data, 0, 0x12345678)
     struct.pack_into("<H", data, 8, species)
@@ -25,6 +28,7 @@ def _pk6(*, species=25, pid=0x11223344, tid=123, sid=456, nickname="Pika", marki
     data[0x40:0x40 + len(encoded)] = encoded
     struct.pack_into("<4H", data, 0x5A, 33, 45, 0, 0)
     struct.pack_into("<I", data, 0x74, 0x3FFFFFFF)
+    data[0xEC] = int(level)
     struct.pack_into("<H", data, 6, _checksum(data))
     return encrypt_pk6(bytes(data))
 
@@ -67,6 +71,7 @@ def test_xy_move_metadata_is_pinned_to_the_xy_version_group() -> None:
         "accuracy": 100,
         "pp": 35,
         "description_es": "Embiste con todo el cuerpo.",
+        "type_id": 0,
     }
     assert metadata[611] == {
         "power": 20,
@@ -76,6 +81,7 @@ def test_xy_move_metadata_is_pinned_to_the_xy_version_group() -> None:
             "Hostiga al Pokémon objetivo durante cuatro o cinco turnos e impide "
             "que pueda huir mientras tanto."
         ),
+        "type_id": 6,
     }
 
 
@@ -131,6 +137,44 @@ def test_xy_alpha6_locates_live_tm_pocket_from_saved_witnesses() -> None:
     assert writer.block_resolver.cached_address(
         (int(process.title_id), str(process.name), reader.transport_label), "xy.inventory.tm_hm"
     ) == base
+
+
+def test_xy_read_ignores_a_leftover_valid_pokemon_beyond_the_real_count() -> None:
+    """Bug real, 2026-09-05: la lectura pasiva normal (dashboard, equipo,
+    barra flotante) decodificaba los seis slots físicos y se quedaba con
+    cualquiera que pareciese un Pokémon válido, sin mirar el contador real.
+    El slot que el contador excluye no se borra -sigue pasando el checksum
+    PK6 como un Pokémon válido, es lo último que hubo ahí-, así que en
+    cuanto se liberaba un hueco esta lectura colaba ese sobrante como un
+    miembro fantasma: el equipo parecía tener seis aunque solo cinco fuesen
+    reales, y RoleRun rechazaba añadir uno nuevo con "el equipo ya tiene
+    seis Pokémon".
+    """
+    def _place(region: bytearray, index: int, raw: bytes) -> None:
+        base = index * XY_PARTY_STRIDE
+        region[base:base + PK6_STORED_SIZE] = raw[:PK6_STORED_SIZE]
+        region[base + XY_PARTY_STATS_OFFSET:base + XY_PARTY_STATS_OFFSET + XY_PARTY_STATS_SIZE] = (
+            raw[PK6_STORED_SIZE:PK6_STORED_SIZE + XY_PARTY_STATS_SIZE]
+        )
+
+    region = bytearray(6 * XY_PARTY_STRIDE)
+    for index, nickname in enumerate(("Uno", "Dos", "Tres", "Cuatro", "Cinco")):
+        _place(region, index, _pk6(pid=0x11110000 + index, nickname=nickname))
+    # El sexto slot físico conserva un Pokémon válido y distinto -lo último
+    # que hubo ahí-, aunque el contador solo declare cinco.
+    _place(region, 5, _pk6(pid=0x22220000, nickname="Fantasma"))
+    fake = _MemoryClient({
+        XY_PARTY_ADDRESS: bytes(region),
+        XY_PARTY_COUNT_ADDRESS: struct.pack("<I", 5),
+    })
+    reader = XYLiveReader(Path("missing.json"), client_factory=lambda: fake, stable_delay=0)
+    current = SaveGameData("X", "SAV6XY", 6, "Timper", [], {})
+
+    snapshot = reader.read(current)
+
+    assert [pokemon.nickname for pokemon in snapshot.game.party] == [
+        "Uno", "Dos", "Tres", "Cuatro", "Cinco",
+    ]
 
 
 def test_xy_alpha6_runtime_capabilities_are_live_for_pc_and_tm() -> None:

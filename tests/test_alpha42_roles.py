@@ -93,7 +93,9 @@ class Alpha42RoleReworkTests(unittest.TestCase):
         self.assertNotIn(322, allowed)  # Cosmic Power: aumenta también Def. Esp.
         self.assertNotIn(347, allowed)  # Calm Mind
         self.assertNotIn(105, allowed)  # Recover
-        self.assertNotIn(97, allowed)   # Agility ya no es excepción para Tanque
+        # Decisión del usuario el 2026-09-03: un movimiento que SOLO afecta a
+        # la Velocidad vale para cualquier rol de combate, Tanque incluido.
+        self.assertIn(97, allowed)   # Agility: solo sube Velocidad
 
     def test_prism_status_rules_match_design(self) -> None:
         allowed = self.allowed("Prisma")
@@ -111,12 +113,123 @@ class Alpha42RoleReworkTests(unittest.TestCase):
         self.assertNotIn(837, allowed)  # Victory Dance: Defensa física
         self.assertNotIn(322, allowed)  # Cosmic Power: también Defensa física
         self.assertNotIn(105, allowed)  # Recover
-        self.assertNotIn(97, allowed)   # Agility sin Def. Esp. no basta
+        # Decisión del usuario el 2026-09-03: un movimiento que SOLO afecta a
+        # la Velocidad vale para cualquier rol de combate, Prisma incluido.
+        self.assertIn(97, allowed)   # Agility: solo sube Velocidad
 
-    def test_assassin_mage_and_support_keep_speed_exception(self) -> None:
-        self.assertIn(97, self.allowed("Asesino"))
-        self.assertIn(97, self.allowed("Mago"))
-        self.assertIn(97, self.allowed("Support"))
+    def test_all_combat_roles_share_pure_speed_status_moves(self) -> None:
+        """Decisión del usuario el 2026-09-03: ampliada de Asesino/Mago a los cuatro roles de combate."""
+        for role in ("Asesino", "Mago", "Tanque", "Prisma", "Support"):
+            self.assertIn(97, self.allowed(role))  # Agility: solo sube Velocidad
+
+    def test_speed_plus_own_stat_status_moves_split_by_role_like_the_curated_pools(self) -> None:
+        """Decisión del usuario el 2026-09-03, mismo criterio que Corpulencia/Paz Mental.
+
+        Un movimiento de Velocidad + otro stat solo vale para el rol al que
+        pertenece ese otro stat, exactamente como ya pasa con las pools
+        curadas (Corpulencia: Ataque+Defensa, solo Tanque; Paz Mental:
+        At. Esp.+Def. Esp., solo Prisma). Que suba de propina el otro stat
+        del mismo bloque (Def. Esp. en Danza Aleteo/Geocontrol) no invalida
+        para Prisma, igual que no invalida para Prisma en Paz Mental.
+        """
+        dragon_dance, shift_gear = 349, 508
+        quiver_dance, geomancy = 483, 601
+        venom_drench = 599
+
+        asesino = self.allowed("Asesino")
+        self.assertIn(dragon_dance, asesino)
+        self.assertIn(shift_gear, asesino)
+        self.assertNotIn(quiver_dance, asesino)
+        self.assertNotIn(geomancy, asesino)
+
+        prisma = self.allowed("Prisma")
+        self.assertIn(quiver_dance, prisma)
+        self.assertIn(geomancy, prisma)
+        self.assertNotIn(dragon_dance, prisma)
+        self.assertNotIn(shift_gear, prisma)
+
+        for role in ("Mago", "Tanque"):
+            allowed = self.allowed(role)
+            self.assertNotIn(dragon_dance, allowed)
+            self.assertNotIn(shift_gear, allowed)
+            self.assertNotIn(quiver_dance, allowed)
+            self.assertNotIn(geomancy, allowed)
+
+        # Trampa Venenosa baja Ataque, At. Esp. y Velocidad del rival a la
+        # vez: no es un autoboost ni "solo Velocidad", nadie la aprende por
+        # esta excepción.
+        for role in ("Asesino", "Mago", "Tanque", "Prisma"):
+            self.assertNotIn(venom_drench, self.allowed(role))
+
+    def test_support_lowers_any_rival_stat_but_no_role_poisons_without_direct_damage_except_three(self) -> None:
+        """Decisión del usuario el 2026-09-03.
+
+        Trampa Venenosa (baja Ataque/At. Esp./Velocidad rival) vale para
+        Support porque el Support puede bajar cualquier stat del rival,
+        aunque no pueda subirse los suyos propios. Hilo Venenoso (envenena +
+        baja Velocidad) solo vale para Prisma, Support y Líbero: son los
+        únicos tres roles que pueden envenenar sin dañar directamente al
+        rival. Alquitranazo (baja Velocidad rival, sin stats extra) vale
+        para todos, como cualquier "solo Velocidad".
+        """
+        venom_drench, toxic_thread, tar_shot = 599, 672, 749
+
+        support = self.allowed("Support")
+        self.assertIn(venom_drench, support)
+        self.assertIn(toxic_thread, support)
+        self.assertIn(tar_shot, support)
+
+        prisma = self.allowed("Prisma")
+        self.assertIn(toxic_thread, prisma)
+
+        for role in ("Asesino", "Mago", "Tanque"):
+            allowed = self.allowed(role)
+            self.assertNotIn(toxic_thread, allowed)
+            self.assertIn(tar_shot, allowed)
+
+    def test_hazards_and_five_stat_boosts_are_not_pure_speed_moves(self) -> None:
+        """Bug real del 2026-09-03: Red Viscosa colaba como "solo Velocidad".
+
+        El usuario cambió el rol de dos Pokémon, y su Gardevoir Prisma aprendió
+        Sticky Web (Red Viscosa). Su efecto principal es poner un hazard, no
+        bajar la Velocidad —eso solo le pasa a quien pise el campo después—,
+        el mismo principio que ya protegía a Giro Rápido. Sticky Web sigue
+        siendo legal para Support, donde ya vivía en su propia pool de
+        hazards. Novena Potencia y Estruendo Escama (los cinco stats a la
+        vez) tampoco cuentan como "Velocidad + el stat del rol": ningún stat
+        ahí es más protagonista que otro.
+        """
+        sticky_web, extreme_evoboost, clangorous_soul = 564, 702, 775
+        for role in ("Asesino", "Mago", "Tanque", "Prisma"):
+            allowed = self.allowed(role)
+            self.assertNotIn(sticky_web, allowed)
+            self.assertNotIn(extreme_evoboost, allowed)
+            self.assertNotIn(clangorous_soul, allowed)
+        self.assertIn(sticky_web, self.allowed("Support"))
+
+    def test_speed_exception_never_leaks_a_damage_move_as_status(self) -> None:
+        """Bug real del 2026-09-03: la excepción de Velocidad coló movimientos de daño.
+
+        ``speed_status_moves`` tenía 21 de 41 IDs clasificados como daño
+        físico o especial (Giro Rápido #229, Restricción #132 entre ellos),
+        confirmado en el juego real: la sustitución de aprendizajes por nivel
+        le ofreció Giro Rápido a un Houndoom Mago, saltándose por completo la
+        restricción "solo daño especial" del rol. Ningún movimiento de la
+        excepción de Velocidad puede tener una clase de daño real.
+        """
+        for role in ("Asesino", "Mago"):
+            allowed = self.allowed(role)
+            filtrados = {
+                move_id for move_id in self.speed_moves
+                if self.damage_classes.get(move_id) != "status"
+            }
+            self.assertTrue(filtrados, "si esto deja de fallar, revisar si la comprobación sigue haciendo falta")
+            self.assertFalse(
+                allowed & filtrados,
+                f"{role} admite movimientos de daño colados por la excepción de Velocidad: {allowed & filtrados}",
+            )
+            self.assertNotIn(229, allowed)  # Giro Rápido, físico
+            self.assertNotIn(132, allowed)  # Restricción, físico
 
     def test_tank_and_prism_can_damage_both_sides_but_never_drain(self) -> None:
         for role in ("Tanque", "Prisma"):

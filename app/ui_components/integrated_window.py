@@ -16,6 +16,15 @@ class IntegratedWindowSurface(ctk.CTkFrame):
 
     def __init__(self, master, *args, **kwargs) -> None:
         self._host = master
+        # El host (RoleRunManager) usa esta cuenta para aplazar cualquier
+        # repintado de fondo mientras haya al menos un diálogo de estos
+        # abierto -ver `_smooth_render_page`-, en vez de dejar que ambos
+        # compitan por la misma superficie. `getattr`/`setattr` sueltos: este
+        # componente no depende de que el host declare el atributo de antemano.
+        try:
+            setattr(master, "_integrated_modal_count", int(getattr(master, "_integrated_modal_count", 0)) + 1)
+        except Exception:
+            pass
         self._scrim = ctk.CTkFrame(master, fg_color="#080808", corner_radius=0)
         self._scrim.place(relx=0, rely=0, relwidth=1, relheight=1)
         self._scrim.lift()
@@ -47,6 +56,38 @@ class IntegratedWindowSurface(ctk.CTkFrame):
         )
         self.after(0, self._place_surface)
         self.after(20, self.focus_force)
+        # Reportado por el usuario 03-09-2026: al cambiar de rol hacia/desde
+        # Líbero con este diálogo abierto, un repintado de fondo (el sondeo en
+        # vivo puede reconstruir Equipo/PC en cualquier momento) crea widgets
+        # nuevos que, en Tk, se apilan por encima de cualquier hermano ya
+        # existente -incluido este velo- salvo que alguien vuelva a levantarlo.
+        # Sin una ventana de sistema propia que lo proteja, ese repintado se
+        # veía encima del diálogo. Mismo patrón que ya usa
+        # `guard_topmost_on_focus_loss` para un problema equivalente con
+        # ventanas reales: un sondeo ligero que se limita a re-levantar el
+        # velo y el propio diálogo mientras siga vivo.
+        self._keep_on_top_after_id = None
+        self._modal_count_released = False
+        self._schedule_keep_on_top()
+
+    def _schedule_keep_on_top(self) -> None:
+        try:
+            self._keep_on_top_after_id = self.after(150, self._keep_on_top_tick)
+        except Exception:
+            self._keep_on_top_after_id = None
+
+    def _keep_on_top_tick(self) -> None:
+        self._keep_on_top_after_id = None
+        if self._withdrawn:
+            return
+        try:
+            if self._scrim.winfo_exists():
+                self._scrim.lift()
+            if self.winfo_exists():
+                self.lift()
+        except Exception:
+            pass
+        self._schedule_keep_on_top()
 
     def _place_surface(self) -> None:
         if self._withdrawn:
@@ -131,11 +172,31 @@ class IntegratedWindowSurface(ctk.CTkFrame):
         self._scrim.place(relx=0, rely=0, relwidth=1, relheight=1)
         self._scrim.lift()
         self._place_surface()
+        if self._keep_on_top_after_id is None:
+            self._schedule_keep_on_top()
 
     def state(self) -> str:
         return "withdrawn" if self._withdrawn else "normal"
 
     def destroy(self) -> None:
+        if self._keep_on_top_after_id is not None:
+            try:
+                self.after_cancel(self._keep_on_top_after_id)
+            except Exception:
+                pass
+            self._keep_on_top_after_id = None
+        if not getattr(self, "_modal_count_released", False):
+            self._modal_count_released = True
+            try:
+                host = self._host
+                count = max(0, int(getattr(host, "_integrated_modal_count", 1)) - 1)
+                setattr(host, "_integrated_modal_count", count)
+                if count == 0:
+                    resume = getattr(host, "_resume_deferred_render_after_modal", None)
+                    if callable(resume):
+                        resume()
+            except Exception:
+                pass
         try:
             root = self.winfo_toplevel()
             if self._escape_binding:

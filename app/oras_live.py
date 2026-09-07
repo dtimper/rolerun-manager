@@ -222,6 +222,55 @@ ORAS_BATTLE_DYNAMIC_HP_PAIR_SIZE = 4
 # separación PK6/estadísticas que la party normal de ORAS. Leer hasta las
 # estadísticas del sexto slot basta para recuperar PS y nivel sin tocar RAM.
 ORAS_BATTLE_PARTY_SPAN = (5 * ORAS_PARTY_STRIDE) + ORAS_PARTY_STATS_OFFSET + ORAS_PARTY_STATS_SIZE
+
+
+def resolve_battle_row_mapping(
+    entradas: list[tuple[int, int] | None], esperado: list[int],
+) -> list[int] | None:
+    """Asocia cada miembro del equipo con su fila de la tabla de combate.
+
+    Hallazgo físico del 31-08-2026 en ORAS, capturado dos veces en vivo (con
+    Scyther y con Breloom como combatiente activo): la tabla NO va en orden de
+    equipo salvo por un detalle — el Pokémon activo se INTERCAMBIA de posición
+    con quien ocupe su hueco "de reposo". Los otros cuatro miembros se quedaron
+    exactamente donde se esperaba. No es una reordenación completa: es un
+    intercambio de dos entradas.
+
+    Confirmado el 06-09-2026 que X/Y hace EXACTAMENTE lo mismo, con el mismo
+    paso de 580 bytes, así que esta resolución la comparten los dos juegos.
+
+    El PS MÁXIMO nunca cambia dentro de un combate en esta generación, así que
+    sirve de ancla fija para reconocer el intercambio sin decodificar la
+    identidad del Pokémon. Devuelve `mapeo[indice_de_equipo] = fila`, o `None`
+    si lo observado no es ni el orden directo ni un intercambio limpio de dos:
+    no se inventa una regla nueva sin haberla capturado.
+
+    Limitación conocida y aceptada: si los dos miembros intercambiados
+    comparten PS máximo, el intercambio es invisible para este ancla y el
+    mapeo queda como identidad. Los máximos siguen siendo correctos; solo
+    podrían cruzarse los PS actuales de esos dos.
+    """
+    total = min(len(entradas), len(esperado))
+    mapeo = list(range(total))
+    discrepantes = [
+        index for index in range(total)
+        if entradas[index] is not None and entradas[index][0] != esperado[index]
+    ]
+    if not discrepantes:
+        return mapeo
+    if len(discrepantes) != 2:
+        return None
+    i, j = discrepantes
+    entrada_i, entrada_j = entradas[i], entradas[j]
+    if (
+        entrada_i is not None and entrada_j is not None
+        and entrada_i[0] == esperado[j] and entrada_j[0] == esperado[i]
+    ):
+        mapeo[i], mapeo[j] = j, i
+        return mapeo
+    return None
+
+
 ORAS_ITEM_RECORD_SIZE = 4
 ORAS_MAX_BAG_QUANTITY = 999
 ORAS_MAX_MONEY = 9_999_999
@@ -1038,6 +1087,8 @@ def load_oras_move_metadata(path: Path) -> dict[int, dict[str, object]]:
         values["description_es"] = str(
             entry.get("description_es", "") or ""
         ).strip()
+        type_id = entry.get("type_id")
+        values["type_id"] = int(type_id) if isinstance(type_id, int) else None
         result[move_id] = values
     return result
 
@@ -1702,38 +1753,9 @@ class ORASLiveReader:
             else:
                 pairs.append((-1, -1))
 
-        # Hallazgo físico del 31-08-2026, capturado dos veces en vivo (con
-        # Scyther y con Breloom como combatiente activo): la tabla NO va en
-        # orden de equipo salvo por un detalle — el Pokémon activo se
-        # INTERCAMBIA de posición con quien ocupe su hueco "de reposo". Los
-        # otros cuatro miembros se quedaron exactamente donde se esperaba. No
-        # es una reordenación completa: es un intercambio de dos entradas.
-        # El PS MÁXIMO nunca cambia dentro de un combate en esta generación,
-        # así que sirve de ancla fija para reconocer el intercambio sin
-        # decodificar la identidad del Pokémon.
         esperado = [int(pokemon.max_hp or 0) for pokemon in current.party[:count]]
-        mapeo = list(range(count))
-        discrepantes = [
-            index for index in range(count)
-            if entradas[index] is not None and entradas[index][0] != esperado[index]
-        ]
-        resoluble = True
-        if len(discrepantes) == 2:
-            i, j = discrepantes
-            entrada_i, entrada_j = entradas[i], entradas[j]
-            if (
-                entrada_i is not None and entrada_j is not None
-                and entrada_i[0] == esperado[j] and entrada_j[0] == esperado[i]
-            ):
-                mapeo[i], mapeo[j] = j, i
-            else:
-                resoluble = False
-        elif discrepantes:
-            # Ni cero discrepancias (todo en su sitio) ni un intercambio
-            # limpio de dos: no se inventa una regla nueva sin capturarla.
-            resoluble = False
-
-        if not resoluble:
+        mapeo = resolve_battle_row_mapping(entradas, esperado)
+        if mapeo is None:
             return ORASBattleProbe(state=state, health_game=None, hp_pairs=tuple(pairs))
 
         party: list[SavePokemon] = []
@@ -1745,11 +1767,17 @@ class ORASLiveReader:
                 move_ids=list(pokemon.move_ids),
                 markings=list(pokemon.markings),
             )
+            medido = False
             if index < count:
                 entrada = entradas[mapeo[index]]
                 if entrada is not None:
                     clone.max_hp, clone.current_hp = entrada
                     valid += 1
+                    medido = True
+            # 06-09-2026: una entrada que no supera la validación estructural
+            # conserva los PS del bloque de equipo. Se marca para que la barra
+            # no los pinte como medidos en vivo.
+            clone.hp_is_live = medido
             party.append(clone)
 
         health = None

@@ -41,6 +41,21 @@ class SavePokemon:
     # dejar ambos valores a cero sin afectar a las rutas existentes.
     current_hp: int = 0
     max_hp: int = 0
+    # ¿Estos PS son los de AHORA, o los que había antes de entrar en combate?
+    #
+    # 06-09-2026, planteado por el usuario: la barra podía pintar en verde los
+    # PS de un Pokémon que estaba a la mitad. En varios juegos, durante un
+    # combate solo el que está en el campo tiene PS medidos en vivo; los demás
+    # arrastran los del bloque de equipo, que en quinta está DEMOSTRADO que no
+    # se actualiza hasta que el combate acaba. Como `current_hp` era un número
+    # suelto sin procedencia, el valor medido y el arrastrado ocupaban el mismo
+    # campo y la barra no podía distinguirlos: pintaba los dos igual.
+    #
+    # `True` por defecto para no cambiar el comportamiento de ninguna lectura
+    # fuera de combate, que es cuando el bloque de equipo SÍ es la verdad. Solo
+    # los caminos de combate lo ponen en `False`, y solo para los miembros cuyo
+    # valor no han podido medir.
+    hp_is_live: bool = True
     # Estado persistente del Pokémon. En PB8 coincide con
     # PKHeX.Core.StatusCondition (0, sueño 1..7, veneno 8, quemadura 16,
     # congelación 32, parálisis 64 y veneno grave 128).

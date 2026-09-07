@@ -475,13 +475,17 @@ def test_alpha36_party_to_box_compacts_full_six_member_party_and_preserves_roles
     assert ram.read(last + 0x158, 0x16) == b"\0" * 0x16
 
 
-def test_alpha37_party_to_box_uses_first_free_live_slot_not_stale_requested_slot() -> None:
+def test_party_to_box_writes_the_exact_requested_destination() -> None:
+    """Reportado por el usuario 04-09-2026: arrastrar del Equipo a una casilla
+    PC concreta siempre acababa en el primer hueco libre, ignorando la
+    casilla exacta. Réplica del contrato ya probado en USUM
+    (`test_usum_party_drag_writes_the_exact_validated_pc_destination`)."""
     writer, ram, current, _party_base, pc_base = _setup_writer(
         [(724, 10, "Líbero"), (731, 11, "Asesino")],
         {0: (165, 99, "Mago")},
     )
     change = PendingTeamChange(
-        operation="party-to-box", party_slot=2, box=1, box_slot=1,
+        operation="party-to-box", party_slot=2, box=1, box_slot=2,
         outgoing_identity="731:11:11:22", outgoing_pokemon="S731",
     )
     result = writer.apply(current, [change])
@@ -490,6 +494,28 @@ def test_alpha37_party_to_box_uses_first_free_live_slot_not_stale_requested_slot
     second = parse_pk7_boxed(ram.read(pc_base + PK7_STORED_SIZE, PK7_STORED_SIZE), 1, 2, {})
     assert first is not None and first.species_id == 165
     assert second is not None and second.species_id == 731
+
+
+def test_party_to_box_rejects_an_exact_destination_that_is_already_occupied() -> None:
+    """Antes (alpha.37) esta misma situación se resolvía en silencio buscando
+    el siguiente hueco libre. Con la UI calculando ya el destino desde la
+    matriz live (no desde un main/caché desfasado, ver `_team_pc_drop` en
+    `app/ui.py`), un destino explícito que resulta ocupado es una señal real
+    de carrera: se rechaza sin escribir nada, igual que ya hace USUM
+    (`test_usum_pc_to_pc_rejects_occupied_destination_without_writing`), en
+    vez de sustituirlo por otra casilla sin avisar."""
+    writer, ram, current, _party_base, _pc_base = _setup_writer(
+        [(724, 10, "Líbero"), (731, 11, "Asesino")],
+        {0: (165, 99, "Mago")},
+    )
+    before_pc = bytes(ram.pc)
+    change = PendingTeamChange(
+        operation="party-to-box", party_slot=2, box=1, box_slot=1,
+        outgoing_identity="731:11:11:22", outgoing_pokemon="S731",
+    )
+    with pytest.raises(SMLiveError, match="casilla PC elegida ya está ocupada"):
+        writer.apply(current, [change])
+    assert bytes(ram.pc) == before_pc
 
 
 def test_alpha36_party_to_box_reuses_existing_live_blank_when_party_has_less_than_six() -> None:
@@ -739,6 +765,267 @@ def test_alpha40_replace_fainted_moves_dead_to_box4_and_inherits_role() -> None:
     grave_addr = pc_base + grave_index * PK7_STORED_SIZE
     grave = parse_pk7_boxed(ram.read(grave_addr, PK7_STORED_SIZE), 4, 1, {})
     assert grave is not None and grave.species_id == 724 and grave.role == "Líbero"
+
+
+def test_sm_pc_to_pc_moves_exact_pk7_to_requested_box_and_slot() -> None:
+    """Reportado por el usuario 04-09-2026: mover un Pokémon del PC a otro
+    hueco del PC no existía para Sol/Luna, solo Equipo→PC. Réplica del mismo
+    contrato ya validado en
+    ``test_usum_alpha44_party_size_integrity.test_usum_pc_to_pc_moves_exact_pk7_to_requested_box_and_slot``
+    sobre la matriz PC de SM, que ya está demostrada por
+    ``_ensure_pc_live_cache_for_team_write``/``_read_proven_pc_matrix``
+    -las mismas funciones que ``party-to-box``/``box-to-party`` usan más
+    arriba en este archivo-, no una dirección nueva."""
+    writer, ram, current, _party_base, pc_base = _setup_writer(
+        [(724, 10, "Líbero")],
+        {(4 - 1) * 30: (165, 99, "Tanque")},
+    )
+    source_index = (4 - 1) * 30
+    destination_index = (3 - 1) * 30 + 4
+    source_addr = pc_base + source_index * PK7_STORED_SIZE
+    destination_addr = pc_base + destination_index * PK7_STORED_SIZE
+    exact_source = ram.read(source_addr, PK7_STORED_SIZE)
+
+    result = writer.apply(current, [PendingTeamChange(
+        operation="move-box-slot", party_slot=0,
+        box=4, box_slot=1, destination_box=3, destination_box_slot=5,
+        incoming_identity="165:99:11:22", incoming_pokemon="Ledyba",
+    )])
+
+    assert result.applied_count == 1
+    assert ram.read(source_addr, PK7_STORED_SIZE) == encrypt_pk6_stored(bytes(PK7_STORED_SIZE))
+    assert ram.read(destination_addr, PK7_STORED_SIZE) == exact_source
+    moved = parse_pk7_boxed(ram.read(destination_addr, PK7_STORED_SIZE), 3, 5, {})
+    assert moved is not None and moved.species_id == 165 and moved.role == "Tanque"
+    assert [pokemon.species_id for pokemon in result.game.party] == [724]
+
+
+def test_sm_pc_to_pc_rejects_occupied_destination_without_writing() -> None:
+    writer, ram, current, _party_base, _pc_base = _setup_writer(
+        [(724, 10, "Líbero")],
+        {0: (165, 99, "Tanque"), 1: (731, 100, "Asesino")},
+    )
+    before = bytes(ram.pc)
+
+    with pytest.raises(SMLiveError, match="destino.*ocupada"):
+        writer.apply(current, [PendingTeamChange(
+            operation="move-box-slot", party_slot=0,
+            box=1, box_slot=1, destination_box=1, destination_box_slot=2,
+            incoming_identity="165:99:11:22",
+        )])
+
+    assert bytes(ram.pc) == before
+
+
+def test_sm_pc_swap_cruza_los_dos_pk7_sin_tocar_el_equipo() -> None:
+    """05-09-2026, pedido del usuario: intercambiar dos casillas OCUPADAS.
+
+    ``_apply_pc_move`` no lo cubre -exige el destino libre y deja el vacío
+    cifrado en el origen-. Aquí no interviene ningún vacío: los dos bloques de
+    0xE8 bytes se cruzan sobre la MISMA matriz PC ya demostrada, y el equipo no
+    se toca.
+    """
+    writer, ram, current, _party_base, pc_base = _setup_writer(
+        [(724, 10, "Líbero")],
+        {0: (165, 99, "Tanque"), 1: (731, 100, "Asesino")},
+    )
+    source_addr = pc_base + 0 * PK7_STORED_SIZE
+    destination_addr = pc_base + 1 * PK7_STORED_SIZE
+    exact_source = ram.read(source_addr, PK7_STORED_SIZE)
+    exact_destination = ram.read(destination_addr, PK7_STORED_SIZE)
+    before_party = bytes(ram.party)
+
+    result = writer.apply(current, [PendingTeamChange(
+        operation="swap-box-slots", party_slot=0,
+        box=1, box_slot=1, destination_box=1, destination_box_slot=2,
+        incoming_identity="165:99:11:22", outgoing_identity="731:100:11:22",
+    )])
+
+    assert result.applied_count == 1
+    # Cruzados byte a byte: ninguna casilla recibe un vacío en ningún momento.
+    assert ram.read(source_addr, PK7_STORED_SIZE) == exact_destination
+    assert ram.read(destination_addr, PK7_STORED_SIZE) == exact_source
+    llegado = parse_pk7_boxed(ram.read(destination_addr, PK7_STORED_SIZE), 1, 2, {})
+    assert llegado is not None and llegado.species_id == 165 and llegado.role == "Tanque"
+    desplazado = parse_pk7_boxed(ram.read(source_addr, PK7_STORED_SIZE), 1, 1, {})
+    assert desplazado is not None and desplazado.species_id == 731
+    assert bytes(ram.party) == before_party
+
+
+def test_sm_pc_swap_rechaza_un_destino_vacio_sin_escribir() -> None:
+    """Un destino libre es un traslado (`move-box-slot`), no un intercambio."""
+    writer, ram, current, _party_base, _pc_base = _setup_writer(
+        [(724, 10, "Líbero")], {0: (165, 99, "Tanque")},
+    )
+    before = bytes(ram.pc)
+
+    with pytest.raises(SMLiveError, match="destino.*vacía"):
+        writer.apply(current, [PendingTeamChange(
+            operation="swap-box-slots", party_slot=0,
+            box=1, box_slot=1, destination_box=1, destination_box_slot=2,
+            incoming_identity="165:99:11:22", outgoing_identity="731:100:11:22",
+        )])
+
+    assert bytes(ram.pc) == before
+
+
+def test_sm_pc_swap_rechaza_una_identidad_que_ya_no_coincide_sin_escribir() -> None:
+    writer, ram, current, _party_base, _pc_base = _setup_writer(
+        [(724, 10, "Líbero")],
+        {0: (165, 99, "Tanque"), 1: (731, 100, "Asesino")},
+    )
+    before = bytes(ram.pc)
+
+    with pytest.raises(SMLiveError, match="no coincide"):
+        writer.apply(current, [PendingTeamChange(
+            operation="swap-box-slots", party_slot=0,
+            box=1, box_slot=1, destination_box=1, destination_box_slot=2,
+            incoming_identity="165:99:11:22",
+            outgoing_identity="999:999:11:22",  # ya no es quien la UI declaró
+        )])
+
+    assert bytes(ram.pc) == before
+
+
+def test_sm_pc_swap_exige_las_dos_identidades() -> None:
+    writer, ram, current, _party_base, _pc_base = _setup_writer(
+        [(724, 10, "Líbero")],
+        {0: (165, 99, "Tanque"), 1: (731, 100, "Asesino")},
+    )
+    before = bytes(ram.pc)
+
+    with pytest.raises(SMLiveError, match="identidad estable de los DOS"):
+        writer.apply(current, [PendingTeamChange(
+            operation="swap-box-slots", party_slot=0,
+            box=1, box_slot=1, destination_box=1, destination_box_slot=2,
+            incoming_identity="165:99:11:22",
+        )])
+
+    assert bytes(ram.pc) == before
+
+
+def test_sm_pc_swap_restaura_las_dos_casillas_si_falla_a_mitad() -> None:
+    writer, ram, current, _party_base, _pc_base = _setup_writer(
+        [(724, 10, "Líbero")],
+        {0: (165, 99, "Tanque"), 1: (731, 100, "Asesino")},
+    )
+    delta = 0x20000000000
+    # La segunda escritura (el origen) falla con el destino ya reescrito.
+    writer.host_memory_factory = lambda: _FailingHostMemory(
+        ram, delta=delta, pid=9001, fail_on_write=2,
+    )
+    before_pc = bytes(ram.pc)
+    before_party = bytes(ram.party)
+
+    with pytest.raises(SMLiveError, match="restauró y verificó"):
+        writer.apply(current, [PendingTeamChange(
+            operation="swap-box-slots", party_slot=0,
+            box=1, box_slot=1, destination_box=1, destination_box_slot=2,
+            incoming_identity="165:99:11:22", outgoing_identity="731:100:11:22",
+        )])
+
+    assert bytes(ram.pc) == before_pc
+    assert bytes(ram.party) == before_party
+
+
+class _PartialWriteHostMemory(_HostMemory):
+    """Escribe la MITAD de los bytes y solo entonces falla.
+
+    Es lo que hace de verdad `WindowsProcessMemory.write`: lanza también
+    cuando `WriteProcessMemory` devuelve `ERROR_PARTIAL_COPY`, y para entonces
+    parte de los bytes YA están escritos. Un doble que solo lanza -sin escribir
+    nada- nunca habría destapado el fallo que esta prueba fija.
+    """
+
+    def __init__(self, ram: _RAM, *, delta: int, pid: int, fail_on_write: int):
+        super().__init__(ram, delta=delta, pid=pid)
+        self.fail_on_write = int(fail_on_write)
+        self.write_count = 0
+
+    def write(self, handle, address: int, data: bytes) -> None:
+        self.write_count += 1
+        if self.write_count == self.fail_on_write:
+            super().write(handle, address, bytes(data)[: len(data) // 2])
+            raise RuntimeError("WriteProcessMemory falló: copia parcial")
+        super().write(handle, address, data)
+
+
+def test_sm_pc_swap_restaura_una_escritura_que_falla_a_medias() -> None:
+    """El caso que un doble «falla sin escribir» no puede reproducir.
+
+    Si el apunte para el rollback se hiciera DESPUÉS de escribir, esta casilla
+    quedaría medio escrita y fuera del rollback -y encima se informaría de que
+    se restauró todo-. Con las dos casillas ocupadas, eso es perder un Pokémon.
+    """
+    for fallo in (1, 2):
+        writer, ram, current, _party_base, _pc_base = _setup_writer(
+            [(724, 10, "Líbero")],
+            {0: (165, 99, "Tanque"), 1: (731, 100, "Asesino")},
+        )
+        delta = 0x20000000000
+        writer.host_memory_factory = lambda: _PartialWriteHostMemory(
+            ram, delta=delta, pid=9001, fail_on_write=fallo,
+        )
+        before_pc = bytes(ram.pc)
+        before_party = bytes(ram.party)
+
+        with pytest.raises(SMLiveError):
+            writer.apply(current, [PendingTeamChange(
+                operation="swap-box-slots", party_slot=0,
+                box=1, box_slot=1, destination_box=1, destination_box_slot=2,
+                incoming_identity="165:99:11:22", outgoing_identity="731:100:11:22",
+            )])
+
+        # Las dos casillas vuelven a estar exactamente como estaban, aunque el
+        # fallo dejara bytes a medias.
+        assert bytes(ram.pc) == before_pc, f"escritura {fallo}"
+        assert bytes(ram.party) == before_party, f"escritura {fallo}"
+
+
+def test_sm_pc_move_restaura_una_escritura_que_falla_a_medias() -> None:
+    """Mismo fallo latente en el hermano ya validado: su SEGUNDA escritura
+    apunta al origen, que todavía está OCUPADO."""
+    writer, ram, current, _party_base, _pc_base = _setup_writer(
+        [(724, 10, "Líbero")], {0: (165, 99, "Tanque")},
+    )
+    delta = 0x20000000000
+    writer.host_memory_factory = lambda: _PartialWriteHostMemory(
+        ram, delta=delta, pid=9001, fail_on_write=2,
+    )
+    before_pc = bytes(ram.pc)
+
+    with pytest.raises(SMLiveError):
+        writer.apply(current, [PendingTeamChange(
+            operation="move-box-slot", party_slot=0,
+            box=1, box_slot=1, destination_box=1, destination_box_slot=2,
+            incoming_identity="165:99:11:22",
+        )])
+
+    assert bytes(ram.pc) == before_pc
+
+
+def test_sm_pc_swap_capability_is_accepted_by_the_ui_gate() -> None:
+    manager = SimpleNamespace(_active_azahar_realtime_key=lambda: "sm")
+    change = PendingTeamChange(
+        operation="swap-box-slots", party_slot=0,
+        box=1, box_slot=1, destination_box=1, destination_box_slot=2,
+    )
+    assert RoleRunManager._oras_live_unsupported_changes(manager, [change]) == []
+    from app.ui import PC_SWAP_GAME_KEYS
+    assert {"sm", "usum"} <= PC_SWAP_GAME_KEYS
+
+
+def test_sm_pc_to_pc_capability_is_accepted_by_the_ui_gate() -> None:
+    """`PC_A_PC_GAME_KEYS`/`_oras_live_unsupported_changes` deben aceptar ya
+    `move-box-slot` para SM, o el cambio se proyecta y nunca llega al writer."""
+    manager = SimpleNamespace(_active_azahar_realtime_key=lambda: "sm")
+    change = PendingTeamChange(
+        operation="move-box-slot", party_slot=0,
+        box=1, box_slot=1, destination_box=1, destination_box_slot=2,
+    )
+    assert RoleRunManager._oras_live_unsupported_changes(manager, [change]) == []
+    from app.ui import PC_A_PC_GAME_KEYS
+    assert "sm" in PC_A_PC_GAME_KEYS
 
 
 def test_alpha40_replace_fainted_rolls_back_source_graveyard_and_party() -> None:

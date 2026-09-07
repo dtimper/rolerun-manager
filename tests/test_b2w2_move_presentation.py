@@ -54,6 +54,9 @@ class _Rom:
     def damage_class(self, move_id):
         return "special" if int(move_id) == LANZALLAMAS else "physical"
 
+    def type_id(self, move_id):
+        return {LANZALLAMAS: 9, TERREMOTO: 4}.get(int(move_id))
+
 
 def _manager(rom=None, descripciones=None):
     return SimpleNamespace(

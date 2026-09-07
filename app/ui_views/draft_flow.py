@@ -5,7 +5,18 @@ from typing import Any
 
 import customtkinter as ctk
 
-from app.config import DANGER, GOLD, MUTED, PANEL, PANEL_ALT, SUCCESS, TEXT
+from app.config import (
+    DANGER,
+    GOLD,
+    MOVE_TYPE_INFO,
+    MUTED,
+    PANEL,
+    PANEL_ALT,
+    SUCCESS,
+    TEXT,
+    mix_hex_colors,
+    move_type_fill,
+)
 from app.pokemon_stats import STAT_KEYS, STAT_LABELS
 from app.ui_components.repintado import configurar_si_cambia
 from app.ui_state.spatial_navigation import (
@@ -83,7 +94,9 @@ class IntegratedDraftFlow:
         navigation_keys: dict[str, str] | None = None,
         on_left_edge: Callable[[], None] | None = None,
         on_edge_accept: Callable[[], bool] | None = None,
+        category_icons=None,
     ) -> None:
+        self.category_icons = category_icons
         self.team_slots = team_slots
         self.selected_pokemon = selected_pokemon
         self.selected_pool = selected_pool
@@ -561,25 +574,39 @@ class IntegratedDraftFlow:
                 and getattr(self.selected_draft, "pool_key", "") == result.get("pool_key")
                 and int(getattr(self.selected_draft, "move_id", 0)) == int(result["move_id"])
             )
-            card = ctk.CTkFrame(grid, height=212, fg_color=PANEL, corner_radius=13,
-                                border_width=2 if selected else 1,
-                                border_color=GOLD if selected else "#3A3A3A")
+            type_name, type_color = self._type_badge(metadata)
+            card = ctk.CTkFrame(
+                grid, height=212, corner_radius=13,
+                fg_color=(
+                    "#27231B" if selected
+                    else (move_type_fill(type_color, PANEL) if type_color else PANEL)
+                ),
+                border_width=2 if (selected or type_color) else 1,
+                border_color=GOLD if selected else (type_color or "#3A3A3A"),
+            )
             card.grid(row=result_row, column=result_column, columnspan=result_span,
                       sticky="nsew", padx=6, pady=6)
             card.pack_propagate(False)
+            if type_name:
+                ctk.CTkLabel(
+                    card, text=type_name, text_color="#111111", fg_color=type_color,
+                    corner_radius=5, font=ctk.CTkFont("Segoe UI", 9, "bold"),
+                ).place(relx=1.0, rely=0.0, anchor="ne", x=-8, y=8)
+            # Pedido del usuario 02-09-2026: la tarjeta es amplia y el texto
+            # se quedaba chico -letra e icono más grandes para llenar mejor
+            # el hueco disponible.
             ctk.CTkLabel(card, text=str(result.get("title", "OPCIÓN")).upper(), text_color=MUTED,
-                         font=ctk.CTkFont("Segoe UI", 10, "bold")).pack(pady=(12, 2))
+                         font=ctk.CTkFont("Segoe UI", 12, "bold")).pack(pady=(14, 3))
             ctk.CTkLabel(card, text=str(result["move"]), text_color=GOLD if selected else TEXT,
-                         font=ctk.CTkFont("Segoe UI", 19, "bold")).pack()
-            ctk.CTkLabel(card, text=self._metadata_line(metadata), text_color=MUTED,
-                         font=ctk.CTkFont("Segoe UI", 10, "bold")).pack(pady=(3, 5))
+                         font=ctk.CTkFont("Segoe UI", 22, "bold")).pack()
+            self._pack_metadata_row(card, metadata, font_size=13, icon_size=26, pady=(5, 7))
             ctk.CTkLabel(
                 card,
                 text=str(metadata.get("description", "Descripción no disponible")),
                 text_color=MUTED,
                 wraplength=390,
                 justify="center",
-                font=ctk.CTkFont("Segoe UI", 10),
+                font=ctk.CTkFont("Segoe UI", 12),
             ).pack(fill="x", padx=16, pady=(0, 7))
             actions = ctk.CTkFrame(card, fg_color="transparent")
             actions.pack(side="bottom", fill="x", padx=12, pady=(0, 12))
@@ -631,17 +658,27 @@ class IntegratedDraftFlow:
         grid.grid_columnconfigure((0, 1), weight=1, uniform="draft_replace")
         grid.grid_rowconfigure((0, 1), weight=0, minsize=220, uniform="draft_replace")
         for index in range(4):
-            metadata = self.move_metadata_for(int(ids[index] or 0))
-            card = ctk.CTkFrame(grid, height=208, fg_color=PANEL, corner_radius=13,
-                                border_width=1, border_color="#3A3A3A")
+            move_id = int(ids[index] or 0)
+            metadata = self.move_metadata_for(move_id)
+            type_name, type_color = self._type_badge(metadata) if move_id > 0 else (None, None)
+            card = ctk.CTkFrame(
+                grid, height=208, corner_radius=13,
+                fg_color=move_type_fill(type_color, PANEL) if type_color else PANEL,
+                border_width=2 if type_color else 1,
+                border_color=type_color or "#3A3A3A",
+            )
             card.grid(row=index // 2, column=index % 2, sticky="ew", padx=7, pady=7)
             card.pack_propagate(False)
+            if type_name:
+                ctk.CTkLabel(
+                    card, text=type_name, text_color="#111111", fg_color=type_color,
+                    corner_radius=5, font=ctk.CTkFont("Segoe UI", 8, "bold"),
+                ).place(relx=1.0, rely=0.0, anchor="ne", x=-8, y=8)
             ctk.CTkLabel(card, text=f"HUECO {index + 1}", text_color=GOLD,
                          font=ctk.CTkFont("Segoe UI", 10, "bold")).pack(pady=(12, 2))
             ctk.CTkLabel(card, text=names[index] or "—", text_color=TEXT,
                          font=ctk.CTkFont("Segoe UI", 18, "bold")).pack()
-            ctk.CTkLabel(card, text=self._metadata_line(metadata), text_color=MUTED,
-                         font=ctk.CTkFont("Segoe UI", 10, "bold")).pack(pady=(3, 3))
+            self._pack_metadata_row(card, metadata, pady=(3, 3))
             ctk.CTkLabel(
                 card,
                 text=str(metadata.get("description", "Descripción no disponible")),
@@ -652,10 +689,14 @@ class IntegratedDraftFlow:
             ).pack(fill="x", padx=16, pady=(0, 4))
             ctk.CTkLabel(card, text=f"→ {getattr(self.selected_draft, 'move', '—')}", text_color=SUCCESS,
                          font=ctk.CTkFont("Segoe UI", 11, "bold")).pack(pady=(0, 5))
+            # Pedido del usuario 02-09-2026: que el botón siga la temática
+            # del color del hueco, no un dorado fijo desconectado del tipo.
             choose = ctk.CTkButton(
                 card, text="SUSTITUIR Y CONSUMIR 1 DRAFTEO", height=32,
                 command=lambda slot=index + 1: self.on_choose_slot(slot),
-                fg_color=GOLD, hover_color="#D3AF70", text_color="#111111",
+                fg_color=type_color or GOLD,
+                hover_color=mix_hex_colors(type_color, "#FFFFFF", 0.25) if type_color else "#D3AF70",
+                text_color="#111111",
                 font=ctk.CTkFont("Segoe UI", 10, "bold"),
             )
             choose.pack(side="bottom", fill="x", padx=18, pady=(0, 10))
@@ -699,10 +740,19 @@ class IntegratedDraftFlow:
                     on_complete()
                 return
             ratio = ratios[index]
+            # Pedido del usuario 02-09-2026: «al hacer un reroll, se quedan
+            # los iconos de categoría fijos en la pantalla». El icono no
+            # tiene un color de por medio con el que difuminarse -solo el
+            # `fg_color`/`border_color` de alrededor se mezclaba hacia el
+            # fondo-, así que esperar a `ratio >= 0.66` para ocultarlo dejaba
+            # un tramo (el primer fotograma del desvanecido) con el fondo de
+            # la tarjeta ya fundido pero el icono todavía nítido y suelto por
+            # encima. Ocultarlo desde el primer fotograma -no solo hacia el
+            # final- quita ese hueco.
             self._apply_fade(
                 targets,
                 ratio,
-                hide_images=hide_images and ratio >= 0.66,
+                hide_images=hide_images,
             )
             after_id = self.frame.after(34, lambda: step(index + 1))
             self._fade_after_ids.add(after_id)
@@ -790,11 +840,33 @@ class IntegratedDraftFlow:
             cls._bind_card_click(child, callback, exclude=excluded)
 
     @staticmethod
+    def _type_badge(metadata: dict[str, Any]) -> tuple[str | None, str | None]:
+        type_id = metadata.get("type_id")
+        return MOVE_TYPE_INFO.get(type_id, (None, None)) if isinstance(type_id, int) else (None, None)
+
+    @staticmethod
     def _metadata_line(metadata: dict[str, Any]) -> str:
-        category = {"physical": "FÍSICO", "special": "ESPECIAL", "status": "ESTADO"}.get(
-            str(metadata.get("category", "unknown")), "NO DISPONIBLE",
-        )
         return (
-            f"{category} · Pot. {metadata.get('power', '—')} · "
+            f"Pot. {metadata.get('power', '—')} · "
             f"Prec. {metadata.get('accuracy', '—')} · PP {metadata.get('pp', '—')}"
         )
+
+    def _pack_metadata_row(
+        self, card, metadata: dict[str, Any], *,
+        font_size: int = 10, icon_size: int = 16, **pack_kwargs,
+    ) -> None:
+        """Categoría como icono -pedido del usuario 02-09-2026- seguida del
+        resto de la línea de metadatos, en una sola fila centrada."""
+        fila = ctk.CTkFrame(card, fg_color="transparent")
+        fila.pack(**pack_kwargs)
+        icono = (
+            self.category_icons.image(str(metadata.get("category", "unknown")), icon_size)
+            if self.category_icons else None
+        )
+        if icono is not None:
+            self.images.append(icono)
+            ctk.CTkLabel(fila, text="", image=icono).pack(side="left", padx=(0, 6))
+        ctk.CTkLabel(
+            fila, text=self._metadata_line(metadata), text_color=MUTED,
+            font=ctk.CTkFont("Segoe UI", font_size, "bold"),
+        ).pack(side="left")

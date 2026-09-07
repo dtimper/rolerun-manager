@@ -1,7 +1,6 @@
 from .adapter import RealTimeAdapterError, RealTimeGameAdapter
 from .bridge import (
     AzaharBridge,
-    CitraBridge,
     EmulatorBridge,
     EmulatorBridgeInfo,
     RyujinxBridge,
@@ -19,7 +18,7 @@ from .models import (
     RealTimeSnapshot,
 )
 from .oras_adapter import ORASRealTimeAdapter
-from .xy_adapter import XYRealTimeAdapter, XYMultiRealTimeAdapter
+from .xy_adapter import XYRealTimeAdapter
 from .sm_adapter import SMRealTimeAdapter
 from .usum_adapter import USUMRealTimeAdapter
 from .bdsp_adapter import BDSPRealTimeAdapter
@@ -35,7 +34,6 @@ __all__ = [
     "BDSPRealTimeAdapter",
     "B2W2RealTimeAdapter",
     "HgssRealTimeAdapter",
-    "CitraBridge",
     "DiagnosticLevel",
     "EmulatorBridge",
     "EmulatorBridgeInfo",
@@ -49,7 +47,6 @@ __all__ = [
     "SMRealTimeAdapter",
     "USUMRealTimeAdapter",
     "XYRealTimeAdapter",
-    "XYMultiRealTimeAdapter",
     "RealTimeAdapterError",
     "RealTimeCore",
     "RealTimeEvent",

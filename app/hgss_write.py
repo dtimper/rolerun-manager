@@ -30,6 +30,7 @@ Y si lo que se pide ya está puesto, no se escribe nada.
 
 import ctypes
 import struct
+import time
 from ctypes import wintypes
 from dataclasses import dataclass
 
@@ -61,6 +62,41 @@ _PROCESS_QUERY_INFORMATION = 0x0400
 # rollback no se confirma, no se reintenta nada y se avisa.
 INTENTOS_DE_ESCRITURA = 3
 
+# Cuánto se espera entre el readback inmediato y la segunda verificación.
+#
+# Identificado el 06-09-2026: el campo de 0x04 que activó el rollback de
+# alpha.96 es la bandera de HUEVO MALO del propio juego (bit 2, documentada en
+# Bulbapedia para cuarta generación). Ese hallazgo confirmó el mecanismo pero
+# no cerró el hueco que el propio alpha.96 dejó explícito: «lo que pase
+# después del readback no lo ve nadie». Una segunda lectura, tras un pequeño
+# margen, cubre justo esa ventana -el mismo principio que ya usan las lecturas
+# con mayoría de varias muestras, aplicado a la escritura-.
+SEGUNDA_VERIFICACION_ESPERA = 0.05
+
+# El bit de HUEVO MALO en sí (ver `PK4_SANITY` en pk4.py).
+#
+# 06-09-2026, quinto^H sexto incidente real: un Hoothoot que RoleRun leía y
+# mostraba perfectamente normal -nivel, movimientos y estadísticas
+# coherentes, checksum válido- resultó ser un Huevo malo DE VERDAD en la
+# propia partida guardada. Causa de fondo, por fin encontrada: el campo de
+# sanidad vive en la CABECERA del PK4 (offset 4-5), FUERA de los 128 bytes
+# que cubre el checksum -ver `unshuffle_pk4`-, así que puede llevar el bit de
+# Huevo malo activo sin que ninguna comprobación de checksum lo note nunca.
+# Ninguna lectura ni escritura de este módulo miraba jamás este campo como
+# regla de contenido, solo como "cambió respecto a antes" -por eso el
+# incidente de Gastly sí lo cazó cuando cambiaba a mitad de escritura, pero
+# nada cazaba un registro que YA llevaba el bit activo desde el principio,
+# de una lectura anterior pillada a medias en esos dos bytes concretos-.
+# Tratarlo como parte de la comprobación de estabilidad -mismo criterio que
+# nivel y PS máximo- cierra ese hueco: si CUALQUIERA de las dos lecturas
+# muestra el bit activo, no se escribe nada con esa base.
+_BIT_HUEVO_MALO = 0x0004
+
+
+def _marca_sanidad(crudo: bytes, hueco: int) -> int:
+    """El campo de sanidad de un hueco, tal cual está en la cabecera."""
+    return struct.unpack_from("<H", crudo, hueco * PK4_PARTY_SIZE + PK4_SANITY)[0]
+
 # QUÉ SE EXIGE ANTES DE ESCRIBIR
 #
 # El bloque del guardado **se mueve dentro de la RAM** y hay varias copias a la
@@ -81,13 +117,26 @@ INTENTOS_DE_ESCRITURA = 3
 # fallo: la lectura fue buena y para cuando llegó la escritura el bloque ya se
 # había movido.
 def _bloque_demostrado(lector) -> None:
-    """Se niega a escribir si no se sabe con certeza dónde está el bloque."""
-    if not getattr(lector, "block_is_live", False):
-        raise HgssLiveError(
-            "No se ha podido demostrar cuál de los bloques del guardado usa el "
-            "juego, así que no se escribe nada. Suele bastar con que el juego "
-            "esté corriendo -no pausado- y volver a intentarlo."
-        )
+    """Se niega a escribir si no se sabe con certeza dónde está el bloque.
+
+    06-09-2026: `read_party()` solo repite esta prueba cuando la lectura
+    barata falla con una excepción, así que si la PRIMERA muestra de la
+    conexión cae en un instante sin movimiento en la RAM del equipo,
+    `block_is_live` se quedaba en `False` el resto de la sesión -reintentar
+    la escritura no ayudaba nunca, hacían falta cinco intentos fallidos en
+    un minuto para notarlo-. La muestra es barata (~0,12 s), así que aquí se
+    repite una vez antes de rendirse.
+    """
+    if getattr(lector, "block_is_live", False):
+        return
+    reintentar = getattr(lector, "retry_block_liveness", None)
+    if callable(reintentar) and reintentar():
+        return
+    raise HgssLiveError(
+        "No se ha podido demostrar cuál de los bloques del guardado usa el "
+        "juego, así que no se escribe nada. Suele bastar con que el juego "
+        "esté corriendo -no pausado- y volver a intentarlo."
+    )
 
 if _KERNEL32 is not None:
     _KERNEL32.WriteProcessMemory.argtypes = [
@@ -116,8 +165,13 @@ class HgssRoleWrite:
 class HgssMelonDSWriter:
     """Escribe en la partida viva de HeartGold, o no escribe nada."""
 
-    def __init__(self, reader: HgssMelonDSReader | None = None) -> None:
+    def __init__(
+        self, reader: HgssMelonDSReader | None = None,
+        segunda_verificacion_espera: float = SEGUNDA_VERIFICACION_ESPERA,
+    ) -> None:
         self.reader = reader or HgssMelonDSReader()
+        # Configurable para que los tests no tengan que esperar de verdad.
+        self.segunda_verificacion_espera = max(0.0, float(segunda_verificacion_espera))
 
     @property
     def memory(self):
@@ -268,12 +322,73 @@ class HgssMelonDSWriter:
 
         for intento in range(INTENTOS_DE_ESCRITURA):
             _bloque_demostrado(self.reader)
+
+            # DOS LECTURAS antes de fijar la dirección que se va a escribir,
+            # solo comparando los huecos que se van a tocar.
+            #
+            # 06-09-2026, corrupción real: la extensión de combate (donde
+            # viven nivel, PS y estadísticas) no lleva checksum propio -ver
+            # `_extension_coherente` en pk4.py-, solo un filtro de
+            # plausibilidad que un valor de sobra puede colar sin ser el
+            # correcto. Una lectura pillada a medias devolvió un nivel que NO
+            # era el real pero sí "plausible" (1-100, estadísticas 1-999), y
+            # de ahí salió un PS máximo recalculado a partir de ese nivel
+            # equivocado -no un fallo de fórmula, un dato de entrada torcido-.
+            # La escritura después reescribió esa misma extensión, dejando el
+            # nivel equivocado también en la partida real, y todos los
+            # cruces de coherencia posteriores lo confirmaron porque
+            # comparaban contra ESE MISMO valor.
+            #
+            # La segunda lectura va ANTES de fijar `base_al_leer`, nunca
+            # después: leer otra vez entre fijar la dirección y escribir es
+            # justo lo que `test_se_escribe_donde_se_leyo_aunque_el_bloque_se_
+            # haya_movido` demuestra que no se puede hacer -el bloque puede
+            # moverse en cualquier lectura, y una de más ahí dentro dispararía
+            # el «se movió» aunque no se haya movido nada que importe-.
+            #
+            # Solo nivel y PS máximo, NUNCA PS actual: 06-09-2026, exigir
+            # también PS actual bloqueó CURAR de verdad -es la operación que
+            # se pide precisamente cuando el PS actual está por debajo del
+            # máximo, y sigue bajando solo mientras el jugador anda envenenado
+            # o de cacería; dos lecturas casi nunca van a coincidir ahí, y no
+            # es una señal de nada roto-. Nivel y PS máximo no cambian sin un
+            # evento real (subir de nivel, EV), así que siguen siendo la
+            # señal correcta de una extensión mal leída.
+            primera = self.reader.read_party()
+            if primera.process_id != party_read.process_id:
+                raise HgssLiveError(
+                    f"melonDS cambió antes de escribir {que} en HeartGold."
+                )
             antes = self.reader.read_party()
             base_al_leer = self.memory.block_base
             if antes.process_id != party_read.process_id:
                 raise HgssLiveError(
                     f"melonDS cambió antes de escribir {que} en HeartGold."
                 )
+            inestable = False
+            for hueco, _identidad in peticiones:
+                if not 0 <= hueco < primera.count or not 0 <= hueco < antes.count:
+                    continue
+                referencia = primera.pokemon[hueco]
+                comparado = antes.pokemon[hueco]
+                if (
+                    referencia.level != comparado.level
+                    or referencia.max_hp != comparado.max_hp
+                    or _marca_sanidad(primera.raw, hueco) & _BIT_HUEVO_MALO
+                    or _marca_sanidad(antes.raw, hueco) & _BIT_HUEVO_MALO
+                ):
+                    inestable = True
+                    break
+            if inestable:
+                # No ha salido ni un byte: reintentar es seguro. Si el último
+                # intento también sale inestable, se avisa en vez de escribir
+                # a ciegas sobre un dato que nunca llegó a demostrarse quieto.
+                if intento == INTENTOS_DE_ESCRITURA - 1:
+                    raise HgssLiveError(
+                        f"El equipo de HeartGold no se estabilizó para escribir "
+                        f"{que}; no se ha tocado nada."
+                    )
+                continue
 
             crudo_viejo = antes.raw
             crudo_nuevo = bytearray(crudo_viejo)
@@ -338,6 +453,22 @@ class HgssMelonDSWriter:
                         f"El rollback de {que} en HeartGold no se pudo confirmar; "
                         "no guardes."
                     )
+                # SEGUNDA VERIFICACIÓN también en el rollback. 06-09-2026: el
+                # abandono por «el juego tocó el miembro X» solo nombra AL
+                # PRIMERO que se encuentra distinto -si dos huecos estaban
+                # siendo tocados a la vez por el juego, el segundo no sale en
+                # el mensaje-, y ese mismo hueco puede seguir tocándose justo
+                # mientras se deshace. Una sola lectura inmediata puede caer
+                # justo en un instante bueno y dar el rollback por bueno sin
+                # serlo. Mismo margen que la escritura normal.
+                if self.segunda_verificacion_espera:
+                    time.sleep(self.segunda_verificacion_espera)
+                otra_vez = self.reader.read_party()
+                if otra_vez.count != antes.count or otra_vez.pokemon != antes.pokemon:
+                    raise HgssLiveError(
+                        f"El rollback de {que} en HeartGold no se sostuvo; "
+                        "no guardes."
+                    )
 
             try:
                 escribir(bytes(crudo_nuevo))
@@ -347,13 +478,8 @@ class HgssMelonDSWriter:
                     raise
                 continue
 
-            def marca(crudo, hueco):
-                return struct.unpack_from(
-                    "<H", crudo, hueco * PK4_PARTY_SIZE + PK4_SANITY,
-                )[0]
-
             if marcas_originales is None:
-                marcas_originales = {h: marca(crudo_viejo, h) for h in tocados}
+                marcas_originales = {h: _marca_sanidad(crudo_viejo, h) for h in tocados}
 
             try:
                 despues = self.reader.read_party()
@@ -361,12 +487,15 @@ class HgssMelonDSWriter:
                 #
                 # Una escritura de 236 bytes no es atómica para el juego
                 # emulado. Si mira el registro a medio escribir, el checksum no
-                # le cuadra y lo marca. Pasó con FIJAR ROLES: cinco de seis
-                # quedaron perfectos y el sexto salió «Huevo malo» con este
-                # campo a 0x0004 mientras los demás seguían a 0x0000 -y el
-                # readback dijo que todo había ido bien, porque nadie lo miraba-.
+                # le cuadra y activa el bit 2 de este campo -la bandera de
+                # HUEVO MALO documentada en Bulbapedia para cuarta generación,
+                # identificada el 06-09-2026 (ver `PK4_SANITY` en pk4.py)-.
+                # Pasó con FIJAR ROLES: cinco de seis quedaron perfectos y el
+                # sexto salió «Huevo malo» con este campo en 0x0004 mientras
+                # los demás seguían a 0x0000 -y el readback dijo que todo había
+                # ido bien, porque nadie lo miraba-.
                 for hueco in tocados:
-                    if marca(despues.raw, hueco) != marcas_originales[hueco]:
+                    if _marca_sanidad(despues.raw, hueco) != marcas_originales[hueco]:
                         raise HgssLiveError(
                             f"El juego tocó el miembro {hueco + 1} mientras se "
                             f"escribía {que}; se deshace el cambio."
@@ -385,7 +514,28 @@ class HgssMelonDSWriter:
                             "La identidad verificada de HeartGold no coincide."
                         )
                     verificar(verificado, hueco)
-                return despues
+
+                # SEGUNDA VERIFICACIÓN, tras un margen. El readback de arriba
+                # solo demuestra que el instante inmediato salió bien; no ve
+                # si el juego marca huevo malo un poco más tarde -exactamente
+                # el hueco que alpha.96 dejó reconocido y sin cerrar-. Se
+                # reutiliza el mismo `deshacer` de este intento: si esto
+                # lanza, cae en el `except` de más abajo como cualquier otro
+                # fallo de esta escritura.
+                if self.segunda_verificacion_espera:
+                    time.sleep(self.segunda_verificacion_espera)
+                otra_vez = self.reader.read_party()
+                for hueco in tocados:
+                    if _marca_sanidad(otra_vez.raw, hueco) != marcas_originales[hueco]:
+                        raise HgssLiveError(
+                            f"El juego tocó el miembro {hueco + 1} después de "
+                            f"confirmar {que}; se deshace el cambio."
+                        )
+                if otra_vez.count != antes.count or otra_vez.pokemon != esperados:
+                    raise HgssLiveError(
+                        f"La segunda verificación de {que} en HeartGold no coincide."
+                    )
+                return otra_vez
             except Exception:
                 # Se deshace siempre. Si el rollback se confirma, la memoria es
                 # coherente y el fallo fue del intento: se puede repetir. Si no
@@ -846,10 +996,63 @@ class HgssMelonDSWriter:
         El contador se escribe **el último**: mientras el equipo nuevo no esté
         entero en memoria, el juego no debe verlo declarado.
         """
+        # DOS LECTURAS del equipo entero antes de fijar nada, no solo del
+        # hueco que la operación declara tocar.
+        #
+        # 06-09-2026, corrupción real: sacar del PC al equipo dejó un Huevo
+        # malo (arreglado con la misma protección en `_pc_en_confirmado`), y
+        # el mismo día enviar un Pokémon AL PC -que no toca ni un byte de
+        # ningún otro hueco por diseño- dejó a un miembro sin relación con la
+        # operación mostrando "Envenenado" donde iba el nivel. La extensión
+        # de combate (nivel, estado, PS, estadísticas) no lleva checksum
+        # propio -ver `_extension_coherente` en pk4.py-, y este armazón
+        # reescribe el bloque de equipo ENTERO en cada operación, así que una
+        # lectura pillada a medias en CUALQUIER hueco -no solo el que se
+        # toca- se persiste igual de fiel que si fuera buena. Mismo criterio
+        # que ya cerró el caso de Gastly en `_transaccion_de_equipo`, aquí
+        # sobre los seis huecos en vez de solo los que la petición nombra.
+        primera = self.reader.read_party()
+        if primera.process_id != party_read.process_id:
+            raise HgssLiveError(f"melonDS cambió antes de {que} en HeartGold.")
         antes_equipo = self.reader.read_party()
         base_al_leer = self.memory.block_base
         if antes_equipo.process_id != party_read.process_id:
             raise HgssLiveError(f"melonDS cambió antes de {que} en HeartGold.")
+        if primera.count != antes_equipo.count:
+            raise HgssLiveError(
+                f"El equipo de HeartGold no se estabilizó para {que}; "
+                "no se ha tocado nada. Vuelve a intentarlo."
+            )
+        # Nivel, estado y PS máximo, NUNCA PS actual: 06-09-2026, exigirlo
+        # también bloqueó mandar Pokémon al PC de verdad -el PS actual sigue
+        # bajando solo mientras el jugador anda envenenado o de cacería, y
+        # dos lecturas casi nunca van a coincidir ahí sin que eso signifique
+        # nada roto-. Nivel, estado y PS máximo no cambian sin un evento real
+        # (subir de nivel, EV, que algo envenene o cure), así que siguen
+        # siendo la señal correcta de una extensión mal leída.
+        #
+        # Y el bit de HUEVO MALO en sí (06-09-2026, sexto incidente: un
+        # Hoothoot que se leía y mostraba perfectamente normal -checksum
+        # válido, nivel y estadísticas coherentes- resultó ser un Huevo malo
+        # de verdad en la partida guardada; el campo de sanidad vive FUERA
+        # del checksum, así que ninguna comprobación anterior lo veía). Si
+        # cualquiera de las dos lecturas lo trae activo en cualquier hueco,
+        # no se construye nada con esa base: no es una cuestión de estar
+        # tocando ese hueco, es que ese hueco ya no es de fiar.
+        for indice, (miembro_antes, miembro_ahora) in enumerate(
+            zip(primera.pokemon, antes_equipo.pokemon),
+        ):
+            if (
+                miembro_antes.level != miembro_ahora.level
+                or miembro_antes.status_condition != miembro_ahora.status_condition
+                or miembro_antes.max_hp != miembro_ahora.max_hp
+                or _marca_sanidad(primera.raw, indice) & _BIT_HUEVO_MALO
+                or _marca_sanidad(antes_equipo.raw, indice) & _BIT_HUEVO_MALO
+            ):
+                raise HgssLiveError(
+                    f"El equipo de HeartGold no se estabilizó para {que}; "
+                    "no se ha tocado nada. Vuelve a intentarlo."
+                )
         antes_pc = self.reader.read_pc(antes_equipo)
 
         contador_nuevo, equipo_nuevo, huecos = planear(antes_equipo, antes_pc)
@@ -886,6 +1089,23 @@ class HgssMelonDSWriter:
                 raise HgssLiveError(
                     f"El rollback de {que} dejó el PC distinto; no guardes."
                 )
+            # SEGUNDA VERIFICACIÓN también en el rollback, mismo motivo que
+            # en `_transaccion_de_equipo` (06-09-2026): una sola lectura
+            # inmediata puede caer justo en un instante en el que el juego
+            # sigue tocando el mismo hueco, y dar el rollback por bueno sin
+            # serlo.
+            if self.segunda_verificacion_espera:
+                time.sleep(self.segunda_verificacion_espera)
+            otra_vez = self.reader.read_party()
+            if otra_vez.count != antes_equipo.count or otra_vez.pokemon != antes_equipo.pokemon:
+                raise HgssLiveError(
+                    f"El rollback de {que} no se sostuvo; no guardes."
+                )
+            if self.reader.read_pc(otra_vez).raw != antes_pc.raw:
+                raise HgssLiveError(
+                    f"El rollback de {que} dejó el PC distinto después de confirmar; "
+                    "no guardes."
+                )
 
         # Confirmar la dirección va **fuera** del `try`. Si se niega no ha
         # salido ni un byte, y `deshacer` escribiría con la dirección vieja:
@@ -915,7 +1135,40 @@ class HgssMelonDSWriter:
                 if despues_pc.raw[offset:offset + PK4_STORED_SIZE] != contenido:
                     raise HgssLiveError(f"El readback del PC tras {que} no coincide.")
             verificar(despues_equipo, despues_pc)
-            return despues_equipo, despues_pc
+
+            # SEGUNDA VERIFICACIÓN, tras un margen. Mismo criterio que ya usa
+            # `_transaccion_de_equipo` desde el incidente de Gastly: el
+            # readback de arriba solo demuestra que el instante inmediato
+            # salió bien, no que el juego no toque algo un poco más tarde.
+            # 06-09-2026, cuarto incidente: sacar a Spinarak del PC quedó
+            # marcado como resuelto sin error y aun así salió Huevo malo en
+            # el propio juego -esta comprobación no cerró esa causa con
+            # certeza, pero es la misma protección que sí sirvió para el
+            # primer incidente, y esta transacción nunca la tuvo-.
+            if self.segunda_verificacion_espera:
+                time.sleep(self.segunda_verificacion_espera)
+            otra_vez_equipo = self.reader.read_party()
+            if otra_vez_equipo.count != contador_nuevo:
+                raise HgssLiveError(
+                    f"El contador del equipo cambió después de confirmar {que}; "
+                    "se deshace el cambio."
+                )
+            if otra_vez_equipo.pokemon != parse_party_block(
+                bytes(equipo_nuevo[:contador_nuevo * PK4_PARTY_SIZE]), contador_nuevo,
+            ):
+                raise HgssLiveError(
+                    f"El juego tocó el equipo después de confirmar {que}; "
+                    "se deshace el cambio."
+                )
+            otra_vez_pc = self.reader.read_pc(otra_vez_equipo)
+            for offset, contenido in huecos.items():
+                if otra_vez_pc.raw[offset:offset + PK4_STORED_SIZE] != contenido:
+                    raise HgssLiveError(
+                        f"El juego tocó el PC después de confirmar {que}; "
+                        "se deshace el cambio."
+                    )
+            verificar(otra_vez_equipo, otra_vez_pc)
+            return otra_vez_equipo, otra_vez_pc
         except Exception:
             deshacer()
             raise
@@ -954,6 +1207,59 @@ class HgssMelonDSWriter:
 
         return self._transaccion_equipo_y_pc(
             party_read, planear, verificar, que="mover dentro del PC",
+        )
+
+    def swap_pc_slots(
+        self, party_read: HgssPartyRead, origen, destino, *,
+        source_identity, destination_identity,
+    ):
+        """Intercambia dos huecos del PC que están **los dos ocupados**.
+
+        ``move_pc_slot`` exige el destino libre y deja el vacío cifrado en el
+        origen. Aquí no interviene ningún vacío: son los mismos dos bloques de
+        136 bytes que esa transacción ya escribe, cruzados, con las dos
+        identidades como ancla.
+        """
+        desde = self._hueco_del_pc(*origen)
+        hasta = self._hueco_del_pc(*destino)
+        if desde == hasta:
+            raise HgssLiveError("El origen y el destino del PC son el mismo hueco.")
+        if tuple(source_identity) == tuple(destination_identity):
+            raise HgssLiveError("Los dos huecos del intercambio declaran el mismo Pokémon.")
+
+        def planear(antes_equipo, antes_pc):
+            crudo_origen = antes_pc.raw[desde:desde + PK4_STORED_SIZE]
+            crudo_destino = antes_pc.raw[hasta:hasta + PK4_STORED_SIZE]
+            for crudo, esperada, etiqueta in (
+                (crudo_origen, source_identity, "origen"),
+                (crudo_destino, destination_identity, "destino"),
+            ):
+                quien = parse_pk4_boxed(crudo, 0)
+                if quien is None:
+                    raise HgssLiveError(f"En el hueco de {etiqueta} del PC no hay nadie.")
+                if (quien.pid, quien.tid, quien.sid) != tuple(esperada):
+                    raise HgssLiveError(
+                        f"La identidad del Pokémon de {etiqueta} del PC cambió."
+                    )
+            return antes_equipo.count, antes_equipo.raw, {
+                desde: crudo_destino, hasta: crudo_origen,
+            }
+
+        def verificar(_despues_equipo, despues_pc):
+            for offset, esperada, etiqueta in (
+                (desde, destination_identity, "origen"),
+                (hasta, source_identity, "destino"),
+            ):
+                llegado = parse_pk4_boxed(
+                    despues_pc.raw[offset:offset + PK4_STORED_SIZE], 0,
+                )
+                if llegado is None or (llegado.pid, llegado.tid, llegado.sid) != tuple(esperada):
+                    raise HgssLiveError(
+                        f"El Pokémon esperado no apareció en el hueco de {etiqueta} del PC."
+                    )
+
+        return self._transaccion_equipo_y_pc(
+            party_read, planear, verificar, que="intercambiar dentro del PC",
         )
 
     def resize_party_pc(

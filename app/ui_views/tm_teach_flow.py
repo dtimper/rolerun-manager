@@ -5,7 +5,18 @@ from typing import Any
 
 import customtkinter as ctk
 
-from app.config import DANGER, GOLD, MUTED, PANEL, PANEL_ALT, SUCCESS, TEXT
+from app.config import (
+    DANGER,
+    GOLD,
+    MOVE_TYPE_INFO,
+    MUTED,
+    PANEL,
+    PANEL_ALT,
+    SUCCESS,
+    TEXT,
+    mix_hex_colors,
+    move_type_fill,
+)
 from app.ui_components.repintado import configurar_si_cambia
 from app.ui_state.spatial_navigation import (
     SpatialSelection,
@@ -40,6 +51,7 @@ class IntegratedTMTeachFlow:
         on_close: Callable[[], None],
         on_open_moves: Callable[[], None] | None = None,
         navigation_keys: dict[str, str] | None = None,
+        category_icons=None,
     ) -> None:
         self.master = master
         self.pokemon = pokemon
@@ -51,13 +63,25 @@ class IntegratedTMTeachFlow:
         self.on_open_moves = on_open_moves
         self.navigation_keys = dict(navigation_keys or {"accept": "z", "back": "x"})
         self.navigation_guard: Callable[[], bool] | None = None
+        self.category_icons = category_icons
+        self._images: list[Any] = []
         self.state = TMTeachFlowState(candidates=candidates)
         self._keyboard_navigation = SpatialSelection()
         self._keyboard_targets: dict[object, tuple[Any, Callable[[], None], str, int]] = {}
         self._keyboard_bindings: list[tuple[str, str]] = []
         self._keyboard_scroll = None
 
-        height = max(460, int(master.winfo_toplevel().winfo_height() or 720) - 230)
+        # Pedido del usuario el 2026-09-03: la resta heurística (alto de la
+        # ventana menos una constante fija) no medía nunca el viewport real
+        # de `master` -un `CTkScrollableFrame`-, así que solía sobrestimarlo.
+        # Ese sobrante hacía que este flujo midiera más que lo visible
+        # dentro de `master`, dándole a `master` scroll de verdad para
+        # revelar nada más que hueco vacío -«scrolleo y baja la página
+        # entera» aunque no había nada más que ver-. Mismo criterio que ya
+        # usa ``GlobalTMView``: con el viewport ya asentado se usa ESE.
+        canvas = getattr(master, "_parent_canvas", None)
+        viewport = int(canvas.winfo_height() or 0) if canvas is not None else 0
+        height = viewport if viewport >= 400 else max(460, int(master.winfo_toplevel().winfo_height() or 720) - 230)
         self.frame = ctk.CTkFrame(
             master, height=height, fg_color="#151515", corner_radius=16,
             border_width=1, border_color="#3A3A3A",
@@ -114,6 +138,56 @@ class IntegratedTMTeachFlow:
         self._bind_keyboard_navigation()
         self._render()
 
+        # Pedido del usuario el 2026-09-03: el alto calculado arriba, en el
+        # primer instante, no era fiable -``master`` (un ``CTkScrollableFrame``
+        # recién creado) mide 200 antes de que Tk resuelva su geometría real-.
+        # Mismo criterio que ya usa ``GlobalTMView``: seguir corrigiendo el
+        # alto mientras se asienta, en vez de fijarlo una sola vez y para
+        # siempre.
+        self._viewport_binding = None
+        if canvas is not None:
+            self._viewport_binding = canvas.bind(
+                "<Configure>",
+                lambda event: configurar_si_cambia(
+                    self.frame,
+                    height=max(460, int(self.frame._reverse_widget_scaling(event.height))),
+                ),
+                add="+")
+        for delay in (0, 80, 180, 400):
+            self.frame.after(delay, self._fit_to_viewport)
+
+    def _fit_to_viewport(self) -> None:
+        """Corrige el alto de ``self.frame`` mientras Tk asienta el layout.
+
+        Reportado por el usuario el 2026-09-05: en el paso "¿QUÉ MOVIMIENTO
+        OLVIDARÁ?" los cuatro botones (`.pack(fill="x", ...)` dentro de una
+        tarjeta ubicada con ``grid`` sobre un contenedor posicionado con
+        ``place(relwidth=..., relheight=...)``) podían quedar pintados
+        diminutos, con el texto ilegible. Si el primer ``_render()`` (llamado
+        en ``__init__`` antes de que Tk resuelva el tamaño real de ``master``,
+        el mismo problema ya documentado arriba para el alto) construye esos
+        botones cuando ``self.content`` todavía mide su tamaño provisional
+        pequeño, CustomTkinter no siempre vuelve a dibujar su canvas redondeado
+        al tamaño final aunque ``place``/``pack`` sí reposicionen el widget más
+        grande después: es un canvas propio, y solo un ``configure()`` real
+        fuerza su redibujado.
+
+        En vez de confiar en que el redimensionado automático de Tk vuelva a
+        pintar bien esos botones, se reconstruye el contenido del paso actual
+        (``self._render()``) cada vez que el alto real cambia de verdad -igual
+        que ya hace este método con el propio ``self.frame``-, para que todos
+        los widgets del paso se creen con la geometría ya definitiva.
+        """
+        canvas = getattr(self.master, "_parent_canvas", None)
+        try:
+            height = int(canvas.winfo_height() or 0) if canvas is not None else 0
+            if height >= 460:
+                logical_height = int(self.frame._reverse_widget_scaling(height))
+                if configurar_si_cambia(self.frame, height=max(460, logical_height)):
+                    self._render()
+        except Exception:
+            pass
+
     def destroy(self) -> None:
         self._release_keyboard_navigation()
         try:
@@ -121,6 +195,12 @@ class IntegratedTMTeachFlow:
                 self.frame.winfo_toplevel().unbind("<Escape>", self._escape_binding)
         except Exception:
             pass
+        canvas = getattr(self.master, "_parent_canvas", None)
+        if canvas is not None and self._viewport_binding:
+            try:
+                canvas.unbind("<Configure>", self._viewport_binding)
+            except Exception:
+                pass
         try:
             if self.frame.winfo_exists():
                 self.frame.destroy()
@@ -315,38 +395,90 @@ class IntegratedTMTeachFlow:
             ).grid(row=0, column=0, columnspan=2, padx=30, pady=80)
             return
         for index, candidate in enumerate(self.state.candidates):
+            # Pedido del usuario el 2026-09-03: la misma ficha de movimiento
+            # centrada, coloreada por tipo y con el icono de categoría que se
+            # usa en el resto del programa (Movimientos, Drafteos, recuerda-
+            # movimientos) — no una fila plana, sin tipo ni icono, a la
+            # izquierda.
+            type_id = candidate.get("type_id")
+            type_name, type_color = MOVE_TYPE_INFO.get(
+                type_id if isinstance(type_id, int) else -1, (None, None),
+            )
             card = ctk.CTkFrame(
-                scroll, fg_color=PANEL, corner_radius=12,
-                border_width=1, border_color="#3B3B3B",
+                scroll, fg_color=move_type_fill(type_color, PANEL) if type_color else PANEL,
+                corner_radius=12, border_width=2 if type_color else 1,
+                border_color=type_color or "#3B3B3B",
             )
             card.grid(row=index // 2, column=index % 2, sticky="nsew", padx=6, pady=6)
-            card.grid_columnconfigure(0, weight=1)
+            if type_name:
+                ctk.CTkLabel(
+                    card, text=type_name, text_color="#111111", fg_color=type_color,
+                    corner_radius=6, font=ctk.CTkFont("Segoe UI", 13, "bold"),
+                ).place(relx=1.0, rely=0.0, anchor="ne", x=-12, y=12)
+            # Pedido del usuario el 2026-09-03: el marco quedaba muy ancho
+            # para lo poco que ocupaba el texto -letra mucho más grande,
+            # aprovechando el ancho real de la tarjeta.
             ctk.CTkLabel(
-                card,
-                text=f"MT{int(candidate['number']):02d} · {candidate['move_name']}",
-                text_color=TEXT, anchor="w",
+                card, text=f"MT{int(candidate['number']):02d}", text_color=MUTED,
                 font=ctk.CTkFont("Segoe UI", 15, "bold"),
-            ).grid(row=0, column=0, sticky="ew", padx=13, pady=(10, 1))
-            category = _CATEGORY_NAMES.get(str(candidate.get("category", "unknown")), "NO DISPONIBLE")
+            ).pack(pady=(22, 2))
             ctk.CTkLabel(
-                card,
-                text=(
-                    f"{category} · Pot. {candidate.get('power', '—')} · Prec. {candidate.get('accuracy', '—')} · "
-                    f"PP {candidate.get('pp', '—')} · x{candidate.get('quantity', 0)}"
-                ),
-                text_color=MUTED, anchor="w",
-                font=ctk.CTkFont("Segoe UI", 10, "bold"),
-            ).grid(row=1, column=0, sticky="ew", padx=13, pady=(0, 9))
+                card, text=str(candidate["move_name"]), text_color=TEXT,
+                font=ctk.CTkFont("Segoe UI", 28, "bold"),
+            ).pack()
+            self._pack_metadata_row(card, candidate, font_size=16, icon_size=36, pady=(12, 4))
+            ctk.CTkLabel(
+                card, text=f"x{candidate.get('quantity', 0)} en la mochila",
+                text_color=MUTED, font=ctk.CTkFont("Segoe UI", 13),
+            ).pack(pady=(0, 8))
+            description = str(candidate.get("description") or "").strip()
+            if description:
+                ctk.CTkLabel(
+                    card, text=description, text_color=MUTED, wraplength=620,
+                    justify="center", font=ctk.CTkFont("Segoe UI", 15),
+                ).pack(fill="x", padx=24, pady=(0, 14))
             ctk.CTkButton(
-                card, text="ELEGIR", width=82, height=34,
+                card, text="ELEGIR", height=44,
                 command=lambda move_id=int(candidate["move_id"]): self._choose_tm(move_id),
-                fg_color=GOLD, hover_color="#D3AF70", text_color="#111111",
-                font=ctk.CTkFont("Segoe UI", 10, "bold"),
-            ).grid(row=0, column=1, rowspan=2, padx=(4, 11), pady=10)
+                fg_color=type_color or GOLD,
+                hover_color=mix_hex_colors(type_color, "#FFFFFF", 0.25) if type_color else "#D3AF70",
+                text_color="#111111",
+                font=ctk.CTkFont("Segoe UI", 14, "bold"),
+            ).pack(fill="x", padx=20, pady=(0, 18))
             self._register_keyboard_target(
                 ("tm", int(candidate["move_id"])), index // 2, index % 2, card,
                 lambda move_id=int(candidate["move_id"]): self._choose_tm(move_id),
             )
+
+    def _pack_metadata_row(
+        self, card, candidate: dict[str, Any], *,
+        font_size: int = 10, icon_size: int = 16, **pack_kwargs,
+    ) -> None:
+        """Categoría como icono, seguida de potencia/precisión/PP, en una
+        sola fila centrada — mismo patrón que ``IntegratedDraftFlow``."""
+        fila = ctk.CTkFrame(card, fg_color="transparent")
+        fila.pack(**pack_kwargs)
+        icono = (
+            self.category_icons.image(str(candidate.get("category", "unknown")), icon_size)
+            if self.category_icons else None
+        )
+        if icono is not None:
+            self._images.append(icono)
+            ctk.CTkLabel(fila, text="", image=icono).pack(side="left", padx=(0, 6))
+        else:
+            categoria = _CATEGORY_NAMES.get(str(candidate.get("category", "unknown")), "NO DISPONIBLE")
+            ctk.CTkLabel(
+                fila, text=categoria, text_color=MUTED,
+                font=ctk.CTkFont("Segoe UI", font_size, "bold"),
+            ).pack(side="left", padx=(0, 6))
+        ctk.CTkLabel(
+            fila,
+            text=(
+                f"Pot. {candidate.get('power', '—')} · Prec. {candidate.get('accuracy', '—')} · "
+                f"PP {candidate.get('pp', '—')}"
+            ),
+            text_color=MUTED, font=ctk.CTkFont("Segoe UI", font_size, "bold"),
+        ).pack(side="left")
 
     def _choose_tm(self, move_id: int) -> None:
         self.state.select_tm(move_id)
@@ -364,8 +496,19 @@ class IntegratedTMTeachFlow:
         )
         grid = ctk.CTkFrame(self.content, fg_color="transparent")
         # Cuatro tarjetas compactas centradas. Antes heredaban todo el alto del
-        # viewport y dejaban grandes franjas vacías bajo cada botón.
-        grid.place(relx=.5, rely=.5, anchor="center", relwidth=.94, relheight=.66)
+        # viewport y dejaban grandes franjas vacías bajo cada botón; forzar un
+        # ``relheight`` fijo (.66) se pasó de frenada en sentido contrario:
+        # reportado por el usuario el 2026-09-05, con captura, en su ventana
+        # real esa fracción quedaba por debajo de lo que las cuatro tarjetas
+        # necesitan de verdad, y ``sticky="nsew"`` las comprimía a esa altura
+        # -el botón, al ser el último hijo empaquetado de cada tarjeta, era
+        # quien perdía la altura, quedando una tira dorada sin texto legible-.
+        # Sin ``relheight`` el grid mide su alto NATURAL (el que de verdad
+        # necesitan sus dos filas), nunca menos, así que nunca vuelve a
+        # comprimir nada; solo cambia cuánto margen en blanco queda arriba y
+        # abajo cuando sobra alto, que es un problema cosmético mucho menor
+        # que un botón ilegible.
+        grid.place(relx=.5, rely=.5, anchor="center", relwidth=.94)
         grid.grid_columnconfigure((0, 1), weight=1, uniform="tm_slots")
         grid.grid_rowconfigure((0, 1), weight=1, uniform="tm_slots")
         valid_slots = {int(value) for value in candidate.get("valid_slots", ())}

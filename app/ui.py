@@ -12,6 +12,7 @@ import threading
 import time
 import unicodedata
 import urllib.request
+import webbrowser
 import tkinter as tk
 from datetime import datetime
 from dataclasses import replace
@@ -29,8 +30,12 @@ from .config import (
     BG,
     DATA_DIR,
     DANGER,
+    GITHUB_OWNER,
+    GITHUB_REPO,
     GOLD,
+    MOVE_TYPE_INFO,
     MUTED,
+    move_type_fill,
     PANEL,
     PANEL_ALT,
     RESOURCES_DIR,
@@ -42,15 +47,18 @@ from .config import (
     SPRITE_DIR,
     SUCCESS,
     TEXT,
+    UPDATE_CHECK_TIMEOUT_SECONDS,
 )
 from . import perf
+from . import update_checker
 from .draft_engine import DraftEngine
 from . import drafteos_guardados
 from .role_content import GLOBAL_ROLE_NOTE, ROLE_GUIDE
 from .pc_browser import filter_pc_pokemon, reset_scrollable_to_top
 from .role_rules import (
     ROLE_ORDER, ROLE_OPTIONS, ROLE_SYMBOLS, ROLE_TO_KEY,
-    allowed_status_move_ids, canonical_role, damage_move_issue_reason, role_from_markings,
+    allowed_status_move_ids, canonical_role, damage_move_issue_reason,
+    is_evasion_move, role_from_markings,
 )
 from .models import PendingChange, PendingDraft, PendingInventoryChange, PendingPartyHeal, PendingPCRoleChange, PendingRoleChange, PendingTMTeach, PendingTeamChange, RunSession
 from .save_engine_client import SaveEngineClient, SaveEngineError, SaveGameData, SavePokemon, SavePCData, SaveBox
@@ -69,16 +77,24 @@ from .sdl_gamepad import (
 )
 from .obs_sync import ObsSyncService, SaveFileWatcher
 from .bdsp_tm_service import (
-    BDSPTMProfile, discover_personal_masterdatas, load_bdsp_tm_profile, remember_source,
+    BDSPTMProfile, discover_personal_masterdatas, load_bdsp_tm_profile,
+    load_personal_masterdatas_objects, remember_source,
 )
-from .pokemon_stats import STAT_KEYS, STAT_LABELS, stat_dict
+from .bdsp_levelup_moves import parse_wazaoboe_table
+from .bdsp_levelup_table_live import build_species_anchor
+from .role_levelup_moves import compute_move_substitute, compute_species_patch
+from .pokemon_stats import STAT_KEYS, STAT_LABELS, project_current_hp, project_stats, stat_dict
 from .oras_tm_service import ORASTMProfile, load_fvx_oras_tm_profile, load_oras_tm_profile
 from .oras_rom_service import (
     ORASRomProfileError,
     ORASRomSource,
+    azahar_user_roots,
     discover_azahar_oras_source,
     load_oras_rom_tm_profile,
+    load_oras_levelup_moves_blob,
+    _ORAS_MAX_MOVE_ID,
 )
+from . import oras_levelup_moves as oras_levelup_moves_mod
 from .gen5_memory import GEN5_MEMORY
 from .gen5_rom_service import (
     discover_gen5_rom,
@@ -90,19 +106,43 @@ from .gen4_rom_service import (
     load_gen4_rom_profile_cached,
 )
 from .boxed_metadata import clear_personal_override, set_personal_override
-from .xy_rom_service import XYRomProfileError, load_xy_rom_tm_profile
+from .xy_rom_service import (
+    XYRomProfileError,
+    XY_MAX_MOVE_ID,
+    load_xy_levelup_moves_blob,
+    load_xy_rom_tm_profile,
+)
+from . import xy_levelup_moves as xy_levelup_moves_mod
+from . import gen4_levelup_memory, gen4_levelup_moves, gen5_levelup_memory, gen5_levelup_moves
+from .pokemon_evolutions import evolution_descendants
 from .sonido import Sonidos
-from .sm_rom_service import SMRomProfileError, load_sm_rom_tm_profile
-from .usum_rom_service import USUMRomProfileError, load_usum_rom_tm_profile
+from .sm_rom_service import (
+    SMRomProfileError, load_sm_levelup_moves_blob, load_sm_rom_tm_profile,
+    sm_personal_id_map_for_rom,
+)
+from .usum_rom_service import (
+    USUMRomProfileError, load_usum_levelup_moves_blob, load_usum_rom_tm_profile,
+    usum_personal_id_map_for_rom,
+)
+from . import sm_levelup_moves as sm_levelup_moves_mod
+from . import usum_levelup_moves as usum_levelup_moves_mod
 from .live_review import inverse_oras_live_change
 from .ui_components import fundido_de_tarjeta
 from .ui_components import (
+    CategoryIconProvider,
     IntegratedRoleInfoPopover,
     IntegratedWindowSurface,
+    LevelupMoveHistoryPopover,
+    MoveInfoPopover,
     TransparentWindowSurface,
     OperationStatusBar,
     RoleIconProvider,
     configurar_si_cambia,
+)
+from .ui_components.window_focus import (
+    guard_topmost_on_focus_loss,
+    hide_from_taskbar_and_alttab,
+    release_focus_guard,
 )
 from .ui_state import (
     DEFAULT_PAGE,
@@ -125,9 +165,9 @@ from .ui_views import (
     UnifiedTeamPCView,
 )
 from .realtime import (
-    ORASRealTimeAdapter, XYRealTimeAdapter, XYMultiRealTimeAdapter, SMRealTimeAdapter, USUMRealTimeAdapter,
+    ORASRealTimeAdapter, XYRealTimeAdapter, SMRealTimeAdapter, USUMRealTimeAdapter,
     BDSPRealTimeAdapter, B2W2RealTimeAdapter, HgssRealTimeAdapter,
-    CitraBridge, RealTimeRegistry,
+    RealTimeRegistry,
 )
 from .realtime.models import badge_source_is_live
 from .live_party_watch import (
@@ -139,7 +179,6 @@ from .live_party_watch import (
 from .xy_live import XYLiveReader, XYLiveWriter, load_xy_move_metadata, read_xy_saved_misc
 from .sm_live import SMLiveReader, load_gen7_move_metadata, load_sm_move_pp
 from .usum_live import USUMLiveReader
-from .citra_broker import CitraBrokerClient
 from .oras_live import (
     ORAS_BADGES_ADDRESS, ORAS_INVENTORY_TARGETS, ORAS_PC_ADDRESS, ORAS_PC_BOX_SLOT_COUNT, PK6_STORED_SIZE,
     ORAS_SAVE_MISC_SIZE, read_oras_saved_misc,
@@ -177,8 +216,41 @@ MELONDS_GEN4_REALTIME_GAME_KEYS = {"hgss"}
 # partida del usuario. Desde alpha.85 la dirección se localiza —por la firma del
 # entrenador y la marca del bloque— y se comprueba cuál de las copias actualiza
 # el juego, mirando cuál se mueve; y antes de cada escritura se confirma que
-# sigue valiendo. Sin esas dos pruebas, el writer se niega.
-MELONDS_GEN4_ESCRIBE = False
+# sigue valiendo. Sin esas dos pruebas, el writer se niega. Se reactivó el
+# 06-09-2026 y se REVIRTIÓ el mismo día TRES VECES seguidas, las tres por la
+# MISMA causa raíz: la extensión de combate (nivel, estado, PS,
+# estadísticas) no lleva checksum propio -ver `_extension_coherente` en
+# pk4.py-, y cada armazón de escritura confiaba en una sola lectura del
+# equipo/PC para construir lo que iba a escribir. (1) Gastly quedó con PS y
+# nivel ilegibles al cambiar de rol dos Pokémon a la vez. (2) Sacar del PC al
+# equipo dejó un Huevo malo de verdad. (3) Enviar OTRO Pokémon al PC dejó a
+# Rattata -sin relación con la operación- mostrando «Envenenado» donde iba
+# el nivel, porque el armazón reescribe el bloque de equipo ENTERO en cada
+# operación. Arreglado con el mismo criterio en los dos armazones de
+# escritura (`_transaccion_de_equipo` y `_transaccion_equipo_y_pc`): dos
+# lecturas independientes tienen que coincidir en nivel/estado/PS de TODO el
+# equipo -no solo el hueco que la operación declara tocar- antes de mutar
+# nada. CUARTO incidente el mismo día: sacar a Spinarak del PC lo dejó en
+# Huevo malo A ÉL MISMO -no a un tercero, como con Rattata-, sin
+# inestabilidad detectable entre dos lecturas seguidas, así que la causa
+# exacta sigue sin encontrarse pese a una reproducción sintética exhaustiva
+# (48 combinaciones de cifrado/especie/nivel, todas limpias). Se añadió,
+# sin certeza de que cierre este caso, la misma segunda verificación tardía
+# que sí cerró el de Gastly, ahora también en `_transaccion_equipo_y_pc`
+# (nunca la había tenido), más un registro de diagnóstico exhaustivo en
+# `_party_block` para capturar los valores reales del próximo intento.
+# QUINTO incidente el mismo día: Wooper apareció como Huevo malo tras enviar
+# OTRO Pokémon al PC, pero el log reconstruido muestra que el culpable real
+# fue un `deshacer()` (rollback) de una curación abortada momentos antes por
+# "el juego tocó el miembro 3" -ese aviso solo nombra al primer hueco
+# distinto que encuentra, y el rollback nunca tuvo la segunda verificación
+# tardía que la escritura normal sí tiene desde Gastly-. Añadida esa misma
+# protección también al rollback, en los dos armazones de escritura. El
+# usuario aclaró que esta partida es de prueba y nunca la guarda, así que
+# reactivada de nuevo el 06-09-2026 aceptando el riesgo residual mientras
+# se sigue puliendo esto -no hay garantía de que la carrera real entre
+# RoleRun y el propio juego escribiendo a la vez esté cerrada del todo-.
+MELONDS_GEN4_ESCRIBE = True
 MELONDS_WRITE_GAME_KEYS = MELONDS_GEN5_REALTIME_GAME_KEYS | (
     MELONDS_GEN4_REALTIME_GAME_KEYS if MELONDS_GEN4_ESCRIBE else set()
 )
@@ -228,12 +300,30 @@ PISTA_GUARDAR_PARA_LOCALIZAR_EL_PC = (
     "y RoleRun vuelve a localizar las cajas."
 )
 
-PC_A_PC_GAME_KEYS = {"usum", "xy", "oras", "bdsp"} | MELONDS_REALTIME_GAME_KEYS
+PC_A_PC_GAME_KEYS = {"sm", "usum", "xy", "oras", "bdsp"} | MELONDS_REALTIME_GAME_KEYS
 # Intercambiar dos casillas OCUPADAS del PC es una escritura distinta de
-# llevar una criatura a un hueco libre: hay dos PK6 que conservar y ninguna
-# casilla vacía donde apoyarse. Solo lo declara quien tiene writer propio
-# (`ORASLiveWriter._apply_pc_swap`).
-PC_SWAP_GAME_KEYS = {"oras"}
+# llevar una criatura a un hueco libre: hay dos criaturas que conservar y
+# ninguna casilla vacía donde apoyarse. A cambio, las DOS identidades son
+# ancla, así que la calibración de la matriz no depende de ningún vecino.
+#
+# 05-09-2026: pedido del usuario, deja de ser exclusivo de sexta. Cada backend
+# lo escribe con su propio writer, sobre la misma matriz PC que su traslado a
+# hueco libre ya tenía demostrada -sin ninguna dirección nueva-:
+# `ORASLiveWriter._apply_pc_swap`, `XYLiveWriter._apply_pc_swap`,
+# `SMLiveWriter._apply_pc_swap`, `USUMLiveWriter._apply_pc_swap`,
+# `BDSPLiveWriter._apply_box_swap`, `B2W2MelonDSReader.swap_pc_slots` (B2/W2 y
+# Blanco/Negro) y `HgssWriter.swap_pc_slots`. Mismo conjunto que
+# `PC_A_PC_GAME_KEYS`, pero se declara aparte a propósito: son dos escrituras
+# distintas y un backend podría tener una sin la otra.
+PC_SWAP_GAME_KEYS = {"sm", "usum", "xy", "oras", "bdsp"} | MELONDS_REALTIME_GAME_KEYS
+# Texto único para toda la fase "en curso" de una escritura en vivo (ver
+# RoleRunManager._set_operation_status). No describe QUÉ se está aplicando
+# a propósito: esa granularidad es la que generaba varios avisos distintos
+# en la misma operación y los hacía ilegibles.
+LOADING_STATUS_TITLE = "CARGANDO…"
+LOADING_STATUS_DETAIL = (
+    "RoleRun está aplicando el cambio en el juego. Puedes seguir usando la aplicación."
+)
 # Backends cuyo writer de rol escribe además el reparto de EV del rol. Estaba
 # repetido como literal en siete sitios, y olvidar uno bastaba para que un
 # juego escribiera la marca del rol pero no sus EV: exactamente lo que le
@@ -259,6 +349,15 @@ TEAM_PC_PAGES = {"team", "pc"}
 #: mientras el PC no se mueva; cualquier cambio vuelve a acelerarlo.
 BDSP_PC_POLL_MIN_MS = 2500
 BDSP_PC_POLL_MAX_MS = 20000
+# Cuánto se espera, en tiempo real, a que el diálogo de aprendizaje del
+# juego se resuelva (vainilla o sustituto) antes de abandonar una entrada
+# pendiente. Con solo "nivel actual - nivel de la entrada <= 20" un salto de
+# nivel enorme de una sola vez (varios Caramelo Raro seguidos) supera el
+# margen en el MISMO sondeo en que se detecta el cruce, sin darle ninguna
+# oportunidad real al jugador de confirmar los varios diálogos en cadena que
+# el juego encola uno detrás de otro -demostrado el 2026-09-03 con un salto
+# de nivel 11→100 en un solo sondeo-.
+BDSP_LEVELUP_PENDING_GRACE_SECONDS = 180.0
 # Sin este límite, una descarga de sprite sin red enrutada podía quedarse
 # colgada indefinidamente. La barrera inicial espera a los sprites, así que ese
 # cuelgue dejaba RoleRun en la pantalla de carga para siempre.
@@ -356,9 +455,118 @@ class RoleRunManager(ctk.CTk):
         self._oras_rom_tm_profile_source: Path | None = None
         self._oras_rom_tm_profile_process: str | None = None
         self._oras_rom_tm_last_error: str | None = None
+        # Aprendizajes por nivel de ORAS ajustados al rol (ver
+        # app/oras_levelup_moves.py). El mod de Azahar solo puede registrarse
+        # una vez por ROM/título; se cachea aquí para no repetir la lectura.
+        self._oras_levelup_moves_vanilla: bytes | None = None
+        self._oras_levelup_moves_title_id: int | None = None
+        self._oras_levelup_moves_azahar_root: Path | None = None
+        self._oras_levelup_moves_last_written: bytes | None = None
+        # Decodificar el GARC entero (826 especies) en cada sondeo era
+        # trabajo repetido: se decodifica una vez al registrar el mod y se
+        # reutiliza aquí en cada sincronización.
+        self._oras_levelup_moves_vanilla_entries: dict[int, tuple[tuple[int, int, int], ...]] | None = None
+        # Pedido por el usuario el 2026-09-03 tras notar el programa lento:
+        # recalcular el parche entero (copiar el blob + evaluar cada entrada
+        # de nivel de cada miembro del equipo) en cada sondeo en vivo —hasta
+        # cada 250ms— era trabajo desperdiciado casi siempre, porque el rol
+        # de cada especie en juego no cambia entre un sondeo y el siguiente.
+        # Si esta clave es igual a la del sondeo anterior, el parche ya
+        # calculado sigue siendo válido y ni se reconstruye ni se compara.
+        self._oras_levelup_moves_last_roles_key: tuple | None = None
+        # Recuerda-movimientos: último nivel visto de cada Pokémon esta
+        # sesión, por identidad PID:TID:SID. Solo memoria de sesión — al
+        # reabrir RoleRun, la primera lectura de cada Pokémon fija la base sin
+        # registrar historial, porque no hay forma de saber qué subida de
+        # nivel ocurrió mientras RoleRun estaba cerrado.
+        self._oras_levelup_history_last_levels: dict[str, int] = {}
+        # USUM: mismo mecanismo que ORAS (mod de LayeredFS, ver
+        # app/usum_levelup_moves.py), con una pieza extra: el GARC de
+        # aprendizajes de USUM indexa por personal_id (formas incluidas),
+        # no por species_id directo como ORAS — este mapa traduce
+        # (species_id, form) -> personal_id, calculado una sola vez al
+        # registrar el mod, igual que _oras_levelup_moves_vanilla_entries.
+        self._usum_levelup_moves_vanilla: bytes | None = None
+        self._usum_levelup_moves_title_id: int | None = None
+        self._usum_levelup_moves_azahar_root: Path | None = None
+        self._usum_levelup_moves_last_written: bytes | None = None
+        self._usum_levelup_moves_vanilla_entries: dict[int, tuple[tuple[int, int, int], ...]] | None = None
+        self._usum_levelup_personal_id_map: dict[tuple[int, int], int] | None = None
+        self._usum_levelup_moves_last_roles_key: tuple | None = None
+        self._usum_levelup_history_last_levels: dict[str, int] = {}
+        # USUM, 2026-09-04: red de seguridad tras el parche proactivo
+        # (``_sync_usum_levelup_moves_backup``) — un cambio de rol justo
+        # antes de subir de nivel puede dejar que el juego enseñe algo que
+        # ya no es ni el vainilla ni el sustituto recién calculado (el que
+        # tenía cacheado de un rol anterior). Se detecta comparando qué
+        # movimiento NUEVO aparece en los 4 huecos contra este snapshot.
+        self._usum_levelup_backup_known_moves: dict[str, list[int]] = {}
+        # Como mucho un hilo de parcheo del anuncio en RAM a la vez por juego
+        # (ver el candado en ``_sync_usum_levelup_announcement_cache``,
+        # 2026-09-04): cada especie puede tardar 1-2s de escaneo con el GIL
+        # ocupado en ráfagas; sin este candado, varios a la vez hacían que
+        # toda la interfaz se sintiera lenta mientras competían por CPU.
+        self._usum_levelup_announcement_cache_running: bool = False
+        self._sm_levelup_announcement_cache_running: bool = False
+        # SM: mismo mecanismo que USUM (mismo motor/generación, ver
+        # app/sm_levelup_moves.py) — comparte estructura de GARC indexado por
+        # personal_id, red de seguridad reactiva y caché de anuncio en RAM.
+        self._sm_levelup_moves_vanilla: bytes | None = None
+        self._sm_levelup_moves_title_id: int | None = None
+        self._sm_levelup_moves_azahar_root: Path | None = None
+        self._sm_levelup_moves_last_written: bytes | None = None
+        self._sm_levelup_moves_vanilla_entries: dict[int, tuple[tuple[int, int, int], ...]] | None = None
+        self._sm_levelup_personal_id_map: dict[tuple[int, int], int] | None = None
+        self._sm_levelup_moves_last_roles_key: tuple | None = None
+        self._sm_levelup_history_last_levels: dict[str, int] = {}
+        self._sm_levelup_backup_known_moves: dict[str, list[int]] = {}
+        # X/Y: mismo mecanismo que ORAS (mismo motor/generación, ver
+        # app/xy_levelup_moves.py) — GARC indexado 1:1 por species_id, sin
+        # indirección por personal_id. Confirmado el 2026-09-05 leyendo la
+        # ROM real del usuario en a/2/1/4.
+        self._xy_levelup_moves_vanilla: bytes | None = None
+        self._xy_levelup_moves_title_id: int | None = None
+        self._xy_levelup_moves_azahar_root: Path | None = None
+        self._xy_levelup_moves_last_written: bytes | None = None
+        self._xy_levelup_moves_vanilla_entries: dict[int, tuple[tuple[int, int, int], ...]] | None = None
+        self._xy_levelup_moves_last_roles_key: tuple | None = None
+        self._xy_levelup_history_last_levels: dict[str, int] = {}
+        self._xy_levelup_backup_known_moves: dict[str, list[int]] = {}
+        self._xy_levelup_announcement_cache_running: bool = False
+        # Petición de más especies llegada MIENTRAS el hilo de arriba ya
+        # estaba en curso (ver ``_sync_xy_levelup_announcement_cache``):
+        # antes se descartaba en silencio -causa real de que el propio
+        # intento urgente de Zigzagoon se cancelara sin dejar rastro
+        # cuando un cambio de rol acababa de lanzar un barrido de 5
+        # especies unos segundos antes-. Ahora se guarda aquí y el propio
+        # hilo la recoge en cuanto termina su vuelta actual, en vez de
+        # perderla.
+        self._xy_levelup_announcement_cache_pending: dict[int, str] | None = None
+        self._xy_levelup_announcement_cache_pending_blob: bytes | None = None
+        # Especies que cruzaron un nivel de aprendizaje en el ÚLTIMO
+        # ``_record_xy_levelup_move_history`` (ver su docstring y el uso en
+        # ``_sync_xy_levelup_moves_mod``): dispara el parcheo de RAM del
+        # cartel aunque el archivo del mod no haya cambiado esta vuelta.
+        self._xy_levelup_species_leveled_this_tick: set[int] = set()
+        # BDSP: aprendizajes por rol vía sustitución posterior en RAM (no hay
+        # mod de LayeredFS para Ryujinx, ver app/bdsp_levelup_moves.py). Tabla
+        # vainilla decodificada una sola vez de personal_masterdatas.
+        self._bdsp_levelup_table: dict[tuple[int, int], tuple[tuple[int, int, int], ...]] | None = None
+        self._bdsp_levelup_table_source: str | None = None
+        # Último nivel visto por identidad, para detectar una subida nueva —
+        # mismo criterio de sesión que el histórico de ORAS de arriba.
+        self._bdsp_levelup_last_levels: dict[str, int] = {}
+        # Entradas cruzadas cuyo movimiento vainilla el juego todavía no ha
+        # escrito en la party (el diálogo de aprendizaje puede tardar más de
+        # un sondeo en resolverse): identidad -> {(movimiento_vainilla,
+        # sustituto, conocidos_antes_de_cruzar_el_nivel)}. Se reintenta en
+        # cada sondeo hasta encontrar el movimiento vainilla recién aparecido
+        # en la party, o hasta que el propio Pokémon suba lo bastante de
+        # nivel como para que ya no tenga sentido seguir esperando.
+        self._bdsp_levelup_pending: dict[str, set[tuple[int, int, frozenset]]] = {}
         # X/Y usa la capa efectiva de ROM del emulador (base + update + mods).
-        # El mismo .3ds puede tener compatibilidades distintas si Citra/Azahar
-        # aplica un LayeredFS, así que el emulador forma parte de la clave caché.
+        # El mismo .3ds puede tener compatibilidades distintas si Azahar aplica
+        # un LayeredFS, así que el emulador forma parte de la clave caché.
         self._xy_rom_tm_profile: ORASTMProfile | None = None
         self._xy_rom_tm_profile_source: Path | None = None
         self._xy_rom_tm_profile_process: str | None = None
@@ -399,39 +607,18 @@ class RoleRunManager(ctk.CTk):
         # 0.2.1-alpha.3: X/Y es el primer segundo juego conectado al mismo
         # Real-Time Core. Party, roles, movimientos, medallas, diagnóstico y
         # replay pasan por exactamente el mismo contrato; PC/MT/batalla se
-        # habilitarán después de calibrar sus bloques propios.
-        # X/Y puede ejecutarse tanto en Azahar como en Citra. Ambos transportes
-        # producen exactamente el mismo snapshot del Core; la UI no necesita
-        # saber cuál está activo. Azahar se conserva como primera preferencia y
-        # Citra queda como fallback automático mediante un broker GDB persistente.
+        # habilitarán después de calibrar sus bloques propios. X/Y corre sobre
+        # Azahar, igual que ORAS/SM/USUM.
         self.xy_live_reader = XYLiveReader(DATA_DIR / "move_catalog.json")
         self.xy_live_writer = XYLiveWriter(
             self.xy_live_reader,
             move_pp_for=lambda move_id: self.oras_live_move_pp[move_id],
             personal_for=self._xy_personal_for_live,
         )
-        self.xy_azahar_realtime_adapter = XYRealTimeAdapter(
+        self.xy_realtime_adapter = XYRealTimeAdapter(
             self.xy_live_reader, self.xy_live_writer,
             adapter_key="xy-azahar-rpc", profile="XY-Azahar-alpha.10", live_badges=True,
         )
-        self.xy_citra_live_reader = XYLiveReader(
-            DATA_DIR / "move_catalog.json", client_factory=CitraBrokerClient,
-            transport_label="Citra GDB broker", live_profile="XY-Citra",
-        )
-        self.xy_citra_live_writer = XYLiveWriter(
-            self.xy_citra_live_reader,
-            move_pp_for=lambda move_id: self.oras_live_move_pp[move_id],
-            personal_for=self._xy_personal_for_live,
-        )
-        self.xy_citra_realtime_adapter = XYRealTimeAdapter(
-            self.xy_citra_live_reader, self.xy_citra_live_writer,
-            bridge=CitraBridge(CitraBrokerClient),
-            adapter_key="xy-citra-gdb", profile="XY-Citra-alpha.10", live_badges=True,
-        )
-        self.xy_realtime_adapter = XYMultiRealTimeAdapter((
-            self.xy_azahar_realtime_adapter,
-            self.xy_citra_realtime_adapter,
-        ))
         # 0.2.2-alpha.7: Sol/Luna mantiene en el Real-Time Core con party, roles y
         # movimientos PK7 en vivo. La referencia RAM pública no se acepta hasta
         # que una party PK7 coincide con el main por identidad fuerte.
@@ -477,6 +664,32 @@ class RoleRunManager(ctk.CTk):
         # melonDS, party PK5 y PS. No expone writers, PC ni batalla.
         # Datos de juego de B2/W2 leídos de la ROM que melonDS tiene cargada.
         # Se resuelve una sola vez por Run y se conserva mientras no cambie.
+        # Quinta generación (B2/W2 y Blanco/Negro) sobre melonDS. A diferencia
+        # de 3DS, aquí no hay archivo de mod: se parchea la imagen de la ROM
+        # dentro de la memoria del emulador (ver app/gen5_levelup_memory.py).
+        # Y a diferencia de X/Y, Sol/Luna y UltraSol/UltraLuna, quinta NO
+        # cachea la tabla -demostrado físicamente el 06-09-2026-, así que con
+        # esta única capa el juego ya anuncia y enseña el movimiento correcto:
+        # no hace falta ni red de seguridad reactiva ni parcheo del cartel.
+        self._gen5_levelup_entries: dict[int, tuple[tuple[int, int, int], ...]] | None = None
+        self._gen5_levelup_rom_path: Path | None = None
+        self._gen5_levelup_image = None
+        self._gen5_levelup_last_roles_key: tuple | None = None
+        #: ``{desplazamiento: movimiento_vainilla}`` de todo lo que se ha
+        #: escrito en esta sesión, para poder devolverlo al cerrar.
+        self._gen5_levelup_written: dict[int, int] = {}
+        self._gen5_levelup_history_last_levels: dict[str, int] = {}
+        # Mismo mecanismo en HeartGold (06-09-2026), con su propia tabla
+        # (``a/0/3/3``, formato empaquetado) y su propio estado: no comparte
+        # nada con quinta salvo el patrón. Si cuarta cachea la tabla como
+        # quinta o como ORAS todavía no se ha probado -eso exige un cambio de
+        # nivel real en la partida del usuario-.
+        self._hgss_levelup_entries: dict[int, tuple[tuple[int, int, int], ...]] | None = None
+        self._hgss_levelup_rom_path: Path | None = None
+        self._hgss_levelup_image = None
+        self._hgss_levelup_last_roles_key: tuple | None = None
+        self._hgss_levelup_written: dict[int, int] = {}
+        self._hgss_levelup_history_last_levels: dict[str, int] = {}
         self._gen5_rom_profiles: dict[str, object | None] = {}
         self._gen5_rom_checked_for: dict[str, str] = {}
         self._gen5_rom_last_error: dict[str, str | None] = {}
@@ -543,11 +756,6 @@ class RoleRunManager(ctk.CTk):
         self._oras_auto_sync_after_id: str | None = None
         self._oras_auto_sync_in_progress = False
         self._oras_auto_sync_token = 0
-        # Citra puede detener el juego antes de que exista una captura X/Y
-        # válida. Este bootstrap es independiente del monitor y se ejecuta aun
-        # cuando hay cambios pendientes, para que ninguna feature (PC/MT/etc.)
-        # pueda impedir que el emulador reciba ``continue``.
-        self._xy_transport_prepare_in_progress = False
         # Una conexión se considera viva solamente después de una lectura
         # validada (automática o F5). Así nunca desviamos una escritura ORAS al
         # RPC por intuición.
@@ -847,6 +1055,8 @@ class RoleRunManager(ctk.CTk):
         self._global_tm_sin_mochila = ""
         self._global_tm_load_requested = False
         self._role_info_popover: IntegratedRoleInfoPopover | None = None
+        self._move_info_popover: MoveInfoPopover | None = None
+        self._levelup_history_popover: LevelupMoveHistoryPopover | None = None
         self._draft_view: IntegratedDraftFlow | None = None
         self._navigation_owner = None
         self._draft_transition_token = 0
@@ -859,6 +1069,7 @@ class RoleRunManager(ctk.CTk):
         self._bdsp_tm_auto_checked = False
         self._role_conflict_dialog: ctk.CTkToplevel | None = None
         self.role_icons = RoleIconProvider(RESOURCES_DIR / "role_icons", GOLD)
+        self.category_icons = CategoryIconProvider(RESOURCES_DIR / "category_icons")
 
         # Historial de edición reversible (1.12.22). Solo contiene estado todavía
         # no consolidado en el guardado. GUARDAR CAMBIOS crea un nuevo punto base.
@@ -889,6 +1100,14 @@ class RoleRunManager(ctk.CTk):
         self._role_drag_ghost_image: ctk.CTkImage | None = None
         self._floating_role_drag_consumed = False
         self._floating_role_reordered = False
+        # Red de seguridad (bug 2026-09-04: sprite fantasma duplicado fuera de la
+        # barra). Si el widget donde empezó el drag se destruye a mitad de gesto
+        # -p. ej. un redibujo de la barra flotante mientras el botón sigue pulsado-
+        # Tk pierde el grab implícito y ButtonRelease-1 nunca llega a esa instancia,
+        # dejando el fantasma huérfano para siempre. Este bind_all es el backstop:
+        # se dispara para CUALQUIER ButtonRelease-1 de la app, y _end_role_drag ya
+        # es un no-op seguro cuando no hay ningún drag en curso.
+        self.bind_all("<ButtonRelease-1>", self._end_role_drag, add="+")
         # La barra flotante es una vista temporal: al volver se restaura exactamente
         # la pestaña principal desde la que se abrió, no siempre Dashboard.
         self._last_main_page_before_floating = DEFAULT_PAGE
@@ -925,9 +1144,20 @@ class RoleRunManager(ctk.CTk):
         self.bind("<Map>", self._on_main_map, add="+")
         self.bind_all("<FocusIn>", self._on_role_run_focus_in, add="+")
 
+        # Aviso de nueva versión: una sola comprobación por arranque contra la
+        # última Release de GitHub, ver app/update_checker.py. El resultado
+        # llega por cola porque se pide desde un hilo aparte -Tk no es seguro
+        # de tocar fuera del hilo principal-, igual que los sprites.
+        self._update_queue: queue.Queue = queue.Queue()
+        self._update_notification_window: ctk.CTkToplevel | None = None
+        self._update_dismissals = update_checker.DismissedVersionStore(
+            CONFIG_DIR / "update_prefs.json"
+        )
+
         self._render_startup_splash()
         self.after(100, self._poll_sprite_queue)
         self._emulator_focus_poll_id = self.after(500, self._poll_emulator_foreground)
+        self.after(2000, self._check_for_updates)
 
     # ---------- UNDO / REDO ----------
 
@@ -1510,6 +1740,26 @@ class RoleRunManager(ctk.CTk):
             libero_stats=libero_assignments.get(self._pokemon_identity(source), ()),
         )
 
+        # Sin esto, un cambio de rol solo llegaba a la tabla de aprendizajes
+        # de ORAS en el siguiente sondeo pasivo (hasta ~950ms después,
+        # _finish_oras_live_reconciliation). Con el juego acelerado (varios
+        # cientos por ciento de velocidad, confirmado el 2026-09-03) ese
+        # margen le sobraba de tiempo para subir de nivel con el rol
+        # anterior todavía escrito. _effective_role ya lee el cambio de rol
+        # pendiente antes de que se confirme en la RAM, así que no hace
+        # falta esperar a releer la partida. Validado físicamente el
+        # 2026-09-03: un intercambio de roles entre dos Pokémon ya se refleja
+        # de inmediato.
+        self._sync_oras_levelup_moves_mod(self.current_game)
+        self._sync_usum_levelup_moves_mod(self.current_game)
+        self._sync_usum_levelup_moves_backup(self.current_game)
+        self._sync_sm_levelup_moves_mod(self.current_game)
+        self._sync_sm_levelup_moves_backup(self.current_game)
+        self._sync_xy_levelup_moves_mod(self.current_game)
+        self._sync_xy_levelup_moves_backup(self.current_game)
+        self._sync_gen5_levelup_moves(self.current_game)
+        self._sync_hgss_levelup_moves(self.current_game)
+
         left = source.nickname or source.species
         if target is not None:
             right = target.nickname or target.species
@@ -1645,6 +1895,7 @@ class RoleRunManager(ctk.CTk):
             return changed
         except Exception:
             return False
+
 
     def _restore_last_emulator_focus_from_bar(self, bar=None) -> None:
         """Fallback: devuelve el foreground al emulador si Tk llegó a activarse."""
@@ -1928,6 +2179,15 @@ class RoleRunManager(ctk.CTk):
         # tareas mientras la barra flotante seguía visible, esa acción se interpreta
         # como "volver a RoleRun". Nunca dejamos raíz + barra activas a la vez:
         # esa superposición era especialmente peligrosa cuando había una baja pendiente.
+        #
+        # Pedido por el usuario el 2026-09-03: abrir la barra flotante ahora pasa
+        # por ``deiconify()`` antes de ``iconify()`` (para conservar el icono real
+        # en la barra de tareas), y eso dispara este mismo <Map> como efecto
+        # colateral de la propia apertura. El guard —ya puesto por
+        # ``open_floating_bar``— evita interpretar ese <Map> autoinducido como
+        # "el usuario ha vuelto" y deshacer la apertura que se acaba de pedir.
+        if self._auto_floating_guard:
+            return
         try:
             if self._floating_bar_is_visible():
                 # Un <Map> de la raíz no implica necesariamente que el usuario haya
@@ -2237,6 +2497,14 @@ class RoleRunManager(ctk.CTk):
         self._schedule_pending_faint_picker(700)
 
     def _shutdown_application(self) -> None:
+        # Con RoleRun cerrado, ORAS/USUM/SM deben volver a enseñar exactamente
+        # lo que diría su propia ROM/randomizer, sin ningún ajuste por rol.
+        self._revert_oras_levelup_moves_mod()
+        self._revert_usum_levelup_moves_mod()
+        self._revert_sm_levelup_moves_mod()
+        self._revert_xy_levelup_moves_mod()
+        self._revert_gen5_levelup_moves()
+        self._revert_hgss_levelup_moves()
         # Si se sale sin guardar, el overlay no debe quedarse mostrando una
         # proyección que nunca llegó al archivo. Restauramos el layout del save.
         if self.run.pending_changes and self.project and self.current_game:
@@ -2429,8 +2697,18 @@ class RoleRunManager(ctk.CTk):
         if self.floating_bar and self.floating_bar.winfo_exists():
             # Flujo estable previo al experimento de doble buffer: retirar primero
             # la ventana principal y después mapear/refrescar el Toplevel.
+            #
+            # Pedido por el usuario el 2026-09-03: un ``withdraw()`` puro deja la
+            # raíz sin icono alguno en la barra de tareas de Windows mientras la
+            # barra flotante está activa. ``deiconify()``+``iconify()`` —el mismo
+            # truco que ya usaba ``_close_from_floating_bar`` al cerrar la
+            # barra— conserva el icono real de RoleRun como ventana minimizada, y
+            # pulsarlo dispara ``<Map>`` → ``_on_main_map``, que ya sabe volver
+            # desde la barra flotante.
             self._set_auto_floating_guard_temporarily()
-            self.withdraw()
+            self.deiconify()
+            self.update_idletasks()
+            self.iconify()
             self.floating_bar.deiconify()
             self._floating_bar_last_signature = None
             self._render_floating_bar(force=True)
@@ -2512,8 +2790,15 @@ class RoleRunManager(ctk.CTk):
 
         # Este orden es intencionadamente el de la alpha.30: era el último ciclo
         # verificado en Windows que mostraba siempre la barra completa.
+        #
+        # Pedido por el usuario el 2026-09-03: mismo motivo que en la rama de
+        # reutilización — ``deiconify()``+``iconify()`` conserva el icono real
+        # de RoleRun en la barra de tareas, y pulsarlo devuelve la aplicación
+        # (``_on_main_map`` ya sabe salir de la barra flotante desde ahí).
         self._set_auto_floating_guard_temporarily()
-        self.withdraw()
+        self.deiconify()
+        self.update_idletasks()
+        self.iconify()
         self._floating_bar_last_signature = None
         self._render_floating_bar(force=True)
         try:
@@ -2869,6 +3154,34 @@ class RoleRunManager(ctk.CTk):
         # de «cambió la composición», y actualizar en su sitio el primer caso.
         return (counters, tuple(roles))
 
+    def _floating_hp_is_live(self, pokemon: SavePokemon | None) -> bool:
+        """¿Los PS que va a pintar la barra son los de AHORA?
+
+        06-09-2026, planteado por el usuario: «si la barra puede dejar de
+        mostrar la vida correcta, eso hay que cambiarlo». Durante un combate,
+        varios juegos solo miden los PS del Pokémon que está en el campo; los
+        demás arrastran los del bloque de equipo, que en quinta está demostrado
+        que no se actualiza hasta que el combate acaba. Pintar eso en verde es
+        afirmar algo que no se ha medido.
+
+        Se mira el mismo candidato que `_floating_health_values` elige como
+        autoridad, para que la marca y el número no puedan discrepar.
+        """
+        if pokemon is None:
+            return True
+        snapshot = getattr(self, "_oras_live_health_snapshot", None)
+        party = list(getattr(snapshot, "party", []) or [])
+        if not party:
+            return bool(getattr(pokemon, "hp_is_live", True))
+        identity = self._pokemon_identity(pokemon)
+        matches = [
+            candidate for candidate in party
+            if self._pokemon_identity(candidate) == identity
+        ]
+        if len(matches) != 1:
+            return bool(getattr(pokemon, "hp_is_live", True))
+        return bool(getattr(matches[0], "hp_is_live", True))
+
     def _floating_health_values(self, pokemon: SavePokemon | None) -> tuple[int, int, int]:
         """Devuelve salud live demostrada sin convertir una muestra provisional en KO.
 
@@ -3123,7 +3436,34 @@ class RoleRunManager(ctk.CTk):
         self._show_floating_menu_home(launcher)
         return "break"
 
+    def _capa_abierta_bloquea_el_menu(self) -> bool:
+        """¿Hay una capa abierta que el menú flotante taparía?
+
+        06-09-2026, reportado por el usuario: con RECUERDA-MOVIMIENTOS abierto,
+        pulsar MENÚ en la barra flotante abría el lanzador ENCIMA, dejando el
+        selector detrás y sin forma de volver a él. Estas capas se dibujan
+        dentro de la ventana principal, así que no pueden competir por el foco
+        con un Toplevel `-topmost`: hay que no abrirlo.
+        """
+        for atributo in (
+            "_levelup_history_popover", "_move_info_popover", "_role_info_popover",
+        ):
+            capa = getattr(self, atributo, None)
+            if capa is None:
+                continue
+            try:
+                if capa.winfo_exists():
+                    return True
+            except Exception:
+                # Una capa ya destruida no bloquea nada.
+                continue
+        return False
+
     def _toggle_floating_launcher(self) -> None:
+        # Cerrar el lanzador siempre se permite; lo que no se permite es
+        # ABRIRLO tapando una capa que el usuario todavía tiene delante.
+        if self._floating_launcher is None and self._capa_abierta_bloquea_el_menu():
+            return
         if self._floating_launcher is not None:
             try:
                 if self._floating_launcher.winfo_exists():
@@ -3942,6 +4282,12 @@ class RoleRunManager(ctk.CTk):
             return
         self._floating_bar_last_signature = signature
         self._floating_health_widgets.clear()
+        # Un drag en curso referencia justo los widgets que este redibujo va a
+        # destruir; cancelarlo aquí evita el fantasma huérfano (ver el bind_all
+        # de respaldo en __init__) tratando la reconstrucción como lo que es
+        # para el gesto: una interrupción, no un drop.
+        if self._role_drag_context == "floating":
+            self._cancel_role_drag()
         self._clear_floating_bar_render_children(bar)
         self.floating_bar_images.clear()
         self._floating_role_drop_targets = []
@@ -4036,7 +4382,16 @@ class RoleRunManager(ctk.CTk):
             role_label.pack(fill="x", padx=3, pady=(0, 0))
             hp, max_hp, status = self._floating_health_values(pokemon)
             hp_fraction = max(0.0, min(1.0, hp / max_hp)) if max_hp > 0 else 0.0
-            hp_color = DANGER if hp_fraction <= .25 else (GOLD if hp_fraction <= .5 else SUCCESS)
+            # El COLOR es la afirmación más fuerte de la barra: verde dice
+            # «este está bien». Cuando los PS no están medidos ahora mismo
+            # -durante un combate, para los que no están en el campo- se pinta
+            # en gris neutro: se sigue viendo la última lectura buena, pero sin
+            # afirmar que siga siendo cierta. Ver `_floating_hp_is_live`.
+            hp_en_vivo = self._floating_hp_is_live(pokemon)
+            hp_color = (
+                (DANGER if hp_fraction <= .25 else (GOLD if hp_fraction <= .5 else SUCCESS))
+                if hp_en_vivo else "#6E6E6E"
+            )
             hp_row = ctk.CTkFrame(
                 frame, width=82, height=9, fg_color="transparent", corner_radius=0,
             )
@@ -4076,22 +4431,28 @@ class RoleRunManager(ctk.CTk):
                 self._register_role_drag_surface(sprite_button, pokemon, "floating", frame, role)
                 self._register_role_drag_surface(role_label, pokemon, "floating", frame, role)
                 self._register_role_drag_surface(frame, pokemon, "floating", frame, role)
+        # 06-09-2026: MENÚ es solo navegación -abre el lanzador de la app- y no
+        # tiene nada que ver con si el backend puede curar en vivo. Estaba
+        # enganchado a `_floating_live_actions_available()`, así que cualquier
+        # juego sin curación (HeartGold, mientras su escritura siga apagada)
+        # se quedaba SIN MENÚ también, aunque no tuviera ninguna relación. Se
+        # separan: MENÚ siempre está, CURAR solo si el backend lo demuestra.
+        actions = ctk.CTkFrame(shell, width=64, height=86, fg_color="transparent")
+        actions.grid(row=0, column=11, padx=3, pady=7, sticky="n")
+        actions.grid_propagate(False)
         if self._floating_live_actions_available():
-            actions = ctk.CTkFrame(shell, width=64, height=86, fg_color="transparent")
-            actions.grid(row=0, column=11, padx=3, pady=7, sticky="n")
-            actions.grid_propagate(False)
             ctk.CTkButton(
                 actions, text="♥ CURAR", width=62, height=38, corner_radius=9,
                 fg_color="transparent", hover_color="#303030", text_color=GOLD,
                 border_width=1, border_color=GOLD, command=self._heal_bdsp_party,
                 font=ctk.CTkFont("Segoe UI", 9, "bold"),
             ).pack(pady=(0, 5))
-            ctk.CTkButton(
-                actions, text="☰ MENÚ", width=62, height=38, corner_radius=9,
-                fg_color="#242424", hover_color="#343434", text_color=GOLD,
-                border_width=1, border_color="#4A3D25", command=self._toggle_floating_launcher,
-                font=ctk.CTkFont("Segoe UI", 8, "bold"),
-            ).pack()
+        ctk.CTkButton(
+            actions, text="☰ MENÚ", width=62, height=38, corner_radius=9,
+            fg_color="#242424", hover_color="#343434", text_color=GOLD,
+            border_width=1, border_color="#4A3D25", command=self._toggle_floating_launcher,
+            font=ctk.CTkFont("Segoe UI", 8, "bold"),
+        ).pack()
         ctk.CTkButton(shell, text="×", width=30, height=30, corner_radius=8, fg_color="transparent", hover_color=DANGER, text_color=MUTED, command=self._close_from_floating_bar).grid(row=0, column=12, padx=(3, 7), pady=7, sticky="n")
         self._schedule_floating_bar_poll()
 
@@ -4116,15 +4477,22 @@ class RoleRunManager(ctk.CTk):
 
     # Cuarta generación no se ofrece en la selección.
     #
-    # Leer funciona entero -equipo, cajas, dinero, medallas, MT, y a 18 ms-, pero
-    # escribir no se puede garantizar: una escritura de 236 bytes no es atómica
-    # para el juego emulado, y si mira el registro a medio escribir lo marca como
-    # «Huevo malo» sin vuelta atrás. Medido sobre la partida real: FIJAR ROLES
-    # dejó cinco miembros perfectos y el sexto roto.
+    # OCULTOS DE NUEVO el 07-09-2026, a petición explícita del usuario, tras
+    # diez rondas seguidas de validación física del carril de combate en vivo
+    # de HGSS (PS de combate + detección de desmayo) sin llegar a estabilizar
+    # del todo -cada arreglo confirmado dejaba un caso real sin cubrir; ver
+    # memoria `rolerun-retomados-hgss-dp-pt.md`-. Antes habían estado ocultos
+    # una primera vez por una razón distinta y ya resuelta (`CHANGELOG.md`
+    # alpha.87-97): cuatro «Huevo malo» al escribir, el último con una causa
+    # que quedó SIN EXPLICAR (un campo `sanity` en un registro que rompió la
+    # escritura sin que nadie llegara a identificar qué significa).
+    # `MELONDS_GEN4_ESCRIBE` (más abajo) sigue en `False` por esa razón.
     #
-    # Se ocultan en vez de borrarse: el código está entero y probado, y sus
-    # etiquetas siguen aquí para que una Run antigua siga teniendo nombre.
-    GAMES_OCULTOS = frozenset({"dp", "pt", "hgss"})
+    # Diamante/Perla y Platino no comparten ese historial de combate -no hay
+    # NINGUNA dirección de RAM medida todavía para ellos, ni siquiera de solo
+    # lectura, así que caen en el motor de archivo `.sav`-, pero se ocultan
+    # junto con HGSS por la misma petición explícita.
+    GAMES_OCULTOS: frozenset[str] = frozenset({"dp", "pt", "hgss"})
 
     #: Tamaño al que se pinta cada banner en el selector. Las capas del fundido
     #: se componen ya a esta medida: es lo que se ve, y evita nueve copias de
@@ -4158,6 +4526,17 @@ class RoleRunManager(ctk.CTk):
         ("usum", "Ultra Sol / Ultra Luna", True),
         ("bdsp", "Diamante Brillante / Perla Reluciente", True),
     ]
+
+    #: Qué emulador corre cada juego, para la tarjeta informativa del selector.
+    #: Los cuatro juegos de 3DS corren todos sobre Azahar -X/Y tuvo en su día
+    #: un carril alternativo por Citra/GDB (`adapter_key="xy-citra-gdb"`), pero
+    #: nunca llegó a habilitarse en la práctica y se retiró el 07-09-2026-.
+    EMULADOR_POR_JUEGO: dict[str, str] = {
+        "dp": "melonDS", "pt": "melonDS", "hgss": "melonDS",
+        "bw": "melonDS", "b2w2": "melonDS",
+        "xy": "Azahar", "oras": "Azahar", "sm": "Azahar", "usum": "Azahar",
+        "bdsp": "Ryujinx",
+    }
 
     @staticmethod
     def _game_source_filetypes(game_key: str) -> list[tuple[str, str]]:
@@ -4526,7 +4905,9 @@ class RoleRunManager(ctk.CTk):
             opcion for opcion in self.GAME_OPTIONS
             if opcion[0] not in self.GAMES_OCULTOS
         ]
-        filas = (len(visibles) + 1) // 2
+        # +1: el hueco que deja un número impar de juegos lleva la tarjeta de
+        # emuladores compatibles, no una fila vacía.
+        filas = (len(visibles) + 2) // 2
         grid.grid_rowconfigure(tuple(range(filas)), weight=1, uniform="games")
 
         cards: list[tuple[ctk.CTkFrame, int, int]] = []
@@ -4695,6 +5076,58 @@ class RoleRunManager(ctk.CTk):
                 widget.bind("<Leave>", lambda _event, fn=set_hover: fn(False), add="+")
 
             cards.append((card, column, start_x))
+
+        # Tarjeta informativa: qué emulador usar para cada juego. Cae en el
+        # mismo grid, en el hueco que deja un número impar de tarjetas (o en
+        # una fila propia si son pares) -así el usuario sabe qué instalar sin
+        # tener que adivinarlo juego a juego.
+        grupos: dict[str, list[str]] = {}
+        for key, label, _enabled in visibles:
+            emulador = self.EMULADOR_POR_JUEGO.get(key)
+            if emulador:
+                grupos.setdefault(emulador, []).append(label)
+
+        info_index = len(visibles)
+        info_row, info_column = divmod(info_index, 2)
+        info_cell = ctk.CTkFrame(grid, fg_color="transparent", corner_radius=0)
+        info_cell.grid(row=info_row, column=info_column, sticky="nsew", padx=8, pady=6)
+        info_cell.grid_propagate(False)
+
+        info_card = ctk.CTkFrame(
+            info_cell,
+            width=10,
+            height=10,
+            fg_color="#171717",
+            corner_radius=17,
+            border_width=1,
+            border_color="#6E5934",
+        )
+        info_start_x = -70 if info_column == 0 else 70
+        info_card.place(x=info_start_x, y=0, relwidth=1.0, relheight=1.0)
+
+        info_inner = ctk.CTkFrame(info_card, fg_color="transparent")
+        info_inner.place(relx=0.5, rely=0.5, anchor="center", relwidth=0.9)
+
+        ctk.CTkLabel(
+            info_inner,
+            text="EMULADORES COMPATIBLES",
+            text_color=GOLD,
+            font=ctk.CTkFont("Segoe UI", 12, "bold"),
+        ).pack(anchor="w", pady=(0, 6))
+
+        for emulador, etiquetas in grupos.items():
+            fila = ctk.CTkFrame(info_inner, fg_color="transparent")
+            fila.pack(anchor="w", fill="x", pady=2)
+            ctk.CTkLabel(
+                fila, text=emulador, text_color=TEXT,
+                font=ctk.CTkFont("Segoe UI", 11, "bold"), width=110, anchor="w",
+            ).pack(side="left")
+            ctk.CTkLabel(
+                fila, text=" · ".join(etiquetas), text_color=MUTED,
+                font=ctk.CTkFont("Segoe UI", 10), anchor="w", justify="left",
+            ).pack(side="left", fill="x", expand=True)
+
+        cards.append((info_card, info_column, info_start_x))
 
         def animate_card(
             card: ctk.CTkFrame, column: int, origin: int, step: int = 0
@@ -5337,6 +5770,18 @@ class RoleRunManager(ctk.CTk):
             return
         self.sidebar_expanded = expanded
         if expanded:
+            # Capturado en vídeo por el usuario el 03-09-2026: durante el cierre,
+            # un fotograma suelto dejaba ver el «›» colapsado junto al «‹» del
+            # drawer, que técnicamente siguen siendo dos widgets superpuestos
+            # hasta que `place_forget()` retira el drawer al terminar. En vez de
+            # depender solo del apilado (frágil ante cualquier repintado del
+            # compositor de Windows), el «›» deja de tener glifo mientras el
+            # drawer exista de cualquier forma -abriendo, abierto o cerrando-, y
+            # solo vuelve a dibujarse cuando `place_forget()` ya lo dejó atrás.
+            try:
+                self.sidebar_toggle.configure(text="")
+            except Exception:
+                pass
             self._sidebar_navigation_selected = False
             self._set_content_navigation_focus(False)
             entries = tuple(getattr(self, "_sidebar_keyboard_entries", ()))
@@ -5491,6 +5936,7 @@ class RoleRunManager(ctk.CTk):
                     drawer.place_forget()
                     self.sidebar.configure(fg_color="#0B0B0B")
                     self.sidebar.lift()
+                    self.sidebar_toggle.configure(text="›")
                 except Exception:
                     pass
                 if perf.ENABLED:
@@ -5998,6 +6444,19 @@ class RoleRunManager(ctk.CTk):
         height = max(1, min(
             int(content.winfo_height()), int(self.winfo_height()) - content_y,
         ))
+        # Pedido del usuario 02-09-2026: «al hacer un reroll, se quedan los
+        # iconos de categoría fijos en la pantalla» -y seguían apareciendo
+        # tras ocultarlos antes en el desvanecido (ver `IntegratedDraftFlow.
+        # _run_fade`). La causa real estaba aquí: esta captura es una foto
+        # NATIVA de Windows (`ImageGrab.grab`), no un estado interno de Tk;
+        # `update_idletasks()` solo garantiza que Tk emitió sus órdenes de
+        # dibujo, no que el compositor de Windows (DWM) ya las haya volcado
+        # de verdad al framebuffer que lee `ImageGrab`. Sin ese margen, la
+        # foto podía llevarse un fotograma todavía viejo -con los iconos que
+        # el desvanecido ya había ocultado por dentro, pero que la pantalla
+        # aún no había terminado de repintar- y esa foto vieja se queda fija
+        # de fondo durante toda la transición.
+        time.sleep(0.02)
         try:
             capture = ImageGrab.grab(bbox=(
                 int(content.winfo_rootx()), int(content.winfo_rooty()),
@@ -6064,6 +6523,73 @@ class RoleRunManager(ctk.CTk):
             except Exception:
                 pass
         self._help_animation_ids.clear()
+
+    def _pin_body_scrollregion_to_viewport(self) -> None:
+        """Deja a ``self.body`` sin ningún recorrido de scroll propio.
+
+        Pedido por el usuario el 2026-09-03, tercer intento: en MOVIMIENTOS
+        (y páginas parecidas) todo el scroll real vive en paneles propios
+        —la lista de MT/drafteos, el equipo, el selector de MT—, nunca en
+        ``self.body``. Pero ``self.body`` es también un
+        ``CTkScrollableFrame``, y CustomTkinter le liga su propio manejador
+        de rueda con ``bind_all`` (independiente del nuestro, ver
+        ``_on_smooth_mousewheel``): mientras su canvas tenga scrollregion
+        real por encima de su viewport, esa rueda global sigue moviendo la
+        página entera, sin que la exclusión de página la pueda evitar.
+
+        Calcular el alto exacto de cada panel para que nunca se pase del
+        viewport es fragil -depende de medir un ``winfo_height()`` que en el
+        primer render vale 200 (el tamaño por defecto de CustomTkinter,
+        antes de que Tk resuelva la geometría real)-. Más simple y más
+        fiable: fijar el propio scrollregion de ``self.body`` a su viewport
+        real, directamente.
+
+        Cuarto intento, el mismo día: fijar SOLO el scrollregion sin tocar
+        el marco de la vista activa recortaba lo que sobrara del marco sin
+        ninguna forma de alcanzarlo -ni con el scroll propio de sus paneles
+        de dentro-, peor que el scroll doble que se pretendía arreglar.
+
+        Quinto intento, el mismo día: forzar el alto del marco a la misma
+        medida seguía sobrando por abajo -el marco cerraba en dorado por
+        arriba pero no por abajo, señal de que seguía pasándose-. La causa:
+        ``canvas.winfo_height()`` da píxeles FÍSICOS, pero ``configure(
+        height=...)`` de un widget CTk espera unidades LÓGICAS -sin
+        convertir, con el escalado de CTk (``set_widget_scaling(1.12)``,
+        ver ``app/ui.py`` cerca del arranque) puesto encima, el marco salía
+        un 12% más alto que el viewport real. ``UnifiedTeamPCView`` (Equipo
+        y PC, que nunca tuvo este fallo) ya convertía con
+        ``frame._reverse_widget_scaling(...)`` antes de fijar el alto; aquí
+        faltaba exactamente ese paso.
+        """
+        canvas = getattr(self.body, "_parent_canvas", None)
+        if canvas is None or not self._widget_alive(self.body):
+            return
+        try:
+            if not canvas.winfo_exists():
+                return
+            width = int(canvas.winfo_width())
+            height = int(canvas.winfo_height())
+            if width <= 1 or height <= 1:
+                return
+            for view in (getattr(self, "_global_tm_view", None), getattr(self, "_tm_teach_flow", None)):
+                frame = getattr(view, "frame", None)
+                if frame is not None and self._widget_alive(frame):
+                    try:
+                        logical_height = int(frame._reverse_widget_scaling(height))
+                        configurar_si_cambia(frame, height=logical_height)
+                    except Exception:
+                        pass
+            canvas.configure(scrollregion=(0, 0, width, height))
+        except Exception:
+            pass
+
+    def _pin_body_scrollregion_soon(self) -> None:
+        """Reintenta fijar el scrollregion mientras Tk asienta la geometría."""
+        for delay in (0, 30, 80, 180, 400):
+            try:
+                self.after(delay, self._pin_body_scrollregion_to_viewport)
+            except Exception:
+                pass
 
     def _body_scroll_metrics(self):
         canvas = getattr(self.body, "_parent_canvas", None)
@@ -6310,7 +6836,14 @@ class RoleRunManager(ctk.CTk):
         # CAJAS PC contiene sus propios scrolls (cajas y ficha). No interceptamos
         # la rueda desde el scroll general de la aplicación para que el panel bajo
         # el puntero reciba el desplazamiento de forma natural.
-        if self.active_page == "pc":
+        #
+        # Pedido por el usuario el 2026-09-03: MOVIMIENTOS tiene el mismo caso
+        # —lista de MT/drafteos a la izquierda, equipo a la derecha, y el
+        # selector de MT superpuesto llevan cada uno su propio scroll—, y el
+        # scroll de la página entera (con la barra escondida, pero el canvas
+        # sigue siendo desplazable) se comía la rueda antes de que llegara al
+        # panel bajo el puntero.
+        if self.active_page in {"pc", "tms"}:
             return None
         metrics = self._body_scroll_metrics()
         if metrics is None:
@@ -6406,8 +6939,11 @@ class RoleRunManager(ctk.CTk):
             return
         elif self.active_page in {"settings", "history"}:
             items = (("settings", "GENERAL"), ("history", "REGISTRO Y RECUPERACIÓN"))
-        elif self.active_page in {"help", "moves"}:
-            items = (("help", "GUÍA"), ("moves", "CONSULTA DE MOVIMIENTOS"))
+        elif self.active_page in {"tms", "moves"}:
+            items = (
+                ("tms", "MOVIMIENTOS"),
+                ("moves", "CONSULTA DE MOVIMIENTOS"),
+            )
         else:
             controls.grid_remove()
             return
@@ -6452,6 +6988,32 @@ class RoleRunManager(ctk.CTk):
         store = getattr(self, "operation_status_store", None)
         if store is None:
             return
+        if kind in ("applying", "verifying"):
+            # 2026-09-05: distintos puntos de la escritura en vivo publicaban
+            # su propio texto de "en curso" (qué operación, cuántas, en qué
+            # fase de verificación...). Cada uno es, técnicamente, un mensaje
+            # distinto del anterior, y publicar dos veces algo distinto
+            # reinicia la barra letra a letra (OperationStatusStore.publish).
+            # En una escritura normal eso son 4 o 5 avisos pisándose entre sí
+            # antes de que el usuario llegue a leer ninguno. Un texto FIJO
+            # para toda la fase "en curso" -sea cual sea el origen de la
+            # llamada- hace que las repúblicas sean idénticas: publish() las
+            # descarta sin tocar la barra, y el usuario ve un único
+            # "Cargando…" estable hasta el resultado final (confirmado o
+            # error), que sí conserva su texto real.
+            #
+            # El propio "verifying" también tenía que normalizarse a
+            # "applying": OperationStatusBar.show_message decide si retipea
+            # letra a letra comparando (kind, título), no solo el texto, y
+            # OperationStatusStore.publish descarta una república solo si
+            # kind/título/detalle son TODOS iguales. Igualar título y
+            # detalle sin igualar el kind seguía contando como "otro aviso":
+            # la barra borraba el detalle y lo volvía a teclear desde cero
+            # -y hasta cambiaba de color/icono- aunque el texto fuera idéntico.
+            kind = "applying"
+            title = LOADING_STATUS_TITLE
+            detail = LOADING_STATUS_DETAIL
+            actions = ()
         # El reloj del usuario para cuando el rótulo deja de decir «aplicando».
         perf.mark("ui.estado", estado=str(kind), titulo=str(title)[:60])
         self._sonar_por_el_estado(str(kind), str(title))
@@ -6661,12 +7223,16 @@ class RoleRunManager(ctk.CTk):
 
         if self.project and self.current_game:
             if self._live_write_in_progress:
-                resumen_cola = self.cola_de_cambios.estado().resumen()
+                # 2026-09-05: el resumen de la cola («2/5», «restan 3»...)
+                # cambia con cada elemento que se procesa, y este texto se
+                # reconfigura sin ninguna protección contra republicar lo
+                # mismo (a diferencia de la barra de estado, que sí evita
+                # reescribirse cuando el mensaje no cambia). En una ráfaga de
+                # varios cambios pequeños, esta línea parpadeaba ilegible justo
+                # debajo del "CARGANDO…" ya estabilizado de la barra. Un texto
+                # fijo mientras dura la escritura evita ese segundo parpadeo.
                 top_status.configure(
-                    text=(
-                        f"RUN: {self.project.name}\n◷ Aplicando cambios en Azahar…"
-                        + (f" · {resumen_cola}" if resumen_cola else "")
-                    ),
+                    text=f"RUN: {self.project.name}\n◷ Aplicando cambios en Azahar…",
                     text_color=GOLD,
                 )
             elif self._pending_ds_install is not None:
@@ -6724,22 +7290,38 @@ class RoleRunManager(ctk.CTk):
         else:
             widget.grid_remove()
 
-    def _effective_role(self, pokemon: SavePokemon) -> tuple[str, str]:
-        symbols = ROLE_SYMBOLS
+    def _pending_role_change_for(self, pokemon: SavePokemon) -> PendingRoleChange | None:
+        """El ``PendingRoleChange`` más reciente que afecta a ``pokemon``.
 
-        # Desde 1.12.5 los cambios de rol siguen al Pokémon por identidad y no
-        # por el número de slot. Esto permite cambiar roles mientras se prepara
-        # cualquier cantidad de movimientos Equipo ↔ PC sin que una compactación
-        # de la party haga que el cambio termine en otro Pokémon.
+        Extraído de ``_effective_role``: los cambios de rol siguen al
+        Pokémon por identidad (desde 1.12.5), con el número de slot como
+        único fallback -y solo fuera de una proyección ya compactada
+        (``box in {-1, -2}``)-. Reutilizado también por ``_projected_party``
+        para saber si hay ``new_evs`` con los que proyectar stats.
+
+        Corta antes de calcular la identidad si no hay ningún
+        ``PendingRoleChange`` en la cola: evita depender de
+        ``_pokemon_identity``/``project_service`` cuando no hay nada que
+        pudiera coincidir -importa para dobles de prueba mínimos que no los
+        implementan-.
+        """
+        pending_changes = self.run.pending_changes
+        if not any(isinstance(change, PendingRoleChange) for change in pending_changes):
+            return None
         identity = self._pokemon_identity(pokemon)
-        pending = next((
-            change for change in reversed(self.run.pending_changes)
+        return next((
+            change for change in reversed(pending_changes)
             if isinstance(change, PendingRoleChange)
             and (
                 (change.pokemon_identity and change.pokemon_identity == identity)
                 or (not change.pokemon_identity and pokemon.box not in {-1, -2} and change.pokemon_slot == pokemon.slot)
             )
         ), None)
+
+    def _effective_role(self, pokemon: SavePokemon) -> tuple[str, str]:
+        symbols = ROLE_SYMBOLS
+
+        pending = self._pending_role_change_for(pokemon)
         if pending:
             role = canonical_role(pending.new_role)
             return role, symbols.get(role, "")
@@ -7719,6 +8301,37 @@ class RoleRunManager(ctk.CTk):
             p.move_ids = list(p.move_ids)
             p.markings = list(p.markings)
 
+        # Un cambio de rol pendiente ya calcula sus EV al instante
+        # (``_apply_role_assignment``), pero las stats numéricas que trae el
+        # Pokémon siguen siendo las del último guardado leído hasta que la
+        # escritura en vivo confirma -~2s de diferencia, medido en vídeo el
+        # 2026-09-04-. Se proyectan aquí, sobre esta copia, con la misma
+        # fórmula que ya usa cada escritor en vivo para verificar bytes
+        # (``project_stats``); si falta cualquier dato (``base_stats``/``ivs``
+        # todavía no publicados por ese backend) no se toca nada y la tarjeta
+        # se comporta exactamente igual que hoy. Va antes de mirar
+        # ``team_changes``: un simple cambio de rol entre miembros activos no
+        # genera ningún cambio de equipo↔PC y no debe depender de esa rama.
+        # ``getattr`` como ya hace ``_projectable_team_changes`` con
+        # ``_pending_team_changes``: tolera dobles de prueba mínimos que no
+        # implementan el helper.
+        pending_role_change_for = getattr(self, "_pending_role_change_for", None)
+        for p in party if callable(pending_role_change_for) else ():
+            pending = pending_role_change_for(p)
+            if pending is None or pending.new_evs is None:
+                continue
+            projected = project_stats(
+                p.base_stats, p.ivs, dict(zip(STAT_KEYS, pending.new_evs)),
+                p.level, p.nature_id,
+            )
+            if not projected:
+                continue
+            p.stats = projected
+            p.evs = dict(zip(STAT_KEYS, pending.new_evs))
+            if p.max_hp > 0:
+                p.current_hp = project_current_hp(p.current_hp, p.max_hp, projected["hp"])
+                p.max_hp = projected["hp"]
+
         team_changes = RoleRunManager._projectable_team_changes(self)
         if not team_changes:
             if self.project and self.project.pending_faints:
@@ -7850,11 +8463,18 @@ class RoleRunManager(ctk.CTk):
         """
         locked = bool(self._pending_team_changes())
         if locked and show_warning:
+            # Corregido 04-09-2026: el texto anterior hablaba de "sustituir un
+            # movimiento de un slot concreto", una descripción de un diseño
+            # previo de Drafteo. Este bloqueo ya no toca movimientos -eso vive
+            # en SUSTITUIR/ELIMINAR de la ficha, que no pasa por aquí-: impide
+            # elegir un Pokémon o rol de Drafteo mientras haya movimientos de
+            # Equipo/PC en cola sin confirmar, para no mezclar dos
+            # reorganizaciones a la vez.
             messagebox.showinfo(
                 "Drafteo durante reorganización",
                 "Puedes seguir moviendo Pokémon y cambiando roles libremente. "
-                "El drafteo de movimientos todavía necesita que fijes primero la reorganización del equipo, "
-                "porque sustituye un movimiento de un slot concreto.",
+                "Elegir un Pokémon o rol de Drafteo todavía necesita que fijes primero "
+                "la reorganización de Equipo/PC (botón REVISAR CAMBIOS).",
             )
         return locked
 
@@ -8462,7 +9082,7 @@ class RoleRunManager(ctk.CTk):
             ),
             "xy": (
                 "X/Y mantiene equipo, roles, movimientos, PC, inventario/MT, "
-                "batalla, bajas y medallas sobre Azahar o Citra. Las operaciones "
+                "batalla, bajas y medallas sobre Azahar. Las operaciones "
                 "que cambian el tamaño del equipo permanecen bloqueadas hasta su "
                 "validación específica."
             ),
@@ -8580,37 +9200,6 @@ class RoleRunManager(ctk.CTk):
         except Exception:
             self._oras_auto_sync_after_id = None
 
-    def _kick_xy_transport_prepare(self) -> None:
-        """Desbloquea Citra mediante el broker GDB antes de una captura X/Y completa."""
-        if (
-            self._active_azahar_realtime_key() != "xy"
-            or self._oras_live_active
-            or self._xy_transport_prepare_in_progress
-        ):
-            return
-        realtime_core = getattr(self, "realtime_core", None)
-        if realtime_core is None:
-            return
-        self._xy_transport_prepare_in_progress = True
-
-        def worker() -> None:
-            try:
-                realtime_core.prepare_connection()
-            except Exception:
-                # Azahar/Citra son rutas alternativas. Que ninguna esté abierta
-                # todavía no es un error de usuario: el detector seguirá
-                # reintentando y publicará un mensaje útil si la captura falla.
-                pass
-            finally:
-                try:
-                    self.after(0, lambda: setattr(self, "_xy_transport_prepare_in_progress", False))
-                except Exception:
-                    self._xy_transport_prepare_in_progress = False
-
-        threading.Thread(
-            target=worker, daemon=True, name="RoleRunXYTransportBootstrap",
-        ).start()
-
     def _start_oras_initial_auto_sync(
         self, generation: int, project_slug: str, token: int,
     ) -> None:
@@ -8626,11 +9215,6 @@ class RoleRunManager(ctk.CTk):
             or self._oras_live_active
         ):
             return
-        # Citra necesita recibir ``continue`` incluso si todavía no podemos
-        # iniciar una captura (por ejemplo, porque hay cambios pendientes).
-        # El bootstrap no selecciona emulador ni toca memoria del juego.
-        self._kick_xy_transport_prepare()
-
         # No competimos con una escritura, un F5 manual ni una verificación.
         if (
             self._oras_auto_sync_in_progress
@@ -8679,8 +9263,7 @@ class RoleRunManager(ctk.CTk):
         transport_label = (
             "Ryujinx" if live_key == "bdsp" else
             "melonDS" if live_key in MELONDS_REALTIME_GAME_KEYS else
-            "AzaharPlus" if live_key in GEN7_REALTIME_GAME_KEYS else
-            "Azahar/Citra" if live_key == "xy" else "Azahar"
+            "AzaharPlus" if live_key in GEN7_REALTIME_GAME_KEYS else "Azahar"
         )
         current_operation = getattr(self, "operation_status_store", None)
         current_operation = current_operation.message if current_operation else None
@@ -8763,9 +9346,7 @@ class RoleRunManager(ctk.CTk):
             detail = str(error or "")
             live_key_getter = getattr(self, "_active_azahar_realtime_key", None)
             live_key = live_key_getter() if callable(live_key_getter) else "oras"
-            if live_key == "xy" and "GDB Stub" in detail:
-                self.sync_status = "◌ X/Y · Azahar no detectado · para Citra activa GDB Stub (24689)"
-            elif live_key in GEN7_REALTIME_GAME_KEYS and detail:
+            if live_key in GEN7_REALTIME_GAME_KEYS and detail:
                 self.sync_status = f"⚠ {self._active_azahar_realtime_label()} · {detail}"
             elif live_key == "oras" and detail:
                 # ORAS también debe enseñar el diagnóstico real. Esto permite
@@ -8942,11 +9523,21 @@ class RoleRunManager(ctk.CTk):
                     # el cambio se creaba, el rótulo decía «MOVIENDO EN EL PC» y
                     # ahí se quedaba para siempre: nadie llegaba a escribirlo.
                     "move-box-slot",
+                    # Intercambio de dos huecos ocupados (`_apply_box_swap`,
+                    # 05-09-2026): las mismas dos escrituras de caja, cruzadas.
+                    "swap-box-slots",
                 }:
                     # El writer BDSP 1↔1 ya valida las identidades party/PC,
                     # hace readback semántico y rollback. Debe atravesar también
                     # esta compuerta UI; alpha.80 lo aceptaba más abajo pero lo
                     # descartaba aquí antes de llegar al writer.
+                    supported_ids.add(id(change))
+                continue
+            if live_key in MELONDS_GEN4_REALTIME_GAME_KEYS and live_key not in MELONDS_WRITE_GAME_KEYS:
+                # HeartGold sin `MELONDS_GEN4_ESCRIBE`: solo mochila/dinero, que
+                # no tocan ningún PK4. Ver el mismo razonamiento en
+                # `_oras_live_unsupported_changes`.
+                if isinstance(change, PendingInventoryChange):
                     supported_ids.add(id(change))
                 continue
             if live_key in MELONDS_REALTIME_GAME_KEYS:
@@ -8963,8 +9554,8 @@ class RoleRunManager(ctk.CTk):
                 elif (
                     isinstance(change, PendingTeamChange)
                     and change.operation in {
-                        "move-box-slot", "swap-party-box", "party-to-box", "box-to-party",
-                        "replace-fainted",
+                        "move-box-slot", "swap-box-slots", "swap-party-box",
+                        "party-to-box", "box-to-party", "replace-fainted",
                     }
                 ):
                     supported_ids.add(id(change))
@@ -8980,7 +9571,16 @@ class RoleRunManager(ctk.CTk):
                     supported_ids.add(id(change))
                 elif isinstance(change, PendingTeamChange) and (
                     change.operation in {"swap-party-box", "party-to-box", "box-to-party", "replace-fainted"}
-                    or (live_key == "usum" and change.operation == "move-box-slot")
+                    # `SMLiveWriter._apply_pc_move`/`USUMLiveWriter._apply_pc_move`
+                    # (04-09-2026 para SM): mover dentro del PC a un hueco vacío.
+                    # Y `_apply_pc_swap` (05-09-2026): intercambiar dos huecos
+                    # ocupados, misma matriz, dos escrituras cruzadas. El resto
+                    # de Gen 7 sin writer PC→PC sigue sin entrar aquí, así que
+                    # esas operaciones se quedarían proyectadas para siempre.
+                    or (
+                        live_key in {"sm", "usum"}
+                        and change.operation in {"move-box-slot", "swap-box-slots"}
+                    )
                 ):
                     supported_ids.add(id(change))
                 continue
@@ -8992,7 +9592,7 @@ class RoleRunManager(ctk.CTk):
                     supported_ids.add(id(change))
                 elif isinstance(change, PendingTeamChange) and change.operation in {
                     "swap-party-box", "party-to-box", "box-to-party",
-                    "replace-fainted", "move-box-slot",
+                    "replace-fainted", "move-box-slot", "swap-box-slots",
                 }:
                     # X/Y ya valida las variaciones 5↔6 de la party dentro de
                     # XYLiveWriter (identidades, testigos de caja, count-last,
@@ -10738,7 +11338,16 @@ class RoleRunManager(ctk.CTk):
         self.current_game = snapshot.game
         self._oras_live_active = True
         process_name = str(getattr(snapshot.process, "name", "") or "").casefold() or None
-        if process_name != self._oras_live_process_name:
+        # Medido el 2026-09-03: una lectura vacía/puntual de `snapshot.process`
+        # (un hipo transitorio del RPC, ya visto por separado en
+        # `realtime.capture_monitor`) se leía aquí igual que un cambio real de
+        # proceso, invalidaba la caché de ROM/TM y forzaba redescubrirla entera
+        # (~5 s de lectura de ROM) en el siguiente sondeo -aunque el proceso
+        # real nunca hubiera cambiado-, y esa pausa coincidía a veces con un
+        # cambio de rol o un repintado, viéndose como un lag con la pantalla
+        # rota. Ahora una lectura vacía no cuenta como cambio de proceso: se
+        # ignora y se conserva el último nombre real conocido.
+        if process_name is not None and process_name != self._oras_live_process_name:
             live_key = self._active_azahar_realtime_key()
             # La primera identificación del proceso no es un cambio de
             # proceso: invalidar aquí el perfil SM que acabamos de precargar
@@ -10755,7 +11364,7 @@ class RoleRunManager(ctk.CTk):
                 self._clear_sm_rom_tm_runtime_profile()
             elif live_key == "usum":
                 self._clear_usum_rom_tm_runtime_profile()
-        self._oras_live_process_name = process_name
+            self._oras_live_process_name = process_name
         self._register_party_roles(snapshot.game)
         RoleRunManager._ensure_live_pc_matrix_loaded(self)
         for pokemon in snapshot.game.party:
@@ -10875,6 +11484,21 @@ class RoleRunManager(ctk.CTk):
             return
 
         self._oras_live_monitor_failures = 0
+        if self._active_azahar_realtime_key() == "oras":
+            self._sync_oras_levelup_moves_mod(snapshot.game if snapshot else None)
+        if self._active_azahar_realtime_key() == "usum":
+            self._sync_usum_levelup_moves_mod(snapshot.game if snapshot else None)
+            self._sync_usum_levelup_moves_backup(snapshot.game if snapshot else None)
+        if self._active_azahar_realtime_key() == "sm":
+            self._sync_sm_levelup_moves_mod(snapshot.game if snapshot else None)
+            self._sync_sm_levelup_moves_backup(snapshot.game if snapshot else None)
+        if self._active_azahar_realtime_key() == "xy":
+            self._sync_xy_levelup_moves_mod(snapshot.game if snapshot else None)
+            self._sync_xy_levelup_moves_backup(snapshot.game if snapshot else None)
+        if self._active_azahar_realtime_key() in MELONDS_GEN5_REALTIME_GAME_KEYS:
+            self._sync_gen5_levelup_moves(snapshot.game if snapshot else None)
+        if self._active_azahar_realtime_key() in MELONDS_GEN4_REALTIME_GAME_KEYS:
+            self._sync_hgss_levelup_moves(snapshot.game if snapshot else None)
 
         if self._active_azahar_realtime_key() in MELONDS_REALTIME_GAME_KEYS:
             # B2/W2 publica party, PC y el carril de presentación de combate.
@@ -10917,6 +11541,68 @@ class RoleRunManager(ctk.CTk):
                 self._oras_battle_probe_last_state = "none"
                 published_health = snapshot.game
                 health_source = "overworld"
+            elif (
+                self._active_azahar_realtime_key() in MELONDS_GEN4_REALTIME_GAME_KEYS
+                and self._oras_battle_probe_last_state == "battle"
+            ):
+                # HeartGold/SoulSilver -a diferencia de ORAS/B2W2, que sí
+                # tienen una tabla con una fila por miembro- no trae PS en
+                # vivo de NADIE en `snapshot.game` salvo en un sondeo
+                # "battle" confirmado: ni siquiera del propio combatiente
+                # activo, que fuera de ese instante conserva el valor de
+                # antes de entrar en combate (`_capture` en
+                # `hgss_adapter.py` solo mete el PS medido cuando
+                # `lectura_batalla.state == "battle"`). Caer aquí al de
+                # reserva -aunque sea un solo sondeo- publica un salto a PS
+                # completo que se corrige él solo en el siguiente sondeo:
+                # el parpadeo "se llena y luego se corrige" que el usuario
+                # grabó en vídeo el 07-09-2026, con Totodile en pleno
+                # combate (un `(0, 0)` suelto en la dirección ya
+                # confirmada, ver `HgssMelonDSReader.read_battle_probe`).
+                # No se publica nada nuevo: se conserva la última
+                # publicación en vivo hasta que el sondeo vuelva a
+                # confirmar "battle" o de verdad confirme "sin combate".
+                #
+                # EXCEPTO cuando lo nuevo es un desmayo real: comprobado
+                # con el usuario el mismo día -un Rattata rematado en dos
+                # golpes apareció a 0/14 en el bloque de equipo mientras la
+                # pantalla seguía pidiendo sustituto, ANTES de que el
+                # combate terminara-. El bloque de equipo SÍ se escribe al
+                # instante en cuanto alguien se desmaya, aunque no se
+                # actualice para nada más durante el combate. Suprimir
+                # TODA publicación durante el margen tapaba también esa
+                # transición real, dejando el desmayo sin detectar hasta
+                # que el combate terminaba del todo. Se deja pasar
+                # específicamente cuando el bloque de equipo acaba de bajar
+                # a 0 al combatiente que se venía siguiendo -eso nunca es
+                # el salto a PS completo que hay que evitar, siempre es una
+                # muerte real recién escrita-.
+                published_health = None
+                health_source = "battle-visible"
+                ultimo_snapshot = getattr(self, "_oras_live_health_snapshot", None)
+                ultimo_vivo = next(
+                    (
+                        member for member in getattr(ultimo_snapshot, "party", []) or []
+                        if getattr(member, "hp_is_live", False)
+                    ),
+                    None,
+                )
+                if (
+                    ultimo_vivo is not None
+                    and int(getattr(ultimo_vivo, "current_hp", 0) or 0) > 0
+                ):
+                    identidad_seguida = self._pokemon_identity(ultimo_vivo)
+                    desmayo_real = next(
+                        (
+                            member for member in snapshot.game.party
+                            if self._pokemon_identity(member) == identidad_seguida
+                            and int(getattr(member, "current_hp", 0) or 0) <= 0
+                        ),
+                        None,
+                    )
+                    if desmayo_real is not None:
+                        published_health = snapshot.game
+                        health_source = "overworld"
             else:
                 # La lane de presentación no se pudo validar: cambio de Pokémon
                 # con las dos copias describiendo miembros distintos, animación a
@@ -10976,8 +11662,18 @@ class RoleRunManager(ctk.CTk):
                 # el parpadeo. La barra la refresca ahora quien tiene algo nuevo
                 # que contar, y su propio sondeo de 500 ms recoge el resto.
                 self._sync_live_layout(refresh_floating=False)
+            # 07-09-2026: al ritmo lento (950 ms) tras un solo "unknown", un
+            # parpadeo real de HeartGold que dura más de un sondeo tenía
+            # margen de sobra para que la SEGUNDA comprobación de
+            # `read_battle_probe` -la que decide si el combate terminó de
+            # verdad, ver `COMBATE_SEGUNDOS_DE_CERO_PARA_CONFIRMAR_FIN`- caiga
+            # TAMBIÉN dentro de la ventana mala, confirmando un final que
+            # no era real. Se sigue al ritmo rápido mientras se siga
+            # considerando que hay combate (`_oras_battle_probe_last_state`,
+            # que un "unknown" no toca), no solo cuando ESTE sondeo lo
+            # confirma -así la segunda comprobación llega antes-.
             self._schedule_oras_live_reconciliation(
-                250 if probe_state == "battle" else 950
+                250 if self._oras_battle_probe_last_state == "battle" else 950
             )
             return
 
@@ -11007,6 +11703,17 @@ class RoleRunManager(ctk.CTk):
                     self._oras_badge_live_source = str(
                         badge_source or "desconocida"
                     )
+            # Aprendizajes por rol (2026-09-03): Enfoque A (parche proactivo
+            # de la tabla en vivo, ver ``_sync_bdsp_levelup_table_patch``)
+            # primero, para que el diálogo del juego ya muestre el
+            # movimiento correcto; Enfoque B (``_sync_bdsp_levelup_moves``,
+            # sustitución posterior) se queda como red de seguridad. Después
+            # de las medallas (alpha.77 exige que se comprometan antes que
+            # cualquier otra cosa de este sondeo) y antes de publicar la
+            # party, para que un cambio de hueco recién escrito llegue ya
+            # reflejado.
+            self._sync_bdsp_levelup_table_patch(snapshot.game if snapshot else None)
+            self._sync_bdsp_levelup_moves(snapshot.game if snapshot else None)
             probe_state = (
                 getattr(battle_probe, "state", None)
                 if battle_probe is not None else None
@@ -11710,6 +12417,33 @@ class RoleRunManager(ctk.CTk):
                 self._oras_battle_probe_last_state = "unknown"
                 self._oras_live_health_snapshot = snapshot.game
 
+            # Esta rama Gen7 nunca llegaba a la migración de marcadores genérica
+            # (más abajo, para ORAS/X-Y): su propio bloque siempre hacía
+            # ``return`` antes. Una Run <=alpha.42 se quedaba en
+            # role_marker_layout=1 para siempre en SM/USUM: el lector PK7 en vivo
+            # decodifica con layout=2 fijo (``usum_live.py``/``sm_live.py``), así
+            # que todo Pokémon se leía "SIN ROL" y el mod de aprendizajes por rol
+            # nunca veía un rol real que sustituir (2026-09-04, bug real
+            # encontrado validando USUM: Carnivine Mago aprendió un movimiento
+            # físico sin que RoleRun lo tocara).
+            marker_migration = self._oras_marker_layout_migration_changes(snapshot.game)
+            if marker_migration:
+                migration_ids = {id(change) for change in marker_migration}
+                self._oras_live_role_marker_migration_ids.update(migration_ids)
+                self._oras_live_system_role_assignment_ids.update(migration_ids)
+                self._publish_oras_live_snapshot(snapshot)
+                if self._save_oras_live_changes(
+                    marker_migration, automatic=True, base_game=snapshot.game,
+                ):
+                    self.sync_status = f"◷ {self._active_azahar_realtime_label()} detectado · migrando marcadores de roles…"
+                    self._update_top_status()
+                    return
+                self._oras_live_role_marker_migration_ids.difference_update(migration_ids)
+                self._oras_live_system_role_assignment_ids.difference_update(migration_ids)
+            elif int(getattr(self.project, "role_marker_layout", 1) or 1) < 2:
+                # Si la party solo contiene SIN ROL/Líbero no hay bits que mover.
+                self._complete_role_marker_layout_migration()
+
             initial_role_changes = self._incoming_oras_role_changes(self.current_game, snapshot.game)
             if initial_role_changes:
                 generated_ids = {id(change) for change in initial_role_changes}
@@ -11861,7 +12595,33 @@ class RoleRunManager(ctk.CTk):
 
     def _oras_live_unsupported_changes(self, changes) -> list[str]:
         """Describe operaciones no cubiertas por el adaptador vivo activo."""
-        if self._active_azahar_realtime_key() in MELONDS_REALTIME_GAME_KEYS:
+        live_key = self._active_azahar_realtime_key()
+        # HeartGold entra en `MELONDS_REALTIME_GAME_KEYS` para poder LEER en
+        # vivo, pero eso no significa que su escritura de equipo/PC (PK4) esté
+        # habilitada -sigue detrás de `MELONDS_GEN4_ESCRIBE = False` por el
+        # historial real de «Huevo malo»-. Antes de esta rama, el `if` de
+        # abajo trataba a hgss como b2w2/bw y dejaba pasar rol/curación/PC sin
+        # ninguna comprobación: un agujero real, no algo que se hubiera
+        # decidido a propósito. Mochila/dinero no tocan ningún PK4 y siguen
+        # permitidos siempre.
+        if live_key in MELONDS_GEN4_REALTIME_GAME_KEYS and live_key not in MELONDS_WRITE_GAME_KEYS:
+            labels = {
+                "PendingChange": "cambios de movimientos",
+                "PendingTMTeach": "enseñanza de MT",
+                "PendingRoleChange": "cambios de rol",
+                "PendingPCRoleChange": "roles del PC",
+                "PendingPartyHeal": "curación",
+                "PendingTeamChange": "cambios Equipo ↔ PC",
+            }
+            result: list[str] = []
+            for change in changes:
+                if isinstance(change, PendingInventoryChange):
+                    continue
+                label = labels.get(type(change).__name__, type(change).__name__)
+                if label not in result:
+                    result.append(label)
+            return result
+        if live_key in MELONDS_REALTIME_GAME_KEYS:
             labels = {
                 "PendingChange": "cambios de movimientos",
                 "PendingTMTeach": "enseñanza de MT",
@@ -11881,8 +12641,8 @@ class RoleRunManager(ctk.CTk):
                 if (
                     isinstance(change, PendingTeamChange)
                     and change.operation in {
-                        "move-box-slot", "swap-party-box", "party-to-box", "box-to-party",
-                        "replace-fainted",
+                        "move-box-slot", "swap-box-slots", "swap-party-box",
+                        "party-to-box", "box-to-party", "replace-fainted",
                     }
                 ):
                     continue
@@ -11900,7 +12660,7 @@ class RoleRunManager(ctk.CTk):
                     continue
                 if isinstance(change, PendingTeamChange) and change.operation in {
                     "swap-party-box", "party-to-box", "box-to-party", "replace-fainted",
-                    "move-box-slot",
+                    "move-box-slot", "swap-box-slots",
                 }:
                     continue
                 label = {
@@ -11921,8 +12681,8 @@ class RoleRunManager(ctk.CTk):
                 if isinstance(change, PendingTeamChange) and (
                     change.operation in {"swap-party-box", "party-to-box", "box-to-party", "replace-fainted"}
                     or (
-                        self._active_azahar_realtime_key() == "usum"
-                        and change.operation == "move-box-slot"
+                        self._active_azahar_realtime_key() in {"sm", "usum"}
+                        and change.operation in {"move-box-slot", "swap-box-slots"}
                     )
                 ):
                     continue
@@ -11945,7 +12705,7 @@ class RoleRunManager(ctk.CTk):
                     continue
                 if isinstance(change, PendingTeamChange) and change.operation in {
                     "swap-party-box", "party-to-box", "box-to-party",
-                    "replace-fainted", "move-box-slot",
+                    "replace-fainted", "move-box-slot", "swap-box-slots",
                 }:
                     continue
                 label = {
@@ -12170,14 +12930,18 @@ class RoleRunManager(ctk.CTk):
             )
             return
         if estado.aplicando is not None:
-            set_status(
-                "applying",
-                "APLICANDO CAMBIO",
-                (
-                    f"RoleRun está enviando «{estado.aplicando.etiqueta}» al juego · {estado.resumen()}. "
-                    "Puedes seguir usando la aplicación."
-                ),
-            )
+            # 2026-09-05: este detalle incluía la etiqueta y el resumen de cada
+            # trabajo de la cola («enviando «X» · 2/5»...). Cuando varios
+            # cambios se aplican en ráfaga -algo tan normal como un solo cambio
+            # de rol que dispara internamente varias escrituras pequeñas-, cada
+            # trabajo republicaba un texto DISTINTO, y publicar dos veces algo
+            # distinto reinicia la barra letra a letra (ver el comentario de
+            # OperationStatusStore.publish). El resultado: 4 o 5 avisos
+            # ilegibles que se pisan entre sí antes de que el usuario llegue a
+            # leer ninguno. Un texto fijo aquí hace que las repúblicas sean
+            # IDÉNTICAS -publish() ya las descarta sin tocar la barra- y el
+            # usuario ve un único «Cargando…» estable hasta el resultado final.
+            set_status("applying", LOADING_STATUS_TITLE, LOADING_STATUS_DETAIL)
             return
         if estado.en_cola:
             set_status(
@@ -12338,7 +13102,8 @@ class RoleRunManager(ctk.CTk):
             and change.operation in {"swap-party-box", "party-to-box", "box-to-party", "replace-fainted", "move-box-slot"}
         ]
         if self._oras_changes_require_personal(changes) and self._active_azahar_realtime_key() == "oras":
-            profile = self._get_oras_rom_tm_profile(prompt=False)
+            with perf.span("ui.save_live.get_oras_rom_tm_profile"):
+                profile = self._get_oras_rom_tm_profile(prompt=False)
             if profile is None or not profile.personal_stats:
                 self._stop_oras_live_auto_apply_for(changes)
                 self._show_live_sync_toast(
@@ -12366,7 +13131,22 @@ class RoleRunManager(ctk.CTk):
                 )
                 return False
 
-        if sm_team_transfers and self._active_azahar_realtime_key() in GEN7_REALTIME_GAME_KEYS:
+        # 2026-09-04: un simple cambio de rol (sin ningún traslado Equipo↔PC)
+        # también recalcula EV/stats -``new_evs`` no nulo- y por lo tanto
+        # también necesita Personal cargado antes de escribir. Antes esto solo
+        # se comprobaba para ``sm_team_transfers``: si el PRIMER cambio
+        # auto-aplicado de la sesión era un cambio de rol puro (p. ej. al
+        # reconciliar justo al conectar), el perfil todavía no se había
+        # precargado nunca y el writer fallaba con "la ROM efectiva no aportó
+        # Personal" -un error real, no cosmético, pero que se autocorregía en
+        # el siguiente reintento porque para entonces el perfil ya estaba en
+        # caché-. Se demuestra aquí de la misma forma, así nunca llega a
+        # fallar la primera vez.
+        gen7_needs_personal = sm_team_transfers or any(
+            isinstance(change, PendingRoleChange) and change.new_evs is not None
+            for change in changes
+        )
+        if gen7_needs_personal and self._active_azahar_realtime_key() in GEN7_REALTIME_GAME_KEYS:
             # El writer trabaja en segundo plano: cargamos Personal aquí, en el
             # hilo UI, y el callback live solo consulta el perfil ya validado.
             gen7_key = self._active_azahar_realtime_key()
@@ -12419,11 +13199,7 @@ class RoleRunManager(ctk.CTk):
         )
         set_operation_status = getattr(self, "_set_operation_status", None)
         if callable(set_operation_status):
-            set_operation_status(
-                "applying",
-                "APLICANDO CAMBIO",
-                f"RoleRun está enviando {len(changes)} operación(es) a {emulator_label}.",
-            )
+            set_operation_status("applying", LOADING_STATUS_TITLE, LOADING_STATUS_DETAIL)
         self._update_top_status()
 
         def show_verifying() -> None:
@@ -12435,11 +13211,10 @@ class RoleRunManager(ctk.CTk):
             ):
                 set_verifying = getattr(self, "_set_operation_status", None)
                 if callable(set_verifying):
-                    set_verifying(
-                        "verifying",
-                        "VERIFICANDO EN EL JUEGO",
-                        "Esperando una confirmación independiente antes de actualizar el estado visible.",
-                    )
+                    # kind "verifying" pasa igualmente por el texto fijo de
+                    # _set_operation_status; ver el comentario de ahí sobre
+                    # por qué toda la fase "en curso" muestra el mismo aviso.
+                    set_verifying("verifying", "VERIFICANDO EN EL JUEGO", "")
 
         self.after(260, show_verifying)
 
@@ -13335,7 +14110,6 @@ class RoleRunManager(ctk.CTk):
                 # guardado desde RoleRun. Las acciones confirmadas viven en el emulador; solo
                 # avisamos por aquellas que todavía quedaron pendientes.
                 emulator_label = (
-                    "Azahar/Citra" if getattr(self.save_engine, "key", "") == "xy" else
                     "Ryujinx" if getattr(self.save_engine, "key", "") == "bdsp" else
                     "Azahar"
                 )
@@ -13404,6 +14178,18 @@ class RoleRunManager(ctk.CTk):
             return False
 
     @perf.timed("ui.smooth_render_page")
+    def _resume_deferred_render_after_modal(self) -> None:
+        """Retoma un repintado aplazado mientras un `IntegratedWindowSurface`
+        seguía abierto. Lo llama ese componente al cerrarse, cuando ya no
+        queda ningún otro diálogo igual abierto (ver `_smooth_render_page`).
+        """
+        requested = self._body_rerender_requested
+        self._body_rerender_requested = None
+        if requested:
+            self.after(0, lambda values=requested: self._smooth_render_page(
+                preserve_scroll=values[0], reset_scroll=values[1],
+            ))
+
     def _smooth_render_page(
         self,
         preserve_scroll: bool = False,
@@ -13420,7 +14206,18 @@ class RoleRunManager(ctk.CTk):
         DWM independiente hasta que el destino ya está compuesto; los refrescos
         internos mantienen su barrera local histórica.
         """
-        if self._body_swap_in_progress:
+        if self._body_swap_in_progress or getattr(self, "_integrated_modal_count", 0) > 0:
+            # Reportado por el usuario 03-09-2026: un diálogo como el de EVs de
+            # Líbero es un `IntegratedWindowSurface` -un velo superpuesto sobre
+            # este mismo root, no una ventana de sistema aparte-. El sondeo en
+            # vivo puede pedir un repintado de Equipo/PC en cualquier momento,
+            # también con ese diálogo todavía abierto; los widgets nuevos que
+            # cree ese repintado se apilan por encima del velo (son hermanos
+            # suyos dentro del mismo root), viéndose la página de fondo encima
+            # del diálogo. Igual que ya se hace mientras hay un intercambio de
+            # body en marcha, este repintado se aplaza y se retoma solo cuando
+            # el diálogo se cierra -ver `_resume_deferred_render_after_modal`-,
+            # nunca mientras compite visualmente con él.
             requested = self._body_rerender_requested
             self._body_rerender_requested = (
                 bool(preserve_scroll or (requested and requested[0])),
@@ -13681,8 +14478,8 @@ class RoleRunManager(ctk.CTk):
             "drafts": ("Drafteos", "Genera movimientos compatibles con el rol del Pokémon."),
             "team": ("Equipo y PC", "Gestiona el equipo y las cajas."),
             "tms": ("Movimientos", "MT de la mochila y drafteos que te guardaste."),
-            "moves": ("Ayuda · Consulta de movimientos", "Comprueba qué movimientos admite cada rol en el juego actual."),
-            "pc": ("Equipo y PC", "Consulta las cajas y reorganiza el equipo desde el mismo espacio."),
+            "moves": ("Movimientos · Consulta de movimientos", "Comprueba qué movimientos admite cada rol en el juego actual."),
+            "pc":("Equipo y PC", "Consulta las cajas y reorganiza el equipo desde el mismo espacio."),
             "history": ("Configuración · Registro y recuperación", "Consulta la línea temporal y las opciones de recuperación de la Run."),
             "settings": ("Configuración", "Preferencias y archivos de la Run."),
             "help": ("Ayuda", ""),
@@ -13783,6 +14580,7 @@ class RoleRunManager(ctk.CTk):
             navigation_keys=self.project.menu_keys if self.project else None,
             on_left_edge=self._select_sidebar_from_content,
             on_edge_accept=self._accept_sidebar_from_content,
+            category_icons=self.category_icons,
         )
         self._set_navigation_owner(self._draft_view)
         if self._draft_fade_in_pending:
@@ -13801,11 +14599,15 @@ class RoleRunManager(ctk.CTk):
     def _draft_move_metadata(self, move_id: int) -> dict[str, object]:
         move_id = int(move_id or 0)
         if move_id <= 0:
-            return {"category": "unknown", "pp": "—", "power": "—", "accuracy": "—"}
+            return {
+                "category": "unknown", "pp": "—", "power": "—", "accuracy": "—",
+                "type_id": None,
+            }
         key = str(getattr(self.save_engine, "key", "") or "")
         pp: int | str = "—"
         power: int | str = "—"
         accuracy: int | str = "—"
+        type_id: int | None = None
         description = "Descripción no disponible en la fuente activa."
         if key == "bdsp":
             profile = self._get_bdsp_tm_profile(prompt=False)
@@ -13814,11 +14616,29 @@ class RoleRunManager(ctk.CTk):
                     pp = int(profile.base_pp(move_id)) or "—"
                     power = int(profile.power(move_id)) or "—"
                     accuracy = int(profile.accuracy(move_id)) or "—"
+                    type_id = profile.type_id(move_id)
                     raw_description = str(profile.description(move_id) or "").strip()
-                    if raw_description:
-                        language = str(getattr(profile, "description_language", "") or "")
-                        prefix = "EN · " if language.casefold() == "english" else ""
-                        description = prefix + raw_description
+                    language = str(getattr(profile, "description_language", "") or "")
+                    if raw_description and language.casefold() != "english":
+                        description = raw_description
+                    else:
+                        # El dump del usuario solo trae inglés (confirmado
+                        # 2026-09-04: su carpeta Message solo tiene
+                        # "english", no hay "spanish"/"es" que ofrecer). En
+                        # vez de mostrar el inglés crudo, se reutiliza el
+                        # mismo catálogo de descripciones en español ya
+                        # cargado para Sol/Luna (``self.gen7_move_metadata``,
+                        # PokeAPI) — mismo movimiento, misma descripción,
+                        # independientemente del juego. Solo si tampoco está
+                        # ahí (movimientos de Gen 8 que BDSP incluye pero
+                        # Sol/Luna no conocía) se cae al inglés con aviso.
+                        localized = str(
+                            self.gen7_move_metadata.get(move_id, {}).get("description_es") or ""
+                        ).strip()
+                        if localized:
+                            description = localized
+                        elif raw_description:
+                            description = "EN · " + raw_description
                 except (TypeError, ValueError):
                     pp = power = accuracy = "—"
         elif key in GEN7_REALTIME_GAME_KEYS:
@@ -13826,6 +14646,7 @@ class RoleRunManager(ctk.CTk):
             pp = int(metadata.get("pp") or self.sm_live_move_pp.get(move_id, 0)) or "—"
             power = int(metadata.get("power") or 0) or "—"
             accuracy = int(metadata.get("accuracy") or 0) or "—"
+            type_id = metadata.get("type_id")
             localized_description = str(metadata.get("description_es") or "").strip()
             if localized_description:
                 description = localized_description
@@ -13834,6 +14655,7 @@ class RoleRunManager(ctk.CTk):
             pp = int(metadata.get("pp") or self.oras_live_move_pp.get(move_id, 0)) or "—"
             power = int(metadata.get("power") or 0) or "—"
             accuracy = int(metadata.get("accuracy") or 0) or "—"
+            type_id = metadata.get("type_id")
             localized_description = str(metadata.get("description_es") or "").strip()
             if localized_description:
                 description = localized_description
@@ -13842,18 +14664,26 @@ class RoleRunManager(ctk.CTk):
             pp = int(metadata.get("pp") or self.oras_live_move_pp.get(move_id, 0)) or "—"
             power = int(metadata.get("power") or 0) or "—"
             accuracy = int(metadata.get("accuracy") or 0) or "—"
+            type_id = metadata.get("type_id")
             localized_description = str(metadata.get("description_es") or "").strip()
             if localized_description:
                 description = localized_description
         elif key in MELONDS_REALTIME_GAME_KEYS:
-            # Potencia, precisión y PP salen de la ROM cargada: son los valores
-            # de quinta generación y, si la partida está randomizada, los de
-            # esta partida. Sin ROM no se enseña un número de otra generación.
-            rom = self._get_b2w2_rom_profile()
+            # Potencia, precisión, PP y tipo salen de la ROM cargada: son los
+            # valores de esta partida —incluida una randomizada— y no de una
+            # tabla fijada de antemano. Cuarta (HGSS/DP/Pt) y quinta (B2W2/BW)
+            # traen lectores de ROM distintos; usar el de quinta para cuarta
+            # dejaba estos cuatro campos siempre en «—» para HGSS.
+            rom = (
+                self._get_gen4_rom_profile(key)
+                if key in MELONDS_GEN4_REALTIME_GAME_KEYS
+                else self._get_b2w2_rom_profile()
+            )
             if rom is not None:
                 pp = int(rom.base_pp(move_id)) or "—"
                 power = int(rom.power(move_id)) or "—"
                 accuracy = int(rom.accuracy(move_id)) or "—"
+                type_id = rom.type_id(move_id)
             else:
                 adaptador = getattr(
                     self, f"{key}_realtime_adapter", None,
@@ -13874,6 +14704,7 @@ class RoleRunManager(ctk.CTk):
             "pp": pp,
             "power": power,
             "accuracy": accuracy,
+            "type_id": int(type_id) if isinstance(type_id, int) else None,
             "description": description,
         }
 
@@ -14503,6 +15334,16 @@ class RoleRunManager(ctk.CTk):
         en una partida sin randomizar.
         """
         game_key = str(game_key)
+        if game_key in MELONDS_GEN4_REALTIME_GAME_KEYS:
+            # 06-09-2026, bug real: un llamador que pidiera "la ROM de quinta"
+            # con el motor de HGSS activo no solo fallaba, sino que dejaba
+            # marcado en la caché COMPARTIDA (`_gen5_rom_checked_for`) que ese
+            # guardado ya se había intentado -con la clave de discovery
+            # equivocada (`discover_gen5_rom` en vez de `discover_gen4_rom`)-,
+            # bloqueando para siempre el intento correcto de
+            # `_get_gen4_rom_profile`. Cuarta tiene su propia función; esta no
+            # la sustituye ni comparte su caché con ella.
+            return None
         if str(getattr(self.save_engine, "key", "") or "") != game_key:
             return None
         save_path = str(getattr(self.current_save, "path", "") or "")
@@ -14534,7 +15375,591 @@ class RoleRunManager(ctk.CTk):
             self._gen5_rom_last_error[game_key] = str(exc)
             return None
         self._gen5_rom_profiles[game_key] = perfil
+        self._ensure_gen5_levelup_registered(ruta)
         return perfil
+
+    def _ensure_gen5_levelup_registered(self, rom_path) -> None:
+        """Decodifica la tabla de aprendizajes de quinta desde la ROM.
+
+        La ROM es la fuente de la verdad vainilla y **se abre siempre en solo
+        lectura**: lo que se parchea es la copia que melonDS tiene en memoria,
+        nunca el archivo. Localizar la imagen se deja para el primer sondeo
+        que la necesite, para no cargar el arranque.
+        """
+        if str(getattr(self.save_engine, "key", "") or "") not in MELONDS_GEN5_REALTIME_GAME_KEYS:
+            return
+        try:
+            entradas = gen5_levelup_moves.parse_levelup_narc(rom_path)
+        except Exception as exc:
+            self._registrar_intento_vivo("gen5_levelup_registro_error", error=str(exc))
+            return
+        self._gen5_levelup_entries = entradas
+        self._gen5_levelup_rom_path = Path(rom_path)
+        self._gen5_levelup_image = None
+        self._gen5_levelup_last_roles_key = None
+        self._registrar_intento_vivo(
+            "gen5_levelup_registro_ok",
+            especies=len(entradas), rom=str(rom_path),
+        )
+        if self.current_game is not None:
+            self._sync_gen5_levelup_moves(self.current_game)
+
+    def _gen5_levelup_usable_move_ids(self) -> set[int] | None:
+        return (
+            set(int(move_id) for move_id in self.engine.allowed_move_ids)
+            if self.engine.allowed_move_ids is not None
+            else None
+        )
+
+    @perf.timed("ui.sync_gen5_levelup_moves")
+    def _sync_gen5_levelup_moves(self, game: SaveGameData | None) -> None:
+        """Ajusta al rol la tabla de aprendizajes dentro de la RAM de melonDS.
+
+        Equivalente al Enfoque A de los juegos de 3DS, pero sin archivo: se
+        escriben los dos bytes del ID de movimiento de cada entrada que no
+        encaja con el rol, dejando el nivel intacto. Quinta relee la tabla en
+        cada aprendizaje, así que esto basta para que el juego enseñe **y
+        anuncie** el movimiento correcto.
+        """
+        if (
+            str(getattr(self.save_engine, "key", "") or "") not in MELONDS_GEN5_REALTIME_GAME_KEYS
+            or game is None
+            or self._gen5_levelup_entries is None
+            or self._gen5_levelup_rom_path is None
+        ):
+            return
+        self._record_gen5_levelup_move_history(game)
+        try:
+            roles_by_species: dict[int, str] = {}
+            for pokemon in game.party:
+                role, _symbol = self._effective_role(pokemon)
+                if role in {"SIN ROL", "Líbero", ""}:
+                    continue
+                roles_by_species[int(pokemon.species_id)] = role
+            # Mismo adelanto a las evoluciones futuras que ya hace X/Y: cuando
+            # evolucione, su fila lleva un rato correcta y no hay carrera que
+            # perder. `setdefault` nunca pisa el rol de un miembro real.
+            for species_id, role in list(roles_by_species.items()):
+                for descendant in evolution_descendants(species_id):
+                    roles_by_species.setdefault(descendant, role)
+            roles_key = (
+                frozenset(roles_by_species.items()),
+                self.engine.allowed_move_ids is not None,
+            )
+            if roles_key == self._gen5_levelup_last_roles_key:
+                return
+
+            patch = gen5_levelup_moves.compute_role_patch(
+                self._gen5_levelup_entries, roles_by_species,
+                pools=self.engine.pools,
+                damage_classes=self.engine.damage_classes,
+                speed_status_moves=self.engine.speed_status_moves,
+                self_healing_damage_moves=self.engine.self_healing_damage_moves,
+                usable_move_ids=self._gen5_levelup_usable_move_ids(),
+            )
+            # Todo lo que se escribió antes y ya no toca, vuelve a su valor de
+            # la ROM. Si no, un rol retirado dejaría su sustituto puesto.
+            restaurar = {
+                offset: vanilla
+                for offset, vanilla in self._gen5_levelup_written.items()
+                if offset not in patch
+            }
+            deseado = {**restaurar, **patch}
+            if not deseado:
+                self._gen5_levelup_last_roles_key = roles_key
+                return
+
+            imagen = self._gen5_levelup_locate_image()
+            if imagen is None:
+                return
+            escritas = imagen.apply(deseado, expected_levels=self._gen5_levelup_levels())
+            for offset in restaurar:
+                self._gen5_levelup_written.pop(offset, None)
+            vanilla_por_offset = self._gen5_levelup_vanilla_moves()
+            for offset in patch:
+                if offset in vanilla_por_offset:
+                    self._gen5_levelup_written[offset] = vanilla_por_offset[offset]
+            self._gen5_levelup_last_roles_key = roles_key
+            self._registrar_intento_vivo(
+                "gen5_levelup_parcheado",
+                roles_by_species=roles_by_species,
+                entradas=len(deseado), escritas=int(escritas),
+            )
+        except Exception as exc:
+            self._registrar_intento_vivo("gen5_levelup_sync_error", error=str(exc))
+
+    def _gen5_levelup_locate_image(self):
+        """La imagen de la ROM en melonDS, revalidando la base ya encontrada."""
+        if self._gen5_levelup_entries is None or self._gen5_levelup_rom_path is None:
+            return None
+        # Mismo criterio que el resto de la interfaz para melonDS: el
+        # adaptador del juego ACTIVO, no uno fijo. Blanco/Negro y B2/W2 tienen
+        # cada uno el suyo, y pedirle la party al equivocado leería la
+        # dirección de otro juego (el fallo real de alpha.62).
+        live_key = str(getattr(self.save_engine, "key", "") or "")
+        adaptador = getattr(self, f"{live_key}_realtime_adapter", None)
+        lector = getattr(adaptador, "reader", None)
+        if lector is None:
+            return None
+        try:
+            process_id = int(lector.read_party().process_id)
+        except Exception:
+            return None
+        conocida = getattr(self._gen5_levelup_image, "base_address", None)
+        if self._gen5_levelup_image is not None and int(
+            getattr(self._gen5_levelup_image, "process_id", -1)
+        ) != process_id:
+            conocida = None
+        try:
+            imagen = gen5_levelup_memory.locate_rom_image(
+                process_id, self._gen5_levelup_rom_path, self._gen5_levelup_entries,
+                known_base=conocida,
+            )
+        except Exception as exc:
+            self._registrar_intento_vivo("gen5_levelup_localizar_error", error=str(exc))
+            return None
+        if imagen is None:
+            self._registrar_intento_vivo("gen5_levelup_imagen_no_encontrada")
+            return None
+        if self._gen5_levelup_image is None or getattr(
+            self._gen5_levelup_image, "base_address", None,
+        ) != imagen.base_address:
+            self._registrar_intento_vivo(
+                "gen5_levelup_imagen_localizada", base=f"0x{imagen.base_address:X}",
+            )
+        self._gen5_levelup_image = imagen
+        return imagen
+
+    def _gen5_levelup_levels(self) -> dict[int, int]:
+        """``{desplazamiento: nivel}`` de toda la tabla, tal y como está en la ROM."""
+        return {
+            offset: level
+            for entradas in (self._gen5_levelup_entries or {}).values()
+            for _move, level, offset in entradas
+        }
+
+    def _gen5_levelup_vanilla_moves(self) -> dict[int, int]:
+        """``{desplazamiento: movimiento}`` vainilla, para poder restaurar."""
+        return {
+            offset: move
+            for entradas in (self._gen5_levelup_entries or {}).values()
+            for move, _level, offset in entradas
+        }
+
+    def _revert_gen5_levelup_moves(self) -> None:
+        """Devuelve a la ROM en memoria todo lo que RoleRun escribió."""
+        if not self._gen5_levelup_written or self._gen5_levelup_entries is None:
+            return
+        try:
+            imagen = self._gen5_levelup_locate_image()
+            if imagen is None:
+                return
+            imagen.apply(
+                dict(self._gen5_levelup_written),
+                expected_levels=self._gen5_levelup_levels(),
+            )
+            self._gen5_levelup_written.clear()
+            self._gen5_levelup_last_roles_key = None
+        except Exception as exc:
+            self._registrar_intento_vivo("gen5_levelup_revertir_error", error=str(exc))
+
+    def _record_gen5_levelup_move_history(self, game: SaveGameData) -> None:
+        """Historial para RECUERDA MOVIMIENTOS, igual que en los demás juegos.
+
+        Anota, en el instante del cruce de nivel, qué movimiento le tocaba a
+        ese Pokémon por su rol — que es justo el que la tabla parcheada le va
+        a enseñar—, para que la pantalla de recordar movimientos pueda
+        ofrecérselo después.
+        """
+        if (
+            str(getattr(self.save_engine, "key", "") or "") not in MELONDS_GEN5_REALTIME_GAME_KEYS
+            or self.project is None
+            or self._gen5_levelup_entries is None
+        ):
+            return
+        try:
+            cambiado = False
+            for pokemon in game.party:
+                identity = f"{int(pokemon.pid or 0)}:{int(pokemon.tid or 0)}:{int(pokemon.sid or 0)}"
+                level = int(pokemon.level or 0)
+                previous = self._gen5_levelup_history_last_levels.get(identity)
+                self._gen5_levelup_history_last_levels[identity] = level
+                species_id = int(pokemon.species_id)
+                entries = self._gen5_levelup_entries.get(species_id)
+                if level > 0 and self._purge_gen5_levelup_history_above_level(identity, level):
+                    cambiado = True
+                if previous is None:
+                    if identity not in self.project.oras_levelup_move_history and entries:
+                        pre_capture = tuple(entry for entry in entries if entry[1] <= level)
+                        if self._append_gen5_levelup_history_entries(
+                            identity, pokemon, species_id, pre_capture, "SIN ROL",
+                            pre_capture=True,
+                        ):
+                            cambiado = True
+                    continue
+                if level <= previous or level <= 0 or not entries:
+                    continue
+                crossed = tuple(entry for entry in entries if previous < entry[1] <= level)
+                if not crossed:
+                    continue
+                role, _symbol = self._effective_role(pokemon)
+                if self._append_gen5_levelup_history_entries(
+                    identity, pokemon, species_id, crossed, role, pre_capture=False,
+                ):
+                    cambiado = True
+            if cambiado:
+                self.project_service.save(self.project)
+        except Exception as exc:
+            self._registrar_intento_vivo("gen5_levelup_history_error", error=str(exc))
+
+    def _append_gen5_levelup_history_entries(
+        self, identity: str, pokemon: SavePokemon, species_id: int,
+        entries: tuple, role: str, *, pre_capture: bool,
+    ) -> bool:
+        """Anota en el historial lo que la tabla parcheada le va a enseñar.
+
+        06-09-2026, bug real reportado por el usuario: Patrat aprendió **Llama
+        Fusión** y el historial registró **Onda Certera** —los dos compatibles
+        con su rol, pero distintos—. La causa: ``compute_species_patch`` excluye
+        los movimientos que la especie YA tiene en su tabla, así que calcular
+        sobre el subconjunto recién cruzado da un conjunto de exclusiones
+        distinto al de la tabla completa, y elige otro sustituto. Medido en la
+        ROM real: 13 de las 14 entradas de Patrat discrepaban.
+
+        La corrección de 2026-09-04 (semilla estable por ``clave``) era
+        necesaria pero no suficiente: la semilla ya coincidía; lo que no
+        coincidía era la exclusión. Se calcula sobre la tabla COMPLETA de la
+        especie —lo mismo que hace el parche— y de ahí se leen solo las
+        entradas que interesan.
+        """
+        if not entries:
+            return False
+        completa = (self._gen5_levelup_entries or {}).get(int(species_id)) or entries
+        patch = gen5_levelup_moves.compute_species_patch(
+            completa, role, species_id=species_id,
+            pools=self.engine.pools, damage_classes=self.engine.damage_classes,
+            speed_status_moves=self.engine.speed_status_moves,
+            self_healing_damage_moves=self.engine.self_healing_damage_moves,
+            usable_move_ids=self._gen5_levelup_usable_move_ids(),
+        )
+        history = self.project.oras_levelup_move_history.setdefault(identity, [])
+        seen = {(int(item.get("level", -1)), int(item.get("move_id", -1))) for item in history}
+        changed = False
+        for vanilla_move_id, entry_level, offset in entries:
+            actual_move_id = int(patch.get(offset, vanilla_move_id))
+            key = (int(entry_level), actual_move_id)
+            if key in seen:
+                continue
+            history.append({
+                "level": int(entry_level),
+                "move_id": actual_move_id,
+                "role": str(role),
+                "species_id": species_id,
+                "nickname": str(pokemon.nickname or pokemon.species),
+                "recorded_at": datetime.now().isoformat(timespec="seconds"),
+                "pre_capture": bool(pre_capture),
+            })
+            seen.add(key)
+            changed = True
+        return changed
+
+    def _purge_gen5_levelup_history_above_level(self, identity: str, level: int) -> bool:
+        """Mirror de ``_purge_xy_levelup_history_above_level``."""
+        history = self.project.oras_levelup_move_history.get(identity)
+        if not history:
+            return False
+        kept = [item for item in history if int(item.get("level", 0)) <= level]
+        if len(kept) == len(history):
+            return False
+        if kept:
+            self.project.oras_levelup_move_history[identity] = kept
+        else:
+            del self.project.oras_levelup_move_history[identity]
+        return True
+
+    def _ensure_hgss_levelup_registered(self, rom_path) -> None:
+        """Decodifica la tabla de aprendizajes de HeartGold desde la ROM.
+
+        Mirror de ``_ensure_gen5_levelup_registered``. La ROM es la fuente de
+        la verdad vainilla y se abre siempre en solo lectura: lo que se
+        parchea es la copia que melonDS tiene en memoria, nunca el archivo.
+        """
+        if str(getattr(self.save_engine, "key", "") or "") not in MELONDS_GEN4_REALTIME_GAME_KEYS:
+            return
+        try:
+            entradas = gen4_levelup_moves.parse_levelup_narc(rom_path)
+        except Exception as exc:
+            self._registrar_intento_vivo("hgss_levelup_registro_error", error=str(exc))
+            return
+        self._hgss_levelup_entries = entradas
+        self._hgss_levelup_rom_path = Path(rom_path)
+        self._hgss_levelup_image = None
+        self._hgss_levelup_last_roles_key = None
+        self._registrar_intento_vivo(
+            "hgss_levelup_registro_ok",
+            especies=len(entradas), rom=str(rom_path),
+        )
+        if self.current_game is not None:
+            self._sync_hgss_levelup_moves(self.current_game)
+
+    def _hgss_levelup_usable_move_ids(self) -> set[int] | None:
+        return (
+            set(int(move_id) for move_id in self.engine.allowed_move_ids)
+            if self.engine.allowed_move_ids is not None
+            else None
+        )
+
+    @perf.timed("ui.sync_hgss_levelup_moves")
+    def _sync_hgss_levelup_moves(self, game: SaveGameData | None) -> None:
+        """Ajusta al rol la tabla de aprendizajes dentro de la RAM de melonDS.
+
+        Mirror de ``_sync_gen5_levelup_moves``, con la diferencia real de
+        formato: cada entrada de HeartGold es un solo u16 empaquetado
+        (``gen4_levelup_moves.pack_entry``), así que escribir exige volver a
+        empaquetar con el nivel esperado -lo hace ``Gen4RomImage.apply``, no
+        aquí-. Si HeartGold cachea la tabla como X/Y o la relee como ORAS
+        todavía no se ha probado contra la partida real.
+        """
+        if (
+            str(getattr(self.save_engine, "key", "") or "") not in MELONDS_GEN4_REALTIME_GAME_KEYS
+            or game is None
+        ):
+            return
+        if self._hgss_levelup_entries is None or self._hgss_levelup_rom_path is None:
+            # 06-09-2026: a diferencia de quinta, nada más en la interfaz de
+            # HeartGold pide la ROM de forma rutinaria -Consulta de Movimientos
+            # y Recuerda-Movimientos no la tocan-, así que el registro nunca
+            # llegaba a dispararse por sí solo y esta sincronización se
+            # quedaba sin tabla para siempre. El propio sondeo periódico la
+            # pide aquí: `_get_gen4_rom_profile` ya se controla a sí mismo
+            # -un intento por guardado- y llama a
+            # `_ensure_hgss_levelup_registered` en cuanto tiene éxito.
+            self._get_gen4_rom_profile("hgss")
+            if self._hgss_levelup_entries is None or self._hgss_levelup_rom_path is None:
+                return
+        self._record_hgss_levelup_move_history(game)
+        try:
+            roles_by_species: dict[int, str] = {}
+            for pokemon in game.party:
+                role, _symbol = self._effective_role(pokemon)
+                if role in {"SIN ROL", "Líbero", ""}:
+                    continue
+                roles_by_species[int(pokemon.species_id)] = role
+            for species_id, role in list(roles_by_species.items()):
+                for descendant in evolution_descendants(species_id):
+                    roles_by_species.setdefault(descendant, role)
+            roles_key = (
+                frozenset(roles_by_species.items()),
+                self.engine.allowed_move_ids is not None,
+            )
+            if roles_key == self._hgss_levelup_last_roles_key:
+                return
+
+            patch = gen4_levelup_moves.compute_role_patch(
+                self._hgss_levelup_entries, roles_by_species,
+                pools=self.engine.pools,
+                damage_classes=self.engine.damage_classes,
+                speed_status_moves=self.engine.speed_status_moves,
+                self_healing_damage_moves=self.engine.self_healing_damage_moves,
+                usable_move_ids=self._hgss_levelup_usable_move_ids(),
+            )
+            restaurar = {
+                offset: vanilla
+                for offset, vanilla in self._hgss_levelup_written.items()
+                if offset not in patch
+            }
+            deseado = {**restaurar, **patch}
+            if not deseado:
+                self._hgss_levelup_last_roles_key = roles_key
+                return
+
+            imagen = self._hgss_levelup_locate_image()
+            if imagen is None:
+                return
+            escritas = imagen.apply(deseado, expected_levels=self._hgss_levelup_levels())
+            for offset in restaurar:
+                self._hgss_levelup_written.pop(offset, None)
+            vanilla_por_offset = self._hgss_levelup_vanilla_moves()
+            for offset in patch:
+                if offset in vanilla_por_offset:
+                    self._hgss_levelup_written[offset] = vanilla_por_offset[offset]
+            self._hgss_levelup_last_roles_key = roles_key
+            self._registrar_intento_vivo(
+                "hgss_levelup_parcheado",
+                roles_by_species=roles_by_species,
+                entradas=len(deseado), escritas=int(escritas),
+            )
+        except Exception as exc:
+            self._registrar_intento_vivo("hgss_levelup_sync_error", error=str(exc))
+
+    def _hgss_levelup_locate_image(self):
+        """La imagen de la ROM en melonDS, revalidando la base ya encontrada."""
+        if self._hgss_levelup_entries is None or self._hgss_levelup_rom_path is None:
+            return None
+        adaptador = getattr(self, "hgss_realtime_adapter", None)
+        lector = getattr(adaptador, "reader", None)
+        if lector is None:
+            return None
+        try:
+            process_id = int(lector.read_party().process_id)
+        except Exception:
+            return None
+        conocida = getattr(self._hgss_levelup_image, "base_address", None)
+        if self._hgss_levelup_image is not None and int(
+            getattr(self._hgss_levelup_image, "process_id", -1)
+        ) != process_id:
+            conocida = None
+        try:
+            imagen = gen4_levelup_memory.locate_rom_image(
+                process_id, self._hgss_levelup_rom_path, self._hgss_levelup_entries,
+                known_base=conocida,
+            )
+        except Exception as exc:
+            self._registrar_intento_vivo("hgss_levelup_localizar_error", error=str(exc))
+            return None
+        if imagen is None:
+            self._registrar_intento_vivo("hgss_levelup_imagen_no_encontrada")
+            return None
+        if self._hgss_levelup_image is None or getattr(
+            self._hgss_levelup_image, "base_address", None,
+        ) != imagen.base_address:
+            self._registrar_intento_vivo(
+                "hgss_levelup_imagen_localizada", base=f"0x{imagen.base_address:X}",
+            )
+        self._hgss_levelup_image = imagen
+        return imagen
+
+    def _hgss_levelup_levels(self) -> dict[int, int]:
+        """``{desplazamiento: nivel}`` de toda la tabla, tal y como está en la ROM."""
+        return {
+            offset: level
+            for entradas in (self._hgss_levelup_entries or {}).values()
+            for _move, level, offset in entradas
+        }
+
+    def _hgss_levelup_vanilla_moves(self) -> dict[int, int]:
+        """``{desplazamiento: movimiento}`` vainilla, para poder restaurar."""
+        return {
+            offset: move
+            for entradas in (self._hgss_levelup_entries or {}).values()
+            for move, _level, offset in entradas
+        }
+
+    def _revert_hgss_levelup_moves(self) -> None:
+        """Devuelve a la ROM en memoria todo lo que RoleRun escribió."""
+        if not self._hgss_levelup_written or self._hgss_levelup_entries is None:
+            return
+        try:
+            imagen = self._hgss_levelup_locate_image()
+            if imagen is None:
+                return
+            imagen.apply(
+                dict(self._hgss_levelup_written),
+                expected_levels=self._hgss_levelup_levels(),
+            )
+            self._hgss_levelup_written.clear()
+            self._hgss_levelup_last_roles_key = None
+        except Exception as exc:
+            self._registrar_intento_vivo("hgss_levelup_revertir_error", error=str(exc))
+
+    def _record_hgss_levelup_move_history(self, game: SaveGameData) -> None:
+        """Historial para RECUERDA MOVIMIENTOS. Mirror de la versión de quinta."""
+        if (
+            str(getattr(self.save_engine, "key", "") or "") not in MELONDS_GEN4_REALTIME_GAME_KEYS
+            or self.project is None
+            or self._hgss_levelup_entries is None
+        ):
+            return
+        try:
+            cambiado = False
+            for pokemon in game.party:
+                identity = f"{int(pokemon.pid or 0)}:{int(pokemon.tid or 0)}:{int(pokemon.sid or 0)}"
+                level = int(pokemon.level or 0)
+                previous = self._hgss_levelup_history_last_levels.get(identity)
+                self._hgss_levelup_history_last_levels[identity] = level
+                species_id = int(pokemon.species_id)
+                entries = self._hgss_levelup_entries.get(species_id)
+                if level > 0 and self._purge_hgss_levelup_history_above_level(identity, level):
+                    cambiado = True
+                if previous is None:
+                    if identity not in self.project.oras_levelup_move_history and entries:
+                        pre_capture = tuple(entry for entry in entries if entry[1] <= level)
+                        if self._append_hgss_levelup_history_entries(
+                            identity, pokemon, species_id, pre_capture, "SIN ROL",
+                            pre_capture=True,
+                        ):
+                            cambiado = True
+                    continue
+                if level <= previous or level <= 0 or not entries:
+                    continue
+                crossed = tuple(entry for entry in entries if previous < entry[1] <= level)
+                if not crossed:
+                    continue
+                role, _symbol = self._effective_role(pokemon)
+                if self._append_hgss_levelup_history_entries(
+                    identity, pokemon, species_id, crossed, role, pre_capture=False,
+                ):
+                    cambiado = True
+            if cambiado:
+                self.project_service.save(self.project)
+        except Exception as exc:
+            self._registrar_intento_vivo("hgss_levelup_history_error", error=str(exc))
+
+    def _append_hgss_levelup_history_entries(
+        self, identity: str, pokemon: SavePokemon, species_id: int,
+        entries: tuple, role: str, *, pre_capture: bool,
+    ) -> bool:
+        """Anota en el historial lo que la tabla parcheada le va a enseñar.
+
+        Mismo criterio que ``_append_gen5_levelup_history_entries``: calculado
+        sobre la tabla COMPLETA de la especie, no sobre el subconjunto recién
+        cruzado -son conjuntos de exclusión distintos y eligen sustitutos
+        distintos, el bug real que ya se corrigió en los otros cinco juegos-.
+        """
+        if not entries:
+            return False
+        completa = (self._hgss_levelup_entries or {}).get(int(species_id)) or entries
+        patch = gen4_levelup_moves.compute_species_patch(
+            completa, role, species_id=species_id,
+            pools=self.engine.pools, damage_classes=self.engine.damage_classes,
+            speed_status_moves=self.engine.speed_status_moves,
+            self_healing_damage_moves=self.engine.self_healing_damage_moves,
+            usable_move_ids=self._hgss_levelup_usable_move_ids(),
+        )
+        history = self.project.oras_levelup_move_history.setdefault(identity, [])
+        seen = {(int(item.get("level", -1)), int(item.get("move_id", -1))) for item in history}
+        changed = False
+        for vanilla_move_id, entry_level, offset in entries:
+            actual_move_id = int(patch.get(offset, vanilla_move_id))
+            key = (int(entry_level), actual_move_id)
+            if key in seen:
+                continue
+            history.append({
+                "level": int(entry_level),
+                "move_id": actual_move_id,
+                "role": str(role),
+                "species_id": species_id,
+                "nickname": str(pokemon.nickname or pokemon.species),
+                "recorded_at": datetime.now().isoformat(timespec="seconds"),
+                "pre_capture": bool(pre_capture),
+            })
+            seen.add(key)
+            changed = True
+        return changed
+
+    def _purge_hgss_levelup_history_above_level(self, identity: str, level: int) -> bool:
+        """Mirror de ``_purge_gen5_levelup_history_above_level``."""
+        history = self.project.oras_levelup_move_history.get(identity)
+        if not history:
+            return False
+        kept = [item for item in history if int(item.get("level", 0)) <= level]
+        if len(kept) == len(history):
+            return False
+        if kept:
+            self.project.oras_levelup_move_history[identity] = kept
+        else:
+            del self.project.oras_levelup_move_history[identity]
+        return True
 
     def _get_gen4_rom_profile(self, game_key: str):
         """Datos de juego de la ROM de cuarta que melonDS tiene cargada.
@@ -14545,7 +15970,8 @@ class RoleRunManager(ctk.CTk):
         PKHeX, que es lo correcto en una partida sin randomizar.
         """
         game_key = str(game_key)
-        if str(getattr(self.save_engine, "key", "") or "") != game_key:
+        motor_key = str(getattr(self.save_engine, "key", "") or "")
+        if motor_key != game_key:
             return None
         save_path = str(getattr(self.current_save, "path", "") or "")
         if not save_path:
@@ -14580,13 +16006,25 @@ class RoleRunManager(ctk.CTk):
             return None
         self._gen5_rom_profiles[game_key] = perfil
         _anotar_intento_vivo(self, "rom-cuarta-cargada", archivo=str(ruta.name))
+        if game_key == "hgss":
+            self._ensure_hgss_levelup_registered(ruta)
         return perfil
 
     def _get_b2w2_rom_profile(self):
-        """Compatibilidad: el resto de la interfaz sigue preguntando por juego."""
-        return self._get_gen5_rom_profile(
-            str(getattr(self.save_engine, "key", "") or ""),
-        )
+        """Compatibilidad: el resto de la interfaz sigue preguntando por juego.
+
+        06-09-2026, bug real: desviaba también las llamadas hechas con el
+        motor de HGSS conectado hacia ``_get_gen5_rom_profile``, que no solo
+        no encontraba nada, sino que marcaba en la caché COMPARTIDA
+        (``_gen5_rom_checked_for``) que esa partida ya se había "intentado"
+        -con el buscador de ROM equivocado-, dejando a
+        ``_get_gen4_rom_profile`` sin poder intentarlo nunca. Causa real de
+        que los aprendizajes por rol de HeartGold no se activaran jamás.
+        """
+        engine_key = str(getattr(self.save_engine, "key", "") or "")
+        if engine_key in MELONDS_GEN4_REALTIME_GAME_KEYS:
+            return self._get_gen4_rom_profile(engine_key)
+        return self._get_gen5_rom_profile(engine_key)
 
     def _forget_b2w2_rom_profile(self) -> None:
         """Olvida la ROM al cambiar de Run: la de otra partida sería peor que nada."""
@@ -14735,8 +16173,10 @@ class RoleRunManager(ctk.CTk):
                 "category": {
                     "physical": "FÍSICO", "special": "ESPECIAL", "status": "ESTADO",
                 }.get(str(self._damage_class_for_move(int(tm.move_id))), "NO DISPONIBLE"),
+                "category_key": str(self._damage_class_for_move(int(tm.move_id))),
                 "power": metadata.get("power", "—"), "accuracy": metadata.get("accuracy", "—"),
                 "pp": self._tm_pp_for_profile(profile, int(tm.move_id)) or "—",
+                "type_id": metadata.get("type_id"),
                 "description": metadata.get("description", "No disponible"),
                 "compatible": tuple(sorted(compatible_by_move.get(int(tm.move_id), set()))),
                 "known": tuple(sorted(known_by_move.get(int(tm.move_id), set()))),
@@ -14780,9 +16220,11 @@ class RoleRunManager(ctk.CTk):
                 "category": {
                     "physical": "FÍSICO", "special": "ESPECIAL", "status": "ESTADO",
                 }.get(str(self._damage_class_for_move(move_id)), "NO DISPONIBLE"),
+                "category_key": str(self._damage_class_for_move(move_id)),
                 "power": metadata.get("power", "—"),
                 "accuracy": metadata.get("accuracy", "—"),
                 "pp": metadata.get("pp", "—"),
+                "type_id": metadata.get("type_id"),
                 "description": metadata.get("description", "No disponible"),
                 "compatible": tuple(compatibles),
                 "known": tuple(conocidos),
@@ -14827,8 +16269,27 @@ class RoleRunManager(ctk.CTk):
             navigation_keys=self.project.menu_keys if self.project else None,
             on_left_edge=self._select_sidebar_from_content,
             on_edge_accept=self._accept_sidebar_from_content,
+            category_icons=self.category_icons,
+            on_open_levelup_history=self._open_oras_levelup_history,
+            on_view_compatible_moves=lambda pokemon: self._open_global_tm_compatible_moves(
+                profile, inventory, source_detail, pokemon,
+            ),
         )
         self._set_navigation_owner(self._global_tm_view)
+        self._pin_body_scrollregion_soon()
+
+    def _open_global_tm_compatible_moves(self, profile, inventory, source_detail, pokemon) -> None:
+        """VER MT COMPATIBLES: abre el paso 1 (lista de MT) para un Pokémon.
+
+        Pedido por el usuario el 2026-09-03: antes solo se llegaba a esta
+        pantalla retrocediendo desde «qué hueco olvidará» después de pulsar
+        ELEGIR en una MT concreta —una pantalla que aparecía sin haberla
+        pedido nunca. Sin ``initial_move_id`` el flujo aterriza directo en el
+        paso 1, con la lista completa de MT compatibles con este Pokémon.
+        """
+        if profile is None:
+            return
+        self._open_integrated_tm_flow(pokemon, profile, inventory, source_detail, return_page="tms")
 
     def _open_global_tm_choice(self, profile, inventory, source_detail, entry, pokemon) -> None:
         if entry is None or profile is None:
@@ -14976,31 +16437,39 @@ class RoleRunManager(ctk.CTk):
     def _aplicar_refresco_team_pc_en_sitio(self) -> bool:
         """Pone los datos de ahora en la vista ya construida."""
         vista = self._team_pc_view
-        pc_data = self._team_pc_cached_data()
+        with perf.span("ui.team_pc_en_sitio.pc_cached_data"):
+            pc_data = self._team_pc_cached_data()
         # `_asegurar_lectura_del_pc` sigue recibiendo el estado REAL de la
         # caché más abajo: si no, una relectura pendiente no se pediría nunca.
-        pintable = self._pc_matriz_para_pintar(pc_data)
+        with perf.span("ui.team_pc_en_sitio.matriz_para_pintar"):
+            pintable = self._pc_matriz_para_pintar(pc_data)
         cajas, _huecos = self._forma_del_pc(pintable)
-        projected_party = list(self._projected_party())
-        team_slots = build_fixed_team_slots(
-            projected_party,
-            lambda pokemon: self._effective_role(pokemon)[0],
-            self._pokemon_identity,
-        )
+        with perf.span("ui.team_pc_en_sitio.projected_party"):
+            projected_party = list(self._projected_party())
+        with perf.span("ui.team_pc_en_sitio.fixed_team_slots"):
+            team_slots = build_fixed_team_slots(
+                projected_party,
+                lambda pokemon: self._effective_role(pokemon)[0],
+                self._pokemon_identity,
+            )
         box_number = max(1, min(int(self._pc_page_box or 1), cajas))
-        members = self._team_pc_box_members(pintable, box_number)
-        fallo = vista.refrescar_en_sitio(team_slots, members, box_number)
+        with perf.span("ui.team_pc_en_sitio.box_members"):
+            members = self._team_pc_box_members(pintable, box_number)
+        with perf.span("ui.team_pc_en_sitio.vista_refrescar_en_sitio"):
+            fallo = vista.refrescar_en_sitio(team_slots, members, box_number)
         if fallo is not None:
             perf.mark("ui.render.reconstruye", motivo=str(fallo))
             return False
         # Lo mismo que hace el repintado completo al terminar: si no, atajar
         # dejaría el PC sin pedirse.
-        self._asegurar_lectura_del_pc(pc_data)
+        with perf.span("ui.team_pc_en_sitio.asegurar_lectura_del_pc"):
+            self._asegurar_lectura_del_pc(pc_data)
 
         self._pc_page_box = box_number
         # La barrera inicial compara contra lo que la vista compuso de verdad.
         # Sin actualizarlo aquí, la firma quedaría hablando del equipo anterior.
-        vista._source_health_signature = self._party_health_signature(projected_party)
+        with perf.span("ui.team_pc_en_sitio.health_signature"):
+            vista._source_health_signature = self._party_health_signature(projected_party)
         return True
 
     def _render_team_pc_unified_page(self) -> None:
@@ -15060,12 +16529,15 @@ class RoleRunManager(ctk.CTk):
             base_stats_for=self._team_pc_base_stats,
             pending_for=self._team_pc_pokemon_has_pending_change,
             move_issues_for=self._collect_pokemon_move_issues,
+            effective_moves_for=self._effective_moves_for_review,
             support_damage_for=self._support_damage_excess,
             on_support_damage=self._open_support_damage_removal_selector,
             on_box_change=self._team_pc_change_box,
             on_search=self._team_pc_global_search,
             on_action=self._team_pc_action,
             on_role_info=self._show_role_information,
+            move_metadata_for=self._draft_move_metadata,
+            on_move_info=self._show_move_information,
             on_heal_party=(
                 self._heal_bdsp_party
                 if faint_mode is None and self._live_party_heal_available()
@@ -15129,11 +16601,16 @@ class RoleRunManager(ctk.CTk):
             profile = self._get_sm_rom_tm_profile(prompt=False)
         elif engine_key == "usum":
             profile = self._get_usum_rom_tm_profile(prompt=False)
+        elif engine_key == "xy":
+            # 2026-09-05: faltaba. X/Y usa el mismo ORASTMProfile con
+            # personal_stats (``xy_rom_service.load_xy_rom_tm_profile``), así
+            # que la fila BASE salía vacía solo por no estar en esta cadena.
+            profile = self._get_xy_rom_tm_profile(prompt=False)
         else:
             return {}
         if profile is None:
             return {}
-        if engine_key in {"oras", "sm", "usum"}:
+        if engine_key in {"oras", "sm", "usum", "xy"}:
             personal = profile.personal_for(
                 int(getattr(pokemon, "species_id", 0) or 0),
                 int(getattr(pokemon, "form", 0) or 0),
@@ -15144,7 +16621,7 @@ class RoleRunManager(ctk.CTk):
                 int(getattr(pokemon, "species_id", 0) or 0),
                 int(getattr(pokemon, "form", 0) or 0),
             )
-        if engine_key in {"oras", "sm", "usum"} and values is not None:
+        if engine_key in {"oras", "sm", "usum", "xy"} and values is not None:
             # Personal Gen 6/7 conserva el orden binario
             # PS, Atq., Def., Vel., At. Esp., Def. Esp.; la UI usa Velocidad
             # al final, igual que SavePokemon.stats/ivs/evs.
@@ -16043,6 +17520,23 @@ class RoleRunManager(ctk.CTk):
             on_open_moves=lambda: self.navigate("moves"),
         )
 
+    def _show_move_information(self, move_id: int, move_name: str) -> None:
+        move_id = int(move_id or 0)
+        if move_id <= 0 or not self._widget_alive(getattr(self, "content", None)):
+            return
+        previous = self._move_info_popover
+        if previous is not None:
+            previous.close()
+
+        def closed() -> None:
+            self._move_info_popover = None
+
+        metadata = self._draft_move_metadata(move_id)
+        self._move_info_popover = MoveInfoPopover(
+            self.content, move_name, metadata, on_close=closed,
+            category_icons=self.category_icons,
+        )
+
     def _render_team_page(self) -> None:
         if not self.current_game:
             self._empty_page("No hay equipo cargado", "Abre una Run desde el Dashboard.", self.select_save)
@@ -16532,11 +18026,435 @@ class RoleRunManager(ctk.CTk):
             )
             return None
 
+    def _ensure_bdsp_levelup_table_loaded(self) -> None:
+        """Decodifica WazaOboeTable una vez por sesión (no una vez por sondeo).
+
+        BDSP no puede parchear la tabla que lee el propio juego (no hay mod
+        de LayeredFS confirmado para Ryujinx, ver
+        ``app/bdsp_levelup_moves.py``): esta tabla solo sirve para saber, al
+        cruzar un nivel, qué movimiento vainilla le tocaría a cada especie —
+        la sustitución real ocurre reescribiendo el hueco ya aprendido, en
+        ``_sync_bdsp_levelup_moves``. Un fallo aquí nunca debe impedir que
+        RoleRun siga funcionando sin esta capacidad.
+
+        Se llama en CADA sondeo en vivo (cada 250-950 ms), así que una vez
+        cargada la tabla con éxito no se vuelve a buscar el archivo de
+        origen: ``discover_personal_masterdatas`` recorre directorios del
+        disco (Atmosphere/mods de Ryujinx), y repetirlo en cada sondeo fue
+        la causa demostrada el 2026-09-04 de una ralentización general de
+        toda la aplicación -el archivo no se mueve mientras el juego sigue
+        abierto, así que no hace falta volver a buscarlo hasta reiniciar
+        RoleRun-.
+        """
+        if getattr(self.save_engine, "key", "") != "bdsp":
+            return
+        if self._bdsp_levelup_table is not None:
+            return
+        source = discover_personal_masterdatas()
+        if source is None:
+            return
+        source_key = str(source)
+        try:
+            objects = load_personal_masterdatas_objects(source)
+            self._bdsp_levelup_table = parse_wazaoboe_table(objects)
+            self._bdsp_levelup_table_source = source_key
+            self._registrar_intento_vivo(
+                "bdsp_levelup_tabla_ok", entradas=len(self._bdsp_levelup_table),
+            )
+        except Exception as exc:
+            self._registrar_intento_vivo("bdsp_levelup_tabla_error", error=str(exc))
+
+    def _bdsp_levelup_usable_move_ids(self) -> set[int] | None:
+        allowed = self.engine.allowed_move_ids
+        return set(int(move_id) for move_id in allowed) if allowed is not None else None
+
+    def _sync_bdsp_levelup_table_patch(self, game: SaveGameData | None) -> None:
+        """Parcheo proactivo de WazaOboeTable en vivo (Enfoque A para BDSP).
+
+        Antes de que el juego llegue a enseñar nada, se mantiene la fila de
+        la tabla de cada especie/forma del equipo ya parcheada con el
+        movimiento de rol — para que el propio diálogo "X quiere aprender
+        <movimiento>" del juego muestre ya el nombre correcto, en vez de la
+        sustitución a ciegas de ``_sync_bdsp_levelup_moves`` (Enfoque B, que
+        se mantiene intacto como red de seguridad si este parche no llega a
+        tiempo). Demostrado en vivo el 2026-09-03 contra la partida real del
+        usuario: tras parchear la tabla, el propio diálogo del juego mostró
+        el movimiento sustituto.
+
+        Como la tabla es compartida por especie/forma (no por individuo),
+        si dos miembros ACTIVOS del equipo son de la misma especie con
+        roles distintos, se elige un único ganador determinista por sondeo
+        —el de menor slot— para no alternar el contenido cada vez.
+        """
+        if getattr(self.save_engine, "key", "") != "bdsp" or game is None:
+            return
+        self._ensure_bdsp_levelup_table_loaded()
+        if not self._bdsp_levelup_table:
+            return
+        adapter = getattr(self, "bdsp_realtime_adapter", None)
+        sync = getattr(adapter, "sync_levelup_table", None)
+        if sync is None:
+            return
+        try:
+            usable_move_ids = self._bdsp_levelup_usable_move_ids()
+            winners: dict[tuple[int, int], SavePokemon] = {}
+            for pokemon in game.party:
+                species_form = (int(pokemon.species_id), int(getattr(pokemon, "form", 0) or 0))
+                current = winners.get(species_form)
+                if current is None or int(pokemon.slot) < int(current.slot):
+                    winners[species_form] = pokemon
+
+            patches: dict[tuple[int, int], dict[int, int]] = {}
+            anchors: dict[tuple[int, int], object] = {}
+            for species_form, pokemon in winners.items():
+                species_id, form = species_form
+                entries = (
+                    self._bdsp_levelup_table.get((species_id, form))
+                    or self._bdsp_levelup_table.get((species_id, 0))
+                )
+                if not entries:
+                    continue
+                role, _symbol = self._effective_role(pokemon)
+                patch = compute_species_patch(
+                    entries, role, species_id=species_id,
+                    pools=self.engine.pools, damage_classes=self.engine.damage_classes,
+                    speed_status_moves=self.engine.speed_status_moves,
+                    self_healing_damage_moves=self.engine.self_healing_damage_moves,
+                    usable_move_ids=usable_move_ids,
+                )
+                if not patch:
+                    continue
+                # Comodín SOLO en las entradas que de verdad hace falta
+                # parchear (no en las 15-20 de toda la tabla): un patrón
+                # demasiado genérico puede coincidir por azar en otro punto
+                # de la memoria y perder la especie como ambigua —
+                # demostrado el 2026-09-04 con Absol.
+                anchors[species_form] = build_species_anchor(
+                    species_form, entries, wildcard_keys=frozenset(patch.keys()),
+                )
+                patches[species_form] = {int(index): int(move_id) for index, move_id in patch.items()}
+
+            if not patches:
+                return
+            outcomes = sync(patches, anchors)
+            for outcome in outcomes:
+                if outcome.changed:
+                    self._registrar_intento_vivo(
+                        "bdsp_levelup_tabla_parcheada",
+                        especie_forma=list(outcome.species_form),
+                        indices=list(outcome.patched_indices),
+                    )
+        except Exception as exc:
+            self._registrar_intento_vivo("bdsp_levelup_tabla_parche_error", error=str(exc))
+
+    def _sync_bdsp_levelup_moves(self, game: SaveGameData | None) -> None:
+        """Aprendizajes por rol en BDSP: red de seguridad tras el parche proactivo.
+
+        Se llama en cada sondeo en vivo, después de
+        ``_sync_bdsp_levelup_table_patch`` (Enfoque A: parchea la tabla en
+        vivo para que el propio diálogo del juego ya muestre el movimiento
+        de rol — demostrado el 2026-09-03 contra la partida real del
+        usuario). Este método es el Enfoque B (sustitución posterior) que
+        se queda como respaldo: si el parche proactivo no llegó a tiempo
+        (primer arranque, especie recién detectada, tabla no localizada
+        todavía) el juego enseña el vainilla, y aquí se reescribe el mismo
+        hueco reutilizando el camino que ya usa cualquier cambio de
+        movimiento confirmado por el usuario (``PendingChange`` +
+        ``_request_oras_live_auto_apply_since``) — nunca un escritor nuevo.
+
+        El diálogo de aprendizaje del juego puede tardar más de un sondeo en
+        resolverse (o el jugador puede rechazar el movimiento): las entradas
+        cruzadas se guardan en ``_bdsp_levelup_pending`` y se reintentan en
+        cada sondeo hasta ver aparecer el movimiento vainilla O el sustituto
+        en la party de verdad (el sustituto aparece directamente cuando el
+        parche proactivo sí llegó a tiempo — en ese caso no hace falta
+        ningún ``PendingChange``, pero el historial de "recuerda-
+        movimientos" se registra igual), comparado contra un
+        ``known_before`` fijado en el momento del cruce -para no confundir
+        un movimiento que ya tenía de antes con uno recién aprendido-.
+        """
+        if (
+            getattr(self.save_engine, "key", "") != "bdsp"
+            or game is None
+            or self.project is None
+        ):
+            return
+        self._ensure_bdsp_levelup_table_loaded()
+        if not self._bdsp_levelup_table:
+            return
+        try:
+            pending_ids_before = {id(change) for change in self.run.pending_changes}
+            usable_move_ids = self._bdsp_levelup_usable_move_ids()
+            for pokemon in game.party:
+                identity = f"{int(pokemon.pid or 0)}:{int(pokemon.tid or 0)}:{int(pokemon.sid or 0)}"
+                level = int(pokemon.level or 0)
+                species_id = int(pokemon.species_id)
+                form = int(getattr(pokemon, "form", 0) or 0)
+                previous = self._bdsp_levelup_last_levels.get(identity)
+                self._bdsp_levelup_last_levels[identity] = level
+                current_ids = [int(move_id or 0) for move_id in pokemon.move_ids[:4]]
+                entries = (
+                    self._bdsp_levelup_table.get((species_id, form))
+                    or self._bdsp_levelup_table.get((species_id, 0))
+                )
+
+                if previous is None:
+                    # Recuerda-movimientos: la primera vez que RoleRun ve a
+                    # este Pokémon en toda la Run, se retro-rellena con lo
+                    # que habría aprendido sin ajustar a ningún rol hasta su
+                    # nivel actual —igual que ya hace ORAS—, sin tocar nada
+                    # en RAM: es solo historial de lo que pasó antes de que
+                    # RoleRun lo gestionara.
+                    if entries and identity not in self.project.oras_levelup_move_history:
+                        pre_capture = tuple(entry for entry in entries if entry[1] <= level)
+                        self._append_bdsp_levelup_history_entries(
+                            identity, pokemon, species_id, pre_capture, "SIN ROL",
+                            pre_capture=True,
+                        )
+                    self._registrar_intento_vivo(
+                        "bdsp_levelup_primera_vez",
+                        identidad=identity, especie=species_id,
+                        nivel=level, movimientos=current_ids,
+                    )
+
+                if previous is not None and level > previous and level > 0:
+                    crossed = tuple(entry for entry in (entries or ()) if previous < entry[1] <= level)
+                    self._registrar_intento_vivo(
+                        "bdsp_levelup_cruce_detectado",
+                        identidad=identity, especie=species_id, forma=form,
+                        nivel_anterior=previous, nivel_actual=level,
+                        hay_tabla_para_especie=bool(entries),
+                        entradas_totales=len(entries or ()),
+                        cruzadas=[(int(m), int(l)) for m, l, _k in crossed],
+                    )
+                    if crossed:
+                        role, _symbol = self._effective_role(pokemon)
+                        # Se calcula sobre TODAS las entradas de la especie
+                        # (no solo las cruzadas), exactamente igual que
+                        # ``_sync_bdsp_levelup_table_patch`` (Enfoque A) —
+                        # ``compute_species_patch`` excluye del pool de
+                        # candidatos los movimientos ya usados en el resto de
+                        # la tabla que se le pase, así que pasarle un
+                        # subconjunto distinto podía elegir un sustituto
+                        # DISTINTO para la misma entrada y que esta detección
+                        # nunca reconociera lo que el parche proactivo ya
+                        # había enseñado -demostrado el 2026-09-03-.
+                        patch = compute_species_patch(
+                            entries, role, species_id=species_id,
+                            pools=self.engine.pools, damage_classes=self.engine.damage_classes,
+                            speed_status_moves=self.engine.speed_status_moves,
+                            self_healing_damage_moves=self.engine.self_healing_damage_moves,
+                            usable_move_ids=usable_move_ids,
+                        )
+                        self._registrar_intento_vivo(
+                            "bdsp_levelup_parche_calculado",
+                            identidad=identity, rol=str(role),
+                            parche=[(int(v), int(s)) for v, s in patch.items()] if patch else [],
+                        )
+                        # Recuerda-movimientos: se registra AQUÍ, en el
+                        # instante del cruce, igual que ya hace ORAS
+                        # (``_record_oras_levelup_move_history``) — no se
+                        # espera a ver el movimiento confirmado en la party.
+                        # Pedido por el usuario el 2026-09-04: si el jugador
+                        # rechaza o deja sin resolver el diálogo del juego,
+                        # el movimiento que le habría tocado por su rol debe
+                        # seguir apareciendo en el historial de todos modos
+                        # -es lo que el rol dice que le corresponde, no una
+                        # promesa de que el juego ya lo aplicó-.
+                        for vanilla_move_id, entry_level, key in crossed:
+                            self._append_bdsp_levelup_history_record(
+                                identity, pokemon, species_id, entry_level,
+                                int(patch.get(key, vanilla_move_id)), role,
+                                pre_capture=False,
+                            )
+                        if patch:
+                            known_before = frozenset(mid for mid in current_ids if mid > 0)
+                            expires_at = time.monotonic() + BDSP_LEVELUP_PENDING_GRACE_SECONDS
+                            pending = self._bdsp_levelup_pending.setdefault(identity, set())
+                            for vanilla_move_id, entry_level, key in crossed:
+                                substitute = patch.get(key)
+                                if substitute is None:
+                                    continue
+                                pending.add((
+                                    int(vanilla_move_id), int(substitute), known_before,
+                                    str(role), int(entry_level), expires_at,
+                                ))
+
+                pending = self._bdsp_levelup_pending.get(identity)
+                if not pending:
+                    continue
+                still_pending: set[tuple[int, int, frozenset, str, int, float]] = set()
+                pokemon_identity = self._pokemon_identity(pokemon)
+                now = time.monotonic()
+                for vanilla_move_id, substitute, known_before, role, entry_level, expires_at in pending:
+                    if vanilla_move_id in known_before:
+                        # Ya lo tenía antes de este cruce: no fue este
+                        # aprendizaje el que lo puso ahí. Se descarta sin
+                        # tocar un hueco que no viene de aquí.
+                        self._registrar_intento_vivo(
+                            "bdsp_levelup_descartado_ya_conocido",
+                            identidad=identity, movimiento_vainilla=vanilla_move_id,
+                        )
+                        continue
+                    if substitute in current_ids and vanilla_move_id not in current_ids:
+                        # El parche proactivo (_sync_bdsp_levelup_table_patch)
+                        # llegó a tiempo: el juego ya enseñó directamente el
+                        # movimiento de rol, así que el vainilla nunca
+                        # aparece y no hace falta ningún PendingChange. Solo
+                        # falta el historial de "recuerda-movimientos", que
+                        # de otro modo nunca se registraría.
+                        self._append_bdsp_levelup_history_record(
+                            identity, pokemon, species_id, entry_level, substitute, role,
+                            pre_capture=False,
+                        )
+                        self._registrar_intento_vivo(
+                            "bdsp_levelup_confirmado_por_parche_proactivo",
+                            identidad=identity, sustituto=substitute,
+                        )
+                        continue
+                    if vanilla_move_id not in current_ids:
+                        # El diálogo del juego puede no haberse resuelto
+                        # todavía (o el jugador rechazó aprender nada — en ese
+                        # caso el moveset nunca cambia y esto queda esperando
+                        # sin más, hasta el margen de abajo). Reintentar
+                        # mientras quede margen POR NIVEL (subidas normales,
+                        # de una en una) O por TIEMPO real transcurrido desde
+                        # el cruce (un salto de nivel enorme de una vez, como
+                        # varios Caramelo Raro seguidos, agota el margen por
+                        # nivel en el mismo sondeo del cruce, pero el juego
+                        # todavía puede tardar varios sondeos en encolar y
+                        # resolver los diálogos en cadena).
+                        if level - entry_level <= 20 or now < expires_at:
+                            still_pending.add((
+                                vanilla_move_id, substitute, known_before, role, entry_level,
+                                expires_at,
+                            ))
+                            self._registrar_intento_vivo(
+                                "bdsp_levelup_esperando_al_juego",
+                                identidad=identity, movimiento_vainilla=vanilla_move_id,
+                                movimientos_actuales=current_ids,
+                            )
+                        else:
+                            self._registrar_intento_vivo(
+                                "bdsp_levelup_abandonado",
+                                identidad=identity, movimiento_vainilla=vanilla_move_id,
+                                nivel_de_la_entrada=entry_level, nivel_actual=level,
+                            )
+                        continue
+                    move_slot = current_ids.index(vanilla_move_id) + 1
+                    move_name = str(self.engine.move(vanilla_move_id).get("name_es") or f"Movimiento #{vanilla_move_id}")
+                    substitute_name = str(self.engine.move(substitute).get("name_es") or f"Movimiento #{substitute}")
+                    change = PendingChange(
+                        role=role,
+                        pokemon_slot=pokemon.slot,
+                        pokemon=pokemon.nickname or pokemon.species,
+                        species=pokemon.species,
+                        move_slot=move_slot,
+                        old_move=move_name,
+                        old_move_id=vanilla_move_id,
+                        new_move=substitute_name,
+                        new_move_id=substitute,
+                        pokemon_identity=pokemon_identity,
+                    )
+                    self.run.pending_changes = [
+                        existing for existing in self.run.pending_changes
+                        if not (
+                            isinstance(existing, (PendingChange, PendingTMTeach))
+                            and getattr(existing, "move_slot", 0) == change.move_slot
+                            and getattr(existing, "pokemon_identity", "") == pokemon_identity
+                        )
+                    ]
+                    self.run.pending_changes.append(change)
+                    # Recuerda-movimientos: se registra AQUÍ, no al detectar el
+                    # cruce -a diferencia de ORAS, la sustitución de BDSP no
+                    # está garantizada hasta este momento (el jugador podría
+                    # haber rechazado aprender nada)-.
+                    self._append_bdsp_levelup_history_record(
+                        identity, pokemon, species_id, entry_level, substitute, role,
+                        pre_capture=False,
+                    )
+                    self._registrar_intento_vivo(
+                        "bdsp_levelup_sustitucion_encolada",
+                        identidad=identity, hueco=move_slot,
+                        vainilla=vanilla_move_id, sustituto=substitute,
+                    )
+                if still_pending:
+                    self._bdsp_levelup_pending[identity] = still_pending
+                elif identity in self._bdsp_levelup_pending:
+                    del self._bdsp_levelup_pending[identity]
+            self._request_oras_live_auto_apply_since(pending_ids_before)
+        except Exception as exc:
+            self._registrar_intento_vivo("bdsp_levelup_sync_error", error=str(exc))
+
+    def _append_bdsp_levelup_history_record(
+        self, identity: str, pokemon: SavePokemon, species_id: int,
+        level: int, move_id: int, role: str, *, pre_capture: bool,
+    ) -> bool:
+        """Recuerda-movimientos de BDSP: una entrada YA resuelta.
+
+        A diferencia de ORAS, aquí nunca se calcula un parche: quien llama
+        ya sabe el movimiento exacto que corresponde -el que de verdad se
+        escribió en la sustitución confirmada, o el vainilla en el
+        retro-relleno de la primera vez-. Calcularlo de nuevo aquí, sobre
+        una sola entrada suelta, podría dar un sustituto distinto al que
+        realmente quedó en el hueco si esa entrada cruzó junto a otras en el
+        mismo sondeo (``compute_species_patch`` excluye entre sí los
+        movimientos del mismo lote).
+        """
+        history = self.project.oras_levelup_move_history.setdefault(identity, [])
+        seen = {(int(item.get("level", -1)), int(item.get("move_id", -1))) for item in history}
+        record_key = (int(level), int(move_id))
+        if record_key in seen:
+            return False
+        history.append({
+            "level": int(level),
+            "move_id": int(move_id),
+            "role": str(role),
+            "species_id": species_id,
+            "nickname": str(pokemon.nickname or pokemon.species),
+            "recorded_at": datetime.now().isoformat(timespec="seconds"),
+            "pre_capture": bool(pre_capture),
+        })
+        self.project_service.save(self.project)
+        return True
+
+    def _append_bdsp_levelup_history_entries(
+        self, identity: str, pokemon: SavePokemon, species_id: int,
+        entries: tuple, role: str, *, pre_capture: bool,
+    ) -> bool:
+        """Retro-relleno de la primera vez: calcula qué le habría tocado a
+        cada entrada vainilla con el rol de ahora, igual que ORAS, para que
+        la pantalla decida si ENSEÑAR tiene sentido. Solo para eso — una
+        sustitución ya confirmada en RAM se registra con
+        ``_append_bdsp_levelup_history_record`` directamente, sin recalcular
+        nada.
+        """
+        if not entries:
+            return False
+        patch = compute_species_patch(
+            entries, role, species_id=species_id,
+            pools=self.engine.pools, damage_classes=self.engine.damage_classes,
+            speed_status_moves=self.engine.speed_status_moves,
+            self_healing_damage_moves=self.engine.self_healing_damage_moves,
+            usable_move_ids=self._bdsp_levelup_usable_move_ids(),
+        )
+        changed = False
+        for vanilla_move_id, entry_level, key in entries:
+            actual_move_id = int(patch.get(key, vanilla_move_id))
+            if self._append_bdsp_levelup_history_record(
+                identity, pokemon, species_id, entry_level, actual_move_id, role,
+                pre_capture=pre_capture,
+            ):
+                changed = True
+        return changed
+
     def _clear_oras_rom_tm_runtime_profile(self) -> None:
         self._oras_rom_tm_profile = None
         self._oras_rom_tm_profile_source = None
         self._oras_rom_tm_profile_process = None
         self._oras_rom_tm_last_error = None
+        self._oras_discovered_rom_source = None
+        self._oras_discovered_rom_source_process = None
 
     def _prepare_oras_live_metadata_profile(self) -> ORASTMProfile | None:
         """Carga el Personal ORAS antes de publicar equipo o PC vivos.
@@ -16549,7 +18467,9 @@ class RoleRunManager(ctk.CTk):
             return None
         return self._get_oras_rom_tm_profile(prompt=False)
 
-    def _remember_oras_rom_tm_profile(self, profile: ORASTMProfile, process_name: str | None) -> ORASTMProfile:
+    def _remember_oras_rom_tm_profile(
+        self, profile: ORASTMProfile, process_name: str | None, azahar_root: Path | None = None,
+    ) -> ORASTMProfile:
         """Asocia una ROM ORAS validada a la Run sin guardar datos del juego."""
         self._oras_rom_tm_profile = profile
         self._oras_rom_tm_profile_source = profile.source
@@ -16559,7 +18479,1892 @@ class RoleRunManager(ctk.CTk):
             if getattr(self.project, "oras_tm_rom_path", "") != source_text:
                 self.project.oras_tm_rom_path = source_text
                 self.project_service.save(self.project)
+        self._ensure_oras_levelup_moves_registered(profile.source, azahar_root, process_name)
         return profile
+
+    def _ensure_oras_levelup_moves_registered(
+        self, rom_path: Path, azahar_root: Path | None, process_name: str | None,
+    ) -> None:
+        """Prepara el mod de aprendizajes por nivel para la ROM ORAS activa.
+
+        Solo lee la tabla vainilla y garantiza que el archivo de mod exista
+        con ese tamaño (ver ``app/oras_levelup_moves.ensure_registered``).
+        Nunca escribe el contenido ajustado a roles aquí: eso lo hace
+        ``_sync_oras_levelup_moves_mod`` en cada sondeo en vivo. Un fallo
+        aquí nunca debe impedir que RoleRun siga funcionando sin esta
+        capacidad — la tabla de MT ya validada no depende de esto.
+        """
+        if getattr(self.save_engine, "key", "") != "oras" or azahar_root is None:
+            return
+        try:
+            with perf.span("ui.ensure_oras_levelup_moves.load_blob"):
+                blob, title_id = load_oras_levelup_moves_blob(
+                    rom_path, process_name=process_name, azahar_root=azahar_root,
+                )
+            with perf.span("ui.ensure_oras_levelup_moves.ensure_registered"):
+                estado = oras_levelup_moves_mod.ensure_registered(azahar_root, title_id, blob)
+        except Exception as exc:
+            self._registrar_intento_vivo(
+                "oras_levelup_registro_error", error=str(exc), rom_path=str(rom_path),
+                azahar_root=str(azahar_root),
+            )
+            return
+        self._oras_levelup_moves_vanilla = blob
+        self._oras_levelup_moves_title_id = title_id
+        self._oras_levelup_moves_azahar_root = Path(azahar_root)
+        self._oras_levelup_moves_last_written = None
+        self._oras_levelup_moves_last_roles_key = None
+        self._oras_levelup_moves_vanilla_entries = oras_levelup_moves_mod.parse_levelup_garc(blob)
+        self._registrar_intento_vivo(
+            "oras_levelup_registro_ok", estado=estado, title_id=f"{title_id:016X}",
+            azahar_root=str(azahar_root), blob_size=len(blob),
+        )
+
+    @perf.timed("ui.sync_oras_levelup_moves_mod")
+    def _sync_oras_levelup_moves_mod(self, game: SaveGameData | None) -> None:
+        """Ajusta al rol el mod de aprendizajes por nivel de ORAS, si aplica.
+
+        Se llama en cada sondeo en vivo con la party ya leída de Azahar. Solo
+        toca las especies con un miembro activo en el equipo con un rol que
+        de verdad restringe algo (Líbero y SIN ROL se dejan tal cual: ver
+        ``app/oras_levelup_moves.py``). Nunca escribe si el contenido
+        calculado es igual al último escrito, ni si el archivo de mod no
+        quedó registrado con el tamaño correcto.
+
+        Pedido por el usuario el 2026-09-03 tras notar el programa lento: si
+        el mapa especie→rol de este sondeo es igual al del anterior, se sale
+        antes de recalcular nada — ni la copia del blob ni la evaluación de
+        cada entrada de nivel. Antes se repetía ese trabajo en cada sondeo
+        (hasta cada 250ms) aunque los roles no hubieran cambiado.
+        """
+        if (
+            getattr(self.save_engine, "key", "") != "oras"
+            or game is None
+            or self._oras_levelup_moves_vanilla is None
+            or self._oras_levelup_moves_title_id is None
+            or self._oras_levelup_moves_azahar_root is None
+        ):
+            return
+        self._record_oras_levelup_move_history(game)
+        try:
+            roles_by_species: dict[int, str] = {}
+            for pokemon in game.party:
+                role, _symbol = self._effective_role(pokemon)
+                if role in {"SIN ROL", "Líbero", ""}:
+                    continue
+                roles_by_species[int(pokemon.species_id)] = role
+            # El resto de esta función —copiar el blob vainilla y evaluar
+            # cada entrada de nivel de cada especie en juego— es trabajo
+            # real de CPU que antes se repetía en cada sondeo aunque nada
+            # hubiera cambiado desde el anterior. Si el mapa especie→rol es
+            # idéntico al del último sondeo (el caso normal: los roles solo
+            # cambian cuando el usuario los cambia), el parche ya calculado
+            # sigue siendo válido tal cual, así que no hace falta
+            # reconstruirlo ni volver a compararlo byte a byte.
+            roles_key = (
+                frozenset(roles_by_species.items()),
+                self.engine.allowed_move_ids is not None,
+            )
+            if roles_key == self._oras_levelup_moves_last_roles_key:
+                return
+            # Nunca ofrecer un sustituto fuera del rango real de ORAS. Los
+            # pools de data/moves.json son comunes a todos los juegos y
+            # llegan a movimientos de generaciones muy posteriores (más allá
+            # de 621) que ORAS no reconoce y mostraría en blanco. Se usa
+            # `engine.allowed_move_ids` cuando ya está poblado (más preciso:
+            # respeta lo que el guardado activo declara jugable) y si todavía
+            # no lo está, el rango completo de IDs de ORAS como red de
+            # seguridad — nunca sin ningún filtro.
+            usable_move_ids = (
+                set(int(move_id) for move_id in self.engine.allowed_move_ids)
+                if self.engine.allowed_move_ids is not None
+                else set(range(1, _ORAS_MAX_MOVE_ID + 1))
+            )
+            patched = oras_levelup_moves_mod.build_party_patched_blob(
+                self._oras_levelup_moves_vanilla, roles_by_species,
+                pools=self.engine.pools,
+                damage_classes=self.engine.damage_classes,
+                speed_status_moves=self.engine.speed_status_moves,
+                self_healing_damage_moves=self.engine.self_healing_damage_moves,
+                usable_move_ids=usable_move_ids,
+                entries_by_species=self._oras_levelup_moves_vanilla_entries,
+            )
+            if patched == self._oras_levelup_moves_last_written:
+                self._oras_levelup_moves_last_roles_key = roles_key
+                return
+            oras_levelup_moves_mod.write_blob(
+                self._oras_levelup_moves_azahar_root,
+                self._oras_levelup_moves_title_id,
+                patched,
+                expected_size=len(self._oras_levelup_moves_vanilla),
+            )
+            self._oras_levelup_moves_last_written = patched
+            self._oras_levelup_moves_last_roles_key = roles_key
+            self._registrar_intento_vivo(
+                "oras_levelup_sync_escrito", roles_by_species=roles_by_species,
+            )
+        except Exception as exc:
+            self._registrar_intento_vivo("oras_levelup_sync_error", error=str(exc))
+            return
+
+    def _oras_levelup_usable_move_ids(self) -> set[int]:
+        return (
+            set(int(move_id) for move_id in self.engine.allowed_move_ids)
+            if self.engine.allowed_move_ids is not None
+            else set(range(1, _ORAS_MAX_MOVE_ID + 1))
+        )
+
+    def _append_oras_levelup_history_entries(
+        self, identity: str, pokemon: SavePokemon, species_id: int,
+        entries: tuple, role: str, *, pre_capture: bool,
+    ) -> bool:
+        """Calcula la sustitución de ``entries`` para ``role`` y las añade.
+
+        Devuelve ``True`` si añadió alguna entrada nueva. No duplica una
+        (nivel, movimiento) ya registrada para esa identidad.
+        """
+        if not entries:
+            return False
+        # 06-09-2026: se calcula sobre la tabla COMPLETA de la especie, no
+        # sobre el subconjunto recién cruzado. `compute_species_patch` excluye
+        # los movimientos que la especie ya tiene, así que un subconjunto da
+        # otro conjunto de exclusiones y elige OTRO sustituto: el historial
+        # acababa registrando un movimiento distinto del que el juego enseña
+        # de verdad (bug reportado en quinta; medido: 13 de 14 entradas de
+        # Patrat discrepaban). Mismo cálculo que el parche, por construcción.
+        completa = (self._oras_levelup_moves_vanilla_entries or {}).get(int(species_id)) or entries
+        patch = oras_levelup_moves_mod.compute_species_patch(
+            completa, role, species_id=species_id,
+            pools=self.engine.pools, damage_classes=self.engine.damage_classes,
+            speed_status_moves=self.engine.speed_status_moves,
+            self_healing_damage_moves=self.engine.self_healing_damage_moves,
+            usable_move_ids=self._oras_levelup_usable_move_ids(),
+        )
+        history = self.project.oras_levelup_move_history.setdefault(identity, [])
+        seen = {(int(item.get("level", -1)), int(item.get("move_id", -1))) for item in history}
+        changed = False
+        for vanilla_move_id, entry_level, offset in entries:
+            actual_move_id = int(patch.get(offset, vanilla_move_id))
+            key = (int(entry_level), actual_move_id)
+            if key in seen:
+                continue
+            history.append({
+                "level": int(entry_level),
+                "move_id": actual_move_id,
+                "role": str(role),
+                "species_id": species_id,
+                "nickname": str(pokemon.nickname or pokemon.species),
+                "recorded_at": datetime.now().isoformat(timespec="seconds"),
+                "pre_capture": bool(pre_capture),
+            })
+            seen.add(key)
+            changed = True
+        return changed
+
+    def _purge_oras_levelup_history_above_level(self, identity: str, level: int) -> bool:
+        """Descarta del recuerda-movimientos lo aprendido por encima de ``level``.
+
+        Pedido por el usuario el 2026-09-03: si el nivel real baja —partida
+        reiniciada sin guardar, en esta sesión o entre sesiones—, lo que se
+        había registrado por encima de ese nivel nunca llegó a persistir en
+        el juego, así que no puede seguir ofreciéndose como ENSEÑAR.
+        """
+        history = self.project.oras_levelup_move_history.get(identity)
+        if not history:
+            return False
+        kept = [item for item in history if int(item.get("level", 0)) <= level]
+        if len(kept) == len(history):
+            return False
+        if kept:
+            self.project.oras_levelup_move_history[identity] = kept
+        else:
+            del self.project.oras_levelup_move_history[identity]
+        return True
+
+    @perf.timed("ui.record_oras_levelup_move_history")
+    def _record_oras_levelup_move_history(self, game: SaveGameData) -> None:
+        """Recuerda-movimientos: registra cada aprendizaje por nivel real.
+
+        Compara el nivel actual de cada miembro del equipo con el último
+        visto esta sesión. Si subió, mira en la tabla vainilla qué entradas
+        cruzó y calcula, para el rol de AHORA, qué movimiento correspondía a
+        cada una — el mismo cálculo que ya hace ``build_party_patched_blob``,
+        pero solo para la especie que realmente subió de nivel, no para las
+        826. Se persiste en la Run, sin duplicar una (nivel, movimiento) que
+        ya estuviera registrada para esa identidad.
+
+        La primera vez que se ve a un Pokémon —en toda la Run, no solo esta
+        sesión— se retro-rellena con lo que habría aprendido sin ajustar a
+        ningún rol hasta su nivel actual, como pidió el usuario: son los
+        movimientos de antes de que RoleRun lo gestionara, así que no llevan
+        rol y no se pueden enseñar si no encajan con el rol de ahora (eso lo
+        decide la propia pantalla, comparando contra el rol actual).
+
+        Si el nivel real baja —partida reiniciada sin guardar, dentro de esta
+        sesión o entre sesiones— se descarta primero lo registrado por
+        encima del nivel actual: nunca llegó a persistir en el juego, así
+        que no puede seguir apareciendo como algo que se le pueda enseñar.
+        """
+        if (
+            getattr(self.save_engine, "key", "") != "oras"
+            or self.project is None
+            or self._oras_levelup_moves_vanilla_entries is None
+        ):
+            return
+        try:
+            changed = False
+            for pokemon in game.party:
+                identity = f"{int(pokemon.pid or 0)}:{int(pokemon.tid or 0)}:{int(pokemon.sid or 0)}"
+                level = int(pokemon.level or 0)
+                previous = self._oras_levelup_history_last_levels.get(identity)
+                self._oras_levelup_history_last_levels[identity] = level
+                species_id = int(pokemon.species_id)
+                entries = self._oras_levelup_moves_vanilla_entries.get(species_id)
+                if level > 0 and self._purge_oras_levelup_history_above_level(identity, level):
+                    changed = True
+                if previous is None:
+                    if identity not in self.project.oras_levelup_move_history and entries:
+                        pre_capture = tuple(entry for entry in entries if entry[1] <= level)
+                        if self._append_oras_levelup_history_entries(
+                            identity, pokemon, species_id, pre_capture, "SIN ROL",
+                            pre_capture=True,
+                        ):
+                            changed = True
+                    continue
+                if level <= previous or level <= 0 or not entries:
+                    continue
+                crossed = tuple(entry for entry in entries if previous < entry[1] <= level)
+                if not crossed:
+                    continue
+                role, _symbol = self._effective_role(pokemon)
+                if self._append_oras_levelup_history_entries(
+                    identity, pokemon, species_id, crossed, role, pre_capture=False,
+                ):
+                    changed = True
+            if changed:
+                self.project_service.save(self.project)
+        except Exception as exc:
+            self._registrar_intento_vivo("oras_levelup_history_error", error=str(exc))
+
+    def _revert_oras_levelup_moves_mod(self) -> None:
+        """Devuelve el mod de aprendizajes por nivel a la tabla vainilla de la ROM.
+
+        Se llama al cerrar RoleRun: con RoleRun cerrado, ORAS debe volver a
+        enseñar exactamente lo que su ROM/randomizer diría por sí sola.
+        """
+        if (
+            self._oras_levelup_moves_vanilla is None
+            or self._oras_levelup_moves_title_id is None
+            or self._oras_levelup_moves_azahar_root is None
+        ):
+            return
+        try:
+            oras_levelup_moves_mod.write_blob(
+                self._oras_levelup_moves_azahar_root,
+                self._oras_levelup_moves_title_id,
+                self._oras_levelup_moves_vanilla,
+                expected_size=len(self._oras_levelup_moves_vanilla),
+            )
+        except Exception:
+            return
+
+    def _ensure_xy_levelup_moves_registered(
+        self, rom_path: Path, azahar_root: Path | None, process_name: str | None,
+        emulator_key: str | None = None,
+    ) -> None:
+        """Prepara el mod de aprendizajes por nivel para la ROM X/Y activa.
+
+        Mirror de ``_ensure_oras_levelup_moves_registered``: X/Y comparte el
+        mismo motor/generación que ORAS (GARC indexado 1:1 por species_id,
+        confirmado el 2026-09-05 en ``a/2/1/4``). A diferencia de ORAS, X/Y
+        puede correr en Azahar o en AzaharPlus, así que sin una raíz explícita
+        se autodescubre la de ``qt-config.ini`` más reciente entre las
+        instalaciones detectadas -mismo criterio que ya usa
+        ``_load_xy_rom_tm_source``-.
+        """
+        if getattr(self.save_engine, "key", "") != "xy":
+            return
+        if azahar_root is None:
+            discovered = azahar_user_roots()
+            azahar_root = max(
+                discovered,
+                key=lambda root: (root / "config" / "qt-config.ini").stat().st_mtime
+                if (root / "config" / "qt-config.ini").is_file() else -1.0,
+                default=None,
+            )
+        if azahar_root is None:
+            return
+        try:
+            with perf.span("ui.ensure_xy_levelup_moves.load_blob"):
+                blob, title_id = load_xy_levelup_moves_blob(
+                    rom_path, process_name=process_name, azahar_root=azahar_root,
+                    emulator_key=emulator_key,
+                )
+            with perf.span("ui.ensure_xy_levelup_moves.ensure_registered"):
+                estado = xy_levelup_moves_mod.ensure_registered(azahar_root, title_id, blob)
+        except Exception as exc:
+            self._registrar_intento_vivo(
+                "xy_levelup_registro_error", error=str(exc), rom_path=str(rom_path),
+                azahar_root=str(azahar_root),
+            )
+            return
+        self._xy_levelup_moves_vanilla = blob
+        self._xy_levelup_moves_title_id = title_id
+        self._xy_levelup_moves_azahar_root = Path(azahar_root)
+        self._xy_levelup_moves_last_written = None
+        self._xy_levelup_moves_last_roles_key = None
+        self._xy_levelup_moves_vanilla_entries = xy_levelup_moves_mod.parse_levelup_garc(blob)
+        self._registrar_intento_vivo(
+            "xy_levelup_registro_ok", estado=estado, title_id=f"{title_id:016X}",
+            azahar_root=str(azahar_root), blob_size=len(blob),
+        )
+        # 2026-09-05, bug real: este registro se repite en cada reenganche
+        # de la conexión (no solo la primera vez), y siempre deja el
+        # archivo en su contenido VAINILLA -createlo o no-, con la caché de
+        # roles ya reiniciada arriba. Sin esta llamada, la fila del rol
+        # actual se quedaba vainilla hasta el siguiente sondeo pasivo (o
+        # hasta el siguiente cambio de rol): demostrado en vivo con
+        # Pidgey, que cruzó un nivel entero con el archivo recién
+        # reenganchado sin que nadie volviera a parchearlo a tiempo.
+        # Resincronizar aquí mismo, en el mismo instante del reenganche,
+        # cierra esa ventana en vez de esperarla.
+        if self.current_game is not None:
+            self._sync_xy_levelup_moves_mod(self.current_game)
+            self._sync_xy_levelup_moves_backup(self.current_game)
+
+    @perf.timed("ui.sync_xy_levelup_moves_mod")
+    def _sync_xy_levelup_moves_mod(self, game: SaveGameData | None) -> None:
+        """Ajusta al rol el mod de aprendizajes por nivel de X/Y, si aplica.
+
+        Mirror exacto de ``_sync_oras_levelup_moves_mod``.
+        """
+        if (
+            getattr(self.save_engine, "key", "") != "xy"
+            or game is None
+            or self._xy_levelup_moves_vanilla is None
+            or self._xy_levelup_moves_title_id is None
+            or self._xy_levelup_moves_azahar_root is None
+        ):
+            return
+        self._record_xy_levelup_move_history(game)
+        leveled_species = set(getattr(self, "_xy_levelup_species_leveled_this_tick", None) or ())
+        try:
+            roles_by_species: dict[int, str] = {}
+            for pokemon in game.party:
+                role, _symbol = self._effective_role(pokemon)
+                if role in {"SIN ROL", "Líbero", ""}:
+                    continue
+                roles_by_species[int(pokemon.species_id)] = role
+            # Copia previa a adelantar evoluciones futuras: el búfer de
+            # anuncio en RAM (ver más abajo) solo puede tocar especies que
+            # de verdad tienen un Pokémon vivo en la party -una evolución
+            # adelantada no tiene ningún búfer real asignado todavía, y
+            # buscar uno ahí arriesga una coincidencia de bytes falsa en
+            # otra estructura de memoria-. El archivo del mod sí puede
+            # incluir especies especulativas sin riesgo: se queda ahí sin
+            # usarse hasta que ese Pokémon exista de verdad.
+            roles_by_species_in_party = dict(roles_by_species)
+            # 2026-09-05: adelanta el mismo parche a las evoluciones futuras
+            # conocidas de cada especie con rol asignado. Evolucionar cambia
+            # species_id de golpe en el juego; RoleRun solo se entera en su
+            # siguiente sondeo, y parchear (releer la party, recorrer las
+            # ~826 especies del GARC, reescribir el archivo) tarda lo
+            # suficiente como para perder la carrera si se sube de nivel
+            # enseguida después -demostrado en vivo con el usuario: Flabébé
+            # evolucionó a Floette y aprendió Deseo sin sustituir, con el
+            # rol ya puesto desde antes de evolucionar-. Adelantando el
+            # parche, cuando evolucione de verdad su fila ya lleva un rato
+            # correcta. `setdefault` nunca pisa el rol de un miembro real
+            # de la party con esta suposición.
+            for species_id, role in list(roles_by_species.items()):
+                for descendant in evolution_descendants(species_id):
+                    roles_by_species.setdefault(descendant, role)
+            roles_key = (
+                frozenset(roles_by_species.items()),
+                self.engine.allowed_move_ids is not None,
+            )
+            if roles_key != self._xy_levelup_moves_last_roles_key:
+                usable_move_ids = self._xy_levelup_usable_move_ids()
+                patched = xy_levelup_moves_mod.build_party_patched_blob(
+                    self._xy_levelup_moves_vanilla, roles_by_species,
+                    pools=self.engine.pools,
+                    damage_classes=self.engine.damage_classes,
+                    speed_status_moves=self.engine.speed_status_moves,
+                    self_healing_damage_moves=self.engine.self_healing_damage_moves,
+                    usable_move_ids=usable_move_ids,
+                    entries_by_species=self._xy_levelup_moves_vanilla_entries,
+                )
+                if patched != self._xy_levelup_moves_last_written:
+                    xy_levelup_moves_mod.write_blob(
+                        self._xy_levelup_moves_azahar_root,
+                        self._xy_levelup_moves_title_id,
+                        patched,
+                        expected_size=len(self._xy_levelup_moves_vanilla),
+                    )
+                    self._xy_levelup_moves_last_written = patched
+                    self._registrar_intento_vivo(
+                        "xy_levelup_sync_escrito", roles_by_species=roles_by_species,
+                    )
+                self._xy_levelup_moves_last_roles_key = roles_key
+            # 2026-09-05, causa real de un crash del emulador confirmada
+            # leyendo ``escrituras_vivas.jsonl``: la primera versión de esto
+            # pasaba ``roles_by_species`` -ya expandido con evoluciones
+            # futuras- a la búsqueda en RAM. Ese día se buscaron/escribieron
+            # 8 especies y el RPC de Azahar dejó de responder segundos
+            # después: varias de esas especies eran evoluciones adelantadas
+            # sin ningún búfer real asignado, y localizar uno ahí arriesga
+            # escribir sobre una coincidencia de bytes de otra estructura.
+            # Se pasa ``roles_by_species_in_party`` -solo especies con un
+            # Pokémon vivo ahora mismo- en su lugar.
+            #
+            # 2026-09-05, segundo bug real confirmado en el log: el cartel
+            # del juego decodifica el búfer de anuncio de una especie en el
+            # instante en que decide qué anunciar -normalmente justo al
+            # cruzar un nivel de aprendizaje-, no cuando RoleRun reescribe
+            # el archivo. Se dispara por cruce de nivel, no por cambio de
+            # rol.
+            #
+            # 2026-09-05, TERCER y QUINTO bug real, los dos confirmados en
+            # el log: hubo una versión que TAMBIÉN disparaba esto en cada
+            # cambio de rol -barrido preventivo de 5-6 especies, 10+
+            # segundos-. Se probó a arreglarlo con una cola en vez de
+            # descartar la petición urgente que llegara ocupado (CUARTO,
+            # motivado por ver el mismo patrón de 14-15s ya validado en el
+            # log de USUM) — pero encolar no basta: el aviso urgente de
+            # Zigzagoon se encoló DETRÁS del barrido preventivo y tardó 10
+            # segundos en procesarse igual, solo que sin perderse. El
+            # barrido por cambio de rol no aporta nada que el cartel vaya
+            # a mostrar antes de que alguien suba de nivel, y si sigue
+            # activo, cualquier aviso urgente que llegue mientras tanto
+            # espera su turno detrás de él. Se dispara SOLO por cruce de
+            # nivel -y por la propia red de seguridad, ver
+            # ``_sync_xy_levelup_moves_backup``-, nunca por cambio de rol,
+            # para que el aviso urgente nunca tenga nada delante en la
+            # cola.
+            if leveled_species and self._xy_levelup_moves_last_written is not None:
+                cache_targets = {
+                    species_id: role
+                    for species_id, role in roles_by_species_in_party.items()
+                    if species_id in leveled_species
+                }
+                if cache_targets:
+                    self._sync_xy_levelup_announcement_cache(
+                        game, cache_targets, self._xy_levelup_moves_last_written,
+                    )
+        except Exception as exc:
+            self._registrar_intento_vivo("xy_levelup_sync_error", error=str(exc))
+            return
+
+    def _sync_xy_levelup_moves_backup(self, game: SaveGameData | None) -> None:
+        """Aprendizajes por rol en X/Y: red de seguridad tras el parche proactivo.
+
+        Mirror de ``_sync_usum_levelup_moves_backup``. 2026-09-05, validado
+        físicamente en la partida real del usuario: a diferencia de lo que
+        se creía (Azahar relee ``a/2/1/4`` sin caché en cada petición del
+        juego, como ya se demostró para ORAS), X/Y puede seguir enseñando
+        el sustituto de un rol YA ABANDONADO -ni el vainilla ni el
+        sustituto del rol actual- incluso con el archivo del mod ya
+        corregido varios segundos antes del aprendizaje, y hasta después
+        de reabrir el menú de equipo del propio juego. Solo un reinicio
+        completo del título lo refresca -demostrado con Zigzagoon: Mago
+        tras un cambio reciente desde Asesino, aprendió Danza Dragón, el
+        sustituto de ASESINO, con el archivo ya en el de Mago desde hacía
+        rato-.
+
+        En vez de perseguir esa caché (no expuesta por ningún archivo ni
+        dirección conocida), esta red de seguridad hace lo mismo que ya
+        resolvió el mismo problema en USUM: observa qué movimiento NUEVO
+        aparece de verdad en los 4 huecos del Pokémon (comparado contra el
+        sondeo anterior) y comprueba si encaja con el rol ACTUAL en ese
+        instante -sin importar de dónde salió-. Si no encaja, lo sustituye
+        ahí mismo en la propia partida, reutilizando el mismo camino
+        transaccional que cualquier cambio de movimiento confirmado por el
+        usuario.
+        """
+        if (
+            getattr(self.save_engine, "key", "") != "xy"
+            or game is None
+            or self.project is None
+        ):
+            return
+        try:
+            pending_ids_before = {id(change) for change in self.run.pending_changes}
+            usable_move_ids = self._xy_levelup_usable_move_ids()
+            for pokemon in game.party:
+                identity = f"{int(pokemon.pid or 0)}:{int(pokemon.tid or 0)}:{int(pokemon.sid or 0)}"
+                level = int(pokemon.level or 0)
+                species_id = int(pokemon.species_id)
+                current_ids = [int(move_id or 0) for move_id in pokemon.move_ids[:4]]
+                previous_ids = self._xy_levelup_backup_known_moves.get(identity)
+                self._xy_levelup_backup_known_moves[identity] = list(current_ids)
+                if previous_ids is None:
+                    continue
+                new_ids = [mid for mid in current_ids if mid > 0 and mid not in previous_ids]
+                if not new_ids:
+                    continue
+                role, _symbol = self._effective_role(pokemon)
+                pokemon_identity = self._pokemon_identity(pokemon)
+                substituted_here = False
+                for new_move_id in new_ids:
+                    substitute = compute_move_substitute(
+                        new_move_id, role,
+                        species_id=species_id,
+                        level=level,
+                        pools=self.engine.pools, damage_classes=self.engine.damage_classes,
+                        speed_status_moves=self.engine.speed_status_moves,
+                        self_healing_damage_moves=self.engine.self_healing_damage_moves,
+                        exclude=set(current_ids) - {new_move_id},
+                        usable_move_ids=usable_move_ids,
+                    )
+                    if substitute is None:
+                        continue
+                    move_slot = current_ids.index(new_move_id) + 1
+                    move_name = str(self.engine.move(new_move_id).get("name_es") or f"Movimiento #{new_move_id}")
+                    substitute_name = str(self.engine.move(substitute).get("name_es") or f"Movimiento #{substitute}")
+                    change = PendingChange(
+                        role=role,
+                        pokemon_slot=pokemon.slot,
+                        pokemon=pokemon.nickname or pokemon.species,
+                        species=pokemon.species,
+                        move_slot=move_slot,
+                        old_move=move_name,
+                        old_move_id=new_move_id,
+                        new_move=substitute_name,
+                        new_move_id=substitute,
+                        pokemon_identity=pokemon_identity,
+                    )
+                    self.run.pending_changes = [
+                        existing for existing in self.run.pending_changes
+                        if not (
+                            isinstance(existing, (PendingChange, PendingTMTeach))
+                            and getattr(existing, "move_slot", 0) == change.move_slot
+                            and getattr(existing, "pokemon_identity", "") == pokemon_identity
+                        )
+                    ]
+                    self.run.pending_changes.append(change)
+                    self._registrar_intento_vivo(
+                        "xy_levelup_backup_sustitucion_encolada",
+                        identidad=identity, hueco=move_slot,
+                        aprendido=new_move_id, sustituto=substitute, rol=str(role),
+                    )
+                    substituted_here = True
+                # 2026-09-05, CUARTO bug real confirmado en la partida: el
+                # disparador por cruce de nivel (``_sync_xy_levelup_moves_mod``)
+                # solo se arma comparando contra el ÚLTIMO nivel que RoleRun
+                # vio de este Pokémon -y ese historial no se resetea si el
+                # usuario reinicia el JUEGO sin reiniciar RoleRun (su propio
+                # flujo de pruebas: reiniciar para bajar de nivel sin
+                # relanzar la app). Si RoleRun se reconecta ya con el nivel
+                # de vuelta en el mismo valor que tenía antes del reinicio,
+                # nunca ve el cruce y nunca dispara el parcheo del cartel
+                # -demostrado con Zigzagoon: Mago→Asesino, mismo nivel 9 tras
+                # un reinicio del juego, cartel anunciando "Vozarrón" -el
+                # sustituto de MAGO- con el archivo ya en Asesino-. Esta red
+                # de seguridad, en cambio, compara el CONTENIDO real de los
+                # 4 huecos en cada sondeo -nunca se "gasta"-, así que
+                # engancha aquí también el parcheo del cartel: si acaba de
+                # sustituir un movimiento, el cartel para esta especie
+                # probablemente también quedó desactualizado.
+                if substituted_here and self._xy_levelup_moves_last_written is not None:
+                    self._sync_xy_levelup_announcement_cache(
+                        game, {species_id: role}, self._xy_levelup_moves_last_written,
+                    )
+            self._request_oras_live_auto_apply_since(pending_ids_before)
+        except Exception as exc:
+            self._registrar_intento_vivo("xy_levelup_backup_sync_error", error=str(exc))
+
+    def _sync_xy_levelup_announcement_cache(
+        self, game: SaveGameData | None, roles_by_species: dict, patched_blob: bytes,
+    ) -> None:
+        """Parchea en vivo el búfer de RAM que decide qué anuncia el diálogo.
+
+        Mirror de ``_sync_usum_levelup_announcement_cache``/
+        ``_sync_sm_levelup_announcement_cache`` (mismo módulo
+        ``usum_levelup_announcement_cache.py``, sin nada específico de
+        Gen 7). Una diferencia real: en Gen 7 la base de la party hay que
+        calibrarla en cada proceso (``reader._scan_reference_window``, la
+        dirección se mueve). En X/Y la base es una constante ya demostrada
+        físicamente (``XY_PARTY_ADDRESS``, ver ``xy_live.py``), así que no
+        hace falta ningún paso de calibración: se usa directamente como
+        centro de la ventana de búsqueda del búfer de anuncio.
+
+        2026-09-05, validado físicamente contra la partida real del
+        usuario (Zigzagoon, Asesino→Mago): el archivo del mod ya quedaba
+        correcto (Enfoque A) y la red de seguridad ya garantizaba el
+        movimiento final (Enfoque B, ``_sync_xy_levelup_moves_backup`` —
+        confirmado en el log, sustituyó Golpe Cabeza por Onda Certera en
+        235ms), pero el cartel "¡X ha aprendido Y!" seguía anunciando el
+        nombre viejo durante ese instante porque el juego ya lo había
+        decodificado en un búfer aparte antes de que la sustitución
+        llegara. Esto cierra ese hueco parcheando también ese búfer.
+
+        2026-09-05, QUINTO bug real: el log de USUM del día anterior (su
+        propia validación física, ya dada por buena) muestra el MISMO
+        patrón que aquí se creyó "imposible de ganar" -un barrido de 5
+        especies tardando 14-15 segundos-, solo que allí nunca chocó con
+        un aprendizaje real porque el usuario no encadenó cambio de rol +
+        caramelo tan rápido como en X/Y. La carrera contra el cartel del
+        juego SIEMPRE fue así de ajustada; lo que faltaba no era ganarla
+        más rápido, sino no TIRAR una petición al suelo cuando llega
+        mientras otra ya está en curso -exactamente lo que le pasó al
+        aviso urgente de Zigzagoon, cancelado en silencio por el barrido
+        preventivo de un cambio de rol segundos antes-. Por eso el candado
+        ya no descarta: la petición que llega ocupado se guarda en
+        ``_xy_levelup_announcement_cache_pending`` y el propio hilo la
+        recoge en cuanto termina su vuelta actual, en vez de perderla.
+        """
+        if (
+            getattr(self.save_engine, "key", "") != "xy"
+            or game is None
+            or not roles_by_species
+        ):
+            return
+        if getattr(self, "_xy_levelup_announcement_cache_running", False):
+            pending = dict(getattr(self, "_xy_levelup_announcement_cache_pending", None) or {})
+            pending.update(roles_by_species)
+            self._xy_levelup_announcement_cache_pending = pending
+            self._xy_levelup_announcement_cache_pending_blob = patched_blob
+            return
+        self._xy_levelup_announcement_cache_pending = None
+        self._xy_levelup_announcement_cache_pending_blob = None
+
+        def _targets_for(roles: dict, blob: bytes) -> list[tuple[tuple, dict[object, int]]]:
+            entries_by_species_patched = xy_levelup_moves_mod.parse_levelup_garc(blob)
+            targets: list[tuple[tuple, dict[object, int]]] = []
+            for species_id in roles:
+                vanilla_entries = (self._xy_levelup_moves_vanilla_entries or {}).get(species_id)
+                patched_entries = entries_by_species_patched.get(species_id)
+                if not vanilla_entries or not patched_entries:
+                    continue
+                move_ids_by_key = {key: int(move_id) for move_id, _level, key in patched_entries}
+                targets.append((vanilla_entries, move_ids_by_key))
+            return targets
+
+        def worker() -> None:
+            from .azahar_rpc import AzaharRPCClient
+            from .xy_live import (
+                XY_ANNOUNCEMENT_CACHE_SCAN_SPAN, XY_PARTY_ADDRESS, XY_TITLE_IDS,
+            )
+            from .win_process_memory import WindowsProcessMemory
+            from .usum_levelup_announcement_cache import patch_species_announcement_cache
+
+            current_roles, current_blob = roles_by_species, patched_blob
+            try:
+                while True:
+                    try:
+                        targets = _targets_for(current_roles, current_blob)
+                    except Exception as exc:
+                        self._registrar_intento_vivo(
+                            "xy_levelup_announcement_cache_error", error=str(exc),
+                        )
+                        targets = []
+                    if targets:
+                        with AzaharRPCClient() as client:
+                            xy_processes = [
+                                process for process in client.process_list()
+                                if int(process.title_id) in XY_TITLE_IDS
+                            ]
+                            if len(xy_processes) == 1:
+                                client.set_process(xy_processes[0].process_id)
+                                wpm = WindowsProcessMemory()
+                                windows_processes = wpm.list_azahar_processes()
+                                total_patched = 0
+                                for windows_process in windows_processes:
+                                    handle = wpm.open_process(windows_process.pid)
+                                    try:
+                                        for vanilla_entries, move_ids_by_key in targets:
+                                            total_patched += patch_species_announcement_cache(
+                                                client, wpm, handle,
+                                                party_base=XY_PARTY_ADDRESS,
+                                                entries=vanilla_entries,
+                                                move_ids_by_key=move_ids_by_key,
+                                                scan_span=XY_ANNOUNCEMENT_CACHE_SCAN_SPAN,
+                                            )
+                                    finally:
+                                        wpm.close_process(handle)
+                                if total_patched:
+                                    self._registrar_intento_vivo(
+                                        "xy_levelup_announcement_cache_parcheado",
+                                        especies=len(targets), copias=total_patched,
+                                    )
+                    pending = self._xy_levelup_announcement_cache_pending
+                    pending_blob = self._xy_levelup_announcement_cache_pending_blob
+                    self._xy_levelup_announcement_cache_pending = None
+                    self._xy_levelup_announcement_cache_pending_blob = None
+                    if not pending:
+                        break
+                    current_roles = pending
+                    current_blob = pending_blob if pending_blob is not None else current_blob
+            except Exception as exc:
+                self._registrar_intento_vivo("xy_levelup_announcement_cache_error", error=str(exc))
+            finally:
+                self._xy_levelup_announcement_cache_running = False
+
+        self._xy_levelup_announcement_cache_running = True
+        threading.Thread(target=worker, daemon=True, name="RoleRunXyAnnouncementCache").start()
+
+    def _xy_levelup_usable_move_ids(self) -> set[int]:
+        return (
+            set(int(move_id) for move_id in self.engine.allowed_move_ids)
+            if self.engine.allowed_move_ids is not None
+            else set(range(1, XY_MAX_MOVE_ID + 1))
+        )
+
+    def _append_xy_levelup_history_entries(
+        self, identity: str, pokemon: SavePokemon, species_id: int,
+        entries: tuple, role: str, *, pre_capture: bool,
+    ) -> bool:
+        """Mirror de ``_append_oras_levelup_history_entries``."""
+        if not entries:
+            return False
+        # 06-09-2026: se calcula sobre la tabla COMPLETA de la especie, no
+        # sobre el subconjunto recién cruzado. `compute_species_patch` excluye
+        # los movimientos que la especie ya tiene, así que un subconjunto da
+        # otro conjunto de exclusiones y elige OTRO sustituto: el historial
+        # acababa registrando un movimiento distinto del que el juego enseña
+        # de verdad (bug reportado en quinta; medido: 13 de 14 entradas de
+        # Patrat discrepaban). Mismo cálculo que el parche, por construcción.
+        completa = (self._xy_levelup_moves_vanilla_entries or {}).get(int(species_id)) or entries
+        patch = xy_levelup_moves_mod.compute_species_patch(
+            completa, role, species_id=species_id,
+            pools=self.engine.pools, damage_classes=self.engine.damage_classes,
+            speed_status_moves=self.engine.speed_status_moves,
+            self_healing_damage_moves=self.engine.self_healing_damage_moves,
+            usable_move_ids=self._xy_levelup_usable_move_ids(),
+        )
+        history = self.project.oras_levelup_move_history.setdefault(identity, [])
+        seen = {(int(item.get("level", -1)), int(item.get("move_id", -1))) for item in history}
+        changed = False
+        for vanilla_move_id, entry_level, offset in entries:
+            actual_move_id = int(patch.get(offset, vanilla_move_id))
+            key = (int(entry_level), actual_move_id)
+            if key in seen:
+                continue
+            history.append({
+                "level": int(entry_level),
+                "move_id": actual_move_id,
+                "role": str(role),
+                "species_id": species_id,
+                "nickname": str(pokemon.nickname or pokemon.species),
+                "recorded_at": datetime.now().isoformat(timespec="seconds"),
+                "pre_capture": bool(pre_capture),
+            })
+            seen.add(key)
+            changed = True
+        return changed
+
+    def _purge_xy_levelup_history_above_level(self, identity: str, level: int) -> bool:
+        """Mirror de ``_purge_oras_levelup_history_above_level``."""
+        history = self.project.oras_levelup_move_history.get(identity)
+        if not history:
+            return False
+        kept = [item for item in history if int(item.get("level", 0)) <= level]
+        if len(kept) == len(history):
+            return False
+        if kept:
+            self.project.oras_levelup_move_history[identity] = kept
+        else:
+            del self.project.oras_levelup_move_history[identity]
+        return True
+
+    @perf.timed("ui.record_xy_levelup_move_history")
+    def _record_xy_levelup_move_history(self, game: SaveGameData) -> None:
+        """Mirror de ``_record_oras_levelup_move_history``."""
+        if (
+            getattr(self.save_engine, "key", "") != "xy"
+            or self.project is None
+            or self._xy_levelup_moves_vanilla_entries is None
+        ):
+            return
+        self._xy_levelup_species_leveled_this_tick = set()
+        try:
+            changed = False
+            for pokemon in game.party:
+                identity = f"{int(pokemon.pid or 0)}:{int(pokemon.tid or 0)}:{int(pokemon.sid or 0)}"
+                level = int(pokemon.level or 0)
+                previous = self._xy_levelup_history_last_levels.get(identity)
+                self._xy_levelup_history_last_levels[identity] = level
+                species_id = int(pokemon.species_id)
+                entries = self._xy_levelup_moves_vanilla_entries.get(species_id)
+                if level > 0 and self._purge_xy_levelup_history_above_level(identity, level):
+                    changed = True
+                if previous is None:
+                    if identity not in self.project.oras_levelup_move_history and entries:
+                        pre_capture = tuple(entry for entry in entries if entry[1] <= level)
+                        if self._append_xy_levelup_history_entries(
+                            identity, pokemon, species_id, pre_capture, "SIN ROL",
+                            pre_capture=True,
+                        ):
+                            changed = True
+                    continue
+                if level <= previous or level <= 0 or not entries:
+                    continue
+                crossed = tuple(entry for entry in entries if previous < entry[1] <= level)
+                if not crossed:
+                    continue
+                # 2026-09-05: marca esta especie como "acaba de cruzar un
+                # nivel de aprendizaje" -ver ``_sync_xy_levelup_moves_mod``,
+                # que usa esto para disparar el parcheo de RAM del cartel
+                # incluso cuando el archivo del mod no cambió esta vuelta.
+                self._xy_levelup_species_leveled_this_tick.add(species_id)
+                role, _symbol = self._effective_role(pokemon)
+                if self._append_xy_levelup_history_entries(
+                    identity, pokemon, species_id, crossed, role, pre_capture=False,
+                ):
+                    changed = True
+            if changed:
+                self.project_service.save(self.project)
+        except Exception as exc:
+            self._registrar_intento_vivo("xy_levelup_history_error", error=str(exc))
+
+    def _revert_xy_levelup_moves_mod(self) -> None:
+        """Mirror de ``_revert_oras_levelup_moves_mod``."""
+        if (
+            self._xy_levelup_moves_vanilla is None
+            or self._xy_levelup_moves_title_id is None
+            or self._xy_levelup_moves_azahar_root is None
+        ):
+            return
+        try:
+            xy_levelup_moves_mod.write_blob(
+                self._xy_levelup_moves_azahar_root,
+                self._xy_levelup_moves_title_id,
+                self._xy_levelup_moves_vanilla,
+                expected_size=len(self._xy_levelup_moves_vanilla),
+            )
+        except Exception:
+            return
+
+    def _ensure_usum_levelup_moves_registered(
+        self, rom_path: Path, azahar_root: Path | None, process_name: str | None,
+    ) -> None:
+        """Prepara el mod de aprendizajes por nivel para la ROM USUM activa.
+
+        Análogo a ``_ensure_oras_levelup_moves_registered``, con una pieza
+        extra: el GARC de aprendizajes de USUM indexa por ``personal_id``
+        (formas incluidas), no por species_id directo — se calcula también
+        aquí, una sola vez, el mapa ``(species_id, form) -> personal_id``
+        desde la tabla Personal efectiva (confirmado el 2026-09-04 contra la
+        ROM real del usuario: Venusaur/Mega Venusaur decodifican listas de
+        aprendizajes completas usando este mismo mapa).
+
+        A diferencia de ORAS (que ya recibe ``azahar_root`` de un
+        ``ORASRomSource`` descubierto de antemano), el camino de USUM
+        (``_load_usum_rom_tm_source``) no encadena esa raíz — si no se pasa
+        una explícita, se autodescubre aquí con ``azahar_user_roots()``
+        (misma función que ya usan ``load_usum_levelup_moves_blob``/
+        ``usum_personal_id_map_for_rom`` para localizar actualizaciones).
+
+        2026-09-04, bug real: con Azahar Y AzaharPlus instalados a la vez
+        (confirmado en la máquina del usuario), ``azahar_user_roots()``
+        antepone "Azahar" porque está hardcodeado antes que el descubrimiento
+        genérico — exactamente el fallo que ``discover_azahar_oras_source``
+        ya documenta y evita para ORAS ("se prefiere la carpeta que modificó
+        su qt-config.ini más recientemente: es la que de verdad se está
+        usando ahora"). Tomar ``discovered[0]`` a ciegas escribía el mod en
+        el fork equivocado, sin ningún error — el mod nunca lo veía la
+        instancia realmente en marcha. Mismo criterio aquí.
+        """
+        if getattr(self.save_engine, "key", "") != "usum":
+            return
+        if azahar_root is None:
+            discovered = azahar_user_roots()
+            azahar_root = max(
+                discovered,
+                key=lambda root: (root / "config" / "qt-config.ini").stat().st_mtime
+                if (root / "config" / "qt-config.ini").is_file() else -1.0,
+                default=None,
+            )
+        if azahar_root is None:
+            return
+        try:
+            with perf.span("ui.ensure_usum_levelup_moves.load_blob"):
+                blob, title_id = load_usum_levelup_moves_blob(
+                    rom_path, process_name=process_name, azahar_root=azahar_root,
+                )
+            with perf.span("ui.ensure_usum_levelup_moves.personal_id_map"):
+                personal_id_map = usum_personal_id_map_for_rom(rom_path, azahar_root=azahar_root)
+            with perf.span("ui.ensure_usum_levelup_moves.ensure_registered"):
+                estado = usum_levelup_moves_mod.ensure_registered(azahar_root, title_id, blob)
+        except Exception as exc:
+            self._registrar_intento_vivo(
+                "usum_levelup_registro_error", error=str(exc), rom_path=str(rom_path),
+                azahar_root=str(azahar_root),
+            )
+            return
+        self._usum_levelup_moves_vanilla = blob
+        self._usum_levelup_moves_title_id = title_id
+        self._usum_levelup_moves_azahar_root = Path(azahar_root)
+        self._usum_levelup_moves_last_written = None
+        self._usum_levelup_moves_last_roles_key = None
+        self._usum_levelup_personal_id_map = personal_id_map
+        self._usum_levelup_moves_vanilla_entries = usum_levelup_moves_mod.parse_levelup_garc(blob)
+        self._registrar_intento_vivo(
+            "usum_levelup_registro_ok", estado=estado, title_id=f"{title_id:016X}",
+            azahar_root=str(azahar_root), blob_size=len(blob),
+            especies_con_forma=sum(1 for k in personal_id_map if k[1] != 0),
+        )
+
+    @perf.timed("ui.sync_usum_levelup_moves_mod")
+    def _sync_usum_levelup_moves_mod(self, game: SaveGameData | None) -> None:
+        """Ajusta al rol el mod de aprendizajes por nivel de USUM, si aplica.
+
+        Análogo a ``_sync_oras_levelup_moves_mod`` — misma caché por
+        roles_key para no reescribir en cada sondeo, mismo criterio de "solo
+        se escribe lo que cambia". La única diferencia real: la clave hacia
+        ``entries_by_species``/``roles_by_species`` es el ``personal_id``
+        traducido de ``(pokemon.species_id, pokemon.form)``, no el
+        species_id directo — un Pokémon cuya forma no está en el mapa
+        (nunca debería pasar con una tabla Personal válida) se ignora sin
+        romper el resto del sondeo.
+        """
+        if (
+            getattr(self.save_engine, "key", "") != "usum"
+            or game is None
+            or self._usum_levelup_moves_vanilla is None
+            or self._usum_levelup_moves_title_id is None
+            or self._usum_levelup_moves_azahar_root is None
+            or self._usum_levelup_personal_id_map is None
+        ):
+            return
+        self._record_usum_levelup_move_history(game)
+        try:
+            roles_by_personal_id: dict[int, str] = {}
+            for pokemon in game.party:
+                role, _symbol = self._effective_role(pokemon)
+                if role in {"SIN ROL", "Líbero", ""}:
+                    continue
+                personal_id = self._usum_levelup_personal_id_for(
+                    int(pokemon.species_id), int(getattr(pokemon, "form", 0) or 0)
+                )
+                if personal_id is None:
+                    continue
+                roles_by_personal_id[personal_id] = role
+            roles_key = (
+                frozenset(roles_by_personal_id.items()),
+                self.engine.allowed_move_ids is not None,
+            )
+            if roles_key == self._usum_levelup_moves_last_roles_key:
+                return
+            # A diferencia de ORAS, deliberadamente sin red de seguridad de
+            # rango fijo aquí: no hay un "USUM_MAX_MOVE_ID" ya demostrado en
+            # este proyecto (ORAS/XY sí lo tienen, verificados contra sus
+            # propias ROMs), y USUM tiene movimientos exclusivos (p. ej. los
+            # de las formas Ultra de Necrozma) cerca del límite superior de
+            # Gen 7 — inventar un número sin confirmarlo contra la ROM real
+            # arriesga excluirlos por error. Mientras `allowed_move_ids` no
+            # esté poblado (ventana breve, normalmente ya lo está), no se
+            # restringe por rango, solo por los pools de rol ya curados.
+            usable_move_ids = (
+                set(int(move_id) for move_id in self.engine.allowed_move_ids)
+                if self.engine.allowed_move_ids is not None
+                else None
+            )
+            patched = usum_levelup_moves_mod.build_party_patched_blob(
+                self._usum_levelup_moves_vanilla, roles_by_personal_id,
+                pools=self.engine.pools,
+                damage_classes=self.engine.damage_classes,
+                speed_status_moves=self.engine.speed_status_moves,
+                self_healing_damage_moves=self.engine.self_healing_damage_moves,
+                usable_move_ids=usable_move_ids,
+                entries_by_species=self._usum_levelup_moves_vanilla_entries,
+            )
+            if patched == self._usum_levelup_moves_last_written:
+                self._usum_levelup_moves_last_roles_key = roles_key
+                return
+            usum_levelup_moves_mod.write_blob(
+                self._usum_levelup_moves_azahar_root,
+                self._usum_levelup_moves_title_id,
+                patched,
+                expected_size=len(self._usum_levelup_moves_vanilla),
+            )
+            self._usum_levelup_moves_last_written = patched
+            self._usum_levelup_moves_last_roles_key = roles_key
+            self._registrar_intento_vivo(
+                "usum_levelup_sync_escrito", roles_by_personal_id=roles_by_personal_id,
+            )
+            self._sync_usum_levelup_announcement_cache(game, roles_by_personal_id, patched)
+        except Exception as exc:
+            self._registrar_intento_vivo("usum_levelup_sync_error", error=str(exc))
+            return
+
+    def _sync_usum_levelup_moves_backup(self, game: SaveGameData | None) -> None:
+        """Aprendizajes por rol en USUM: red de seguridad tras el parche proactivo.
+
+        2026-09-04, validado en la partida real del usuario: a diferencia
+        de ORAS (relee ``a/1/9/1`` sin caché en cada petición del juego),
+        USUM puede enseñar un movimiento que ya no es ni el vainilla ni el
+        sustituto recién calculado — el que tenía cacheado de ANTES de un
+        cambio de rol reciente (demostrado con Registeel: venía de Prisma,
+        cambiado a Mago, y aprendió Somnífero — el sustituto de PRISMA, ni
+        vainilla ni el de Mago). Un primer diseño (calcado de
+        ``_sync_bdsp_levelup_moves``, que predice de antemano el
+        movimiento vainilla exacto y espera a verlo aparecer) no cubre este
+        caso: ni el vainilla ni el sustituto esperado llegan a aparecer
+        nunca, así que la sustitución se queda esperando para siempre.
+
+        Este diseño es más simple y robusto: en vez de predecir qué
+        aprenderá el Pokémon, observa qué movimiento NUEVO aparece de
+        verdad en sus 4 huecos (comparado contra el sondeo anterior) y
+        comprueba si es compatible con el rol ACTUAL en ese mismo
+        instante — sin importar si es el vainilla, un sustituto de un rol
+        viejo, o cualquier otra cosa. Si no lo es, lo sustituye ahí mismo
+        (``compute_move_substitute``) reutilizando el mismo camino
+        transaccional que cualquier cambio de movimiento confirmado por el
+        usuario (``PendingChange`` + ``_request_oras_live_auto_apply_since``
+        — ``USUMLiveWriter._replace_move`` ya sabe aplicar un
+        ``PendingChange``, la misma pieza que ya usa la enseñanza de MT).
+
+        No registra historial aquí: ``_record_usum_levelup_move_history``
+        (llamado antes, en ``_sync_usum_levelup_moves_mod``) ya lo hace en
+        el instante del cruce de nivel, con el mismo criterio "aunque el
+        juego no lo haya enseñado, el movimiento de rol debe seguir
+        apareciendo" que ya usa ORAS/BDSP.
+        """
+        if (
+            getattr(self.save_engine, "key", "") != "usum"
+            or game is None
+            or self.project is None
+        ):
+            return
+        try:
+            pending_ids_before = {id(change) for change in self.run.pending_changes}
+            usable_move_ids = self._usum_levelup_usable_move_ids()
+            for pokemon in game.party:
+                identity = f"{int(pokemon.pid or 0)}:{int(pokemon.tid or 0)}:{int(pokemon.sid or 0)}"
+                level = int(pokemon.level or 0)
+                species_id = int(pokemon.species_id)
+                form = int(getattr(pokemon, "form", 0) or 0)
+                current_ids = [int(move_id or 0) for move_id in pokemon.move_ids[:4]]
+                previous_ids = self._usum_levelup_backup_known_moves.get(identity)
+                self._usum_levelup_backup_known_moves[identity] = list(current_ids)
+                if previous_ids is None:
+                    continue
+                new_ids = [mid for mid in current_ids if mid > 0 and mid not in previous_ids]
+                if not new_ids:
+                    continue
+                role, _symbol = self._effective_role(pokemon)
+                personal_id = self._usum_levelup_personal_id_for(species_id, form)
+                pokemon_identity = self._pokemon_identity(pokemon)
+                for new_move_id in new_ids:
+                    substitute = compute_move_substitute(
+                        new_move_id, role,
+                        species_id=personal_id if personal_id is not None else species_id,
+                        level=level,
+                        pools=self.engine.pools, damage_classes=self.engine.damage_classes,
+                        speed_status_moves=self.engine.speed_status_moves,
+                        self_healing_damage_moves=self.engine.self_healing_damage_moves,
+                        exclude=set(current_ids) - {new_move_id},
+                        usable_move_ids=usable_move_ids,
+                    )
+                    if substitute is None:
+                        continue
+                    move_slot = current_ids.index(new_move_id) + 1
+                    move_name = str(self.engine.move(new_move_id).get("name_es") or f"Movimiento #{new_move_id}")
+                    substitute_name = str(self.engine.move(substitute).get("name_es") or f"Movimiento #{substitute}")
+                    change = PendingChange(
+                        role=role,
+                        pokemon_slot=pokemon.slot,
+                        pokemon=pokemon.nickname or pokemon.species,
+                        species=pokemon.species,
+                        move_slot=move_slot,
+                        old_move=move_name,
+                        old_move_id=new_move_id,
+                        new_move=substitute_name,
+                        new_move_id=substitute,
+                        pokemon_identity=pokemon_identity,
+                    )
+                    self.run.pending_changes = [
+                        existing for existing in self.run.pending_changes
+                        if not (
+                            isinstance(existing, (PendingChange, PendingTMTeach))
+                            and getattr(existing, "move_slot", 0) == change.move_slot
+                            and getattr(existing, "pokemon_identity", "") == pokemon_identity
+                        )
+                    ]
+                    self.run.pending_changes.append(change)
+                    self._registrar_intento_vivo(
+                        "usum_levelup_backup_sustitucion_encolada",
+                        identidad=identity, hueco=move_slot,
+                        aprendido=new_move_id, sustituto=substitute, rol=str(role),
+                    )
+            self._request_oras_live_auto_apply_since(pending_ids_before)
+        except Exception as exc:
+            self._registrar_intento_vivo("usum_levelup_backup_sync_error", error=str(exc))
+
+    def _sync_usum_levelup_announcement_cache(
+        self, game: SaveGameData | None, roles_by_personal_id: dict, patched_blob: bytes,
+    ) -> None:
+        """Parchea en vivo el búfer de RAM que decide qué anuncia el diálogo.
+
+        2026-09-04, validado físicamente contra la partida real del
+        usuario (Eevee, Asesino→Mago→Asesino): el diálogo "X quiere
+        aprender Y" de USUM no relee ``a/0/1/3`` en cada aprendizaje — el
+        juego decodifica la tabla de cada Pokémon UNA VEZ en un búfer de
+        trabajo (pares movimiento+nivel), y ese búfer es lo que decide el
+        anuncio hasta que se reconstruye (al cargar la escena, o al abrir
+        la ficha del Pokémon — ninguna de las dos cosas depende de
+        RoleRun). Sin esto, el archivo ya queda correcto (Enfoque A) y la
+        red de seguridad ya garantiza el resultado final (Enfoque B), pero
+        el TEXTO del diálogo puede seguir mostrando el rol anterior hasta
+        que el jugador haga algo ajeno a RoleRun.
+
+        Ver ``app/usum_levelup_announcement_cache.py`` para el porqué
+        completo de la técnica de localización (ancla por niveles +
+        traducción a direcciones reales de Windows, necesaria porque
+        Azahar rechaza en silencio las escrituras RPC en este rango de
+        memoria). Aquí solo se orquesta: qué especies tocar y con qué
+        movimientos, reutilizando el propio ``self.usum_live_reader`` ya
+        instanciado para el resto de la app.
+
+        Se ejecuta en un hilo aparte (localizar + traducir + escribir en
+        memoria de otro proceso puede tardar 1-2 s por especie) y nunca
+        deja una excepción escapar hacia la interfaz: si algo falla aquí,
+        el archivo y la red de seguridad ya garantizan que el Pokémon
+        termine con el movimiento correcto de todos modos — esto solo
+        adelanta que el propio diálogo ya lo anuncie bien.
+        """
+        if (
+            getattr(self.save_engine, "key", "") != "usum"
+            or game is None
+            or not roles_by_personal_id
+            or not getattr(self, "usum_live_reader", None)
+        ):
+            return
+        # 2026-09-04, lag general reportado por el usuario tras probar SM: cada
+        # especie puede tardar 1-2s (localizar en RAM huésped + escanear la
+        # región FCRAM real, ~decenas de MB, para traducir a Windows) y ese
+        # escaneo mantiene el GIL ocupado en ráfagas -no es una llamada de red
+        # que lo libere-. Sin este candado, un cambio de rol seguido de otro
+        # (o el sondeo periódico) apilaba varios hilos haciendo esas ráfagas a
+        # la vez, y la interfaz entera se sentía lenta mientras competían por
+        # CPU. Con esto, como mucho hay UNO en curso por juego: el siguiente
+        # sondeo que detecte un cambio ya lo recogerá cuando este termine. Solo
+        # se marca "en curso" justo antes de lanzar el hilo -no aquí arriba-,
+        # para que un `return` temprano (nada que parchear) no lo deje
+        # bloqueado para siempre.
+        if getattr(self, "_usum_levelup_announcement_cache_running", False):
+            return
+        try:
+            entries_by_species_patched = usum_levelup_moves_mod.parse_levelup_garc(patched_blob)
+        except Exception as exc:
+            self._registrar_intento_vivo("usum_levelup_announcement_cache_error", error=str(exc))
+            return
+        targets: list[tuple[tuple, dict[object, int]]] = []
+        for personal_id in roles_by_personal_id:
+            vanilla_entries = (self._usum_levelup_moves_vanilla_entries or {}).get(personal_id)
+            patched_entries = entries_by_species_patched.get(personal_id)
+            if not vanilla_entries or not patched_entries:
+                continue
+            move_ids_by_key = {key: int(move_id) for move_id, _level, key in patched_entries}
+            targets.append((vanilla_entries, move_ids_by_key))
+        if not targets:
+            return
+        witnesses = [pokemon for pokemon in game.party if int(getattr(pokemon, "species_id", 0)) > 0][:3]
+        if not witnesses:
+            return
+        reader = self.usum_live_reader
+
+        def worker() -> None:
+            try:
+                from types import SimpleNamespace
+
+                from .azahar_rpc import AzaharRPCClient
+                from .usum_live import USUM_TITLE_IDS
+                from .win_process_memory import WindowsProcessMemory
+                from .usum_levelup_announcement_cache import patch_species_announcement_cache
+
+                with AzaharRPCClient() as client:
+                    usum_processes = [
+                        process for process in client.process_list()
+                        if int(process.title_id) in USUM_TITLE_IDS
+                    ]
+                    if len(usum_processes) != 1:
+                        return
+                    client.set_process(usum_processes[0].process_id)
+                    located = reader._scan_reference_window(client, SimpleNamespace(party=witnesses))
+                    if located is None:
+                        return
+                    party_base, _party = located
+
+                    wpm = WindowsProcessMemory()
+                    windows_processes = wpm.list_azahar_processes()
+                    if not windows_processes:
+                        return
+                    # Puede haber más de un proceso "azahar.exe" (procesos
+                    # auxiliares del propio emulador, no instancias
+                    # distintas, confirmado 2026-09-04: uno de los dos nunca
+                    # tiene la región FCRAM en cuestión) — se prueba cada
+                    # uno; el que no la tenga simplemente no encuentra nada,
+                    # sin ambigüedad real: cada escritura ya exige releer y
+                    # confirmar el contenido exacto antes de tocar nada (ver
+                    # ``patch_species_announcement_cache``).
+                    total_patched = 0
+                    for windows_process in windows_processes:
+                        handle = wpm.open_process(windows_process.pid)
+                        try:
+                            for vanilla_entries, move_ids_by_key in targets:
+                                total_patched += patch_species_announcement_cache(
+                                    client, wpm, handle,
+                                    party_base=party_base,
+                                    entries=vanilla_entries,
+                                    move_ids_by_key=move_ids_by_key,
+                                )
+                        finally:
+                            wpm.close_process(handle)
+                    if total_patched:
+                        self._registrar_intento_vivo(
+                            "usum_levelup_announcement_cache_parcheado",
+                            especies=len(targets), copias=total_patched,
+                        )
+            except Exception as exc:
+                self._registrar_intento_vivo("usum_levelup_announcement_cache_error", error=str(exc))
+            finally:
+                self._usum_levelup_announcement_cache_running = False
+
+        self._usum_levelup_announcement_cache_running = True
+        threading.Thread(target=worker, daemon=True, name="RoleRunUsumAnnouncementCache").start()
+
+    def _usum_levelup_usable_move_ids(self) -> set[int] | None:
+        return (
+            set(int(move_id) for move_id in self.engine.allowed_move_ids)
+            if self.engine.allowed_move_ids is not None
+            else None
+        )
+
+    def _usum_levelup_personal_id_for(self, species_id: int, form: int) -> int | None:
+        """``form`` cae a la base si la forma exacta no existe en el mapa.
+
+        2026-09-04: el byte de forma leído en vivo (``usum_live.py``) llegó a
+        mostrar valores no nulos para especies sin ninguna forma alternativa
+        real (confirmado contra la tabla Personal efectiva) — un Pokémon del
+        equipo/PC nunca puede estar realmente en una forma de combate (Mega,
+        etc.) fuera de un combate, así que su aprendizaje por nivel es
+        siempre el de la forma base independientemente de ese byte.
+        """
+        if self._usum_levelup_personal_id_map is None:
+            return None
+        species_id = int(species_id)
+        personal_id = self._usum_levelup_personal_id_map.get((species_id, int(form)))
+        if personal_id is not None:
+            return personal_id
+        return self._usum_levelup_personal_id_map.get((species_id, 0))
+
+    def _ensure_sm_levelup_moves_registered(
+        self, rom_path: Path, azahar_root: Path | None, process_name: str | None,
+    ) -> None:
+        """Prepara el mod de aprendizajes por nivel para la ROM SM activa.
+
+        Mirror exacto de ``_ensure_usum_levelup_moves_registered``: SM
+        comparte el mismo motor/generación que USUM, confirmado el
+        2026-09-04 contra la ROM real del usuario (``a/0/1/3``, GARC válido,
+        961 ficheros indexados por ``personal_id`` igual que USUM).
+        """
+        if getattr(self.save_engine, "key", "") != "sm":
+            return
+        if azahar_root is None:
+            discovered = azahar_user_roots()
+            azahar_root = max(
+                discovered,
+                key=lambda root: (root / "config" / "qt-config.ini").stat().st_mtime
+                if (root / "config" / "qt-config.ini").is_file() else -1.0,
+                default=None,
+            )
+        if azahar_root is None:
+            return
+        try:
+            with perf.span("ui.ensure_sm_levelup_moves.load_blob"):
+                blob, title_id = load_sm_levelup_moves_blob(
+                    rom_path, process_name=process_name, azahar_root=azahar_root,
+                )
+            with perf.span("ui.ensure_sm_levelup_moves.personal_id_map"):
+                personal_id_map = sm_personal_id_map_for_rom(rom_path, azahar_root=azahar_root)
+            with perf.span("ui.ensure_sm_levelup_moves.ensure_registered"):
+                estado = sm_levelup_moves_mod.ensure_registered(azahar_root, title_id, blob)
+        except Exception as exc:
+            self._registrar_intento_vivo(
+                "sm_levelup_registro_error", error=str(exc), rom_path=str(rom_path),
+                azahar_root=str(azahar_root),
+            )
+            return
+        self._sm_levelup_moves_vanilla = blob
+        self._sm_levelup_moves_title_id = title_id
+        self._sm_levelup_moves_azahar_root = Path(azahar_root)
+        self._sm_levelup_moves_last_written = None
+        self._sm_levelup_moves_last_roles_key = None
+        self._sm_levelup_personal_id_map = personal_id_map
+        self._sm_levelup_moves_vanilla_entries = sm_levelup_moves_mod.parse_levelup_garc(blob)
+        self._registrar_intento_vivo(
+            "sm_levelup_registro_ok", estado=estado, title_id=f"{title_id:016X}",
+            azahar_root=str(azahar_root), blob_size=len(blob),
+            especies_con_forma=sum(1 for k in personal_id_map if k[1] != 0),
+        )
+
+    @perf.timed("ui.sync_sm_levelup_moves_mod")
+    def _sync_sm_levelup_moves_mod(self, game: SaveGameData | None) -> None:
+        """Ajusta al rol el mod de aprendizajes por nivel de SM, si aplica.
+
+        Mirror exacto de ``_sync_usum_levelup_moves_mod``.
+        """
+        if (
+            getattr(self.save_engine, "key", "") != "sm"
+            or game is None
+            or self._sm_levelup_moves_vanilla is None
+            or self._sm_levelup_moves_title_id is None
+            or self._sm_levelup_moves_azahar_root is None
+            or self._sm_levelup_personal_id_map is None
+        ):
+            return
+        self._record_sm_levelup_move_history(game)
+        try:
+            roles_by_personal_id: dict[int, str] = {}
+            for pokemon in game.party:
+                role, _symbol = self._effective_role(pokemon)
+                if role in {"SIN ROL", "Líbero", ""}:
+                    continue
+                personal_id = self._sm_levelup_personal_id_for(
+                    int(pokemon.species_id), int(getattr(pokemon, "form", 0) or 0)
+                )
+                if personal_id is None:
+                    continue
+                roles_by_personal_id[personal_id] = role
+            roles_key = (
+                frozenset(roles_by_personal_id.items()),
+                self.engine.allowed_move_ids is not None,
+            )
+            if roles_key == self._sm_levelup_moves_last_roles_key:
+                return
+            usable_move_ids = (
+                set(int(move_id) for move_id in self.engine.allowed_move_ids)
+                if self.engine.allowed_move_ids is not None
+                else None
+            )
+            patched = sm_levelup_moves_mod.build_party_patched_blob(
+                self._sm_levelup_moves_vanilla, roles_by_personal_id,
+                pools=self.engine.pools,
+                damage_classes=self.engine.damage_classes,
+                speed_status_moves=self.engine.speed_status_moves,
+                self_healing_damage_moves=self.engine.self_healing_damage_moves,
+                usable_move_ids=usable_move_ids,
+                entries_by_species=self._sm_levelup_moves_vanilla_entries,
+            )
+            if patched == self._sm_levelup_moves_last_written:
+                self._sm_levelup_moves_last_roles_key = roles_key
+                return
+            sm_levelup_moves_mod.write_blob(
+                self._sm_levelup_moves_azahar_root,
+                self._sm_levelup_moves_title_id,
+                patched,
+                expected_size=len(self._sm_levelup_moves_vanilla),
+            )
+            self._sm_levelup_moves_last_written = patched
+            self._sm_levelup_moves_last_roles_key = roles_key
+            self._registrar_intento_vivo(
+                "sm_levelup_sync_escrito", roles_by_personal_id=roles_by_personal_id,
+            )
+            self._sync_sm_levelup_announcement_cache(game, roles_by_personal_id, patched)
+        except Exception as exc:
+            self._registrar_intento_vivo("sm_levelup_sync_error", error=str(exc))
+            return
+
+    def _sync_sm_levelup_moves_backup(self, game: SaveGameData | None) -> None:
+        """Aprendizajes por rol en SM: red de seguridad tras el parche proactivo.
+
+        Mirror exacto de ``_sync_usum_levelup_moves_backup``: observa qué
+        movimiento NUEVO aparece de verdad en los 4 huecos (comparado contra
+        el sondeo anterior) y comprueba si es compatible con el rol ACTUAL
+        en ese instante, sin importar de dónde viniera. No registra
+        historial aquí: ``_record_sm_levelup_move_history`` (llamado antes,
+        en ``_sync_sm_levelup_moves_mod``) ya lo hace en el instante del
+        cruce de nivel.
+        """
+        if (
+            getattr(self.save_engine, "key", "") != "sm"
+            or game is None
+            or self.project is None
+        ):
+            return
+        try:
+            pending_ids_before = {id(change) for change in self.run.pending_changes}
+            usable_move_ids = self._sm_levelup_usable_move_ids()
+            for pokemon in game.party:
+                identity = f"{int(pokemon.pid or 0)}:{int(pokemon.tid or 0)}:{int(pokemon.sid or 0)}"
+                level = int(pokemon.level or 0)
+                species_id = int(pokemon.species_id)
+                form = int(getattr(pokemon, "form", 0) or 0)
+                current_ids = [int(move_id or 0) for move_id in pokemon.move_ids[:4]]
+                previous_ids = self._sm_levelup_backup_known_moves.get(identity)
+                self._sm_levelup_backup_known_moves[identity] = list(current_ids)
+                if previous_ids is None:
+                    continue
+                new_ids = [mid for mid in current_ids if mid > 0 and mid not in previous_ids]
+                if not new_ids:
+                    continue
+                role, _symbol = self._effective_role(pokemon)
+                personal_id = self._sm_levelup_personal_id_for(species_id, form)
+                pokemon_identity = self._pokemon_identity(pokemon)
+                for new_move_id in new_ids:
+                    substitute = compute_move_substitute(
+                        new_move_id, role,
+                        species_id=personal_id if personal_id is not None else species_id,
+                        level=level,
+                        pools=self.engine.pools, damage_classes=self.engine.damage_classes,
+                        speed_status_moves=self.engine.speed_status_moves,
+                        self_healing_damage_moves=self.engine.self_healing_damage_moves,
+                        exclude=set(current_ids) - {new_move_id},
+                        usable_move_ids=usable_move_ids,
+                    )
+                    if substitute is None:
+                        continue
+                    move_slot = current_ids.index(new_move_id) + 1
+                    move_name = str(self.engine.move(new_move_id).get("name_es") or f"Movimiento #{new_move_id}")
+                    substitute_name = str(self.engine.move(substitute).get("name_es") or f"Movimiento #{substitute}")
+                    change = PendingChange(
+                        role=role,
+                        pokemon_slot=pokemon.slot,
+                        pokemon=pokemon.nickname or pokemon.species,
+                        species=pokemon.species,
+                        move_slot=move_slot,
+                        old_move=move_name,
+                        old_move_id=new_move_id,
+                        new_move=substitute_name,
+                        new_move_id=substitute,
+                        pokemon_identity=pokemon_identity,
+                    )
+                    self.run.pending_changes = [
+                        existing for existing in self.run.pending_changes
+                        if not (
+                            isinstance(existing, (PendingChange, PendingTMTeach))
+                            and getattr(existing, "move_slot", 0) == change.move_slot
+                            and getattr(existing, "pokemon_identity", "") == pokemon_identity
+                        )
+                    ]
+                    self.run.pending_changes.append(change)
+                    self._registrar_intento_vivo(
+                        "sm_levelup_backup_sustitucion_encolada",
+                        identidad=identity, hueco=move_slot,
+                        aprendido=new_move_id, sustituto=substitute, rol=str(role),
+                    )
+            self._request_oras_live_auto_apply_since(pending_ids_before)
+        except Exception as exc:
+            self._registrar_intento_vivo("sm_levelup_backup_sync_error", error=str(exc))
+
+    def _sync_sm_levelup_announcement_cache(
+        self, game: SaveGameData | None, roles_by_personal_id: dict, patched_blob: bytes,
+    ) -> None:
+        """Parchea en vivo el búfer de RAM que decide qué anuncia el diálogo.
+
+        Mirror exacto de ``_sync_usum_levelup_announcement_cache``: mismo
+        mecanismo de RAM Gen 7 (``app/usum_levelup_announcement_cache.py``,
+        reutilizado tal cual, sin nada específico de USUM), solo cambia el
+        Title ID (``sm_live.SM_TITLE_IDS``) y el lector de party en vivo
+        (``self.sm_live_reader``).
+        """
+        if (
+            getattr(self.save_engine, "key", "") != "sm"
+            or game is None
+            or not roles_by_personal_id
+            or not getattr(self, "sm_live_reader", None)
+        ):
+            return
+        # Mismo candado que USUM (ver su comentario en
+        # ``_sync_usum_levelup_announcement_cache``, 2026-09-04): sin él, un
+        # cambio de rol seguido de otro apilaba varios hilos escaneando RAM a
+        # la vez y la interfaz entera se sentía lenta mientras competían por
+        # CPU. Solo se marca "en curso" justo antes de lanzar el hilo, para
+        # que un `return` temprano no lo deje bloqueado para siempre.
+        if getattr(self, "_sm_levelup_announcement_cache_running", False):
+            return
+        try:
+            entries_by_species_patched = sm_levelup_moves_mod.parse_levelup_garc(patched_blob)
+        except Exception as exc:
+            self._registrar_intento_vivo("sm_levelup_announcement_cache_error", error=str(exc))
+            return
+        targets: list[tuple[tuple, dict[object, int]]] = []
+        for personal_id in roles_by_personal_id:
+            vanilla_entries = (self._sm_levelup_moves_vanilla_entries or {}).get(personal_id)
+            patched_entries = entries_by_species_patched.get(personal_id)
+            if not vanilla_entries or not patched_entries:
+                continue
+            move_ids_by_key = {key: int(move_id) for move_id, _level, key in patched_entries}
+            targets.append((vanilla_entries, move_ids_by_key))
+        if not targets:
+            return
+        witnesses = [pokemon for pokemon in game.party if int(getattr(pokemon, "species_id", 0)) > 0][:3]
+        if not witnesses:
+            return
+        reader = self.sm_live_reader
+
+        def worker() -> None:
+            try:
+                from types import SimpleNamespace
+
+                from .azahar_rpc import AzaharRPCClient
+                from .sm_live import SM_TITLE_IDS
+                from .win_process_memory import WindowsProcessMemory
+                from .usum_levelup_announcement_cache import patch_species_announcement_cache
+
+                with AzaharRPCClient() as client:
+                    sm_processes = [
+                        process for process in client.process_list()
+                        if int(process.title_id) in SM_TITLE_IDS
+                    ]
+                    if len(sm_processes) != 1:
+                        return
+                    client.set_process(sm_processes[0].process_id)
+                    located = reader._scan_reference_window(client, SimpleNamespace(party=witnesses))
+                    if located is None:
+                        return
+                    party_base, _party = located
+
+                    wpm = WindowsProcessMemory()
+                    windows_processes = wpm.list_azahar_processes()
+                    if not windows_processes:
+                        return
+                    # Puede haber más de un proceso "azahar.exe" (procesos
+                    # auxiliares del propio emulador, no instancias
+                    # distintas — mismo hallazgo que USUM el 2026-09-04) —
+                    # se prueba cada uno; el que no tenga la región FCRAM en
+                    # cuestión simplemente no encuentra nada.
+                    total_patched = 0
+                    for windows_process in windows_processes:
+                        handle = wpm.open_process(windows_process.pid)
+                        try:
+                            for vanilla_entries, move_ids_by_key in targets:
+                                total_patched += patch_species_announcement_cache(
+                                    client, wpm, handle,
+                                    party_base=party_base,
+                                    entries=vanilla_entries,
+                                    move_ids_by_key=move_ids_by_key,
+                                )
+                        finally:
+                            wpm.close_process(handle)
+                    if total_patched:
+                        self._registrar_intento_vivo(
+                            "sm_levelup_announcement_cache_parcheado",
+                            especies=len(targets), copias=total_patched,
+                        )
+            except Exception as exc:
+                self._registrar_intento_vivo("sm_levelup_announcement_cache_error", error=str(exc))
+            finally:
+                self._sm_levelup_announcement_cache_running = False
+
+        self._sm_levelup_announcement_cache_running = True
+        threading.Thread(target=worker, daemon=True, name="RoleRunSmAnnouncementCache").start()
+
+    def _sm_levelup_usable_move_ids(self) -> set[int] | None:
+        return (
+            set(int(move_id) for move_id in self.engine.allowed_move_ids)
+            if self.engine.allowed_move_ids is not None
+            else None
+        )
+
+    def _sm_levelup_personal_id_for(self, species_id: int, form: int) -> int | None:
+        """``form`` cae a la base si la forma exacta no existe en el mapa.
+
+        Mismo fallback que ``_usum_levelup_personal_id_for``: un Pokémon del
+        equipo/PC nunca puede estar realmente en una forma de combate fuera
+        de un combate, así que su aprendizaje por nivel es siempre el de la
+        forma base independientemente del byte de forma leído en vivo.
+        """
+        if self._sm_levelup_personal_id_map is None:
+            return None
+        species_id = int(species_id)
+        personal_id = self._sm_levelup_personal_id_map.get((species_id, int(form)))
+        if personal_id is not None:
+            return personal_id
+        return self._sm_levelup_personal_id_map.get((species_id, 0))
+
+    def _append_sm_levelup_history_entries(
+        self, identity: str, pokemon: SavePokemon, species_id: int,
+        entries: tuple, role: str, *, pre_capture: bool, personal_id: int | None = None,
+    ) -> bool:
+        """Calcula la sustitución de ``entries`` para ``role`` y las añade.
+
+        Mirror exacto de ``_append_usum_levelup_history_entries`` —
+        ``personal_id`` (si se pasa) es la semilla determinista de
+        ``compute_species_patch`` y DEBE coincidir con la que usan
+        ``_sync_sm_levelup_moves_mod``/``_sync_sm_levelup_moves_backup`` para
+        la MISMA entrada.
+        """
+        if not entries:
+            return False
+        # 06-09-2026: se calcula sobre la tabla COMPLETA de la especie, no
+        # sobre el subconjunto recién cruzado. `compute_species_patch` excluye
+        # los movimientos que la especie ya tiene, así que un subconjunto da
+        # otro conjunto de exclusiones y elige OTRO sustituto: el historial
+        # acababa registrando un movimiento distinto del que el juego enseña
+        # de verdad (bug reportado en quinta; medido: 13 de 14 entradas de
+        # Patrat discrepaban). Mismo cálculo que el parche, por construcción.
+        completa = (self._sm_levelup_moves_vanilla_entries or {}).get(int(personal_id if personal_id is not None else species_id)) or entries
+        patch = sm_levelup_moves_mod.compute_species_patch(
+            completa, role, species_id=personal_id if personal_id is not None else species_id,
+            pools=self.engine.pools, damage_classes=self.engine.damage_classes,
+            speed_status_moves=self.engine.speed_status_moves,
+            self_healing_damage_moves=self.engine.self_healing_damage_moves,
+            usable_move_ids=self._sm_levelup_usable_move_ids(),
+        )
+        history = self.project.oras_levelup_move_history.setdefault(identity, [])
+        seen = {(int(item.get("level", -1)), int(item.get("move_id", -1))) for item in history}
+        changed = False
+        for vanilla_move_id, entry_level, offset in entries:
+            actual_move_id = int(patch.get(offset, vanilla_move_id))
+            key = (int(entry_level), actual_move_id)
+            if key in seen:
+                continue
+            history.append({
+                "level": int(entry_level),
+                "move_id": actual_move_id,
+                "role": str(role),
+                "species_id": species_id,
+                "nickname": str(pokemon.nickname or pokemon.species),
+                "recorded_at": datetime.now().isoformat(timespec="seconds"),
+                "pre_capture": bool(pre_capture),
+            })
+            seen.add(key)
+            changed = True
+        return changed
+
+    def _purge_sm_levelup_history_above_level(self, identity: str, level: int) -> bool:
+        """Igual que ``_purge_usum_levelup_history_above_level``."""
+        history = self.project.oras_levelup_move_history.get(identity)
+        if not history:
+            return False
+        kept = [item for item in history if int(item.get("level", 0)) <= level]
+        if len(kept) == len(history):
+            return False
+        if kept:
+            self.project.oras_levelup_move_history[identity] = kept
+        else:
+            del self.project.oras_levelup_move_history[identity]
+        return True
+
+    @perf.timed("ui.record_sm_levelup_move_history")
+    def _record_sm_levelup_move_history(self, game: SaveGameData) -> None:
+        """Recuerda-movimientos para SM. Mirror exacto de
+        ``_record_usum_levelup_move_history``: registra en el instante del
+        cruce de nivel, sin esperar a que el juego confirme el aprendizaje,
+        buscando la tabla vainilla por ``personal_id`` traducido de
+        ``(species_id, form)``.
+        """
+        if (
+            getattr(self.save_engine, "key", "") != "sm"
+            or self.project is None
+            or self._sm_levelup_moves_vanilla_entries is None
+            or self._sm_levelup_personal_id_map is None
+        ):
+            return
+        try:
+            changed = False
+            for pokemon in game.party:
+                identity = f"{int(pokemon.pid or 0)}:{int(pokemon.tid or 0)}:{int(pokemon.sid or 0)}"
+                level = int(pokemon.level or 0)
+                previous = self._sm_levelup_history_last_levels.get(identity)
+                self._sm_levelup_history_last_levels[identity] = level
+                species_id = int(pokemon.species_id)
+                form = int(getattr(pokemon, "form", 0) or 0)
+                personal_id = self._sm_levelup_personal_id_for(species_id, form)
+                entries = (
+                    self._sm_levelup_moves_vanilla_entries.get(personal_id)
+                    if personal_id is not None else None
+                )
+                if level > 0 and self._purge_sm_levelup_history_above_level(identity, level):
+                    changed = True
+                if previous is None:
+                    if identity not in self.project.oras_levelup_move_history and entries:
+                        pre_capture = tuple(entry for entry in entries if entry[1] <= level)
+                        if self._append_sm_levelup_history_entries(
+                            identity, pokemon, species_id, pre_capture, "SIN ROL",
+                            pre_capture=True, personal_id=personal_id,
+                        ):
+                            changed = True
+                    continue
+                if level <= previous or level <= 0 or not entries:
+                    continue
+                crossed = tuple(entry for entry in entries if previous < entry[1] <= level)
+                if not crossed:
+                    continue
+                role, _symbol = self._effective_role(pokemon)
+                if self._append_sm_levelup_history_entries(
+                    identity, pokemon, species_id, crossed, role, pre_capture=False,
+                    personal_id=personal_id,
+                ):
+                    changed = True
+            if changed:
+                self.project_service.save(self.project)
+        except Exception as exc:
+            self._registrar_intento_vivo("sm_levelup_history_error", error=str(exc))
+
+    def _revert_sm_levelup_moves_mod(self) -> None:
+        """Devuelve el mod de aprendizajes por nivel de SM a la tabla vainilla.
+
+        Igual que ``_revert_usum_levelup_moves_mod`` — se llama al cerrar
+        RoleRun.
+        """
+        if (
+            self._sm_levelup_moves_vanilla is None
+            or self._sm_levelup_moves_title_id is None
+            or self._sm_levelup_moves_azahar_root is None
+        ):
+            return
+        try:
+            sm_levelup_moves_mod.write_blob(
+                self._sm_levelup_moves_azahar_root,
+                self._sm_levelup_moves_title_id,
+                self._sm_levelup_moves_vanilla,
+                expected_size=len(self._sm_levelup_moves_vanilla),
+            )
+        except Exception:
+            return
+
+    def _append_usum_levelup_history_entries(
+        self, identity: str, pokemon: SavePokemon, species_id: int,
+        entries: tuple, role: str, *, pre_capture: bool, personal_id: int | None = None,
+    ) -> bool:
+        """Calcula la sustitución de ``entries`` para ``role`` y las añade.
+
+        Igual que ``_append_oras_levelup_history_entries``: no duplica una
+        (nivel, movimiento) ya registrada para esa identidad.
+
+        ``personal_id`` (si se pasa) es la semilla determinista de
+        ``compute_species_patch`` — DEBE coincidir con la que usa
+        ``_sync_usum_levelup_moves_mod`` (Enfoque A, vía
+        ``build_party_patched_blob``) y ``_sync_usum_levelup_moves_backup``
+        (Enfoque B) para la MISMA entrada, o el historial podía mostrar un
+        sustituto distinto al que de verdad se escribe (bug real,
+        2026-09-04: antes se sembraba con ``species_id`` real, que solo
+        coincide con ``personal_id`` para especies sin formas). Si no se
+        pasa, cae a ``species_id`` (compatibilidad con especies sin forma).
+        """
+        if not entries:
+            return False
+        # 06-09-2026: se calcula sobre la tabla COMPLETA de la especie, no
+        # sobre el subconjunto recién cruzado. `compute_species_patch` excluye
+        # los movimientos que la especie ya tiene, así que un subconjunto da
+        # otro conjunto de exclusiones y elige OTRO sustituto: el historial
+        # acababa registrando un movimiento distinto del que el juego enseña
+        # de verdad (bug reportado en quinta; medido: 13 de 14 entradas de
+        # Patrat discrepaban). Mismo cálculo que el parche, por construcción.
+        completa = (self._usum_levelup_moves_vanilla_entries or {}).get(int(personal_id if personal_id is not None else species_id)) or entries
+        patch = usum_levelup_moves_mod.compute_species_patch(
+            completa, role, species_id=personal_id if personal_id is not None else species_id,
+            pools=self.engine.pools, damage_classes=self.engine.damage_classes,
+            speed_status_moves=self.engine.speed_status_moves,
+            self_healing_damage_moves=self.engine.self_healing_damage_moves,
+            usable_move_ids=self._usum_levelup_usable_move_ids(),
+        )
+        history = self.project.oras_levelup_move_history.setdefault(identity, [])
+        seen = {(int(item.get("level", -1)), int(item.get("move_id", -1))) for item in history}
+        changed = False
+        for vanilla_move_id, entry_level, offset in entries:
+            actual_move_id = int(patch.get(offset, vanilla_move_id))
+            key = (int(entry_level), actual_move_id)
+            if key in seen:
+                continue
+            history.append({
+                "level": int(entry_level),
+                "move_id": actual_move_id,
+                "role": str(role),
+                "species_id": species_id,
+                "nickname": str(pokemon.nickname or pokemon.species),
+                "recorded_at": datetime.now().isoformat(timespec="seconds"),
+                "pre_capture": bool(pre_capture),
+            })
+            seen.add(key)
+            changed = True
+        return changed
+
+    def _purge_usum_levelup_history_above_level(self, identity: str, level: int) -> bool:
+        """Igual que ``_purge_oras_levelup_history_above_level``."""
+        history = self.project.oras_levelup_move_history.get(identity)
+        if not history:
+            return False
+        kept = [item for item in history if int(item.get("level", 0)) <= level]
+        if len(kept) == len(history):
+            return False
+        if kept:
+            self.project.oras_levelup_move_history[identity] = kept
+        else:
+            del self.project.oras_levelup_move_history[identity]
+        return True
+
+    @perf.timed("ui.record_usum_levelup_move_history")
+    def _record_usum_levelup_move_history(self, game: SaveGameData) -> None:
+        """Recuerda-movimientos para USUM. Igual que
+        ``_record_oras_levelup_move_history``: registra en el instante del
+        cruce de nivel, sin esperar a que el juego confirme el aprendizaje.
+        Solo cambia cómo se busca la tabla vainilla: por ``personal_id``
+        traducido de ``(species_id, form)``, no por species_id directo.
+        """
+        if (
+            getattr(self.save_engine, "key", "") != "usum"
+            or self.project is None
+            or self._usum_levelup_moves_vanilla_entries is None
+            or self._usum_levelup_personal_id_map is None
+        ):
+            return
+        try:
+            changed = False
+            for pokemon in game.party:
+                identity = f"{int(pokemon.pid or 0)}:{int(pokemon.tid or 0)}:{int(pokemon.sid or 0)}"
+                level = int(pokemon.level or 0)
+                previous = self._usum_levelup_history_last_levels.get(identity)
+                self._usum_levelup_history_last_levels[identity] = level
+                species_id = int(pokemon.species_id)
+                form = int(getattr(pokemon, "form", 0) or 0)
+                personal_id = self._usum_levelup_personal_id_for(species_id, form)
+                entries = (
+                    self._usum_levelup_moves_vanilla_entries.get(personal_id)
+                    if personal_id is not None else None
+                )
+                if level > 0 and self._purge_usum_levelup_history_above_level(identity, level):
+                    changed = True
+                if previous is None:
+                    if identity not in self.project.oras_levelup_move_history and entries:
+                        pre_capture = tuple(entry for entry in entries if entry[1] <= level)
+                        if self._append_usum_levelup_history_entries(
+                            identity, pokemon, species_id, pre_capture, "SIN ROL",
+                            pre_capture=True, personal_id=personal_id,
+                        ):
+                            changed = True
+                    continue
+                if level <= previous or level <= 0 or not entries:
+                    continue
+                crossed = tuple(entry for entry in entries if previous < entry[1] <= level)
+                if not crossed:
+                    continue
+                role, _symbol = self._effective_role(pokemon)
+                if self._append_usum_levelup_history_entries(
+                    identity, pokemon, species_id, crossed, role, pre_capture=False,
+                    personal_id=personal_id,
+                ):
+                    changed = True
+            if changed:
+                self.project_service.save(self.project)
+        except Exception as exc:
+            self._registrar_intento_vivo("usum_levelup_history_error", error=str(exc))
+
+    def _revert_usum_levelup_moves_mod(self) -> None:
+        """Devuelve el mod de aprendizajes por nivel de USUM a la tabla vainilla.
+
+        Igual que ``_revert_oras_levelup_moves_mod`` — se llama al cerrar
+        RoleRun.
+        """
+        if (
+            self._usum_levelup_moves_vanilla is None
+            or self._usum_levelup_moves_title_id is None
+            or self._usum_levelup_moves_azahar_root is None
+        ):
+            return
+        try:
+            usum_levelup_moves_mod.write_blob(
+                self._usum_levelup_moves_azahar_root,
+                self._usum_levelup_moves_title_id,
+                self._usum_levelup_moves_vanilla,
+                expected_size=len(self._usum_levelup_moves_vanilla),
+            )
+        except Exception:
+            return
 
     def _load_oras_rom_tm_source(
         self, source: ORASRomSource | Path, *, show_error: bool = False,
@@ -16584,9 +20389,10 @@ class RoleRunManager(ctk.CTk):
         ):
             return self._oras_rom_tm_profile
         try:
-            profile = load_oras_rom_tm_profile(
-                path, process_name=process_name, azahar_root=azahar_root,
-            )
+            with perf.span("ui.load_oras_rom_tm_source.load_oras_rom_tm_profile"):
+                profile = load_oras_rom_tm_profile(
+                    path, process_name=process_name, azahar_root=azahar_root,
+                )
         except (OSError, ORASRomProfileError, ValueError) as exc:
             self._oras_rom_tm_last_error = str(exc)
             if show_error:
@@ -16597,7 +20403,7 @@ class RoleRunManager(ctk.CTk):
                 )
             return None
         self._oras_rom_tm_last_error = None
-        return self._remember_oras_rom_tm_profile(profile, process_name)
+        return self._remember_oras_rom_tm_profile(profile, process_name, azahar_root)
 
     def _select_oras_rom_tm_profile(self) -> ORASTMProfile | None:
         """Permite elegir la ROM activa solo si Azahar no pudo delatarla."""
@@ -16628,9 +20434,31 @@ class RoleRunManager(ctk.CTk):
         # El log de Azahar registra la última ROM que arrancó. La aceptamos
         # únicamente si su NCCH coincide con el proceso RPC que F5 ya validó.
         if self._oras_live_active:
-            source = discover_azahar_oras_source(self._oras_live_process_name)
+            # `discover_azahar_oras_source` abre y lee entera cada ROM candidata
+            # (hasta el ExeFS .code completo, para verificar su NCCH) para saber
+            # cuál está abierta - medido el 2026-09-03 en ~4.8 s por llamada. Antes
+            # se repetía esa lectura completa en cada acción de Equipo/PC de la
+            # sesión (recuerda-movimientos y el aprendizaje por rol necesitan este
+            # perfil con mucha más frecuencia que antes), aunque Azahar siguiera
+            # con el mismo proceso y la misma ROM abiertos. Mientras el proceso RPC
+            # no cambie, la fuente descubierta la última vez sigue siendo válida.
+            cached_source = getattr(self, "_oras_discovered_rom_source", None)
+            cached_process = getattr(self, "_oras_discovered_rom_source_process", None)
+            if (
+                cached_source is not None
+                and cached_process == self._oras_live_process_name
+                and cached_source.path.is_file()
+            ):
+                source = cached_source
+            else:
+                with perf.span("ui.get_oras_rom_tm_profile.discover_azahar_oras_source"):
+                    source = discover_azahar_oras_source(self._oras_live_process_name)
+                if source is not None:
+                    self._oras_discovered_rom_source = source
+                    self._oras_discovered_rom_source_process = self._oras_live_process_name
             if source is not None:
-                profile = self._load_oras_rom_tm_source(source, show_error=False)
+                with perf.span("ui.get_oras_rom_tm_profile.load_oras_rom_tm_source"):
+                    profile = self._load_oras_rom_tm_source(source, show_error=False)
                 if profile is not None:
                     return profile
 
@@ -16711,6 +20539,7 @@ class RoleRunManager(ctk.CTk):
         self._sm_rom_tm_profile_source = source
         self._sm_rom_tm_profile_title_id = title_id
         self._sm_rom_tm_last_error = None
+        self._ensure_sm_levelup_moves_registered(source, None, None)
         return profile
 
     def _select_sm_rom_tm_profile(self) -> ORASTMProfile | None:
@@ -16788,6 +20617,7 @@ class RoleRunManager(ctk.CTk):
         self._usum_rom_tm_profile_source = source
         self._usum_rom_tm_profile_title_id = title_id
         self._usum_rom_tm_last_error = None
+        self._ensure_usum_levelup_moves_registered(source, None, None)
         return profile
 
     def _select_usum_rom_tm_profile(self) -> ORASTMProfile | None:
@@ -16831,12 +20661,9 @@ class RoleRunManager(ctk.CTk):
         self, source: Path | str, *, show_error: bool = False,
     ) -> ORASTMProfile | None:
         path = Path(source).expanduser().resolve()
-        active_xy = getattr(getattr(self, "xy_realtime_adapter", None), "active_adapter", None)
-        active_bridge = getattr(getattr(active_xy, "bridge", None), "info", None)
+        active_bridge = getattr(getattr(self, "xy_realtime_adapter", None), "bridge", None)
+        active_bridge = getattr(active_bridge, "info", None)
         emulator_key = str(getattr(active_bridge, "key", "") or "") or None
-        # Azahar expone el proceso real (kujira-1/2), pero el GDB clásico de
-        # Citra solo representa un target genérico. No debemos convertir ese
-        # nombre sintético en una validación X-vs-Y que rechace Pokémon Y.
         process_name = (
             self._oras_live_process_name
             if self._oras_live_active and emulator_key == "azahar"
@@ -16867,6 +20694,7 @@ class RoleRunManager(ctk.CTk):
         self._xy_rom_tm_profile_source = path
         self._xy_rom_tm_profile_process = process_name
         self._xy_rom_tm_profile_emulator = emulator_key
+        self._ensure_xy_levelup_moves_registered(path, None, process_name, emulator_key)
         return profile
 
     def _select_xy_rom_tm_profile(self) -> ORASTMProfile | None:
@@ -16903,7 +20731,20 @@ class RoleRunManager(ctk.CTk):
         return None
 
     def _xy_personal_for_live(self, species_id: int, form: int):
-        profile = self._get_xy_rom_tm_profile(prompt=False)
+        """Personal X/Y ya precargado; solo abre la ROM si aún no hay perfil.
+
+        2026-09-05: desde que el adaptador enriquece cada Pokémon con Personal
+        (``realtime/xy_adapter.py::_enrich_pokemon``) esto se llama una vez por
+        miembro del equipo en cada sondeo, y una vez por hueco al leer el PC.
+        La versión anterior llamaba SIEMPRE a ``_get_xy_rom_tm_profile``, que
+        hace ``Path.expanduser()``/``is_file()``/``resolve()`` -syscalls de
+        disco- aunque el perfil ya estuviera cacheado. Se lee primero el
+        atributo ya cargado, como hacen ORAS (``ui.py`` al construir su
+        writer), SM y USUM; la carga perezosa queda solo para la primera vez.
+        """
+        profile = self._xy_rom_tm_profile
+        if profile is None:
+            profile = self._get_xy_rom_tm_profile(prompt=False)
         return profile.personal_for(species_id, form) if profile is not None else None
 
     def _remember_oras_fvx_tm_profile(self, profile: ORASTMProfile) -> ORASTMProfile:
@@ -16992,7 +20833,9 @@ class RoleRunManager(ctk.CTk):
                 return category
         # B2/W2 lee la categoría de la ROM cargada. Es lo que decide si una MT
         # se le ofrece a un Mago o a un Asesino, así que en una partida
-        # randomizada el catálogo estático no sirve.
+        # randomizada el catálogo estático no sirve. `_get_b2w2_rom_profile`
+        # ya sabe desviar a cuarta cuando corresponde (mismo bug real que en
+        # la ficha de movimiento, línea 14573).
         rom = self._get_b2w2_rom_profile()
         if rom is not None:
             category = rom.damage_class(move_id)
@@ -17004,9 +20847,13 @@ class RoleRunManager(ctk.CTk):
         self, pokemon: SavePokemon, role: str, move_id: int, target_slot: int,
     ) -> bool:
         """Aplica las mismas reglas que las tarjetas de Equipo a una MT candidata."""
+        move_id = int(move_id)
+        if is_evasion_move(move_id):
+            # Absoluto: ni siquiera Líbero o SIN ROL pueden quedarse con un
+            # movimiento que suba su propia evasión (2026-09-04).
+            return False
         if role in {"SIN ROL", "Líbero"}:
             return True
-        move_id = int(move_id)
         category = self._damage_class_for_move(move_id)
         fallback_physical = {int(mid) for mid in self.engine.pools.get("extra_ataque_fisico", [])}
         fallback_special = {int(mid) for mid in self.engine.pools.get("extra_ataque_especial", [])}
@@ -17093,6 +20940,7 @@ class RoleRunManager(ctk.CTk):
             if not self._tm_move_compatible_with_role(pokemon, role, tm.move_id, move_slot):
                 continue
             move = self.engine.move(tm.move_id)
+            metadata = self._draft_move_metadata(tm.move_id)
             candidates.append({
                 "number": tm_number,
                 "item_id": tm.item_id,
@@ -17100,6 +20948,8 @@ class RoleRunManager(ctk.CTk):
                 "move_name": str(move.get("name_es", f"Movimiento #{tm.move_id}")),
                 "quantity": quantity,
                 "category": self._damage_class_for_move(tm.move_id),
+                "type_id": metadata.get("type_id"),
+                "description": metadata.get("description", "No disponible"),
             })
         return candidates
 
@@ -17504,6 +21354,7 @@ class RoleRunManager(ctk.CTk):
                 on_close=close_flow,
                 on_open_moves=lambda: self.navigate("moves"),
                 navigation_keys=self.project.menu_keys if self.project else None,
+                category_icons=self.category_icons,
             )
             self._set_navigation_owner(self._tm_teach_flow)
             if initial_move_id is not None:
@@ -17522,10 +21373,27 @@ class RoleRunManager(ctk.CTk):
                     return
             self.update_idletasks()
             self._retire_tm_open_when_ready(self._tm_teach_flow)
+            self._pin_body_scrollregion_soon()
 
         self.after(34, build_flow)
 
-    def _retire_tm_open_when_ready(self, flow) -> None:
+    def _retire_tm_open_when_ready(self, flow, attempt: int = 0) -> None:
+        """Retira la barrera de apertura de MT, y se retira SIEMPRE.
+
+        Pedido por el usuario el 2026-09-03: al enseñar una MT directamente
+        desde su tarjeta (``initial_move_id``, que salta a «qué hueco
+        olvidará» sin pasar por el paso 1), la barrera de «Abriendo el
+        selector de MT…» —un ``Toplevel`` sin marco, en ``-topmost`` y
+        opaco sobre el contenido— a veces se quedaba encima para siempre si
+        ``is_fully_composed()`` nunca llegaba a devolver ``True``. El flujo
+        de debajo quedaba completo y con su botón de volver, pero
+        inalcanzable: tapado por la barrera, que bloqueaba todos los clics.
+        Parecía que «enseñar un movimiento» no daba opción a retroceder.
+        Mismo arreglo que ya tenía la barrera de CIERRE (``INTENTOS_BARRERA_MT``,
+        alpha con «la vista no terminó de componerse»): reintentar con tope y,
+        al agotar la paciencia, retirarse igual — una barrera eterna es peor
+        que un fallo ruidoso.
+        """
         if flow is not self._tm_teach_flow:
             return
         ready = bool(
@@ -17536,7 +21404,22 @@ class RoleRunManager(ctk.CTk):
         if ready:
             self._hide_busy_indicator("tm-flow")
             return
-        self.after(35, lambda: self._retire_tm_open_when_ready(flow))
+        if attempt >= self.INTENTOS_BARRERA_MT:
+            self._hide_busy_indicator("tm-flow")
+            self._set_operation_status(
+                "failed", "LA VISTA NO TERMINÓ DE COMPONERSE",
+                "Se abrió el selector de MT, pero no alcanzó un estado visual "
+                "estable. Si no ves sus controles, vuelve a Movimientos e "
+                "inténtalo de nuevo.",
+                persistent=True,
+            )
+            return
+        try:
+            self.after(35, lambda: self._retire_tm_open_when_ready(flow, attempt + 1))
+        except Exception:
+            # Si ni siquiera se puede reprogramar, la barrera se va ahora: es
+            # preferible una página sin barrera a una barrera sin salida.
+            self._hide_busy_indicator("tm-flow")
 
     #: Cuántas vueltas espera la barrera de cierre de MT antes de retirarse
     #: igualmente. A 35 ms por vuelta son unos 4 segundos, la misma paciencia
@@ -17768,7 +21651,7 @@ class RoleRunManager(ctk.CTk):
             if not self._oras_live_active:
                 messagebox.showinfo(
                     "X/Y todavía no está enlazado",
-                    "Entra en Pokémon X/Y en Azahar o Citra y RoleRun se sincronizará automáticamente. Si quieres forzarlo, pulsa F5.",
+                    "Entra en Pokémon X/Y en Azahar y RoleRun se sincronizará automáticamente. Si quieres forzarlo, pulsa F5.",
                     parent=self._dialog_parent(),
                 )
                 return
@@ -18011,20 +21894,34 @@ class RoleRunManager(ctk.CTk):
 
     def _collect_pokemon_move_issues(self, pokemon: SavePokemon, role: str) -> list[dict]:
         """Comprueba un Pokémon contra un rol concreto usando la previsualización actual."""
-        if role == "Líbero":
-            return []
         if role == "SIN ROL":
             return []
+        # Líbero no tiene más restricción de rol que la evasión (2026-09-04,
+        # absoluta para cualquier rol): se sigue comprobando eso, pero no el
+        # resto de reglas de daño/estado que no le aplican.
+        solo_evasion = role == "Líbero"
 
         fallback_physical = {int(move_id) for move_id in self.engine.pools.get("extra_ataque_fisico", [])}
         fallback_special = {int(move_id) for move_id in self.engine.pools.get("extra_ataque_especial", [])}
-        allowed_status = self._allowed_move_ids_for_role(role) or set()
+        allowed_status = set() if solo_evasion else (self._allowed_move_ids_for_role(role) or set())
         move_names, move_ids = self._effective_moves_for_review(pokemon)
         issues: list[dict] = []
 
         for move_index, (move_name, move_id) in enumerate(zip(move_names, move_ids), start=1):
             move_id = int(move_id or 0)
             if move_id == 0 or not move_name or move_name == "—":
+                continue
+            if is_evasion_move(move_id):
+                issues.append({
+                    "pokemon": pokemon,
+                    "role": role,
+                    "move_slot": move_index,
+                    "move_name": move_name,
+                    "move_id": move_id,
+                    "reason": "Movimiento de evasión: ningún rol puede usarlo",
+                })
+                continue
+            if solo_evasion:
                 continue
 
             category = self._damage_class_for_move(move_id)
@@ -18408,31 +22305,138 @@ class RoleRunManager(ctk.CTk):
     def _queue_invalid_move_removals(self, issues: list[dict], window=None) -> None:
         if not issues or not self.current_game:
             return
-        if not messagebox.askyesno(
-            "Borrar movimientos no válidos",
-            f"Se borrarán {len(issues)} movimiento(s) del equipo.\n\n"
-            f"En {self._active_azahar_realtime_label()} conectado se aplicarán al instante en Azahar cuando esa operación esté soportada; en los motores clásicos quedarán como cambios pendientes.",
-            parent=window,
-        ):
-            return
-        pending_ids_before = {id(change) for change in self.run.pending_changes}
-        queued = self._append_invalid_move_removals(issues)
-        if window is not None and window.winfo_exists():
-            window.destroy()
-        self._smooth_render_page(preserve_scroll=(self.active_page == "team"))
-        toast = ctk.CTkFrame(self, fg_color="#151515", corner_radius=16, border_width=2, border_color=GOLD)
-        toast.place(relx=0.57, rely=0.5, anchor="center")
+        # Pedido del usuario 02-09-2026: el aviso de confirmación era un
+        # `messagebox` nativo de Windows -con `parent=window`-, pero `window`
+        # (el editor de rol) es un `CTkToplevel` con topmost propio
+        # (`TransparentWindowSurface`) que se reafirma por encima de
+        # CUALQUIER ventana de este mismo proceso al recuperar el foco -ver
+        # `guard_topmost_on_focus_loss`-, incluido el propio messagebox: en
+        # cuanto se abría, quedaba tapado por el editor y solo se veía al
+        # cerrar ese editor. Un aviso integrado -un `CTkFrame` más dentro del
+        # propio `window`, no una ventana nueva- no compite por el topmost.
+        ventana_valida = window is not None and window.winfo_exists()
+        contenedor = window if ventana_valida else self
+
+        def _confirmado() -> None:
+            pending_ids_before = {id(change) for change in self.run.pending_changes}
+            queued = self._append_invalid_move_removals(issues)
+            if ventana_valida:
+                window.destroy()
+            self._smooth_render_page(preserve_scroll=(self.active_page == "team"))
+            toast = ctk.CTkFrame(self, fg_color="#151515", corner_radius=16, border_width=2, border_color=GOLD)
+            toast.place(relx=0.57, rely=0.5, anchor="center")
+            ctk.CTkLabel(
+                toast, text="✓  BORRADOS PREPARADOS", text_color=SUCCESS,
+                font=ctk.CTkFont("Segoe UI", 17, "bold"),
+            ).pack(padx=30, pady=(18, 2))
+            ctk.CTkLabel(
+                toast, text=f"{queued} borrado(s) pendiente(s) de guardar", text_color=TEXT,
+                font=ctk.CTkFont("Segoe UI", 12, "bold"),
+            ).pack(padx=30, pady=(0, 18))
+            toast.lift()
+            self.after(1400, toast.destroy)
+            self._request_oras_live_auto_apply_since(pending_ids_before)
+
+        self._mostrar_confirmacion_integrada(
+            contenedor,
+            titulo="Borrar movimientos no válidos",
+            mensaje=(
+                f"Se borrarán {len(issues)} movimiento(s) del equipo.\n\n"
+                f"En {self._active_azahar_realtime_label()} conectado se aplicarán al instante en Azahar cuando esa operación esté soportada; en los motores clásicos quedarán como cambios pendientes."
+            ),
+            texto_confirmar="BORRAR",
+            on_confirmar=_confirmado,
+        )
+
+    def _mostrar_confirmacion_integrada(
+        self, contenedor, *, titulo: str, mensaje: str, texto_confirmar: str, on_confirmar,
+    ) -> None:
+        """Aviso de sí/no sobre ``contenedor``, mismo patrón que ya usa
+        `TransparentWindowSurface`: velo con alfa real y tarjeta, cada uno su
+        propio `CTkToplevel`, coordinados por UN solo guarda de `-topmost`
+        -no dos independientes, que es justo lo que competía por el foco en
+        el primer intento-.
+
+        Pedido del usuario 02-09-2026, en dos vueltas:
+        1. «que no se vea toda la pantalla en negro, que tenga
+           transparencia» -un `CTkFrame` normal no admite alfa real-.
+        2. «la opción de borrar está tras un velo oscuro que no permite
+           pulsarlo» -el primer arreglo puso el velo en su propia ventana
+           pero dejó la tarjeta como widget normal DENTRO de `contenedor`;
+           una ventana SIEMPRE se dibuja entera por delante o por detrás de
+           otra, nunca intercalada con los widgets de otra ventana, así que
+           el velo (creado después, más nuevo) tapaba a la tarjeta igual que
+           tapa al resto de `contenedor`. La tarjeta necesita ser TAMBIÉN su
+           propia ventana, por delante del velo -ver `TransparentWindowSurface`,
+           el mismo patrón ya probado para el propio editor de rol-.
+        """
+        contenedor.update_idletasks()
+        ancho = max(1, int(contenedor.winfo_width()))
+        alto = max(1, int(contenedor.winfo_height()))
+        x = int(contenedor.winfo_rootx())
+        y = int(contenedor.winfo_rooty())
+
+        velo = ctk.CTkToplevel(contenedor)
+        velo.overrideredirect(True)
+        velo.attributes("-topmost", True)
+        velo.attributes("-alpha", 0.55)
+        velo.configure(fg_color="#000000")
+        velo.geometry(f"{ancho}x{alto}+{x}+{y}")
+
+        dialogo = ctk.CTkToplevel(contenedor)
+        dialogo.overrideredirect(True)
+        dialogo.attributes("-topmost", True)
+
+        tarjeta = ctk.CTkFrame(dialogo, fg_color="#1B1B1B", corner_radius=16, border_width=2, border_color=GOLD)
+        tarjeta.pack(fill="both", expand=True)
         ctk.CTkLabel(
-            toast, text="✓  BORRADOS PREPARADOS", text_color=SUCCESS,
-            font=ctk.CTkFont("Segoe UI", 17, "bold"),
-        ).pack(padx=30, pady=(18, 2))
+            tarjeta, text=titulo, text_color=GOLD, font=ctk.CTkFont("Segoe UI", 15, "bold"),
+        ).pack(padx=28, pady=(20, 6))
         ctk.CTkLabel(
-            toast, text=f"{queued} borrado(s) pendiente(s) de guardar", text_color=TEXT,
-            font=ctk.CTkFont("Segoe UI", 12, "bold"),
-        ).pack(padx=30, pady=(0, 18))
-        toast.lift()
-        self.after(1400, toast.destroy)
-        self._request_oras_live_auto_apply_since(pending_ids_before)
+            tarjeta, text=mensaje, text_color=TEXT, wraplength=380, justify="center",
+            font=ctk.CTkFont("Segoe UI", 11),
+        ).pack(padx=28, pady=(0, 18))
+        botones = ctk.CTkFrame(tarjeta, fg_color="transparent")
+        botones.pack(fill="x", padx=22, pady=(0, 20))
+
+        def _cerrar() -> None:
+            release_focus_guard(guardia)
+            for ventana in (dialogo, velo):
+                try:
+                    ventana.destroy()
+                except Exception:
+                    pass
+
+        ctk.CTkButton(
+            botones, text="CANCELAR", command=_cerrar, height=38,
+            fg_color="transparent", border_width=1, border_color="#4A4A4A",
+            hover_color=PANEL_ALT, text_color=MUTED,
+        ).pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        def _confirmar() -> None:
+            _cerrar()
+            on_confirmar()
+
+        ctk.CTkButton(
+            botones, text=texto_confirmar, command=_confirmar, height=38,
+            fg_color=DANGER, hover_color="#B23A3A", text_color="#FFFFFF",
+            font=ctk.CTkFont("Segoe UI", 11, "bold"),
+        ).pack(side="left", fill="x", expand=True, padx=(6, 0))
+
+        dialogo.update_idletasks()
+        ancho_tarjeta = max(1, int(tarjeta.winfo_reqwidth()))
+        alto_tarjeta = max(1, int(tarjeta.winfo_reqheight()))
+        dx = x + (ancho - ancho_tarjeta) // 2
+        dy = y + (alto - alto_tarjeta) // 2
+        dialogo.geometry(f"{ancho_tarjeta}x{alto_tarjeta}+{dx}+{dy}")
+
+        hide_from_taskbar_and_alttab(velo, dialogo)
+        # `velo` primero, `dialogo` al final: mismo orden que
+        # `TransparentWindowSurface`, para que al recuperar el foco el
+        # diálogo se releve por delante del velo, no al revés.
+        guardia = guard_topmost_on_focus_loss(contenedor.winfo_toplevel(), velo, dialogo)
+        velo.lift()
+        dialogo.lift()
 
     def _read_pc_data(self, force: bool = False) -> SavePCData | None:
         if not self.current_save:
@@ -19105,6 +23109,15 @@ class RoleRunManager(ctk.CTk):
             # Incluye también la liberación de un rol ocupado en la misma
             # transacción viva que la sustitución.
             self._request_oras_live_auto_apply_since(pending_ids_before)
+            self._sync_oras_levelup_moves_mod(self.current_game)
+            self._sync_usum_levelup_moves_mod(self.current_game)
+            self._sync_usum_levelup_moves_backup(self.current_game)
+            self._sync_sm_levelup_moves_mod(self.current_game)
+            self._sync_sm_levelup_moves_backup(self.current_game)
+            self._sync_xy_levelup_moves_mod(self.current_game)
+            self._sync_xy_levelup_moves_backup(self.current_game)
+            self._sync_gen5_levelup_moves(self.current_game)
+            self._sync_hgss_levelup_moves(self.current_game)
             self._pc_cache = None
             self._sync_live_layout()
             close_picker()
@@ -19286,7 +23299,18 @@ class RoleRunManager(ctk.CTk):
             if floating_modal:
                 self._floating_modal_windows.discard(window)
             window.destroy()
-            callback(tuple(key for key in STAT_KEYS if key in selected))
+            stats = tuple(key for key in STAT_KEYS if key in selected)
+            # Reportado por el usuario 03-09-2026: en contexto "main" este
+            # diálogo vive en un `IntegratedWindowSurface` (un velo + marco
+            # superpuestos sobre el propio root, no una ventana de sistema
+            # aparte). `callback` dispara el cambio de rol, la sincronización
+            # del mod de aprendizajes y el repintado de Equipo/PC en la misma
+            # pulsación que acaba de destruir ese velo; si Tk aún no procesó
+            # esa destrucción, el indicador de "Cargando cajas del PC…" y el
+            # nuevo repintado competían por el mismo hueco con los restos del
+            # diálogo, viéndose ambos superpuestos. Encolarlo aquí deja que la
+            # destrucción se pinte primero.
+            self.after(0, lambda: callback(stats))
 
         confirm.configure(command=apply_selection)
         confirm.pack(fill="x", padx=38, pady=(16, 28))
@@ -20029,6 +24053,15 @@ class RoleRunManager(ctk.CTk):
             if holder is not None:
                 self._set_projected_member_role(holder, "SIN ROL")
                 self._sync_live_layout()
+            self._sync_oras_levelup_moves_mod(self.current_game)
+            self._sync_usum_levelup_moves_mod(self.current_game)
+            self._sync_usum_levelup_moves_backup(self.current_game)
+            self._sync_sm_levelup_moves_mod(self.current_game)
+            self._sync_sm_levelup_moves_backup(self.current_game)
+            self._sync_xy_levelup_moves_mod(self.current_game)
+            self._sync_xy_levelup_moves_backup(self.current_game)
+            self._sync_gen5_levelup_moves(self.current_game)
+            self._sync_hgss_levelup_moves(self.current_game)
             self._pc_cache = None
             self._update_top_status()
             if embedded:
@@ -20551,6 +24584,9 @@ class RoleRunManager(ctk.CTk):
         """
         role = canonical_role(role)
         move_id = int(move_id or 0)
+        if move_id > 0 and is_evasion_move(move_id):
+            # Absoluto: ningún rol, ni siquiera Líbero, puede usarlo (2026-09-04).
+            return False, "Movimiento de evasión: ningún rol puede usarlo"
         if role == "Líbero":
             return True, "Sin restricciones de rol"
         if role in {"SIN ROL", ""} or move_id <= 0:
@@ -20707,6 +24743,97 @@ class RoleRunManager(ctk.CTk):
         role_menu.configure(command=lambda _value: refresh())
         search_var.trace_add("write", refresh)
         refresh()
+
+    def _open_oras_levelup_history(self, pokemon: SavePokemon) -> None:
+        """Ventana del recuerda-movimientos de un Pokémon concreto.
+
+        Pedido por el usuario el 2026-09-03: siempre disponible desde
+        MOVIMIENTOS, sin importar si el movimiento que se está enseñando
+        encaja con este Pokémon. Cada movimiento del historial se muestra
+        como su propia tarjeta —igual que el resto del catálogo, coloreada
+        por tipo, con categoría/potencia/precisión/PP— y ENSEÑAR solo se
+        activa si encaja con el ROL ACTUAL, no con el que tenía cuando lo
+        aprendió.
+        """
+        name = pokemon.nickname or pokemon.species
+        # 06-09-2026: quinta se suma con su propio historial
+        # (`_record_gen5_levelup_move_history`), que anota lo mismo que los
+        # demás: qué le tocaba por su rol en cada cruce de nivel.
+        if getattr(self.save_engine, "key", "") not in (
+            {"oras", "bdsp", "usum", "sm", "xy"}
+            | MELONDS_GEN5_REALTIME_GAME_KEYS | MELONDS_GEN4_REALTIME_GAME_KEYS
+        ):
+            messagebox.showinfo(
+                "Recuerda-movimientos no disponible",
+                "El recuerda-movimientos solo está disponible en ORAS, BDSP, USUM, SM, "
+                "X/Y, Blanco/Negro, Negro 2/Blanco 2 y HeartGold por ahora.",
+                parent=self._dialog_parent(),
+            )
+            return
+        if not self.project:
+            return
+        identity = f"{int(pokemon.pid or 0)}:{int(pokemon.tid or 0)}:{int(pokemon.sid or 0)}"
+        history_entries = sorted(
+            self.project.oras_levelup_move_history.get(identity, []),
+            key=lambda item: int(item.get("level", 0)),
+        )
+        role, _symbol = self._effective_role(pokemon)
+        _names, effective_ids = self._effective_moves_for_review(pokemon)
+        known_move_ids = set(effective_ids)
+
+        display_entries = []
+        for entry in history_entries:
+            move_id = int(entry.get("move_id", 0))
+            move_name = str(self.engine.move(move_id).get("name_es") or f"Movimiento #{move_id}")
+            metadata = self._draft_move_metadata(move_id)
+            type_id = metadata.get("type_id")
+            type_name, type_color = MOVE_TYPE_INFO.get(
+                type_id if isinstance(type_id, int) else -1, ("SIN TIPO DEMOSTRADO", "#3A3A3A"),
+            )
+            compatible, reason = self._move_browser_role_compatibility(role, move_id)
+            already_known = move_id in known_move_ids
+            if entry.get("pre_capture"):
+                procedencia = "Aprendido antes de que RoleRun lo gestionara, sin rol asignado."
+            else:
+                procedencia = f"Aprendido con el rol {entry.get('role', 'SIN ROL')}."
+            display_entries.append({
+                "level": int(entry.get("level", 0)),
+                "move_id": move_id,
+                "move_name": move_name,
+                "type_name": type_name,
+                "type_color": type_color,
+                "category": metadata.get("category", "unknown"),
+                "power": metadata.get("power", "—"),
+                "accuracy": metadata.get("accuracy", "—"),
+                "pp": metadata.get("pp", "—"),
+                "description": metadata.get("description", ""),
+                "compatible": compatible,
+                "already_known": already_known,
+                "teachable": compatible and not already_known,
+                "reason": reason,
+                "procedencia": procedencia,
+            })
+
+        previous = self._levelup_history_popover
+        if previous is not None:
+            previous.close()
+
+        def closed() -> None:
+            self._levelup_history_popover = None
+
+        def teach(display_entry: dict) -> None:
+            self.ensenar_drafteo_guardado(
+                {
+                    "role": role, "categoria": "", "pool_key": "",
+                    "move_id": display_entry["move_id"], "move": display_entry["move_name"],
+                },
+                pokemon,
+            )
+
+        self._levelup_history_popover = LevelupMoveHistoryPopover(
+            self.content, str(name), role, display_entries,
+            on_close=closed, on_teach=teach,
+        )
 
     def _render_pc_page(self) -> None:
         """Renderiza el gestor de cajas como una pestaña nativa del Manager."""
@@ -21172,8 +25299,17 @@ class RoleRunManager(ctk.CTk):
         window = TransparentWindowSurface(self)
         self._apply_window_icon(window)
         window.title(f"Rol de {pokemon.nickname or pokemon.species}")
-        window.geometry("760x720")
-        window.minsize(700, 650)
+        # Pedido del usuario 02-09-2026: con 760x720 el selector de EV de
+        # Líbero (dos estadísticas a elegir) quedaba fuera de la vista sin
+        # avisar de que hacía falta bajar el scroll — quien pulsaba ACEPTAR
+        # ROL sin haber visto ese selector solo recibía un aviso sin saber
+        # de dónde salía. Subir la altura a mano arregló eso pero dejó un
+        # hueco vacío bajo el selector de EV: la altura fija no puede acertar
+        # sola porque depende de cuántas líneas ocupa el aviso de estado. Se
+        # empieza deliberadamente holgada (950) y se recorta más abajo a lo
+        # que el contenido realmente pide.
+        window.geometry("820x950")
+        window.minsize(760, 700)
         window.configure(fg_color=BG)
         window.transient(self)
         window.grab_set()
@@ -21185,7 +25321,7 @@ class RoleRunManager(ctk.CTk):
         ctk.CTkLabel(
             window,
             text="Selecciona un rol para previsualizarlo. Rojo indica incompatibilidad individual; en Support, si sobran ataques de daño, todos los candidatos se resaltan en dorado para que tú elijas cuáles quitar.",
-            text_color=MUTED, wraplength=690, justify="center",
+            text_color=MUTED, wraplength=750, justify="center",
             font=ctk.CTkFont("Segoe UI", 11),
         ).pack(padx=24, pady=(0, 14))
 
@@ -21240,7 +25376,39 @@ class RoleRunManager(ctk.CTk):
         preview = ctk.CTkScrollableFrame(window, fg_color=PANEL, corner_radius=16)
         preview.pack(fill="both", expand=True, padx=24, pady=(16, 12))
 
+        # Pedido del usuario 02-09-2026: los iconos de eliminar/enseñar MT
+        # llevan su etiqueta como tooltip -"ELIMINAR"/"ENSEÑAR MT"-, no un
+        # botón de texto grande. Mismo patrón que ya usa la ficha
+        # (`_show_role_tooltip`/`_show_move_issue_tooltip` en
+        # `team_pc_view.py`), reescrito aquí porque este diálogo no comparte
+        # esa instancia.
+        tooltip_de_accion: dict[str, Any] = {"widget": None}
+
+        def ocultar_tooltip_de_accion() -> None:
+            widget = tooltip_de_accion["widget"]
+            tooltip_de_accion["widget"] = None
+            if widget is not None:
+                try:
+                    widget.destroy()
+                except Exception:
+                    pass
+
+        def mostrar_tooltip_de_accion(ancla, texto: str) -> None:
+            ocultar_tooltip_de_accion()
+            try:
+                etiqueta = ctk.CTkLabel(
+                    window, text=texto, fg_color="#111111", corner_radius=7,
+                    text_color=GOLD, font=ctk.CTkFont("Segoe UI", 10, "bold"),
+                    height=22,
+                )
+                etiqueta.place(in_=ancla, relx=0.5, y=-4, anchor="s")
+                etiqueta.lift()
+                tooltip_de_accion["widget"] = etiqueta
+            except Exception:
+                tooltip_de_accion["widget"] = None
+
         def render_preview(role: str) -> None:
+            ocultar_tooltip_de_accion()
             selected_role.set(role)
             for candidate, button in buttons.items():
                 chosen = candidate == role
@@ -21255,6 +25423,7 @@ class RoleRunManager(ctk.CTk):
             symbol = self._role_symbol(role)
             issues = self._collect_pokemon_move_issues(pokemon, role) if role != "SIN ROL" else []
             bad_slots = {int(issue["move_slot"]) for issue in issues}
+            issue_by_slot = {int(issue["move_slot"]): issue for issue in issues}
             support_excess, support_candidates = self._support_damage_excess(pokemon, role)
             support_slots = {int(item["move_slot"]) for item in support_candidates} if support_excess else set()
             ctk.CTkLabel(
@@ -21274,19 +25443,159 @@ class RoleRunManager(ctk.CTk):
             moves_grid = ctk.CTkFrame(preview, fg_color="transparent")
             moves_grid.pack(fill="x", padx=18, pady=(0, 14))
             moves_grid.grid_columnconfigure((0, 1), weight=1, uniform="previewmoves")
+            preview_move_ids = list(getattr(pokemon, "move_ids", None) or [])[:4]
             for idx, move_name in enumerate(pokemon.moves[:4], start=1):
                 bad = idx in bad_slots
                 support_choice = idx in support_slots and not bad
-                box = ctk.CTkFrame(
-                    moves_grid, fg_color="#2A1717" if bad else ("#292315" if support_choice else PANEL_ALT), corner_radius=10,
-                    border_width=1, border_color=DANGER if bad else (GOLD if support_choice else "#414141"), height=58,
+                accionable_preview = bad or support_choice
+                move_id = int(preview_move_ids[idx - 1] or 0) if idx - 1 < len(preview_move_ids) else 0
+                type_id = (
+                    self._draft_move_metadata(move_id).get("type_id")
+                    if move_id > 0 else None
                 )
-                box.grid(row=(idx - 1)//2, column=(idx - 1)%2, sticky="ew", padx=4, pady=4)
+                type_name, type_color = (
+                    MOVE_TYPE_INFO.get(type_id, (None, None))
+                    if isinstance(type_id, int) else (None, None)
+                )
+                # Mismo diseño para las cuatro casillas -pedido del usuario
+                # 02-09-2026, «mira cómo de distintos son los marcos»-: alto
+                # fijo y fino, la misma cápsula muy redondeada para todas.
+                # La incompatible ya no crece para dos botones grandes; sus
+                # acciones son ahora dos iconos en la propia línea del
+                # nombre (ver más abajo).
+                box = ctk.CTkFrame(
+                    moves_grid,
+                    fg_color=(
+                        "#2A1717" if bad
+                        else ("#292315" if support_choice
+                              else (move_type_fill(type_color, PANEL_ALT) if type_color else PANEL_ALT))
+                    ),
+                    corner_radius=25,
+                    border_width=(
+                        1 if accionable_preview else (2 if type_color else 0)
+                    ),
+                    border_color=(
+                        DANGER if bad else (GOLD if support_choice else (type_color or "#414141"))
+                    ),
+                    height=58,
+                )
+                box.grid(row=(idx - 1)//2, column=(idx - 1)%2, sticky="nsew", padx=4, pady=4)
                 box.grid_propagate(False)
-                ctk.CTkLabel(
+                nombre_label = ctk.CTkLabel(
                     box, text=move_name or "—", text_color=DANGER if bad else (GOLD if support_choice else TEXT),
-                    font=ctk.CTkFont("Segoe UI", 15, "bold"), wraplength=260, justify="center",
-                ).place(relx=0.5, rely=0.5, anchor="center")
+                    font=ctk.CTkFont("Segoe UI", 15, "bold"), wraplength=140 if bad else 260, justify="center",
+                    # Pedido del usuario 02-09-2026: los iconos van a la
+                    # DERECHA del nombre, así que el nombre se desplaza un
+                    # poco a la izquierda del centro para dejarles sitio.
+                )
+                nombre_label.place(relx=0.38 if bad else 0.5, rely=0.5, anchor="center")
+                badge = None
+                if type_name:
+                    badge = ctk.CTkLabel(
+                        box, text=type_name, text_color="#111111", fg_color=type_color,
+                        corner_radius=5, font=ctk.CTkFont("Segoe UI", 8, "bold"),
+                    )
+                    # Pedido del usuario 02-09-2026: la esquina de la caja es
+                    # muy redondeada (`corner_radius=25`) y la insignia se
+                    # salía por encima de esa curva con un margen de 3 px;
+                    # con más margen queda dentro del marco.
+                    badge.place(relx=1.0, rely=0.0, anchor="ne", x=-10, y=8)
+                if bad:
+                    # Pedido del usuario 02-09-2026: los mismos dos iconos
+                    # de antes -papelera y disco-, pero en la línea del
+                    # propio nombre en vez de una fila de botones grandes
+                    # debajo, con su etiqueta como tooltip al pasar el
+                    # ratón (reutiliza el patrón ya usado para el aviso de
+                    # incompatibilidad de la ficha).
+                    #
+                    # Pedido del usuario 02-09-2026, otra vuelta: solo
+                    # aparecen al pasar el ratón por encima de la casilla, y
+                    # mientras están visibles ocupan el sitio del rótulo del
+                    # tipo -que se oculta mientras tanto- para no amontonarse
+                    # los tres en la misma esquina.
+                    issue = issue_by_slot.get(idx)
+                    aviso_eliminar = ctk.CTkLabel(
+                        box, text="🗑", text_color=DANGER, fg_color="transparent",
+                        width=30, height=30, font=ctk.CTkFont("Segoe UI Symbol", 20),
+                        cursor="hand2",
+                    )
+                    if issue is not None:
+                        aviso_eliminar.bind(
+                            "<Button-1>",
+                            lambda _event, i=issue: self._eliminar_movimiento_incompatible(i, window),
+                            add="+",
+                        )
+                    aviso_eliminar.bind(
+                        "<Enter>",
+                        lambda _event, w=aviso_eliminar: mostrar_tooltip_de_accion(w, "ELIMINAR"),
+                        add="+",
+                    )
+                    aviso_eliminar.bind("<Leave>", lambda _event: ocultar_tooltip_de_accion(), add="+")
+                    aviso_mt = ctk.CTkLabel(
+                        box, text="💿", text_color=GOLD, fg_color="transparent",
+                        width=30, height=30, font=ctk.CTkFont("Segoe UI Symbol", 20),
+                        cursor="hand2",
+                    )
+                    aviso_mt.bind(
+                        "<Button-1>",
+                        lambda _event, p=pokemon, s=idx: self._ensenar_mt_desde_editor_de_rol(p, s, window),
+                        add="+",
+                    )
+                    aviso_mt.bind(
+                        "<Enter>",
+                        lambda _event, w=aviso_mt: mostrar_tooltip_de_accion(w, "ENSEÑAR MT"),
+                        add="+",
+                    )
+                    aviso_mt.bind("<Leave>", lambda _event: ocultar_tooltip_de_accion(), add="+")
+
+                    estado_hover_caja = {"after_id": None}
+
+                    def _mostrar_iconos_de_accion(_event=None, insignia=badge, elim=aviso_eliminar, mt=aviso_mt):
+                        if insignia is not None:
+                            insignia.place_forget()
+                        elim.place(relx=1.0, rely=0.5, x=-38, anchor="e")
+                        mt.place(relx=1.0, rely=0.5, x=-6, anchor="e")
+
+                    def _ocultar_iconos_de_accion(_event=None, insignia=badge, elim=aviso_eliminar, mt=aviso_mt):
+                        elim.place_forget()
+                        mt.place_forget()
+                        if insignia is not None:
+                            insignia.place(relx=1.0, rely=0.0, anchor="ne", x=-10, y=8)
+
+                    # Pedido del usuario 02-09-2026, otra vuelta: «me ponga
+                    # sobre la que me ponga, siempre sale en la misma
+                    # casilla». El fallo real: estas dos funciones llamaban a
+                    # `_mostrar_iconos_de_accion`/`_ocultar_iconos_de_accion`
+                    # por su nombre, una variable que el bucle reescribe en
+                    # cada vuelta -al dispararse el evento de verdad, ya
+                    # apunta siempre a las de la ÚLTIMA casilla creada.
+                    # Capturarlas como argumento por defecto, igual que ya se
+                    # hacía con `caja`, fija la de ESTA vuelta concreta.
+                    def _al_entrar_la_casilla(
+                        _event=None, caja=box, estado=estado_hover_caja, mostrar=_mostrar_iconos_de_accion,
+                    ):
+                        if estado["after_id"] is not None:
+                            caja.after_cancel(estado["after_id"])
+                            estado["after_id"] = None
+                        mostrar()
+
+                    def _al_salir_la_casilla(
+                        _event=None, caja=box, estado=estado_hover_caja, ocultar=_ocultar_iconos_de_accion,
+                    ):
+                        if estado["after_id"] is not None:
+                            caja.after_cancel(estado["after_id"])
+
+                        def _confirmar_salida(estado=estado, ocultar=ocultar):
+                            estado["after_id"] = None
+                            ocultar()
+
+                        estado["after_id"] = caja.after(80, _confirmar_salida)
+
+                    for widget in (box, nombre_label, badge, aviso_eliminar, aviso_mt):
+                        if widget is None:
+                            continue
+                        widget.bind("<Enter>", _al_entrar_la_casilla, add="+")
+                        widget.bind("<Leave>", _al_salir_la_casilla, add="+")
             ev_frame = ctk.CTkFrame(preview, fg_color="transparent")
             ev_frame.pack(fill="x", padx=18, pady=(0, 12))
             ctk.CTkLabel(
@@ -21338,6 +25647,78 @@ class RoleRunManager(ctk.CTk):
             buttons[role] = button
 
         render_preview(current_role)
+        # `preview` es el único bloque con `expand=True`: todo lo que la
+        # ventana mida de más frente a lo que su contenido real pide, se lo
+        # queda él solo. Medirlo y descontar la diferencia sustituye a
+        # adivinar un número de altura fijo -que unas veces se quedaba corto
+        # y otras sobraba- por uno que se ajusta al contenido de cada
+        # Pokémon (varía según cuántas líneas ocupe el aviso de estado).
+        #
+        # `CTkScrollableFrame` desacopla las dos alturas a propósito -si no,
+        # nunca podría haber scroll-: `preview.winfo_height()` es el tamaño
+        # NATURAL de su contenido (crece con él, igual que
+        # `winfo_reqheight()`), no el hueco visible real. Ese hueco lo tiene
+        # el canvas interno que ya usan otras vistas de este mismo programa
+        # (`_parent_canvas`, ver `global_tm_view.py`), y es contra ÉL contra
+        # quien hay que medir el sobrante.
+        # `update_idletasks` no basta: en un `CTkToplevel` sin marco recién
+        # creado, la geometría pedida (`window.geometry(...)`) todavía no se
+        # ha aplicado de verdad y el canvas mide lo que medía antes de
+        # pedirla. Comprobado en vivo: con solo `update_idletasks` el canvas
+        # sigue devolviendo 1 píxel de alto.
+        window.update()
+        try:
+            visor = preview._parent_canvas
+            sobra = int(visor.winfo_height()) - int(preview.winfo_reqheight())
+        except Exception:
+            sobra = 0
+        if sobra > 20:
+            try:
+                ancho_actual, alto_actual = (int(v) for v in window.geometry().split("x"))
+                window.geometry(f"{ancho_actual}x{max(700, alto_actual - sobra + 16)}")
+            except Exception:
+                pass
+            # Pedido del usuario 02-09-2026: con la ventana ya ajustada al
+            # contenido, la barra de scroll deja de tener sentido -nunca hace
+            # falta bajarla-, así que estorba más de lo que ayuda. Solo se
+            # quita cuando de verdad se pudo medir y ajustar arriba; si algo
+            # falló, se deja la barra como red de seguridad.
+            try:
+                preview._scrollbar.grid_remove()
+            except Exception:
+                pass
+
+    def _eliminar_movimiento_incompatible(self, issue: dict | None, window=None) -> None:
+        """Pedido del usuario 02-09-2026: papelera junto a cada movimiento
+        incompatible del editor de rol, para resolverlo sin salir de él.
+
+        Mismo camino que ya usa `_team_pc_action` para `delete_move:` -la
+        cola de retiradas pendientes-, así que el borrado pasa por la misma
+        revisión de cambios que cualquier otro. La ficha queda obsoleta en
+        cuanto el movimiento desaparece, así que se cierra en vez de intentar
+        refrescarla en sitio.
+        """
+        if issue is None:
+            return
+        self._queue_invalid_move_removals([issue])
+        if window is not None:
+            try:
+                window.destroy()
+            except Exception:
+                pass
+
+    def _ensenar_mt_desde_editor_de_rol(
+        self, pokemon: SavePokemon, move_slot: int, window=None,
+    ) -> None:
+        """Pedido del usuario 02-09-2026: enseñar una MT sobre el hueco
+        incompatible sin salir del editor de rol -mismo flujo que ya usa el
+        botón «ENSEÑAR MT» del resto del programa (`_open_tm_selector`)."""
+        if window is not None:
+            try:
+                window.destroy()
+            except Exception:
+                pass
+        self._open_tm_selector(pokemon, move_slot, replace_existing=True)
 
     def assign_role(
         self, pokemon: SavePokemon, role: str, window=None,
@@ -22119,7 +26500,7 @@ class RoleRunManager(ctk.CTk):
             "A la derecha está tu equipo, siempre. Pasa el ratón por un movimiento y verás encendidos los que pueden aprenderlo y apagados los que no, con el motivo.",
             "Lo que puede aprender cada Pokémon lo decide su ROL, no su especie: RoleRun ignora a propósito la compatibilidad de especie del juego.",
             "La papelera de un drafteo aparece al pasar el ratón por su fila. Pregunta antes, porque no devuelve el drafteo que costó.",
-            "Si lo que quieres es mirar sin enseñar nada, AYUDA → CONSULTA DE MOVIMIENTOS busca en el catálogo del juego y separa lo que cada rol admite de lo que no.",
+            "Si lo que quieres es mirar sin enseñar nada, MOVIMIENTOS → CONSULTA DE MOVIMIENTOS busca en el catálogo del juego y separa lo que cada rol admite de lo que no.",
         ])
         section(7, "◈", "Drafteos", "Tirar es gratis. Quedarse un resultado, no.", [
             "Elige el rol y después el Pokémon. Se generan cuatro opciones del conjunto de ese rol.",
@@ -22260,6 +26641,17 @@ class RoleRunManager(ctk.CTk):
             for child in detail_host.winfo_children():
                 child.destroy()
 
+        def target_height_for(role: str) -> int:
+            # ``306`` era un tamaño fijo que ya no le cabe al texto real de
+            # cada rol (2026-09-03: la Guía se amplió con la excepción de
+            # Velocidad completa). Medir el contenido ya construido evita que
+            # el texto se corte o que la tarjeta crezca de más al no encoger
+            # nunca de vuelta al pasar de un rol largo a uno corto.
+            detail_host.update_idletasks()
+            bbox = detail_host.grid_bbox()
+            measured = bbox[3] if bbox else 306
+            return max(230, measured + 6)
+
         def show_role(role: str) -> None:
             if animation["role"] == role and int(animation["height"]) > 0:
                 animation["role"] = None
@@ -22268,23 +26660,15 @@ class RoleRunManager(ctk.CTk):
                 animate_height(0)
                 return
 
-            previous_role = animation["role"]
             animation["role"] = role
             set_role_button_state(role)
 
-            # La tarjeta solo cambia de altura al abrirse o cerrarse. Al pasar
-            # de un rol a otro mantiene su tamaño fijo y sustituye el contenido
-            # dentro del mismo panel, evitando que toda la vista se comprima y
-            # genere líneas, bordes o textos superpuestos durante la transición.
-            if int(animation["height"]) <= 0:
-                clear_role_detail()
-                animate_height(306, lambda: populate_role(role))
-                return
-
-            if previous_role != role:
-                # Sustitución inmediata dentro de una tarjeta de altura fija: no
-                # existe un fotograma vacío que reduzca el scroll y deforme la vista.
-                populate_role(role)
+            # El contenido se construye primero, sea abrir desde cero o
+            # sustituir un rol por otro: la altura objetivo se mide sobre el
+            # contenido real de CADA rol, así que un rol corto tras uno largo
+            # también encoge, en vez de heredar la altura del anterior.
+            populate_role(role)
+            animate_height(target_height_for(role))
 
         for column, (role, symbol) in enumerate(ROLE_OPTIONS[:-1]):
             button = ctk.CTkButton(
@@ -23002,6 +27386,98 @@ class RoleRunManager(ctk.CTk):
             # Un aviso jamás puede impedir que la partida se publique.
             pass
 
+    def _check_for_updates(self) -> None:
+        """Lanza en segundo plano la única comprobación de versión del arranque."""
+        if not GITHUB_OWNER or not GITHUB_REPO:
+            return
+
+        def worker() -> None:
+            info = update_checker.check_for_update(
+                APP_VERSION, GITHUB_OWNER, GITHUB_REPO,
+                timeout=UPDATE_CHECK_TIMEOUT_SECONDS,
+            )
+            self._update_queue.put(info)
+
+        threading.Thread(target=worker, daemon=True, name="RoleRunUpdateCheck").start()
+        self.after(300, self._poll_update_queue)
+
+    def _poll_update_queue(self) -> None:
+        try:
+            info = self._update_queue.get_nowait()
+        except queue.Empty:
+            if self.winfo_exists():
+                self.after(300, self._poll_update_queue)
+            return
+        if info is not None and not self._update_dismissals.is_dismissed(info.version):
+            self._show_update_notification(info)
+
+    def _show_update_notification(self, info: update_checker.UpdateInfo) -> None:
+        if self._update_notification_window is not None:
+            try:
+                if self._update_notification_window.winfo_exists():
+                    self._update_notification_window.lift()
+                    return
+            except Exception:
+                pass
+
+        window = IntegratedWindowSurface(self)
+        self._apply_window_icon(window)
+        self._update_notification_window = window
+        window.title("Nueva versión disponible")
+        window.geometry("560x480")
+        window.minsize(520, 420)
+        window.configure(fg_color=BG)
+        window.transient(self)
+
+        def _close() -> None:
+            self._update_notification_window = None
+            if window.winfo_exists():
+                window.destroy()
+
+        window.protocol("WM_DELETE_WINDOW", _close)
+
+        ctk.CTkLabel(
+            window, text="HAY UNA VERSIÓN NUEVA", text_color=GOLD,
+            font=ctk.CTkFont("Segoe UI", 22, "bold"),
+        ).pack(anchor="w", padx=26, pady=(24, 4))
+        ctk.CTkLabel(
+            window,
+            text=f"Tienes la v{APP_VERSION} instalada. La última publicada es la v{info.version}.",
+            text_color=TEXT, wraplength=500, justify="left",
+            font=ctk.CTkFont("Segoe UI", 13),
+        ).pack(anchor="w", padx=26, pady=(0, 16))
+
+        notes_frame = ctk.CTkFrame(window, fg_color=PANEL, corner_radius=15)
+        notes_frame.pack(fill="both", expand=True, padx=26, pady=(0, 16))
+        notes_box = ctk.CTkTextbox(
+            notes_frame, fg_color="transparent", text_color=MUTED,
+            font=ctk.CTkFont("Segoe UI", 12), wrap="word",
+        )
+        notes_box.pack(fill="both", expand=True, padx=14, pady=14)
+        notes_box.insert("1.0", info.notes or "Esta versión no trae notas publicadas.")
+        notes_box.configure(state="disabled")
+
+        button_row = ctk.CTkFrame(window, fg_color="transparent")
+        button_row.pack(fill="x", padx=26, pady=(0, 22))
+        button_row.grid_columnconfigure((0, 1, 2), weight=1)
+
+        ctk.CTkButton(
+            button_row, text="MÁS TARDE", command=_close, height=38,
+            fg_color="transparent", border_width=1, border_color="#4A4A4A",
+            hover_color=PANEL_ALT, text_color=MUTED,
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        ctk.CTkButton(
+            button_row, text="NO AVISAR DE ESTA VERSIÓN", height=38,
+            command=lambda: (self._update_dismissals.dismiss(info.version), _close()),
+            fg_color="transparent", border_width=1, border_color=GOLD,
+            hover_color="#332B1D", text_color=GOLD,
+        ).grid(row=0, column=1, sticky="ew", padx=6)
+        ctk.CTkButton(
+            button_row, text="DESCARGAR", height=38,
+            command=lambda: (webbrowser.open(info.url), _close()),
+            fg_color=GOLD, hover_color="#D8B26E", text_color="#111111",
+        ).grid(row=0, column=2, sticky="ew", padx=(6, 0))
+
     def _retry_placeholder_sprites(self) -> None:
         """Permite reintentar la descarga en la siguiente recarga de partida."""
         for species_id in tuple(self._sprite_placeholder_species):
@@ -23671,12 +28147,18 @@ class RoleRunManager(ctk.CTk):
                 except Exception:
                     pass
         pc_data = self._initial_shell_pc_data
-        live_key_getter = getattr(self, "_active_azahar_realtime_key", None)
-        live_key = live_key_getter() if callable(live_key_getter) else ""
-        live_pc_ready = bool(
-            live_key != "sm"
-            or bool((getattr(pc_data, "raw", None) or {}).get("live_matrix"))
-        )
+        # Reportado por el usuario 04-09-2026: si la matriz PC en vivo de SM
+        # nunca llega a demostrarse en la sesión (p. ej. sin un testigo
+        # party->PC reciente), RoleRun no abría NUNCA -esta barrera no publica
+        # por timeout a propósito-, aunque la party ya estuviera lista.
+        # USUM y Perla Reluciente usan el mismo mecanismo de matriz PC
+        # completa (`FULL_MATRIX_LIVE_PC_GAME_KEYS`) y NO bloquean aquí: si la
+        # prueba falla, `_ensure_live_pc_matrix_loaded` la reintenta después de
+        # publicar y, si sigue sin poder demostrarla, `_fail_team_pc_load` deja
+        # el aviso «NO SE PUDIERON ABRIR LAS CAJAS · REINTENTAR» sin tapar el
+        # resto de la app. SM tenía aquí una excepción que la privaba de esa
+        # misma degradación ya probada; se retira para igualarla al resto.
+        live_pc_ready = True
         view = getattr(self, "_team_pc_view", None)
         projected_party_getter = getattr(self, "_projected_party", None)
         projected_party = (
@@ -24485,7 +28967,7 @@ class RoleRunManager(ctk.CTk):
                     and isinstance(change, PendingTeamChange)
                     and change.operation in {
                         "swap-party-box", "party-to-box", "box-to-party",
-                        "replace-fainted", "move-box-slot",
+                        "replace-fainted", "move-box-slot", "swap-box-slots",
                     }
                 )
                 for change in changes

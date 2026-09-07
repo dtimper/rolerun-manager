@@ -88,8 +88,16 @@ def read_paths(fnt: bytes, fat_raw: bytes) -> dict[str, tuple[int, int]]:
     return rutas
 
 
-def read_narc(blob: bytes) -> list[bytes]:
-    """Extrae los archivos de un contenedor NARC."""
+def narc_slices(blob: bytes) -> list[tuple[int, int]]:
+    """``(desplazamiento, tamaño)`` de cada archivo, relativo a ``blob``.
+
+    Es lo mismo que resuelve :func:`read_narc`, pero devolviendo DÓNDE está
+    cada archivo en vez de una copia de su contenido. Hace falta para poder
+    escribir sobre un archivo concreto sin reconstruir el contenedor: sumando
+    el desplazamiento del contenedor dentro de la ROM se obtiene la posición
+    absoluta de esos bytes en la ROM, y con ella la dirección real en la
+    memoria del emulador (ver ``app/gen5_levelup_moves.py``).
+    """
     if blob[:4] != _NARC_MAGIC:
         raise NdsRomError("El contenedor no empieza por NARC.")
     header_size, bloques = struct.unpack_from("<HH", blob, 0x0C)
@@ -112,13 +120,18 @@ def read_narc(blob: bytes) -> list[bytes]:
 
     total = struct.unpack_from("<I", blob, fatb + 8)[0]
     base = gmif + 8
-    archivos: list[bytes] = []
+    trozos: list[tuple[int, int]] = []
     for index in range(total):
         inicio, fin = struct.unpack_from("<II", blob, fatb + 12 + index * 8)
         if base + fin > len(blob) or fin < inicio:
             raise NdsRomError("El NARC apunta a datos fuera del contenedor.")
-        archivos.append(blob[base + inicio:base + fin])
-    return archivos
+        trozos.append((base + inicio, fin - inicio))
+    return trozos
+
+
+def read_narc(blob: bytes) -> list[bytes]:
+    """Extrae los archivos de un contenedor NARC."""
+    return [blob[inicio:inicio + tamano] for inicio, tamano in narc_slices(blob)]
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +150,24 @@ class NdsRom:
         inicio, fin = self.paths[nombre]
         with self.path.open("rb") as archivo:
             return read_narc(_leer(archivo, self.path.name, inicio, fin - inicio))
+
+    def narc_absolute_slices(self, nombre: str) -> list[tuple[int, int]]:
+        """``(desplazamiento en la ROM, tamaño)`` de cada archivo del contenedor.
+
+        A diferencia de :meth:`narc`, no devuelve el contenido sino dónde vive
+        dentro del archivo .nds. Sumado a la dirección donde el emulador tiene
+        cargada la imagen de la ROM, da la dirección exacta de esos bytes en
+        su memoria.
+        """
+        if nombre not in self.paths:
+            raise NdsRomError(f"La ROM no contiene {nombre}.")
+        inicio, fin = self.paths[nombre]
+        with self.path.open("rb") as archivo:
+            contenedor = _leer(archivo, self.path.name, inicio, fin - inicio)
+        return [
+            (inicio + desplazamiento, tamano)
+            for desplazamiento, tamano in narc_slices(contenedor)
+        ]
 
 
 def _leer(archivo, nombre: str, desplazamiento: int, tamano: int) -> bytes:

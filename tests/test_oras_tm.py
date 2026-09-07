@@ -279,11 +279,85 @@ class ORASTMProfileTests(unittest.TestCase):
             log = root / "log" / "azahar_log.txt"
             log.parent.mkdir(parents=True)
             log.write_text(f"Loader: Loading file {rom} as NCCH...\n", encoding="utf-8")
-            with patch.dict(os.environ, {"APPDATA": str(appdata), "LOCALAPPDATA": ""}, clear=False):
+            with (
+                patch.dict(os.environ, {"APPDATA": str(appdata), "LOCALAPPDATA": ""}, clear=False),
+                patch.object(Path, "home", return_value=Path(directory) / "home"),
+            ):
                 discovered = discover_azahar_oras_source("sango-2")
 
         self.assertIsNotNone(discovered)
         self.assertEqual(discovered.path, rom.resolve())
+
+    def test_discovery_reads_recent_files_from_the_real_qt_config_layout(self) -> None:
+        """El INI real de Azahar no tiene una sección ``[Paths]``.
+
+        Demostrado el 2026-09-03 contra una instalación real: QSettings
+        escribe ``Paths\\recentFiles`` como una clave dentro de ``[UI]``, no
+        dentro de una sección propia llamada "Paths". Buscar esa sección
+        devolvía siempre una lista vacía y ``discover_azahar_oras_source``
+        no encontraba nunca la ROM por esta vía, aunque Azahar sí la tuviera
+        en su lista de recientes.
+        """
+        with TemporaryDirectory() as directory:
+            appdata = Path(directory) / "AppData"
+            root = appdata / "Azahar"
+            rom = Path(directory) / "mi randomizer.cxi"
+            _make_oras_cxi(rom)
+            config = root / "config" / "qt-config.ini"
+            config.parent.mkdir(parents=True)
+            config.write_text(
+                "[UI]\n"
+                f"Paths\\recentFiles={rom}, D:/otro.3ds\n"
+                "Paths\\romsPath=D:/Juegos\n"
+                "[Core]\n"
+                "use_cpu_jit=true\n",
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(os.environ, {"APPDATA": str(appdata), "LOCALAPPDATA": ""}, clear=False),
+                patch.object(Path, "home", return_value=Path(directory) / "home"),
+            ):
+                discovered = discover_azahar_oras_source("sango-2")
+
+        self.assertIsNotNone(discovered)
+        self.assertEqual(discovered.path, rom.resolve())
+
+    def test_discovery_prefers_the_most_recently_used_azahar_install(self) -> None:
+        """Dos instalaciones de Azahar con la misma ROM en recientes: gana la activa.
+
+        Reproduce el caso real del 2026-09-03: Azahar y AzaharPlus, ambos
+        instalados, referenciaban la misma ROM en su ``qt-config.ini``. Sin
+        desempate, ``discover_azahar_oras_source`` devolvía la primera
+        carpeta de la lista aunque el proceso realmente conectado por RPC
+        fuera el de la otra instalación, y el mod de RoleRun se escribía en
+        la carpeta que Azahar no llega a leer.
+        """
+        import time
+
+        with TemporaryDirectory() as directory:
+            appdata = Path(directory) / "AppData"
+            rom = Path(directory) / "mi randomizer.cxi"
+            _make_oras_cxi(rom)
+
+            def write_config(root: Path) -> None:
+                config = root / "config" / "qt-config.ini"
+                config.parent.mkdir(parents=True)
+                config.write_text(f"[UI]\nPaths\\recentFiles={rom}\n", encoding="utf-8")
+
+            stale_root = appdata / "Azahar"
+            active_root = appdata / "AzaharPlus"
+            write_config(stale_root)
+            time.sleep(0.05)
+            write_config(active_root)
+
+            with (
+                patch.dict(os.environ, {"APPDATA": str(appdata), "LOCALAPPDATA": ""}, clear=False),
+                patch.object(Path, "home", return_value=Path(directory) / "home"),
+            ):
+                discovered = discover_azahar_oras_source("sango-2")
+
+        self.assertIsNotNone(discovered)
+        self.assertEqual(discovered.azahar_root, active_root.resolve())
 
 
 if __name__ == "__main__":

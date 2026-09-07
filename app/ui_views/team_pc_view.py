@@ -6,7 +6,8 @@ from typing import Any
 import customtkinter as ctk
 import tkinter as tk
 
-from app.config import DANGER, GOLD, MUTED, PANEL, PANEL_ALT, SUCCESS, TEXT
+from app import perf
+from app.config import DANGER, GOLD, MOVE_TYPE_INFO, MUTED, PANEL, PANEL_ALT, SUCCESS, TEXT, move_type_fill
 from app.ui_components.repintado import configurar_si_cambia
 from app.animacion import Vuelo, centro_en_la_raiz, medida
 from app.pc_browser import pokemon_matches_pc_query
@@ -46,6 +47,44 @@ def _move_issue_map(
         for issue in move_issues_for(pokemon, role)
         if 1 <= int(issue.get("move_slot", 0) or 0) <= 4
     }
+
+
+def _effective_moves(
+    pokemon: Any,
+    effective_moves_for: Callable[[Any], tuple[list[str], list[int]]] | None,
+    *,
+    context: str = "team",
+) -> tuple[list[str], list[int]]:
+    """Nombres/IDs de movimiento a mostrar, incluyendo sustituciones/borrados
+    en cola.
+
+    ``move_issues_for`` ya proyecta los cambios pendientes (``PendingChange``/
+    ``PendingTMTeach``) para decidir qué hueco sigue siendo una incompatibilidad.
+    Si la celda se pinta con los movimientos crudos del Pokémon en vez de esta
+    misma proyección, un hueco recién vaciado por ELIMINAR deja de marcarse en
+    rojo pero sigue enseñando el movimiento antiguo: dos fuentes de verdad
+    distintas en el mismo repintado. Solo aplica en "team": es el único
+    contexto donde estas acciones existen.
+    """
+    moves = list(getattr(pokemon, "moves", None) or [])[:4]
+    move_ids = list(getattr(pokemon, "move_ids", None) or [])[:4]
+    while len(moves) < 4:
+        moves.append("—")
+    while len(move_ids) < 4:
+        move_ids.append(0)
+    if context != "team" or effective_moves_for is None:
+        return moves, move_ids
+    try:
+        names, ids = effective_moves_for(pokemon)
+    except Exception:
+        return moves, move_ids
+    names = list(names)[:4]
+    ids = list(ids)[:4]
+    while len(names) < 4:
+        names.append("—")
+    while len(ids) < 4:
+        ids.append(0)
+    return names, ids
 
 
 def _support_damage_map(
@@ -121,12 +160,15 @@ class UnifiedTeamPCView:
         role_icon_for: Callable[[str, int], Any | None],
         pending_for: Callable[[Any, str], bool],
         move_issues_for: Callable[[Any, str], list[dict[str, Any]]] | None,
+        effective_moves_for: Callable[[Any], tuple[list[str], list[int]]] | None = None,
         support_damage_for: Callable[[Any, str], tuple[int, list[dict[str, Any]]]] | None = None,
         on_support_damage: Callable[[Any], None] | None = None,
         on_box_change: Callable[[int], tuple[int, dict[int, Any]]],
         on_search: Callable[[str], list[tuple[int, int, Any]]],
         on_action: Callable[[str, Any], None],
         on_role_info: Callable[[str], None],
+        move_metadata_for: Callable[[int], dict[str, Any]] | None = None,
+        on_move_info: Callable[[int, str], None] | None = None,
         on_heal_party: Callable[[], None] | None = None,
         on_fix_roles: Callable[[], None] | None = None,
         on_drop: Callable[[str, Any, str, dict[str, Any]], None] | None = None,
@@ -165,12 +207,15 @@ class UnifiedTeamPCView:
         self.base_stats_for = base_stats_for
         self.pending_for = pending_for
         self.move_issues_for = move_issues_for
+        self.effective_moves_for = effective_moves_for
         self.support_damage_for = support_damage_for
         self.on_support_damage = on_support_damage
         self.on_box_change = on_box_change
         self.on_search = on_search
         self.on_action = on_action
         self.on_role_info = on_role_info
+        self.move_metadata_for = move_metadata_for
+        self.on_move_info = on_move_info
         self.on_heal_party = on_heal_party
         self.on_fix_roles = on_fix_roles
         self.on_drop = on_drop
@@ -243,6 +288,7 @@ class UnifiedTeamPCView:
         self._viewport_bind_id = None
         self._keyboard_bindings: list[tuple[str, str]] = []
         self._role_tooltip = None
+        self._move_issue_tooltip = None
         self._inspector_action_buttons: dict[str, ctk.CTkButton] = {}
         self._keyboard_inspector_action: tuple[str, Any] | None = None
         self.pc_columns = 3
@@ -416,6 +462,7 @@ class UnifiedTeamPCView:
         self._release_keyboard_navigation()
         self._release_viewport_resize()
         self._hide_role_tooltip()
+        self._hide_move_issue_tooltip()
 
     def _bind_keyboard_navigation(self) -> None:
         top = self.frame.winfo_toplevel()
@@ -653,20 +700,44 @@ class UnifiedTeamPCView:
         nuevas = list(team_slots)
         antes = [self.firma_de_casilla(s, self.identity_for) for s in self.team_slots]
         ahora = [self.firma_de_casilla(s, self.identity_for) for s in nuevas]
+        cambios = [
+            (index, viejo) for index, (viejo, nuevo) in enumerate(zip(antes, ahora))
+            if viejo != nuevo
+        ]
         try:
-            for index, (viejo, nuevo) in enumerate(zip(antes, ahora)):
-                if viejo == nuevo:
-                    continue
+            # Reportado por el usuario 03-09-2026: cambiar el rol de dos
+            # Pokémon a la vez (p. ej. hacia/desde Líbero) los intercambia de
+            # casilla en la MISMA pasada. `team_frames`/`_team_card_widgets`
+            # están indexados por IDENTIDAD, no por posición: resolver "el
+            # marco viejo de esta casilla" mientras se avanzaba, casilla a
+            # casilla, consultaba ese diccionario DESPUÉS de que una casilla
+            # anterior ya hubiera reconstruido esa misma identidad en su sitio
+            # nuevo -mismo intercambio, la identidad no cambia, solo de
+            # posición-, así que devolvía el marco RECIÉN CREADO en vez del
+            # viejo y lo destruía por error, dejando esa tarjeta con los
+            # widgets muertos aunque su registro siguiera «vivo». El refresco
+            # en sitio siguiente no podía usarla, fallaba con «una tarjeta no
+            # se pudo actualizar» y cargaba a reconstruir la página entera
+            # (~700 ms, con Equipo/PC visiblemente incompleto un instante).
+            #
+            # Capturar aquí, en una pasada propia y ANTES de reconstruir nada,
+            # qué marco pertenece a cada casilla vieja evita la carrera: nadie
+            # ha tocado todavía ese diccionario cuando se lee.
+            marcos_viejos = [
+                (self._clave_de_casilla(viejo), self.team_frames.get(self._clave_de_casilla(viejo)))
+                for _index, viejo in cambios
+            ]
+            for index, _viejo in cambios:
                 # Se apunta la casilla nueva ANTES de destruir la vieja. Al
                 # revés, un fallo a mitad dejaba la casilla destruida y sin
                 # registrar: un hueco en el equipo sin destino donde soltar, y
                 # arrastrar ahí desde el PC no encontraba nada.
                 self.team_slots[index] = nuevas[index]
-                clave = self._clave_de_casilla(viejo)
-                marco = self.team_frames.get(clave)
+            for clave, marco in marcos_viejos:
                 self._olvidar_casilla(clave)
                 if marco is not None and self._widget_vivo(marco):
                     marco.destroy()
+            for index, _viejo in cambios:
                 self._pintar_casilla(index, nuevas[index])
             # Un destino de soltar que apunte a un marco destruido no se puede
             # resolver: se cae con el marco.
@@ -747,13 +818,16 @@ class UnifiedTeamPCView:
         """
         entry = self._team_health_widgets.get(str(identity))
         if not entry:
+            perf.mark("diag.update_team_health.fallo", motivo="sin_entry", identity=str(identity))
             return False
         bar = entry.get("bar")
         label = entry.get("label")
         try:
             if bar is None or label is None:
+                perf.mark("diag.update_team_health.fallo", motivo="bar_o_label_none", identity=str(identity))
                 return False
             if not bar.winfo_exists() or not label.winfo_exists():
+                perf.mark("diag.update_team_health.fallo", motivo="widget_muerto", identity=str(identity))
                 return False
             max_hp = int(max_hp or 0)
             value = int(hp_value) if hp_value is not None else None
@@ -762,7 +836,11 @@ class UnifiedTeamPCView:
             if abs(float(bar.get()) - fraction) > 1e-9:
                 bar.set(fraction)
             self._configurar_si_cambia(label, text=f"PS {text}")
-        except Exception:
+        except Exception as error:
+            perf.mark(
+                "diag.update_team_health.fallo", motivo="excepcion", identity=str(identity),
+                error=type(error).__name__, detalle=str(error)[:120],
+            )
             return False
         # La barrera inicial comprueba lo que esta superficie materializó de
         # verdad. Si actualizamos los widgets sin actualizar esa evidencia, la
@@ -818,12 +896,19 @@ class UnifiedTeamPCView:
         """
         registro = self._team_card_widgets.get(str(identity))
         if not registro or pokemon is None:
+            perf.mark(
+                "diag.update_team_card.fallo",
+                motivo="sin_registro" if not registro else "sin_pokemon",
+                identity=str(identity),
+            )
             return False
         try:
             if not registro["sprite"].winfo_exists():
+                perf.mark("diag.update_team_card.fallo", motivo="sprite_muerto", identity=str(identity))
                 return False
 
-            imagen = self.sprite_for(pokemon, (76, 76))
+            with perf.span("ui.team_pc_view.sprite_for"):
+                imagen = self.sprite_for(pokemon, (76, 76))
             # La referencia vive en el registro, no en `self.images`: esa lista
             # se recorta por posición al repintar el PC y añadirle cosas la
             # descuadraría.
@@ -848,6 +933,7 @@ class UnifiedTeamPCView:
                 # Los PS son lo único que esta tarjeta no pinta por sí misma. Si
                 # no se pudieron poner, decirlo: seguir devolviendo «hecho»
                 # dejaría en pantalla los PS del Pokémon anterior.
+                perf.mark("diag.update_team_card.fallo", motivo="ps")
                 return False
 
             stats = dict(getattr(pokemon, "stats", {}) or {})
@@ -877,15 +963,17 @@ class UnifiedTeamPCView:
                 registro["meta"][1], text=f"OBJETO · {item}",
             )
 
-            moves = list(getattr(pokemon, "moves", None) or [])[:4]
-            while len(moves) < 4:
-                moves.append("—")
-            issue_by_slot = _move_issue_map(
-                pokemon, slot_role, self.move_issues_for, context="team",
+            moves, _move_ids = _effective_moves(
+                pokemon, self.effective_moves_for, context="team",
             )
-            _excess, support_slots = _support_damage_map(
-                pokemon, slot_role, self.support_damage_for, context="team",
-            )
+            with perf.span("ui.team_pc_view.move_issue_map"):
+                issue_by_slot = _move_issue_map(
+                    pokemon, slot_role, self.move_issues_for, context="team",
+                )
+            with perf.span("ui.team_pc_view.support_damage_map"):
+                _excess, support_slots = _support_damage_map(
+                    pokemon, slot_role, self.support_damage_for, context="team",
+                )
             for index, move in enumerate(moves):
                 issue = issue_by_slot.get(index + 1)
                 elegible = (index + 1) in support_slots and not issue
@@ -907,7 +995,11 @@ class UnifiedTeamPCView:
                         else (GOLD if elegible else (TEXT if move != "—" else MUTED))
                     ),
                 )
-        except Exception:
+        except Exception as error:
+            perf.mark(
+                "diag.update_team_card.fallo", motivo="excepcion", identity=str(identity),
+                error=type(error).__name__, detalle=str(error)[:120],
+            )
             return False
 
         # Lo último, y solo si todo lo visible ha ido bien: si se apuntara antes
@@ -943,18 +1035,23 @@ class UnifiedTeamPCView:
         # Una casilla que cambia de rol, de estado o de ocupante se rehace
         # entera -35 ms-; el resto solo cambia de datos. Antes bastaba con que
         # una sola cambiara para rehacer la página, que son 700.
-        if not self.repintar_casillas_cambiadas(team_slots):
-            return "no se pudo repintar una casilla"
-        for slot in team_slots:
-            pokemon = slot.get("pokemon")
-            if pokemon is None:
-                continue                      # casilla libre: no enseña datos
-            if not self.update_team_card(
-                self.identity_for(pokemon),
-                pokemon,
-                str(slot.get("slot_role") or "SIN ROL"),
-            ):
-                return "una tarjeta no se pudo actualizar"
+        with perf.span("ui.team_pc_view.repintar_casillas_cambiadas"):
+            if not self.repintar_casillas_cambiadas(team_slots):
+                return "no se pudo repintar una casilla"
+        with perf.span("ui.team_pc_view.update_team_card_loop") as medida:
+            n = 0
+            for slot in team_slots:
+                pokemon = slot.get("pokemon")
+                if pokemon is None:
+                    continue                      # casilla libre: no enseña datos
+                n += 1
+                if not self.update_team_card(
+                    self.identity_for(pokemon),
+                    pokemon,
+                    str(slot.get("slot_role") or "SIN ROL"),
+                ):
+                    return "una tarjeta no se pudo actualizar"
+            medida.add(tarjetas=n)
         self.team_slots = list(team_slots)
 
         try:
@@ -962,9 +1059,12 @@ class UnifiedTeamPCView:
             self.pc_members = dict(pc_members)
             self.selection.set_pc_box(self.pc_box, self.pc_members)
             self.box_label.configure(text=self._box_title())
-            self._render_pc_grid()
-            self._render_inspector()
-            self._apply_selection_styles()
+            with perf.span("ui.team_pc_view.render_pc_grid"):
+                self._render_pc_grid()
+            with perf.span("ui.team_pc_view.render_inspector"):
+                self._render_inspector()
+            with perf.span("ui.team_pc_view.apply_selection_styles"):
+                self._apply_selection_styles()
         except Exception:
             return "fallo al refrescar el PC o la ficha"
         return None
@@ -1102,9 +1202,9 @@ class UnifiedTeamPCView:
                 etiqueta.grid(row=0, column=column, sticky="ew", padx=(0, 5))
                 meta_labels.append(etiqueta)
 
-            moves = list(getattr(pokemon, "moves", None) or [])[:4]
-            while len(moves) < 4:
-                moves.append("—")
+            moves, _move_ids = _effective_moves(
+                pokemon, self.effective_moves_for, context="team",
+            )
             issue_by_slot = _move_issue_map(
                 pokemon, slot_role, self.move_issues_for, context="team",
             )
@@ -1178,9 +1278,7 @@ class UnifiedTeamPCView:
         # entonces ya no sería el de ahora.
         self._bind_click_tree(
             card,
-            lambda _event=None, ident=identity: self._select_team(
-                self._team_card_pokemon.get(ident),
-            ),
+            lambda _event=None, ident=identity: self._click_team_card(ident),
             exclude={info},
         )
         self._bind_drag_tree(
@@ -1616,9 +1714,9 @@ class UnifiedTeamPCView:
                 font=ctk.CTkFont("Segoe UI", 13, "bold"),
             ).pack(padx=9, pady=(0, 7))
 
-        moves = list(getattr(pokemon, "moves", None) or [])[:4]
-        while len(moves) < 4:
-            moves.append("—")
+        moves, move_ids = _effective_moves(
+            pokemon, self.effective_moves_for, context=context,
+        )
         ctk.CTkLabel(
             details, text="MOVIMIENTOS", text_color=GOLD,
             font=ctk.CTkFont("Segoe UI", 10, "bold"),
@@ -1633,29 +1731,60 @@ class UnifiedTeamPCView:
             pokemon, role, self.support_damage_for, context=context,
         )
         if support_excess:
+            # Pedido del usuario 02-09-2026: «no se termina de ver bien» -un
+            # `wraplength` fijo (260) no correspondía al ancho real de este
+            # panel, que es una FRACCIÓN relativa de la ventana
+            # (`self._panel(relx, relwidth)`), no un tamaño fijo en píxeles;
+            # medido contra el panel de verdad, como ya se hace en
+            # Movimientos.
+            self.inspector_panel.update_idletasks()
+            ancho_panel = int(self.inspector_panel.winfo_width() or 0)
+            if ancho_panel <= 1:
+                ancho_panel = 320
             ctk.CTkLabel(
                 details,
                 text=(
                     f"Support conserva 2 ataques de daño: elige {support_excess} "
                     "para quitar o sustituir."
                 ),
-                text_color=GOLD, wraplength=260, justify="center",
+                text_color=GOLD, wraplength=max(160, ancho_panel - 40), justify="center",
                 font=ctk.CTkFont("Segoe UI", 10, "bold"),
             ).pack(padx=8, pady=(0, 3))
         for index, move in enumerate(moves):
+            move_id = int(move_ids[index] or 0)
             issue = issue_by_slot.get(index + 1)
             # El dorado no dice «ilegal», dice «elige cuál sobra». Las acciones
             # son las mismas que para una incompatibilidad: el usuario decide.
             elegible = (index + 1) in support_slots and not issue
             accionable = bool(issue) or elegible
             color = DANGER if issue else GOLD
+            # El marco de tipo solo sustituye al de aviso cuando no hay nada
+            # que decidir: la incompatibilidad o el exceso de Support siguen
+            # mandando el color, porque ya son una acción pendiente del
+            # usuario y perderla sería peor que no enseñar el tipo.
+            metadata = (
+                self.move_metadata_for(move_id)
+                if self.move_metadata_for is not None and move_id > 0
+                else None
+            )
+            type_id = metadata.get("type_id") if metadata else None
+            type_name, type_color = (
+                MOVE_TYPE_INFO.get(type_id, (None, None))
+                if isinstance(type_id, int) else (None, None)
+            )
             cell = ctk.CTkFrame(
                 move_grid,
                 height=32,
                 corner_radius=8,
-                fg_color="#341A1A" if issue else ("#292315" if elegible else PANEL_ALT),
-                border_width=1 if accionable else 0,
-                border_color=color if accionable else PANEL_ALT,
+                fg_color=(
+                    "#341A1A" if issue
+                    else ("#292315" if elegible
+                          else (move_type_fill(type_color, PANEL_ALT) if type_color else PANEL_ALT))
+                ),
+                border_width=1 if accionable else (2 if type_color else 0),
+                border_color=(
+                    color if accionable else (type_color or PANEL_ALT)
+                ),
             )
             cell.grid(
                 row=index // 2, column=index % 2,
@@ -1665,11 +1794,34 @@ class UnifiedTeamPCView:
             # píxeles recortaba el marco de abajo en cuanto el texto ocupaba dos
             # líneas o el tema cambiaba de fuente.
             cell.grid_propagate(not accionable)
-            ctk.CTkLabel(
+            move_label = ctk.CTkLabel(
                 cell, text=str(move),
                 text_color=color if accionable else (TEXT if move != "—" else MUTED),
                 font=ctk.CTkFont("Segoe UI", 12, "bold"),
-            ).pack(fill="x", padx=4, pady=(4, 1) if accionable else 6)
+            )
+            move_label.pack(fill="x", padx=4, pady=(4, 1) if accionable else 6)
+            if type_name:
+                ctk.CTkLabel(
+                    cell, text=type_name, text_color="#111111", fg_color=type_color,
+                    corner_radius=5, font=ctk.CTkFont("Segoe UI", 8, "bold"),
+                ).place(relx=1.0, rely=0.0, anchor="ne", x=-3, y=3)
+            if issue:
+                aviso = ctk.CTkLabel(
+                    cell, text="i", text_color="#111111", fg_color=DANGER,
+                    width=14, height=14, corner_radius=7,
+                    font=ctk.CTkFont("Segoe UI", 9, "bold"),
+                )
+                aviso.place(relx=0.0, rely=0.0, anchor="nw", x=3, y=3)
+                aviso.bind(
+                    "<Enter>",
+                    lambda _event, boton=aviso: self._show_move_issue_tooltip(boton),
+                    add="+",
+                )
+                aviso.bind("<Leave>", lambda _event: self._hide_move_issue_tooltip(), add="+")
+            if self.on_move_info is not None and move_id > 0:
+                abrir_ficha = lambda _event, mid=move_id, name=str(move): self.on_move_info(mid, name)
+                cell.bind("<Button-1>", abrir_ficha, add="+")
+                move_label.bind("<Button-1>", abrir_ficha, add="+")
             if accionable:
                 row = ctk.CTkFrame(cell, fg_color="transparent")
                 row.pack(fill="x", padx=4, pady=(0, 4))
@@ -1709,6 +1861,34 @@ class UnifiedTeamPCView:
             if pokemon is not None and self.identity_for(pokemon) == identity:
                 return pokemon
         return None
+
+    def _click_team_card(self, ident: str) -> None:
+        """Resuelve un clic sobre una tarjeta de equipo por su identidad capturada.
+
+        Reportado por el usuario 04-09-2026: tras un intercambio PC↔Equipo
+        (Ledyba entró, Pikipek salió), pulsar la tarjeta de Ledyba dejó de
+        abrir su ficha -el resto de tarjetas seguían funcionando-. El clic
+        está enganchado una sola vez, con la IDENTIDAD capturada en ese
+        instante (`ident`), y en cada pulsación relee `_team_card_pokemon`
+        -así una tarjeta reutilizada en sitio no queda atada al Pokémon de
+        cuando se creó-. Si dos repintados casi simultáneos (el proyectado del
+        intercambio y el confirmado por la RAM) dejan `ident` sin una entrada
+        vigente en ese diccionario, `_select_team(None)` acababa llamando a
+        `identity_for(None)`, que revienta -en silencio para el usuario,
+        Tkinter solo lo imprime en consola- sin abrir nada ni avisar. No se ha
+        podido reproducir la carrera para localizar por qué `ident` queda sin
+        Pokémon; esto solo evita el cuelgue silencioso y dael un diagnóstico
+        con el que localizarla si vuelve a pasar.
+        """
+        pokemon = self._team_card_pokemon.get(ident)
+        if pokemon is None:
+            perf.mark(
+                "diag.click_team_card.sin_pokemon",
+                ident=str(ident),
+                claves_vigentes=sorted(str(k) for k in self._team_card_pokemon),
+            )
+            return
+        self._select_team(pokemon)
 
     def _select_team(self, pokemon: Any) -> None:
         if self._suppress_click_once:
@@ -2409,6 +2589,37 @@ class UnifiedTeamPCView:
         except Exception:
             pass
 
+    def _show_move_issue_tooltip(self, button) -> None:
+        self._hide_move_issue_tooltip()
+        try:
+            tooltip = ctk.CTkLabel(
+                self.frame,
+                text="Movimiento incompatible con el rol de este Pokémon",
+                fg_color="#111111",
+                corner_radius=7,
+                text_color=DANGER,
+                font=ctk.CTkFont("Segoe UI", 10, "bold"),
+                height=24,
+                wraplength=200,
+                justify="center",
+            )
+            # Mismo anclaje que `_show_role_tooltip`, y por el mismo motivo: contra
+            # el propio botón, nunca contra `winfo_rootx`.
+            tooltip.place(in_=button, relx=0.5, y=-5, anchor="s")
+            tooltip.lift()
+            self._move_issue_tooltip = tooltip
+        except Exception:
+            self._move_issue_tooltip = None
+
+    def _hide_move_issue_tooltip(self) -> None:
+        tooltip = self._move_issue_tooltip
+        self._move_issue_tooltip = None
+        try:
+            if tooltip is not None and tooltip.winfo_exists():
+                tooltip.destroy()
+        except Exception:
+            pass
+
     def _box_title(self) -> str:
         return f"CAJA {self.pc_box} DE {self.pc_box_count}"
 
@@ -2423,15 +2634,59 @@ class UnifiedTeamPCView:
 
     @staticmethod
     def _bind_hover_tree(widget, on_enter, on_leave, *, exclude: set[Any] | None = None) -> None:
+        """Engancha roce en un widget y en TODOS sus descendientes.
+
+        Reportado por el usuario 04-09-2026, en dos intentos:
+
+        1. La tarjeta de equipo dejaba de marcarse como rozada en cuanto el
+           cursor pasaba por encima de un texto, la barra de PS o cualquier
+           otro hijo -esta función solo enganchaba un nivel de hijos, no
+           todos los descendientes, a diferencia de `_bind_click_tree`-.
+           Enganchar también los nietos no bastó: pasó a marcarse SOLO en el
+           borde de la tarjeta, la única franja sin ningún hijo debajo.
+        2. Cada hijo de Tk es una ventana real propia. Moverse de la tarjeta
+           a uno de sus hijos -aunque visualmente el cursor sigue "dentro" de
+           la tarjeta- SIGUE disparando `<Leave>` en la tarjeta y `<Enter>` en
+           el hijo, en ese orden. El `on_leave` de esta vista difiere su
+           efecto (`after_idle`) mientras que `on_enter` actúa al momento, así
+           que el `<Leave>` diferido siempre ganaba la carrera y deshacía el
+           marcado un instante después de que `<Enter>` lo hubiera puesto.
+           Solo la franja exterior, sin ningún hijo debajo, no sufre esa
+           transición Leave→Enter y por eso parecía la única que funcionaba.
+
+        La solución de Tk para "roce de un contenedor con hijos" es esta:
+        en `<Leave>`, comprobar si el puntero sigue dentro del rectángulo del
+        widget RAÍZ -no del hijo que disparó el evento-. Si sigue dentro,
+        solo cambió de hijo: se ignora. Si de verdad salió, se llama a
+        ``on_leave``.
+        """
         excluded = exclude or set()
-        if widget in excluded:
-            return
-        widget.bind("<Enter>", on_enter, add="+")
-        widget.bind("<Leave>", on_leave, add="+")
-        for child in widget.winfo_children():
-            if child not in excluded:
-                child.bind("<Enter>", on_enter, add="+")
-                child.bind("<Leave>", on_leave, add="+")
+
+        def _todavia_dentro(event) -> bool:
+            try:
+                if event is None:
+                    return False
+                return bool(
+                    widget.winfo_rootx() <= int(event.x_root) < widget.winfo_rootx() + widget.winfo_width()
+                    and widget.winfo_rooty() <= int(event.y_root) < widget.winfo_rooty() + widget.winfo_height()
+                )
+            except Exception:
+                return False
+
+        def _en_salida(event=None):
+            if _todavia_dentro(event):
+                return
+            on_leave(event)
+
+        def _enganchar(nodo) -> None:
+            if nodo in excluded:
+                return
+            nodo.bind("<Enter>", on_enter, add="+")
+            nodo.bind("<Leave>", _en_salida, add="+")
+            for hijo in nodo.winfo_children():
+                _enganchar(hijo)
+
+        _enganchar(widget)
 
     #: El mismo ayudante que usan el menú lateral, Drafteos y MT. Se deja
     #: enganchado aquí porque esta vista lo llama desde métodos que las pruebas

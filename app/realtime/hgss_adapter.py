@@ -17,12 +17,15 @@ DOS COSAS PROPIAS DE CUARTA QUE ESTE ADAPTADOR TIENE QUE RESPETAR
 """
 
 import json
-from dataclasses import dataclass
+import struct
+from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 
 from ..boxed_metadata import (
     ability_name, base_stats_for, boxed_level, item_name, species_name,
 )
+from ..config import LOG_DIR
 from ..gen4_memory import MONEY_MAX, PC_BOX_STRIDE
 from ..gen4_memory import GEN4_MEMORY, Gen4Memory
 from ..hgss_live import (
@@ -35,8 +38,12 @@ from ..models import (
     PendingTeamChange, PendingTMTeach,
 )
 from ..pk4 import (
-    PK4_STORED_SIZE, STAT_ORDER_PERSONAL, parse_pk4_boxed, pk4_party_block,
+    PK4_SANITY, PK4_STORED_SIZE, STAT_ORDER_PERSONAL, parse_pk4_boxed, pk4_party_block,
 )
+
+# Bit 2 del campo de sanidad: bandera de HUEVO MALO (ver el comentario de
+# `PK4_SANITY` en pk4.py). Vive en la cabecera, fuera del checksum.
+_BIT_HUEVO_MALO = 0x0004
 from ..pokemon_stats import nature_presentation, stat_dict
 from ..role_rules import (
     ROLE_SYMBOLS, ROLE_TO_KEY, ROLE_TO_MARKING, canonical_role,
@@ -57,6 +64,33 @@ HGSS_UTILITY_ITEMS = {
     "rare-candy": 50,
     "max-repel": 77,
 }
+
+
+def _anotar_diagnostico(etapa: str, **datos) -> None:
+    """Registro autocontenido, sin depender de `_registrar_intento_vivo`.
+
+    Este módulo (la capa de adaptador) no tiene acceso al registrador de la
+    interfaz -vive en otra capa-, así que escribe directamente al mismo
+    archivo con el mismo criterio: nunca puede tumbar la operación por
+    fallar al escribir.
+    """
+    try:
+        registro = {
+            "cuando": datetime.now().isoformat(timespec="milliseconds"),
+            "etapa": etapa,
+            "juego": "hgss",
+            **datos,
+        }
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        with (LOG_DIR / "escrituras_vivas.jsonl").open("a", encoding="utf-8") as salida:
+            salida.write(json.dumps(registro, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _anotar_diagnostico_box_to_party(**datos) -> None:
+    """Registro para el cuarto incidente de "box-to-party" (06-09-2026)."""
+    _anotar_diagnostico("hgss-diagnostico-box-to-party", **datos)
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +127,12 @@ class HgssRealTimeAdapter(RealTimeGameAdapter):
         )
         self.writer = HgssMelonDSWriter(self.reader)
         self.role_layout_getter = role_layout_getter or (lambda: 2)
+        # DIAGNÓSTICO TEMPORAL 06-09-2026: el usuario reportó que el daño y
+        # el desmayo no se ven en vivo pese al arreglo de identidad
+        # ambigua. Registra cada vez que CAMBIA el estado de la sonda de
+        # combate -no en cada sondeo, para no inundar el log- para ver la
+        # secuencia real de un combate.
+        self._diag_ultimo_estado_batalla: object = object()
         # Datos de juego leídos de la ROM que melonDS tiene cargada.
         self.rom_getter = rom_getter or (lambda: None)
         ruta = Path(__file__).resolve().parents[2] / "data" / "move_catalog.json"
@@ -335,6 +375,91 @@ class HgssRealTimeAdapter(RealTimeGameAdapter):
                 f"0x{self.memory.badges:08X}",
             )
 
+        # Carril de combate: solo el que está en el campo (localizado el
+        # 06-09-2026, ver `HgssMelonDSReader.read_battle_probe`). Los demás
+        # conservan los PS del bloque de equipo, marcados como no medidos.
+        try:
+            lectura_batalla = self.reader.read_battle_probe(crudo)
+        except Exception as exc:
+            lectura_batalla = None
+            _resumen_diag = ("excepcion", str(exc))
+        else:
+            _resumen_diag = (
+                None if lectura_batalla is None else lectura_batalla.state,
+                None if lectura_batalla is None else lectura_batalla.party_slot,
+                None if lectura_batalla is None else lectura_batalla.current_hp,
+                None if lectura_batalla is None else lectura_batalla.max_hp,
+            )
+        # DIAGNÓSTICO TEMPORAL 07-09-2026: sin deduplicar. Vuelve a hacer
+        # falta -la versión deduplicada de abajo no distingue "no hay
+        # transiciones porque va todo bien" de "no hay transiciones porque
+        # nunca llegó a resolverse nada"-. Quitar en cuanto se confirme el
+        # arreglo de los dos ceros seguidos.
+        self._diag_contador_sondeos = getattr(self, "_diag_contador_sondeos", 0) + 1
+        _anotar_diagnostico(
+            "hgss-sondeo-crudo", n=self._diag_contador_sondeos,
+            resumen=list(_resumen_diag),
+            barrido=getattr(self.reader, "_diag_ultimo_barrido", None),
+            party_max_hp=[int(p.max_hp) for p in crudo.pokemon],
+            confirmada=getattr(self.reader, "_battle_hp_ubicacion_confirmada", None),
+            cero_desde=getattr(self.reader, "_battle_confirmada_cero_desde", None),
+        )
+        # DIAGNÓSTICO TEMPORAL 06-09-2026: solo cuando cambia, no en cada
+        # sondeo -evita inundar el log durante un combate largo, pero deja
+        # ver la secuencia completa de estados-.
+        if _resumen_diag != self._diag_ultimo_estado_batalla:
+            self._diag_ultimo_estado_batalla = _resumen_diag
+            _anotar_diagnostico(
+                "hgss-diagnostico-combate", resumen=list(_resumen_diag),
+            )
+
+        if lectura_batalla is None:
+            battle = BattleState("unknown")
+            diagnostico_batalla = LiveDiagnostic(
+                "battle", DiagnosticLevel.WARNING,
+                "La sonda de combate de HeartGold no respondió.",
+                f"0x{self.memory.battle_hp_primary:08X} + 0x{self.memory.battle_hp_secondary:08X}",
+            )
+        elif lectura_batalla.state == "none":
+            battle = BattleState("none")
+            diagnostico_batalla = LiveDiagnostic(
+                "battle", DiagnosticLevel.OK,
+                "Fuera de combate; el carril de HeartGold está a cero.",
+                f"0x{self.memory.battle_hp_primary:08X} + 0x{self.memory.battle_hp_secondary:08X}",
+            )
+        elif lectura_batalla.state == "battle" and lectura_batalla.party_slot is not None:
+            health_party = [
+                replace(
+                    member,
+                    current_hp=lectura_batalla.current_hp,
+                    max_hp=lectura_batalla.max_hp,
+                    hp_is_live=True,
+                ) if member.slot == lectura_batalla.party_slot
+                else replace(member, hp_is_live=False)
+                for member in juego.party
+            ]
+            health_game = replace(juego, party=health_party)
+            battle = BattleState(
+                "battle", health_game=health_game,
+                hp_pairs=((lectura_batalla.current_hp, lectura_batalla.max_hp),),
+            )
+            diagnostico_batalla = LiveDiagnostic(
+                "battle", DiagnosticLevel.OK,
+                f"PS en combate: {lectura_batalla.current_hp}/{lectura_batalla.max_hp} "
+                f"(hueco {lectura_batalla.party_slot}). El resto conserva el bloque de "
+                "equipo, no medido en vivo.",
+                f"0x{self.memory.battle_hp_primary:08X} + 0x{self.memory.battle_hp_secondary:08X} redundantes",
+            )
+        else:
+            # "unknown": instante de transición o PS máximo ambiguo entre dos
+            # miembros. No se inventa nada; el llamador conserva lo anterior.
+            battle = BattleState("unknown")
+            diagnostico_batalla = LiveDiagnostic(
+                "battle", DiagnosticLevel.WARNING,
+                "Combate detectado pero el instante no se pudo confirmar.",
+                f"0x{self.memory.battle_hp_primary:08X} + 0x{self.memory.battle_hp_secondary:08X}",
+            )
+
         diagnosticos = (
             LiveDiagnostic(
                 "party", DiagnosticLevel.OK,
@@ -342,14 +467,7 @@ class HgssRealTimeAdapter(RealTimeGameAdapter):
                 "naturaleza, estadísticas, IV, EV, PP y marcas.",
                 "PK4 nominal · doble lectura + checksum + identidad · PKHeX PK4",
             ),
-            # Cuarta todavía no tiene demostrada su copia de combate. Decirlo es
-            # mejor que publicar un «fuera de combate» que no se ha comprobado.
-            LiveDiagnostic(
-                "battle", DiagnosticLevel.WARNING,
-                "La copia de combate de HeartGold todavía no está demostrada; "
-                "los PS son los del bloque de equipo.",
-                "pendiente de traza de dos estados",
-            ),
+            diagnostico_batalla,
             diagnostico_medallas,
         )
 
@@ -359,7 +477,7 @@ class HgssRealTimeAdapter(RealTimeGameAdapter):
             1,
             self.key,
             "HeartGold España · melonDS",
-            battle=BattleState("unknown"),
+            battle=battle,
             diagnostics=diagnosticos,
             sequence=sequence,
             badges=medallas,
@@ -618,12 +736,26 @@ class HgssRealTimeAdapter(RealTimeGameAdapter):
         nivel = boxed_level(
             self.game_key, pokemon.species_id, pokemon.form, pokemon.experience,
         )
-        return pk4_party_block(
-            stored, pid=pokemon.pid, level=nivel,
-            stats=self._calculated_stats(
-                base, pokemon.ivs, pokemon.evs, nivel, pokemon.nature_id,
-            ),
+        estadisticas = self._calculated_stats(
+            base, pokemon.ivs, pokemon.evs, nivel, pokemon.nature_id,
         )
+        construido = pk4_party_block(
+            stored, pid=pokemon.pid, level=nivel, stats=estadisticas,
+        )
+        # DIAGNÓSTICO TEMPORAL 06-09-2026: cuarto incidente real, sin causa
+        # encontrada por reproducción sintética -ver el comentario de
+        # `_anotar_diagnostico_box_to_party`-. Captura los valores reales del
+        # próximo intento en vivo para poder comparar contra lo que ya se
+        # probó a mano.
+        _anotar_diagnostico_box_to_party(
+            especie=int(pokemon.species_id), forma=int(pokemon.form),
+            pid=int(pokemon.pid), experiencia=int(pokemon.experience),
+            nivel_calculado=nivel, base_stats=list(base),
+            ivs=list(pokemon.ivs), evs=list(pokemon.evs),
+            naturaleza=int(pokemon.nature_id), estadisticas_calculadas=list(estadisticas),
+            stored_hex=stored.hex(), construido_hex=construido.hex(),
+        )
+        return construido
 
     @staticmethod
     def _identidad_de(instantanea) -> tuple[int, int, int]:
@@ -640,6 +772,47 @@ class HgssRealTimeAdapter(RealTimeGameAdapter):
             raise HgssLiveError("Ese hueco del PC está fuera de rango.")
         guardado = pc_read.raw[offset:offset + PK4_STORED_SIZE]
         return parse_pk4_boxed(guardado, 0), guardado
+
+    def _pc_en_confirmado(self, party_read, box: int, box_slot: int):
+        """Como ``_pc_en``, pero exige dos lecturas independientes de acuerdo.
+
+        06-09-2026, corrupción real: sacar un Pokémon del PC al equipo dejó
+        un Huevo malo de verdad en la partida del usuario -no solo
+        estadísticas raras, el propio juego lo marcó así-, con un solo
+        intento y una sola lectura del PC de por medio, sin la protección
+        que ya se le dio a los cambios de rol tras el incidente de Gastly
+        (extensión de combate sin checksum propio, ver
+        ``HgssMelonDSWriter._transaccion_de_equipo``). El PK4 guardado SÍ
+        lleva checksum -``parse_pk4_boxed`` ya se niega ante uno roto-, pero
+        eso no cubre una lectura que atrapó al juego a mitad de escribir algo
+        ahí mismo y aun así dio un checksum válido para un contenido que ya
+        no es el que se creía. Exigir que dos lecturas del PC, separadas en
+        el tiempo, decodifiquen exactamente lo mismo cierra esa ventana con
+        el mismo criterio, aunque no se haya podido demostrar que esta fuera
+        la causa exacta de aquel Huevo malo.
+        """
+        primera, crudo1 = self._pc_en(self.reader.read_pc(party_read), box, box_slot)
+        segunda, crudo2 = self._pc_en(self.reader.read_pc(party_read), box, box_slot)
+        if primera != segunda:
+            raise HgssLiveError(
+                "Ese hueco del PC dio dos lecturas distintas seguidas; no se "
+                "mueve nada sobre un dato que todavía no se ha demostrado estable."
+            )
+        # El bit de HUEVO MALO en sí (06-09-2026, sexto incidente: un Hoothoot
+        # que se leía y mostraba perfectamente normal -checksum válido, nivel
+        # y estadísticas coherentes- resultó ser un Huevo malo de verdad en la
+        # partida guardada). `Pk4Pokemon` no expone este campo -vive en la
+        # cabecera, fuera del checksum, y ninguna comparación de contenido lo
+        # ve-, así que se mira aparte en los bytes crudos de las dos lecturas.
+        if segunda is not None and (
+            struct.unpack_from("<H", crudo1, PK4_SANITY)[0] & _BIT_HUEVO_MALO
+            or struct.unpack_from("<H", crudo2, PK4_SANITY)[0] & _BIT_HUEVO_MALO
+        ):
+            raise HgssLiveError(
+                "Ese hueco del PC ya lleva la marca de Huevo malo del propio "
+                "juego; no se mueve nada desde ahí."
+            )
+        return segunda, crudo2
 
     def _aplicar_equipo_pc(self, current: SaveGameData, change: PendingTeamChange):
         operacion = str(change.operation)
@@ -660,14 +833,31 @@ class HgssRealTimeAdapter(RealTimeGameAdapter):
             )
             return self._resultado_equipo_pc(current, change, 1)
 
+        if operacion == "swap-box-slots":
+            destino_box = int(change.destination_box or 0)
+            destino_slot = int(change.destination_box_slot or 0)
+            # `incoming` es el que se arrastra y acaba en el destino;
+            # `outgoing`, el que estaba allí y pasa al hueco de origen.
+            identidad_origen = self._identidad_de(change.incoming_snapshot)
+            identidad_destino = self._identidad_de(change.outgoing_snapshot)
+            if not all(identidad_origen) or not all(identidad_destino):
+                raise HgssLiveError(
+                    "El intercambio dentro del PC necesita la identidad de los dos Pokémon."
+                )
+            self.writer.swap_pc_slots(
+                party_read, (box, box_slot), (destino_box, destino_slot),
+                source_identity=identidad_origen,
+                destination_identity=identidad_destino,
+            )
+            return self._resultado_equipo_pc(current, change, 1)
+
         if operacion in {"party-to-box", "box-to-party"}:
             party_slot = int(change.party_slot or 0)
             if operacion == "party-to-box":
                 identidad = self._identidad_de(change.outgoing_snapshot)
                 construido = None
             else:
-                pc_read = self.reader.read_pc(party_read)
-                entrante, guardado = self._pc_en(pc_read, box, box_slot)
+                entrante, guardado = self._pc_en_confirmado(party_read, box, box_slot)
                 if entrante is None:
                     raise HgssLiveError("En ese hueco del PC no hay nadie.")
                 if entrante.held_item_id != 0:
@@ -689,8 +879,7 @@ class HgssRealTimeAdapter(RealTimeGameAdapter):
 
         if operacion == "swap-party-box":
             party_slot = int(change.party_slot or 0)
-            pc_read = self.reader.read_pc(party_read)
-            entrante, guardado = self._pc_en(pc_read, box, box_slot)
+            entrante, guardado = self._pc_en_confirmado(party_read, box, box_slot)
             if entrante is None:
                 raise HgssLiveError("En ese hueco del PC no hay nadie.")
             if entrante.held_item_id != 0:
@@ -716,8 +905,7 @@ class HgssRealTimeAdapter(RealTimeGameAdapter):
                 raise HgssLiveError(
                     "La sustitución no declara casilla de Cementerio."
                 )
-            pc_read = self.reader.read_pc(party_read)
-            entrante, guardado = self._pc_en(pc_read, box, box_slot)
+            entrante, guardado = self._pc_en_confirmado(party_read, box, box_slot)
             if entrante is None:
                 raise HgssLiveError("En ese hueco del PC no hay nadie.")
             if entrante.held_item_id != 0:

@@ -136,6 +136,7 @@ def test_oras_move_metadata_is_pinned_to_oras_and_exposes_water_gun() -> None:
         "accuracy": 100,
         "pp": 25,
         "description_es": "Ataca disparando agua con gran potencia.",
+        "type_id": 10,
     }
     assert metadata[379]["power"] is None
     assert metadata[379]["accuracy"] is None
@@ -168,5 +169,6 @@ def test_oras_ui_uses_oras_metadata_for_the_owned_tm() -> None:
         "pp": 25,
         "power": 40,
         "accuracy": 100,
+        "type_id": 10,
         "description": "Ataca disparando agua con gran potencia.",
     }

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Sequence
 
+from ..oras_live import calculate_pk6_stats
+from ..pokemon_stats import stat_dict
 from ..save_engine_client import SaveGameData
 from ..xy_live import XYLiveReader, XYLiveWriter
-from .adapter import RealTimeAdapterError, RealTimeGameAdapter
+from .adapter import RealTimeGameAdapter
 from .bridge import AzaharBridge, EmulatorBridge
 from .models import (
     BattleState,
@@ -37,7 +40,7 @@ class XYRealTimeAdapter(RealTimeGameAdapter):
         self.reader = reader
         self.writer = writer
         self.bridge = bridge or AzaharBridge(reader.client_factory)
-        default_key = {"azahar": "xy-azahar-rpc", "citra": "xy-citra-gdb"}.get(self.bridge.info.key, f"xy-{self.bridge.info.key}")
+        default_key = {"azahar": "xy-azahar-rpc"}.get(self.bridge.info.key, f"xy-{self.bridge.info.key}")
         self.key = adapter_key or default_key
         self.profile = profile or f"XY-{self.bridge.info.display_name}"
         self.live_badges = bool(live_badges)
@@ -58,6 +61,78 @@ class XYRealTimeAdapter(RealTimeGameAdapter):
             for block in tuple(blocks or ())
         )
 
+    def _enrich_pokemon(self, pokemon, _cache: dict | None = None):
+        """Añade Personal y stats derivadas sin inventar datos fuera de ROM.
+
+        Reportado por el usuario el 2026-09-05 probando X/Y en vivo: el equipo
+        salía con "BASE —" en las seis estadísticas, y los Pokémon del PC
+        aparecían directamente sin stats. La causa era que este adaptador
+        nunca enriquecía lo leído, a diferencia del de ORAS
+        (``oras_adapter.ORASRealTimeAdapter._enrich_pokemon``), pese a que
+        X/Y comparte el mismo PK6 de sexta generación y ya tiene su tabla
+        Personal disponible en el writer (``personal_for``, cableado en
+        ``app/ui.py`` con ``_xy_personal_for_live``):
+
+        * el PK6 de PARTY sí trae sus stats calculadas, pero nunca las base;
+        * el PK6 ALMACENADO (cajas) no trae ninguna de las dos, así que sin
+          este paso el PC no podía enseñar ni stats ni base.
+
+        Se calcula con la misma fórmula ya validada para ORAS
+        (``calculate_pk6_stats``), y solo cuando la ROM aporta Personal: si
+        no hay perfil cargado, el Pokémon se devuelve tal cual en vez de
+        inventar una tabla vanilla.
+        """
+        personal_for = getattr(self.writer, "personal_for", None)
+        if not callable(personal_for):
+            return pokemon
+        # Una caja llena son 930 huecos: sin memoria por pasada se repetiría la
+        # misma búsqueda de Personal cientos de veces.
+        key = (int(pokemon.species_id), int(pokemon.form))
+        if _cache is not None and key in _cache:
+            personal = _cache[key]
+        else:
+            try:
+                personal = personal_for(*key)
+            except Exception:
+                personal = None
+            if _cache is not None:
+                _cache[key] = personal
+        if personal is None:
+            return pokemon
+        base_stats = stat_dict(tuple(personal.base_stats[index] for index in (0, 1, 2, 4, 5, 3)))
+        updates = {"base_stats": base_stats}
+        if (
+            not pokemon.stats
+            and pokemon.nature_id is not None
+            and len(pokemon.ivs) == 6
+            and len(pokemon.evs) == 6
+        ):
+            try:
+                updates["stats"] = calculate_pk6_stats(
+                    level=int(pokemon.level),
+                    nature_id=int(pokemon.nature_id),
+                    personal=personal,
+                    ivs=pokemon.ivs,
+                    evs=pokemon.evs,
+                )
+            except Exception:
+                # Nivel/naturaleza fuera de rango en un hueco raro no puede
+                # tumbar la lectura entera del PC: se deja sin stats, como antes.
+                pass
+        changed = {
+            name: value
+            for name, value in updates.items()
+            if getattr(pokemon, name) != value
+        }
+        return replace(pokemon, **changed) if changed else pokemon
+
+    def _enrich_game(self, game: SaveGameData) -> SaveGameData:
+        cache: dict = {}
+        party = [self._enrich_pokemon(pokemon, cache) for pokemon in game.party]
+        if all(enriched is original for enriched, original in zip(party, game.party)):
+            return game
+        return replace(game, party=party)
+
     def _convert(
         self,
         raw,
@@ -66,6 +141,7 @@ class XYRealTimeAdapter(RealTimeGameAdapter):
         sequence: int,
         include_badges: bool,
     ) -> RealTimeSnapshot:
+        game = self._enrich_game(raw.game)
         source = f"{self.bridge.info.display_name} · {self.bridge.info.transport}"
         diagnostics: list[LiveDiagnostic] = [LiveDiagnostic(
             "party", DiagnosticLevel.OK,
@@ -134,7 +210,7 @@ class XYRealTimeAdapter(RealTimeGameAdapter):
             ))
         self._last_process_key = (int(raw.process.title_id), str(raw.process.name))
         return RealTimeSnapshot(
-            game=raw.game,
+            game=game,
             process=self._process(raw.process),
             attempts=int(raw.attempts),
             adapter_key=self.key,
@@ -184,12 +260,21 @@ class XYRealTimeAdapter(RealTimeGameAdapter):
         return self.writer.read_tm_inventory(saved_items)
 
     def read_pc(self, anchors, *, box_count: int | None = None, box_slot_count: int | None = None):
-        return self.reader.read_pc(anchors)
+        process, base_address, slots = self.reader.read_pc(anchors)
+        # El PK6 almacenado no trae stats ni base: sin este paso el PC de X/Y
+        # se veía entero con "—" (reportado 2026-09-05). Mismo enriquecido que
+        # ya hace ORAS en su adaptador.
+        cache: dict = {}
+        enriched = {
+            key: None if pokemon is None else self._enrich_pokemon(pokemon, cache)
+            for key, pokemon in slots.items()
+        }
+        return process, base_address, enriched
 
     def diagnostic_memory_requests(self) -> tuple[tuple[int, int], ...]:
-        # Inventario/PC pueden estar calibrados también en Citra aunque las
-        # medallas sigan usando temporalmente el main. El diagnóstico debe
-        # registrar cualquier bloque vivo resuelto por el adaptador.
+        # Inventario/PC pueden estar calibrados aunque las medallas sigan
+        # usando temporalmente el main. El diagnóstico debe registrar
+        # cualquier bloque vivo resuelto por el adaptador.
         return self.writer.runtime_memory_requests()
 
     def runtime_state(self) -> dict[str, object]:
@@ -232,119 +317,3 @@ class XYRealTimeAdapter(RealTimeGameAdapter):
     def reset_runtime_state(self) -> None:
         self._last_process_key = None
         self.writer.reset_runtime_state()
-
-
-class XYMultiRealTimeAdapter(RealTimeGameAdapter):
-    """Selecciona automáticamente Azahar o Citra sin perder compatibilidad.
-
-    La última ruta que funcionó se prueba primero. Si desaparece, el adaptador
-    vuelve a sondear el resto. El Core, la UI y los eventos siguen viendo una
-    única implementación ``xy``.
-    """
-
-    key = "xy-multi"
-    game_key = "xy"
-    display_name = "Pokémon X / Y"
-
-    def __init__(self, adapters: Iterable[XYRealTimeAdapter]) -> None:
-        self.adapters = tuple(adapters)
-        if not self.adapters:
-            raise ValueError("XYMultiRealTimeAdapter necesita al menos un transporte.")
-        self._active: XYRealTimeAdapter | None = None
-        self._errors: dict[str, str] = {}
-
-    @property
-    def active_adapter(self) -> XYRealTimeAdapter | None:
-        return self._active
-
-    def _ordered(self) -> tuple[XYRealTimeAdapter, ...]:
-        if self._active is None:
-            return self.adapters
-        return (self._active, *tuple(a for a in self.adapters if a is not self._active))
-
-    def _capture(self, method: str, current: SaveGameData, **kwargs) -> RealTimeSnapshot:
-        errors: list[str] = []
-        for adapter in self._ordered():
-            try:
-                snapshot = getattr(adapter, method)(current, **kwargs)
-            except Exception as exc:
-                message = str(exc) or type(exc).__name__
-                self._errors[adapter.key] = message
-                errors.append(f"{adapter.bridge.info.display_name}: {message}")
-                if adapter is self._active:
-                    self._active = None
-                continue
-            self._active = adapter
-            self._errors.pop(adapter.key, None)
-            return snapshot
-        raise RealTimeAdapterError(
-            "No se encontró X/Y en un emulador compatible. " + " | ".join(errors)
-        )
-
-    def prepare_connection(self) -> None:
-        """Libera transportes que bloquean el arranque sin seleccionar aún uno.
-
-        Azahar no necesita preparación. Citra sí: su GDB Stub puede detener la
-        CPU hasta recibir ``continue``. El transporte activo se decidirá después
-        mediante una captura validada; este método no fuerza Citra sobre Azahar.
-        """
-        errors: list[str] = []
-        for adapter in self.adapters:
-            try:
-                adapter.prepare_connection()
-            except Exception as exc:
-                # Es normal que un emulador alternativo no esté abierto. Solo
-                # conservamos el detalle para diagnóstico; la captura posterior
-                # decidirá qué ruta está realmente disponible.
-                errors.append(f"{adapter.bridge.info.display_name}: {str(exc) or type(exc).__name__}")
-        if errors:
-            self._errors["prepare"] = " | ".join(errors)
-        else:
-            self._errors.pop("prepare", None)
-
-    def capture_monitor(self, current: SaveGameData, *, save_path, memory_requests=(), sequence=0):
-        return self._capture(
-            "capture_monitor", current, save_path=save_path,
-            memory_requests=memory_requests, sequence=sequence,
-        )
-
-    def capture_full(self, current: SaveGameData, *, save_path, memory_requests=(), sequence=0):
-        return self._capture(
-            "capture_full", current, save_path=save_path,
-            memory_requests=memory_requests, sequence=sequence,
-        )
-
-    def _require_active(self) -> XYRealTimeAdapter:
-        if self._active is None:
-            raise RealTimeAdapterError("X/Y todavía no está enlazado a Azahar ni Citra.")
-        return self._active
-
-    def apply_changes(self, current: SaveGameData, changes):
-        return self._require_active().apply_changes(current, changes)
-
-    def read_tm_inventory(self, saved_items=None):
-        return self._require_active().read_tm_inventory(saved_items)
-
-    def read_pc(self, anchors, *, box_count: int | None = None, box_slot_count: int | None = None):
-        return self._require_active().read_pc(
-            anchors, box_count=box_count, box_slot_count=box_slot_count,
-        )
-
-    def diagnostic_memory_requests(self) -> tuple[tuple[int, int], ...]:
-        return self._active.diagnostic_memory_requests() if self._active is not None else ()
-
-    def runtime_state(self) -> dict[str, object]:
-        return {
-            "adapter": self.key,
-            "game": self.game_key,
-            "active": self._active.key if self._active is not None else None,
-            "active_emulator": self._active.bridge.info.display_name if self._active is not None else None,
-            "errors": dict(self._errors),
-            "transports": [adapter.runtime_state() for adapter in self.adapters],
-        }
-
-    def reset_runtime_state(self) -> None:
-        self._active = None
-        self._errors.clear()
-        for adapter in self.adapters:
-            adapter.reset_runtime_state()

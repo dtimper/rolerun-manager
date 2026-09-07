@@ -183,6 +183,11 @@ def test_xy_all_team_pc_operations_cross_the_live_ui_gate() -> None:
     operations = (
         "move-box-slot", "party-to-box", "box-to-party",
         "swap-party-box", "replace-fainted",
+        # 2026-09-05: XYLiveWriter._apply_pc_swap añade el intercambio entre
+        # dos casillas ocupadas del PC, con el mismo contrato ya validado
+        # para ORAS. Sin esta entrada la compuerta lo rechazaba antes de
+        # llegar al escritor.
+        "swap-box-slots",
     )
 
     for operation in operations:

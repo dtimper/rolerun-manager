@@ -52,3 +52,42 @@ def configurar_si_cambia(widget: Any, **opciones: Any) -> bool:
     if cambios:
         widget.configure(**cambios)
     return bool(cambios)
+
+
+def wrap_to_own_width(label: Any, *, max_passes: int = 4, margin: int = 4) -> None:
+    """El ``wraplength`` de ``label`` sigue al ancho real que Tk le da.
+
+    Extraído de ``IntegratedRoleInfoPopover._wrap_to_own_width`` (31-08-2026),
+    donde ya demostró el motivo por el que hace falta: un `wraplength` fijo,
+    adivinado a mano, se sale del hueco real en cuanto ese hueco depende de
+    un reparto de columnas por `weight` -que no se conoce en píxeles hasta que
+    Tk termina de repartir el espacio-. Reaparece en `global_tm_view.py`
+    (02-09-2026, «sigue sin verse el marco completo»): la descripción de un
+    movimiento se salía del marco de tipo cuando el `wraplength` adivinado
+    era más ancho que la columna real.
+
+    CustomTkinter reescala `wraplength` con su propio factor de escala de
+    pantalla antes de dárselo al Label de Tk real, y `.cget("wraplength")`
+    devuelve el valor SIN escalar que se le pasó -nunca el aplicado de
+    verdad-. Pasarle el ancho físico de `event.width` tal cual haría que CTk
+    lo multiplicara POR SEGUNDA VEZ. `_reverse_widget_scaling` es la misma
+    conversión que usa el propio CustomTkinter en su manejador de
+    `<Configure>` para deshacer exactamente ese escalado.
+
+    Un tope duro de aplicaciones (``max_passes``) evita escuchar para
+    siempre: basta con corregir el par de pasadas iniciales en las que Tk
+    todavía está asentando el layout.
+    """
+    aplicaciones_restantes = [max(1, int(max_passes))]
+
+    def ajustar(event) -> None:
+        if aplicaciones_restantes[0] <= 0:
+            label.unbind("<Configure>", binding[0])
+            return
+        fisico = max(1, int(event.width) - margin)
+        logico = int(label._reverse_widget_scaling(fisico))
+        if int(label.cget("wraplength") or 0) != logico:
+            aplicaciones_restantes[0] -= 1
+            label.configure(wraplength=logico)
+
+    binding = [label.bind("<Configure>", ajustar, add="+")]

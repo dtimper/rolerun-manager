@@ -265,7 +265,7 @@ def test_movimientos_tampoco_reescribe_su_altura() -> None:
     ajuste = inspect.getsource(GlobalTMView._fit_to_viewport)
 
     assert "configurar_si_cambia(" in montaje
-    assert "configurar_si_cambia(self.frame, height=height)" in ajuste
+    assert "configurar_si_cambia(self.frame, height=" in ajuste
     assert "self.frame.configure(height=" not in ajuste
 
 

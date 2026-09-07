@@ -88,14 +88,27 @@ class _Emulador:
         # las fichas de verdad: medido, 7 de 25 pares de lecturas seguidas del
         # equipo dan bytes distintos y 0 dan contenido distinto.
         self.parpadea: int | None = None
+        # 06-09-2026: simula una lectura pillada a medias en un hueco que NO
+        # tiene nada que ver con la operación -exactamente lo que le pasó a
+        # Rattata al enviar OTRO Pokémon al PC-. En esas llamadas concretas,
+        # ese hueco devuelve otro Pokémon válido (mismo formato, nivel y
+        # estado distintos), sin tocar `self.party`.
+        self.llamadas_a_read_party = 0
+        self.nivel_torcido_en_llamadas: set[int] = set()
+        self.nivel_torcido_hueco: int = 0
 
     def read_party(self) -> HgssPartyRead:
+        self.llamadas_a_read_party += 1
         if self.parpadea is not None:
             desde = self.parpadea * PK4_PARTY_SIZE
             self.party[desde:desde + PK4_PARTY_SIZE] = _del_reves(
                 bytes(self.party[desde:desde + PK4_PARTY_SIZE]),
             )
-        crudo = bytes(self.party[:self.count * PK4_PARTY_SIZE])
+        crudo = bytearray(self.party[:self.count * PK4_PARTY_SIZE])
+        if self.llamadas_a_read_party in self.nivel_torcido_en_llamadas:
+            desde = self.nivel_torcido_hueco * PK4_PARTY_SIZE
+            crudo[desde:desde + PK4_PARTY_SIZE] = bytes.fromhex(_CASOS[2]["party_hex"])
+        crudo = bytes(crudo)
         return HgssPartyRead(
             self.process_id, "melonDS.exe", 0, self.count, crudo,
             parse_party_block(crudo, self.count),
@@ -111,7 +124,8 @@ class _Emulador:
 
 class _Writer(HgssMelonDSWriter):
     def __init__(self, emulador: _Emulador, *, rompe_pc: bool = False) -> None:
-        super().__init__(reader=emulador)
+        # Los tests no esperan de verdad la segunda verificación (06-09-2026).
+        super().__init__(reader=emulador, segunda_verificacion_espera=0.0)
         self.emulador = emulador
         self.rompe_pc = rompe_pc
 
@@ -192,6 +206,72 @@ def test_una_caja_fuera_de_rango_se_rechaza() -> None:
         )
 
 
+def test_intercambiar_dos_huecos_ocupados_cruza_los_dos_pk4() -> None:
+    """05-09-2026, pedido del usuario: el intercambio deja de ser de sexta.
+
+    `move_pc_slot` exige el destino libre y deja el vacío cifrado en el origen.
+    Aquí no interviene ningún vacío: son los mismos dos bloques de 136 bytes,
+    cruzados, con las dos identidades como ancla.
+    """
+    emu = _Emulador(guardados=((0, 1, 1, 10), (1, 2, 5, 10)))
+    writer = _Writer(emu)
+    uno = parse_pk4_boxed(bytes(emu.pc[_hueco(1, 1):_hueco(1, 1) + PK4_STORED_SIZE]), 0)
+    otro = parse_pk4_boxed(bytes(emu.pc[_hueco(2, 5):_hueco(2, 5) + PK4_STORED_SIZE]), 0)
+    assert _identidad(uno) != _identidad(otro)
+
+    _equipo, _pc = writer.swap_pc_slots(
+        emu.read_party(), (1, 1), (2, 5),
+        source_identity=_identidad(uno), destination_identity=_identidad(otro),
+    )
+
+    quedo = parse_pk4_boxed(bytes(emu.pc[_hueco(1, 1):_hueco(1, 1) + PK4_STORED_SIZE]), 0)
+    llego = parse_pk4_boxed(bytes(emu.pc[_hueco(2, 5):_hueco(2, 5) + PK4_STORED_SIZE]), 0)
+    assert _identidad(quedo) == _identidad(otro)
+    assert _identidad(llego) == _identidad(uno)
+    # Ninguna casilla pasa por el vacío en ningún momento.
+    assert quedo is not None and llego is not None
+
+
+def test_no_se_intercambia_con_un_hueco_vacio() -> None:
+    """Un destino libre es un traslado (`move_pc_slot`), no un intercambio."""
+    emu = _Emulador()
+    writer = _Writer(emu)
+    quien = parse_pk4_boxed(bytes(emu.pc[_hueco(1, 1):_hueco(1, 1) + PK4_STORED_SIZE]), 0)
+
+    with pytest.raises(HgssLiveError, match="destino del PC no hay nadie"):
+        writer.swap_pc_slots(
+            emu.read_party(), (1, 1), (2, 5),
+            source_identity=_identidad(quien), destination_identity=(1, 2, 3),
+        )
+    assert emu.escrituras == []
+
+
+def test_el_intercambio_rechaza_una_identidad_desfasada_sin_escribir() -> None:
+    emu = _Emulador(guardados=((0, 1, 1, 10), (1, 2, 5, 10)))
+    writer = _Writer(emu)
+    uno = parse_pk4_boxed(bytes(emu.pc[_hueco(1, 1):_hueco(1, 1) + PK4_STORED_SIZE]), 0)
+
+    with pytest.raises(HgssLiveError, match="identidad del Pokémon de destino"):
+        writer.swap_pc_slots(
+            emu.read_party(), (1, 1), (2, 5),
+            source_identity=_identidad(uno), destination_identity=(99, 98, 97),
+        )
+    assert emu.escrituras == []
+
+
+def test_el_intercambio_no_admite_el_mismo_pokemon_dos_veces() -> None:
+    emu = _Emulador(guardados=((0, 1, 1, 10), (1, 2, 5, 10)))
+    writer = _Writer(emu)
+    uno = parse_pk4_boxed(bytes(emu.pc[_hueco(1, 1):_hueco(1, 1) + PK4_STORED_SIZE]), 0)
+
+    with pytest.raises(HgssLiveError, match="mismo Pokémon"):
+        writer.swap_pc_slots(
+            emu.read_party(), (1, 1), (2, 5),
+            source_identity=_identidad(uno), destination_identity=_identidad(uno),
+        )
+    assert emu.escrituras == []
+
+
 # --------------------------------------------------------------------------
 # Depositar y retirar
 # --------------------------------------------------------------------------
@@ -212,6 +292,30 @@ def test_depositar_encoge_el_equipo_y_compacta() -> None:
     ]
     guardado = parse_pk4_boxed(bytes(emu.pc[:PK4_STORED_SIZE]), 0)
     assert _identidad(guardado) == _identidad(saliente)
+
+
+def test_una_ficha_ajena_inestable_impide_depositar() -> None:
+    """06-09-2026, corrupción real: enviar OTRO Pokémon al PC dejó a Rattata
+
+    -sin ninguna relación con la operación- mostrando «Envenenado» donde iba
+    el nivel. El armazón reescribe el bloque de equipo entero en cada
+    operación, así que una lectura inestable en CUALQUIER hueco tiene que
+    bloquear la escritura, no solo la del hueco que se declara mover.
+    """
+    emu = _Emulador(miembros=3, guardados=())
+    emu.nivel_torcido_en_llamadas = {2}  # solo la lectura `primera` interna
+    emu.nivel_torcido_hueco = 0  # el hueco 0 no tiene nada que ver con el 1
+    writer = _Writer(emu)
+    antes = emu.read_party()
+    saliente = antes.pokemon[1]
+
+    with pytest.raises(HgssLiveError, match="no se estabilizó"):
+        writer.resize_party_pc(
+            antes, operation="party-to-box", party_slot=1, box=1, box_slot=1,
+            expected_identity=_identidad(saliente),
+        )
+    assert emu.escrituras == []
+    assert bytes(emu.party) == emu.party_original
 
 
 def test_no_se_deja_el_equipo_vacio() -> None:
@@ -240,6 +344,37 @@ def test_retirar_agranda_el_equipo_y_vacia_el_hueco() -> None:
     assert equipo.count == 4
     assert _identidad(equipo.pokemon[3]) == _identidad(entrante)
     assert bytes(emu.pc[:PK4_STORED_SIZE]) == empty_pk4_stored()
+
+
+def test_un_toque_tardio_del_juego_tras_retirar_se_deshace() -> None:
+    """06-09-2026: la segunda verificación que le faltaba a este armazón.
+
+    `_transaccion_de_equipo` ya la tiene desde el incidente de Gastly; esta
+    transacción -la que usan mover/depositar/retirar del PC- nunca la tuvo,
+    y el cuarto incidente real (Spinarak Huevo malo al retirarlo) pasó
+    precisamente aquí. No se ha demostrado que esto sea la causa exacta,
+    pero si el juego toca el hueco recién llegado un instante después del
+    readback inmediato, ahora se detecta y se deshace en vez de darlo por
+    bueno.
+    """
+    emu = _Emulador(miembros=3, guardados=((5, 1, 1, 10),))
+    emu.nivel_torcido_en_llamadas = {6}  # la lectura de la segunda verificación
+    emu.nivel_torcido_hueco = 3  # el hueco recién llegado, el cuarto
+    writer = _Writer(emu)
+    guardado = bytes(emu.pc[:PK4_STORED_SIZE])
+    entrante = parse_pk4_boxed(guardado, 0)
+
+    with pytest.raises(HgssLiveError, match="tocó el equipo después de confirmar"):
+        writer.resize_party_pc(
+            emu.read_party(), operation="box-to-party", party_slot=3, box=1, box_slot=1,
+            expected_identity=_identidad(entrante),
+            incoming_party=_bloque_de_combate(guardado),
+        )
+    # Y el rollback dejó la partida exactamente como estaba: el PC con el
+    # depositado de vuelta y el equipo con sus tres miembros originales.
+    assert bytes(emu.pc[:PK4_STORED_SIZE]) == guardado
+    restaurado = emu.read_party()
+    assert restaurado.count == 3
 
 
 def test_no_se_retira_a_un_equipo_lleno() -> None:

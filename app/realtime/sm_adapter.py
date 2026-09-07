@@ -286,7 +286,13 @@ class SMRealTimeAdapter(RealTimeGameAdapter):
                 "tm_live": True,
                 "pc_read_live": True,
                 "pc_write_live": True,
-                "pc_write_modes": ("swap-party-box", "party-to-box", "box-to-party"),
+                # Se había quedado desactualizado: `move-box-slot` existe desde
+                # el 04-09-2026 (`SMLiveWriter._apply_pc_move`) y `swap-box-slots`
+                # desde el 05-09-2026 (`SMLiveWriter._apply_pc_swap`).
+                "pc_write_modes": (
+                    "swap-party-box", "party-to-box", "box-to-party",
+                    "move-box-slot", "swap-box-slots",
+                ),
                 "pc_swap_diagnostic": False,
                 "party_base": int(raw.party_base),
             },

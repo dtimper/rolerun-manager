@@ -191,6 +191,11 @@ class Gen4RomProfile:
         move = self.move(move_id)
         return int(move.accuracy) if move is not None else 0
 
+    def type_id(self, move_id: int) -> int | None:
+        """Tipo ya normalizado al esquema de quinta en adelante (0=normal…16=siniestro)."""
+        move = self.move(move_id)
+        return int(move.type_id) if move is not None else None
+
 
 def _narc_alguno(rom, rutas: tuple[str, ...], que: str, juego: Gen4Game) -> list[bytes]:
     for ruta in rutas:

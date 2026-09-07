@@ -111,6 +111,11 @@ class Gen4Memory:
     # Fuera del bloque del guardado: vive en el binario del juego, así que hay
     # que demostrarla aparte. Un juego puede tener ancla y todavía no tenerla.
     tm_table: int | None = None
+    # PS del combatiente EN EL CAMPO, en dos copias redundantes -mismo listón
+    # que en X/Y: una sola nunca basta para publicar-. No hay tabla con los
+    # otros cinco (a diferencia de Gen5): cuarta solo demuestra al activo.
+    battle_hp_primary: int | None = None
+    battle_hp_secondary: int | None = None
 
     @property
     def bag_pouches(self) -> dict[str, tuple[int, int]]:
@@ -169,5 +174,46 @@ GEN4_MEMORY: dict[str, Gen4Memory] = {
         # que se ha encontrado no es una copia de la referencia sino la tabla
         # propia de HeartGold.
         tm_table=0x021000B4,
+        # Localizadas el 06-09-2026 sobre la partida real, con búsqueda de
+        # valor exacto en tres instantes (sin suponer ninguna tabla): a
+        # diferencia de Gen5, cuarta NO mantiene una fila por miembro -se
+        # buscó una alrededor de cada candidato y no apareció-, solo refleja
+        # al que está en el campo, en varias copias redundantes.
+        #
+        # `battle_hp_primary` trae `<PS actual, PS máximo>` y siguió
+        # correctamente a Totodile (38/42) y, tras un cambio de combatiente en
+        # la misma pelea, a Spinarak (20/23) sin retraso. `battle_hp_secondary`
+        # solo trae el PS actual (su segundo campo no es el máximo), pero
+        # coincidió con el primero en los tres instantes y sirve de
+        # confirmación redundante.
+        #
+        # Las dos se resetean a 0 nada más terminar el combate -confirmado
+        # saliendo de la pelea real-, lo que da gratis la detección de "hay
+        # combate": basta con que el PS máximo de la primaria sea 0.
+        #
+        # 07-09-2026: estas dos direcciones NO son fijas de verdad. Tras un
+        # día reiniciando el juego muchas veces (los incidentes de escritura),
+        # el usuario reportó que el carril de combate se quedaba en "sin
+        # combate" durante una pelea real, y una lectura en vivo confirmó las
+        # dos a 0/0 en pleno combate. Reubicadas con el mismo método de
+        # búsqueda de valor exacto -PS 14/14→5/14→6/14, cruzando primaria y
+        # secundaria en el mismo desplazamiento relativo (0x68) para
+        # descartar coincidencias- a `0x022CC568`/`0x022CC500`, un
+        # desplazamiento de +0x7C respecto a las de ayer.
+        #
+        # Y se volvió a mover DENTRO de la misma sesión, sin reiniciar nada:
+        # el usuario siguió sin ver daño en tiempo real y una lectura en vivo
+        # encontró basura (5823/56213/65024) en estas dos direcciones. La
+        # estructura se reserva en tiempo de ejecución en cada combate, así
+        # que ya no basta con relocalizarla a mano una vez. `HgssMelonDSReader
+        # .read_battle_probe` (`hgss_live.py`) la localiza ahora sola, con el
+        # mismo método pero automático: barre los 4 MiB buscando el propio
+        # contenido -un PS máximo de un miembro real del equipo con su PS
+        # actual dentro de rango, confirmado por la copia secundaria en el
+        # mismo desplazamiento de 0x68-, y solo repite el barrido cuando la
+        # dirección conocida deja de servir. Estos dos valores quedan como
+        # primera pista de arranque, no como verdad fija.
+        battle_hp_primary=0x022CC568,
+        battle_hp_secondary=0x022CC500,
     ),
 }

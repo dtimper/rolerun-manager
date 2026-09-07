@@ -68,6 +68,7 @@ def test_spurious_main_map_cannot_close_bar_while_another_process_is_foreground(
     )
     manager = SimpleNamespace(
         floating_bar=bar,
+        _auto_floating_guard=False,
         _floating_bar_is_visible=lambda: True,
         _foreground_belongs_to_this_process=lambda: False,
         withdraw=lambda: calls.append("main-withdraw"),
@@ -164,6 +165,7 @@ def test_explicitly_visible_main_window_always_withdraws_the_floating_bar() -> N
     )
     manager = SimpleNamespace(
         floating_bar=bar,
+        _auto_floating_guard=False,
         _floating_bar_is_visible=lambda: True,
         _foreground_belongs_to_this_process=lambda: False,
         state=lambda: "zoomed",

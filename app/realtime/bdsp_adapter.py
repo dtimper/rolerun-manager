@@ -26,6 +26,12 @@ from ..bdsp_live import (
 )
 from ..bdsp_live import read_bdsp_play_time
 from ..ventana_activa import tiene_el_foco
+from ..bdsp_levelup_table_live import (
+    WazaOboeAnchor,
+    WazaOboeLiveLocator,
+    WazaOboeLivePatcher,
+    WazaOboePatchOutcome,
+)
 from ..bdsp_tm_service import BDSPTMProfile, discover_personal_masterdatas, load_bdsp_tm_profile
 from ..boxed_metadata import ability_name, item_name, level_for_experience, species_name
 from ..config import APP_VERSION
@@ -127,6 +133,7 @@ class BDSPRealTimeAdapter(RealTimeGameAdapter):
         self.trace_path = Path(trace_path) if trace_path is not None else None
         self._trace_started = False
         self._client: RyujinxHostMappedClient | None = None
+        self._levelup_locator: WazaOboeLiveLocator | None = None
         # La lectura de 40×30 cajas y el monitor comparten un handle Win32 de
         # solo lectura. Se serializan para que sus dobles lecturas no se mezclen
         # con un reset/cierre concurrente ni publiquen instantes incompatibles.
@@ -229,8 +236,66 @@ class BDSPRealTimeAdapter(RealTimeGameAdapter):
 
     def _discard_client(self) -> None:
         client, self._client = self._client, None
+        self._levelup_locator = None
         if client is not None:
             client.close()
+
+    def _ensure_levelup_locator(self, client: RyujinxHostMappedClient) -> WazaOboeLiveLocator:
+        if self._levelup_locator is None:
+            self._levelup_locator = WazaOboeLiveLocator(client)
+        return self._levelup_locator
+
+    def sync_levelup_table(
+        self,
+        patches: Mapping[tuple[int, int], Mapping[int, int]],
+        anchors: Mapping[tuple[int, int], WazaOboeAnchor],
+    ) -> tuple[WazaOboePatchOutcome, ...]:
+        """Parchea en vivo, de forma proactiva, la fila de WazaOboeTable de
+        cada especie/forma indicada en ``patches`` — para que el propio
+        diálogo de aprendizaje del juego ya muestre el movimiento de rol, en
+        vez de sustituirlo después de que el jugador confirme el vainilla
+        (ver ``_sync_bdsp_levelup_moves`` en ``ui.py``, que sigue activo como
+        red de seguridad). No lanza por una especie individual no localizada
+        o cuyo parche falle — solo lo traza y continúa con el resto; si el
+        cliente/sesión en sí ya no es válido, propaga para que el sondeo
+        general lo reconecte igual que cualquier otra lectura.
+        """
+        if not patches:
+            return ()
+        with self._read_lock:
+            client = self._ensure_client()
+            locator = self._ensure_levelup_locator(client)
+            wanted = [anchors[key] for key in patches if key in anchors]
+            locations = locator.locate_all(wanted)
+            patcher = WazaOboeLivePatcher(client)
+            outcomes: list[WazaOboePatchOutcome] = []
+            for species_form, patch in patches.items():
+                if not patch:
+                    continue
+                location = locations.get(species_form)
+                if location is None:
+                    self._trace({
+                        "event": "levelup-table-not-found",
+                        "species_form": list(species_form),
+                    })
+                    continue
+                try:
+                    outcome = patcher.apply_patch(location, patch)
+                except Exception as exc:
+                    self._trace({
+                        "event": "levelup-table-patch-error",
+                        "species_form": list(species_form),
+                        "error": str(exc),
+                    })
+                    continue
+                if outcome.changed:
+                    self._trace({
+                        "event": "levelup-table-patch",
+                        "species_form": list(species_form),
+                        "patched_indices": list(outcome.patched_indices),
+                    })
+                outcomes.append(outcome)
+            return tuple(outcomes)
 
     def _party_game(self, raw: BDSPPartyRead, current: SaveGameData) -> SaveGameData:
         try:
@@ -966,6 +1031,7 @@ class BDSPRealTimeAdapter(RealTimeGameAdapter):
     def reset_runtime_state(self) -> None:
         with self._read_lock:
             self._discard_client()
+            self._levelup_locator = None
             self._trace_started = False
             self._battle_identity = ()
             self._published_battle_hp.clear()

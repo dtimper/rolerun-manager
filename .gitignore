@@ -19,6 +19,7 @@ engine/publish/
 # Windows
 Thumbs.db
 desktop.ini
+*.lnk
 
 # Logs
 *.log

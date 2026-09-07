@@ -303,7 +303,12 @@ class USUMRealTimeAdapter(RealTimeGameAdapter):
                 "tm_live": True,
                 "pc_read_live": True,
                 "pc_write_live": True,
-                "pc_write_modes": ("swap-party-box", "party-to-box", "box-to-party", "move-box-slot"),
+                "pc_write_modes": (
+                    "swap-party-box", "party-to-box", "box-to-party",
+                    "move-box-slot",
+                    # 05-09-2026: `USUMLiveWriter._apply_pc_swap`.
+                    "swap-box-slots",
+                ),
                 "pc_swap_diagnostic": False,
                 "party_base": int(raw.party_base),
             },

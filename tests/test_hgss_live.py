@@ -373,6 +373,69 @@ def test_el_bloque_no_se_da_por_vivo_sin_demostrarlo() -> None:
     assert HgssMelonDSReader().block_is_live is False
 
 
+def test_retry_block_liveness_no_repite_la_muestra_si_ya_esta_viva() -> None:
+    """06-09-2026: no hace falta volver a buscar melonDS si ya se demostró.
+
+    `_bloque_demostrado` (en `hgss_write.py`) llama a esto antes de rendirse;
+    si ya está viva, tiene que devolver `True` sin tocar la lista de
+    procesos -barato solo importa cuando de verdad hace falta reintentar-.
+    """
+    from app.hgss_live import HgssMelonDSReader
+
+    lector = HgssMelonDSReader(firma_getter=lambda: None)
+    lector._bloque_vivo = True
+    llamada = {"hecha": False}
+
+    def _no_deberia_llamarse():
+        llamada["hecha"] = True
+        return []
+
+    lector._list_melonds_processes = _no_deberia_llamarse
+    assert lector.retry_block_liveness() is True
+    assert llamada["hecha"] is False
+
+
+def test_retry_block_liveness_sin_melonds_no_inventa_nada() -> None:
+    """Sin ningún proceso que mirar, no puede demostrar nada -ni fallar mal-."""
+    from app.hgss_live import HgssMelonDSReader
+
+    lector = HgssMelonDSReader(firma_getter=lambda: None)
+    lector._list_melonds_processes = list
+    assert lector.retry_block_liveness() is False
+    assert lector.block_is_live is False
+
+
+def test_bloque_demostrado_reintenta_una_vez_antes_de_rendirse() -> None:
+    """06-09-2026: el agujero real -cinco escrituras fallidas en un minuto.
+
+    `read_party()` solo repite la prueba de "cuál bloque se mueve" cuando la
+    lectura barata lanza una excepción; si la primera muestra de la conexión
+    cayó en un instante sin movimiento, `block_is_live` se quedaba en
+    `False` el resto de la sesión. `_bloque_demostrado` ahora pide una
+    muestra nueva antes de negarse.
+    """
+    from app.hgss_write import HgssLiveError, _bloque_demostrado
+
+    class _LectorQueSeReaniva:
+        block_is_live = False
+
+        def retry_block_liveness(self):
+            self.block_is_live = True
+            return True
+
+    lector = _LectorQueSeReaniva()
+    _bloque_demostrado(lector)  # no lanza: la reintentona lo revivió
+
+    class _LectorQueSigueMuerto:
+        block_is_live = False
+
+        def retry_block_liveness(self):
+            return False
+
+    with pytest.raises(HgssLiveError, match="No se ha podido demostrar"):
+        _bloque_demostrado(_LectorQueSigueMuerto())
+
+
 def test_si_un_miembro_esta_danado_se_dice_cual() -> None:
     """«No se localizó la RAM» culpaba a la búsqueda cuando el fallo era otro.
 

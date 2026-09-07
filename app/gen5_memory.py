@@ -103,6 +103,18 @@ GEN5_MEMORY: dict[str, Gen5Memory] = {
         tm_table=0x02090C54,
         battle_presentation=0x0225B1B0,
         battle_logical=0x0225B5F8,
+        # Medido el 06-09-2026 sobre la partida real del usuario (seis
+        # miembros, buscando especie+PS máximo de cada uno alrededor de
+        # `battle_presentation`): mismo paso que Blanco, 0x224. La búsqueda
+        # reveló además que `battle_presentation` y `battle_logical` son la
+        # MISMA tabla -difieren en exactamente 2*paso-, no dos tablas
+        # independientes como en Blanco: es una tabla de seis filas, una por
+        # puesto del equipo (fila k = puesto k, SIN el intercambio de activo a
+        # la fila 0 que sí tienen ORAS/X-Y), y cada fila sigue el PS real de
+        # su miembro tanto activo como banqueado -confirmado con dos cambios
+        # de combatiente seguidos: el PS de cada uno se quedó donde debía tras
+        # salir del campo, sin resetear-.
+        battle_stride=0x224,
     ),
     # Blanco / Negro. Ancla medida el 27-08-2026 sobre la partida del usuario:
     # cuatro PK5 seguidos separados 220 bytes -su equipo de cuatro- y, en la

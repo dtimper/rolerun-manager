@@ -88,7 +88,7 @@ def test_alpha31_real_game_party_transition_records_full_runtime_slot(tmp_path: 
     latest = tmp_path / "sm_party_runtime_transition_latest.json"
     assert latest.is_file()
     payload = json.loads(latest.read_text(encoding="utf-8"))
-    assert payload["version"] == "0.3.1-alpha.19"
+    assert payload["version"] == "0.3.1-alpha.26"
     assert payload["party_stride"] == SM_PARTY_STRIDE
     assert len(payload["changed_slots"]) == 1
     slot = payload["changed_slots"][0]
@@ -124,7 +124,12 @@ def test_alpha33_adapter_advertises_live_pc_write_modes() -> None:
     raw = _raw(_game(_mon(724, 0x11112222)), bytes(6 * SM_PARTY_STRIDE))
     snapshot = adapter._convert(raw, sequence=1)
     assert snapshot.metadata["pc_write_live"] is True
-    assert snapshot.metadata["pc_write_modes"] == ("swap-party-box", "party-to-box", "box-to-party")
+    # 05-09-2026: el metadato se había quedado atrás. SM escribe además
+    # `move-box-slot` (04-09-2026) y `swap-box-slots` (05-09-2026).
+    assert snapshot.metadata["pc_write_modes"] == (
+        "swap-party-box", "party-to-box", "box-to-party",
+        "move-box-slot", "swap-box-slots",
+    )
     assert snapshot.metadata["pc_swap_diagnostic"] is False
 
 

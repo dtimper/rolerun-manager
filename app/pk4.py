@@ -62,10 +62,19 @@ _PERMUTATIONS = (
 # por PKHeX. El único registro que salió «Huevo malo» -el Wooper del cuarto
 # incidente- llevaba 0x0004.
 #
-# No se sabe qué significa cada valor, así que **no se usa como regla**: nada se
-# rechaza por su contenido. Se usa como **cambio**, que es lo que sí demuestra
-# algo: si no vale lo mismo antes y después de escribir, el juego ha tocado esa
-# ficha por su cuenta.
+# IDENTIFICADO el 06-09-2026 (Bulbapedia, «Pokémon data structure (Generation
+# IV)», sección de bytes sin cifrar): es un campo de bits, no un valor suelto.
+# Bit 0-1: si está activo, el juego se salta la comprobación de checksum.
+# **Bit 2: bandera de HUEVO MALO.** Bit 3-7: sin uso. `0x0004` = `0b100` = bit 2
+# activo: el propio juego marcó ese registro como huevo malo mientras RoleRun
+# lo escribía. No se ha identificado en qué instante exacto de una escritura de
+# 236 bytes no atómica el juego llega a poner ese bit -sigue siendo terreno de
+# la emulación, no del formato-, pero ya no es un campo sin significado.
+#
+# Por eso se sigue usando como **cambio** y no como regla de contenido: aunque
+# ahora se sepa leer, no se sabe evitar que el juego lo active a mitad de una
+# escritura. Si no vale lo mismo antes y después de escribir, el juego ha
+# tocado esa ficha por su cuenta y se deshace.
 PK4_SANITY = 0x04
 
 # Desplazamientos dentro del PK4 canónico (descifrado y desbarajado).

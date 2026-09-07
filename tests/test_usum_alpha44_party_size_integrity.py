@@ -510,6 +510,166 @@ def test_usum_pc_to_pc_moves_exact_pk7_to_requested_box_and_slot() -> None:
     assert [pokemon.species_id for pokemon in result.game.party] == [115]
 
 
+def test_usum_pc_swap_cruza_los_dos_pk7_sin_tocar_el_equipo() -> None:
+    """05-09-2026, pedido del usuario: intercambiar dos casillas OCUPADAS.
+
+    ``_apply_pc_move`` no lo cubre -exige el destino libre y deja el vacío
+    cifrado en el origen-. Aquí no interviene ningún vacío: los dos bloques de
+    0xE8 bytes se cruzan sobre la MISMA matriz PC ya demostrada.
+    """
+    writer, ram, current, _party_base, pc_base, _count_addr = _setup(
+        [(115, 10, "Líbero")],
+        {0: (133, 99, "Tanque"), 1: (761, 100, "Asesino")},
+    )
+    source_addr = pc_base + 0 * PK7_STORED_SIZE
+    destination_addr = pc_base + 1 * PK7_STORED_SIZE
+    exact_source = ram.read(source_addr, PK7_STORED_SIZE)
+    exact_destination = ram.read(destination_addr, PK7_STORED_SIZE)
+    before_party = bytes(ram.party)
+
+    result = writer.apply(current, [PendingTeamChange(
+        operation="swap-box-slots", party_slot=0,
+        box=1, box_slot=1, destination_box=1, destination_box_slot=2,
+        incoming_identity="133:99:11:22", outgoing_identity="761:100:11:22",
+    )])
+
+    assert result.applied_count == 1
+    assert ram.read(source_addr, PK7_STORED_SIZE) == exact_destination
+    assert ram.read(destination_addr, PK7_STORED_SIZE) == exact_source
+    llegado = parse_pk7_boxed(ram.read(destination_addr, PK7_STORED_SIZE), 1, 2, {})
+    assert llegado is not None and llegado.species_id == 133 and llegado.role == "Tanque"
+    desplazado = parse_pk7_boxed(ram.read(source_addr, PK7_STORED_SIZE), 1, 1, {})
+    assert desplazado is not None and desplazado.species_id == 761
+    assert bytes(ram.party) == before_party
+
+
+class _HostEscrituraParcial(_Host):
+    """Escribe la MITAD de los bytes y solo entonces falla.
+
+    Es lo que hace de verdad `WindowsProcessMemory.write`: lanza también con
+    `ERROR_PARTIAL_COPY`, y para entonces parte de los bytes YA están
+    escritos. Un doble que solo lanza -sin escribir nada- no destapa el fallo
+    que esta prueba fija.
+    """
+
+    def __init__(self, ram, delta: int, pid: int, *, fail_on_write: int):
+        super().__init__(ram, delta, pid)
+        self.fail_on_write = int(fail_on_write)
+        self.write_count = 0
+
+    def write(self, handle, address: int, data: bytes) -> None:
+        self.write_count += 1
+        if self.write_count == self.fail_on_write:
+            super().write(handle, address, bytes(data)[: len(data) // 2])
+            raise RuntimeError("WriteProcessMemory falló: copia parcial")
+        super().write(handle, address, data)
+
+
+def test_usum_pc_swap_restaura_una_escritura_que_falla_a_medias() -> None:
+    """Con las dos casillas ocupadas, un apunte de rollback tardío perdería
+    un Pokémon de verdad -y encima informaría de que se restauró todo-."""
+    import pytest
+    from app.usum_live import USUMLiveError
+
+    for fallo in (1, 2):
+        writer, ram, current, _party_base, _pc_base, _count_addr = _setup(
+            [(115, 10, "Líbero")],
+            {0: (133, 99, "Tanque"), 1: (761, 100, "Asesino")},
+        )
+        writer.host_memory_factory = lambda: _HostEscrituraParcial(
+            ram, 0x20000000000, 9002, fail_on_write=fallo,
+        )
+        before_pc = bytes(ram.pc)
+        before_party = bytes(ram.party)
+
+        with pytest.raises(USUMLiveError):
+            writer.apply(current, [PendingTeamChange(
+                operation="swap-box-slots", party_slot=0,
+                box=1, box_slot=1, destination_box=1, destination_box_slot=2,
+                incoming_identity="133:99:11:22", outgoing_identity="761:100:11:22",
+            )])
+
+        assert bytes(ram.pc) == before_pc, f"escritura {fallo}"
+        assert bytes(ram.party) == before_party, f"escritura {fallo}"
+
+
+def test_usum_pc_move_restaura_una_escritura_que_falla_a_medias() -> None:
+    """Mismo fallo latente en el hermano ya validado: su SEGUNDA escritura
+    apunta al origen, que todavía está OCUPADO."""
+    import pytest
+    from app.usum_live import USUMLiveError
+
+    writer, ram, current, _party_base, _pc_base, _count_addr = _setup(
+        [(115, 10, "Líbero")], {0: (133, 99, "Tanque")},
+    )
+    writer.host_memory_factory = lambda: _HostEscrituraParcial(
+        ram, 0x20000000000, 9002, fail_on_write=2,
+    )
+    before_pc = bytes(ram.pc)
+
+    with pytest.raises(USUMLiveError):
+        writer.apply(current, [PendingTeamChange(
+            operation="move-box-slot", party_slot=0,
+            box=1, box_slot=1, destination_box=1, destination_box_slot=2,
+            incoming_identity="133:99:11:22",
+        )])
+
+    assert bytes(ram.pc) == before_pc
+
+
+def test_usum_pc_swap_rechaza_un_destino_vacio_sin_escribir() -> None:
+    writer, ram, current, _party_base, _pc_base, _count_addr = _setup(
+        [(115, 10, "Líbero")], {0: (133, 99, "Tanque")},
+    )
+    before = bytes(ram.pc)
+    import pytest
+    from app.usum_live import USUMLiveError
+
+    with pytest.raises(USUMLiveError, match="destino.*vacía"):
+        writer.apply(current, [PendingTeamChange(
+            operation="swap-box-slots", party_slot=0,
+            box=1, box_slot=1, destination_box=1, destination_box_slot=2,
+            incoming_identity="133:99:11:22", outgoing_identity="761:100:11:22",
+        )])
+    assert bytes(ram.pc) == before
+
+
+def test_usum_pc_swap_rechaza_una_identidad_que_ya_no_coincide() -> None:
+    writer, ram, current, _party_base, _pc_base, _count_addr = _setup(
+        [(115, 10, "Líbero")],
+        {0: (133, 99, "Tanque"), 1: (761, 100, "Asesino")},
+    )
+    before = bytes(ram.pc)
+    import pytest
+    from app.usum_live import USUMLiveError
+
+    with pytest.raises(USUMLiveError, match="no coincide"):
+        writer.apply(current, [PendingTeamChange(
+            operation="swap-box-slots", party_slot=0,
+            box=1, box_slot=1, destination_box=1, destination_box_slot=2,
+            incoming_identity="133:99:11:22", outgoing_identity="999:999:11:22",
+        )])
+    assert bytes(ram.pc) == before
+
+
+def test_usum_pc_swap_exige_las_dos_identidades() -> None:
+    writer, ram, current, _party_base, _pc_base, _count_addr = _setup(
+        [(115, 10, "Líbero")],
+        {0: (133, 99, "Tanque"), 1: (761, 100, "Asesino")},
+    )
+    before = bytes(ram.pc)
+    import pytest
+    from app.usum_live import USUMLiveError
+
+    with pytest.raises(USUMLiveError, match="identidad estable de los DOS"):
+        writer.apply(current, [PendingTeamChange(
+            operation="swap-box-slots", party_slot=0,
+            box=1, box_slot=1, destination_box=1, destination_box_slot=2,
+            incoming_identity="133:99:11:22",
+        )])
+    assert bytes(ram.pc) == before
+
+
 def test_usum_pc_to_pc_rejects_occupied_destination_without_writing() -> None:
     writer, ram, current, _party_base, _pc_base, _count_addr = _setup(
         [(115, 10, "Líbero")],

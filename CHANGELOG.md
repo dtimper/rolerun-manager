@@ -1,6 +1,1388 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+## Tarjeta de emuladores compatibles en el selector, y se retira el soporte de Citra nunca habilitado (07-09-2026)
+
+Con Diamante/Perla, Platino y HGSS ocultos, el selector de juegos dejaba un
+hueco vacío en la rejilla (número impar de tarjetas). A petición del usuario
+se rellenó con una tarjeta informativa: qué emulador usar para cada juego
+(`EMULADOR_POR_JUEGO` en `app/ui.py`, junto a `GAME_OPTIONS`) -melonDS para
+los NDS, Azahar para los 3DS, Ryujinx para BDSP-. Primera versión insuficiente:
+el usuario reportó que el recuadro se veía "comido por arriba y por abajo"
+-el contenido desbordaba el borde redondeado de la tarjeta- porque X/Y tenía
+su propia etiqueta ("Azahar (o Citra)"), añadiendo una cuarta fila que no
+cabía en la altura disponible.
+
+Al preguntar por esa etiqueta, el usuario confirmó que el soporte de Citra
+para X/Y (`CitraBridge`, `CitraBrokerClient`, `app/citra_broker.py`,
+`app/citra_gdb.py`, el adaptador `XYMultiRealTimeAdapter` que combinaba
+Azahar+Citra) nunca llegó a habilitarse de verdad en la práctica, así que se
+retiró por completo en vez de solo esconderlo de la tarjeta: X/Y vuelve a un
+`XYRealTimeAdapter` directo sobre Azahar (mismo patrón que ORAS/SM/USUM), se
+borraron los dos módulos dedicados, la clase `XYMultiRealTimeAdapter`, el
+bootstrap `_kick_xy_transport_prepare` (que solo existía para el handshake
+GDB de Citra) y los textos de UI que mencionaban Citra como alternativa. Los
+tests dedicados a Citra se borraron (`test_citra_broker_alpha8.py` salvo un
+test genérico de la bolsa de MT que se movió a `test_xy_rom_tm_alpha6.py`,
+`test_realtime_xy_citra_alpha4.py`, `test_realtime_xy_citra_alpha5.py`,
+`test_xy_citra_bootstrap_alpha6_1.py`); el test de LayeredFS que usaba
+`citra_user_roots` como vehículo se reescribió sobre `azahar_user_roots`. Con
+X/Y usando la misma etiqueta "Azahar" que ORAS/SM/USUM, la tarjeta ahora los
+agrupa en una sola fila y el contenido cabe con margen. Suite completa verde
+(2826 passed, 8 skipped).
+
+## Diamante/Perla, Platino y HeartGold/SoulSilver vuelven a ocultarse (07-09-2026)
+
+A petición explícita del usuario, tras diez rondas seguidas de validación
+física del carril de combate en vivo de HGSS (PS de combate + detección de
+desmayo) sin llegar a estabilizar del todo -cada arreglo confirmado dejaba
+un caso real sin cubrir, ver las entradas anteriores de esta misma fecha-.
+`GAMES_OCULTOS` en `app/ui.py` vuelve a incluir `dp`, `pt` y `hgss`: no
+aparecen en la pantalla "SELECCIONA TU JUEGO", igual que ya había pasado una
+vez antes (alpha.87-97) por una razón distinta. Los banners y el resto del
+código de cuarta generación se quedan tal cual, listos para cuando se
+retomen. Test actualizado:
+`tests/test_fundido_de_la_tarjeta.py::test_los_diez_juegos_tienen_su_banner_
+aunque_tres_esten_ocultos`. Suite completa verde (2837 passed, 8 skipped).
+
+## HeartGold: el carril de combate se localiza solo, ya no a mano (07-09-2026)
+
+Tras el arreglo del 06-09-2026, el usuario siguió sin ver daño en tiempo
+real, y esta vez ni siquiera con un solo Pokémon en combate. Causa de fondo:
+`battle_hp_primary`/`battle_hp_secondary` nunca fueron direcciones fijas del
+binario, sino de una estructura reservada en tiempo de ejecución -como el
+bloque del guardado, pero sin mecanismo de relocalización propio-. Se
+recolocó UNA vez con la cooperación del usuario (búsqueda de valor exacto en
+vivo, PS 14/14→5/14→6/14), pero volvió a moverse DENTRO de la misma sesión
+sin reiniciar nada: una lectura en vivo encontró basura
+(5823/56213/65024) en las direcciones recién relocalizadas.
+`HgssMelonDSReader.read_battle_probe` ahora localiza la estructura sola: si
+la dirección conocida (la de `Gen4Memory` o la última encontrada) deja de
+corresponder a un PS máximo real del equipo, barre los 4 MiB buscando el
+par ‹PS actual, PS máximo› de un miembro real, confirmado por la copia
+secundaria en el mismo desplazamiento relativo (0x68) que ya demostró
+servir a mano -misma disciplina que la localización del bloque del
+guardado: sin firma fija, por contenido, y ambigüedad se falla en vez de
+adivinar-. Un enfriamiento de 0,5 s evita repetir el barrido completo en
+cada sondeo mientras la dirección conocida siga sin servir.
+
+**Primera versión insuficiente, corregida el mismo día**: el usuario probó
+un combate real (Rattata a 4/14) y siguió sin ver PS en vivo. La dirección
+conocida leía `(0, 0)` -limpio, no basura-, y el barrido automático confiaba
+en ese cero sin condiciones, igual que la versión manual de origen. Pero una
+reserva vieja no tiene por qué reescribirse con basura al abandonarse: puede
+quedar sobre memoria nunca tocada, que ya era cero, así que confiar en eso
+para siempre deja el carril ciego en cada combate nuevo si la reserva cambia
+de sitio -el caso normal, no la excepción-. Ahora un `(0, 0)` también se
+reconfirma por barrido, con su propio enfriamiento más largo
+(`COMBATE_RECONFIRMACION_SIN_COMBATE = 2 s`, sin prisa porque tardar un poco
+más en confirmar "sin combate" no cuesta nada). Suite completa verde (2817).
+Ver `tests/test_hgss_battle_lane.py::test_un_cero_limpio_se_reconfirma_y_
+encuentra_el_combate_real` (reproduce el caso real, Rattata 4/14).
+
+**Segunda versión insuficiente, corregida el mismo día**: con la
+reconfirmación ya puesta, el usuario probó un combate real (Totodile
+45/51) y seguía sin ver PS en vivo tras recibir muchos golpes. Un
+diagnóstico en vivo contra la partida real (lectura directa, sin tocar la
+app) reveló la causa: un solo barrido de los 4 MiB con las estadísticas
+reales del equipo (14/21/27/51) producía **327 candidatos** que cumplían
+las dos comprobaciones -PS máximo de un miembro real, PS actual en rango
+y copia secundaria de acuerdo-. Casi todos eran tablas estáticas del propio
+juego (niveles, movimientos, estadísticas base...) que por pura casualidad
+repiten números pequeños al desplazamiento de 0x68. Un PS máximo compartido
+no bastaba ni de lejos para identificar al combatiente real.
+
+Verificado con el mismo método que ya localiza el bloque del guardado
+(`_cual_se_mueve`): de los 327 candidatos, muestreados 20 segundos durante
+un combate real con el usuario recibiendo golpes, **exactamente uno cambió
+de valor** -el verdadero, `0x022CC538` esta vez-. Arreglado:
+`_localizar_combate_dinamicamente` ya no resuelve nada en el primer barrido
+si hay más de un candidato -salvo que sea único en toda la RAM, el caso
+ideal-; recuerda qué valor tenía cada uno la última vez
+(`_battle_historial_valores`) y solo publica una dirección cuando ha
+demostrado cambiar de valor entre dos barridos Y sigue siendo un candidato
+válido. El historial se olvida en cuanto se confirma que el combate
+terminó, para no arrastrar una "vivas" falsa a la siguiente pelea. Suite
+completa verde (2820, un fallo de Tkinter no relacionado -sensible al foco
+real del ratón- y no reproducible en aislado). Ver
+`tests/test_hgss_battle_lane.py::test_el_candidato_que_cambia_de_valor_se_
+publica` (reproduce los 327→1 candidatos reales).
+
+**Tercera vuelta, bug real encontrado con diagnóstico en vivo**: con el
+barrido de "el único que cambia" ya puesto, el usuario probó otro combate
+real (Totodile 45/51) y SIGUIÓ sin ver PS en vivo, ni un golpe en varios
+minutos con el historial siempre en `vivas: 0`. Causa: la dirección de
+`Gen4Memory` lee `(0, 0)` limpio en TODOS los sondeos -nunca ha sido la
+correcta esta sesión-, y `read_battle_probe` trataba eso como "combate
+confirmado terminado", borrando el historial acumulado por el barrido EN
+CADA LLAMADA -antes de que pudiera acumular una segunda lectura del mismo
+candidato-. El historial nunca sobrevivía de un sondeo al siguiente. Un
+`(0, 0)` en una dirección que nunca se ha demostrado correcta no prueba
+que el combate terminara; arreglado distinguiendo con
+`_battle_hp_ubicacion_confirmada` cuándo un `(0, 0)` es una señal fiable
+(dirección ya demostrada por el barrido) de cuándo no lo es (la primera
+pista sin probar). Suite completa verde (2823). Ver
+`tests/test_hgss_battle_lane.py::test_regresion_el_historial_sobrevive_
+aunque_la_configuracion_lea_cero_siempre`.
+
+**Cuarta vuelta, arreglo real confirmado con vídeo del usuario**: con las
+tres versiones anteriores puestas, un combate real (Totodile) SÍ registró
+daño en vivo -confirmado en el log, `"battle", hueco 0, 45/51` sostenido
+decenas de sondeos-, pero el usuario grabó un vídeo mostrando la barra de
+PS de una tarjeta de rol vaciándose y rellenándose de golpe en vez de bajar
+con naturalidad. El log de la ventana exacta del vídeo lo confirmó: la
+dirección YA CONFIRMADA de Totodile daba `(0, 0)` SUELTO varias veces
+-`42→(0,0)→39→(0,0)→36`, cada cero rodeado de lecturas correctas-, y
+`read_battle_probe` trataba cualquier `(0, 0)` en una dirección confirmada
+como "combate terminado de verdad" sin pedir una segunda opinión. Publicar
+eso un solo sondeo basta para que la interfaz enseñe el PS de reserva -del
+bloque de equipo, no medido en vivo- antes de que el siguiente sondeo lo
+corrija: exactamente el parpadeo "se llena y luego se corrige" del vídeo.
+Arreglado: ahora hacen falta DOS `(0, 0)` SEGUIDOS en la dirección
+confirmada -la cuenta se reinicia en cuanto se ve una lectura buena- antes
+de dar el combate por terminado; un cero suelto se publica como "unknown"
+(conserva la última lectura buena) sin tocar el historial ni la dirección
+confirmada. Suite completa verde (2825). Ver
+`tests/test_hgss_battle_lane.py::test_un_solo_cero_en_una_direccion_
+confirmada_no_la_descarta` (reproduce el caso real de Totodile) y
+`test_una_lectura_buena_entre_dos_ceros_reinicia_la_cuenta`.
+
+**Quinta vuelta, la causa real vivía en `ui.py`, no en el lector**: con las
+cuatro anteriores puestas, el usuario grabó OTRO vídeo -Totodile en
+combate real- mostrando la barra de PS de una tarjeta de rol vaciándose y
+rellenándose de golpe **durante el turno**, no al elegir ataque sin tocar
+nada. El registro detallado confirmó que `read_battle_probe` ya funcionaba
+bien: un `(0, 0)` suelto en la dirección confirmada se publicaba como
+`"unknown"` (no como `"none"`), exactamente como debía. El bug estaba un
+piso más arriba: `_finish_oras_live_reconciliation` trataba `"unknown"`
+IGUAL que `"none"` -caía al bloque de party (`snapshot.game`) en ese mismo
+sondeo-. Para ORAS/B2W2 eso es correcto -tienen una tabla con un PS por
+miembro incluso fuera de un sondeo `"battle"` confirmado, así que no hay
+nada que destripar (ver `test_b2w2_health_and_floating_flicker.py`)-, pero
+HGSS no tiene esa tabla: fuera de un sondeo `"battle"`, ni siquiera el
+propio combatiente activo trae PS en vivo en `snapshot.game` -se queda con
+el valor de ANTES de entrar en combate-, así que caer ahí publicaba un
+salto a PS completo que el siguiente sondeo corregía solo: el parpadeo del
+vídeo. Arreglado con el mismo patrón que ya usan SM/BDSP en este mismo
+archivo (`if previous_probe_state != "battle"`), aplicado solo a cuarta
+generación para no tocar el comportamiento ya validado de ORAS/B2W2: si el
+sondeo anterior confirmó `"battle"` y este da `"unknown"`, no se publica
+nada -se conserva el último PS en vivo- en vez de caer al de reserva.
+Suite completa verde (2829). Ver `tests/test_hgss_realtime_ui.py`.
+
+**Sexta vuelta**: con el arreglo de arriba puesto, el usuario probó otro
+combate real (Totodile 45/51) y volvió a parpadear. El registro detallado
+lo explicó: un `(0, 0)` suelto se publicó como `"unknown"` (n.º de sondeo
+145), y el SIGUIENTE sondeo -que decide si el combate terminó de verdad,
+la segunda comprobación de `COMBATE_CEROS_SEGUIDOS_PARA_CONFIRMAR_FIN`-
+llegó casi un segundo después, no 250 ms: `_schedule_oras_live_
+reconciliation(250 if probe_state == "battle" else 950)` mira el ESTADO DE
+ESTE sondeo, y un `"unknown"` no es `"battle"`, así que caía al ritmo
+lento justo cuando más falta hacía ir rápido. Con casi un segundo de
+margen, la segunda comprobación cayó TAMBIÉN dentro de la ventana mala y
+confirmó un final que no era real -Totodile seguía a 45/51 en pantalla-.
+Arreglado: se sigue al ritmo rápido mientras se siga CONSIDERANDO que hay
+combate (`_oras_battle_probe_last_state`, que un `"unknown"` no toca), no
+solo cuando el sondeo de AHORA MISMO lo confirma. Suite completa verde
+(2831). Ver
+`tests/test_hgss_realtime_ui.py::test_un_unknown_tras_battle_sigue_
+sondeando_al_ritmo_rapido`.
+
+**Séptima vuelta**: con el ritmo rápido puesto, el usuario probó otro
+combate real y confirmó el patrón exacto: "sube... a full vida" DURANTE
+el turno, y se corrige al volver al menú. Esto reveló que el umbral de
+"dos ceros seguidos" nunca fue el problema de fondo: la dirección
+confirmada da `(0, 0)` durante TODA la animación del golpe -más de un
+segundo, más de lo que dos sondeos consecutivos (incluso al ritmo rápido)
+podían cubrir sin arriesgarse a tardar de más en notar un combate que sí
+terminó-. Arreglado sustituyendo el contador de repeticiones por un
+umbral de TIEMPO (`COMBATE_SEGUNDOS_DE_CERO_PARA_CONFIRMAR_FIN = 4.0`):
+mientras la dirección confirmada lleve leyendo `(0, 0)` menos de 4
+segundos seguidos, se publica `"unknown"` -conserva el último PS bueno,
+sin importar cuántos sondeos lleve así-; solo pasado ese margen se da el
+combate por terminado de verdad. Cuatro segundos cubre con margen
+cualquier animación normal sin tardar sensiblemente más en notar un
+combate que sí ha acabado. Suite completa verde (2832). Ver
+`tests/test_hgss_battle_lane.py::test_un_cero_que_dura_lo_que_una_
+animacion_no_termina_el_combate`. Pendiente de validación física: el
+usuario debe reiniciar y probar un combate completo, mirando en concreto
+si la barra ya baja con naturalidad durante el turno, sin parpadeos ni
+saltos a PS completo.
+
+**Validado físicamente por el usuario el 07-09-2026: el parpadeo queda
+cerrado.** El mismo día, probando más, reportó un caso real de OHKO tras
+cambiar de combatiente donde el desmayo no se detectó. Encontrada una
+brecha real en el arreglo anterior: el margen de tiempo de
+`COMBATE_SEGUNDOS_DE_CERO_PARA_CONFIRMAR_FIN` solo cubría un `(0, 0)`
+limpio (`resultado.state == "none"`) en la dirección confirmada, pero la
+misma animación puede partir la lectura de OTRA forma -basura que no
+coincide con NINGÚN miembro del equipo (`resultado is None`)-, y esa
+segunda forma de fallo seguía sin margen, descartando la dirección
+confirmada al instante y produciendo el mismo parpadeo con un disfraz
+distinto. Arreglado unificando las dos formas de fallo bajo el mismo
+margen de tiempo: cualquier fallo en la dirección confirmada -limpio o
+basura- se trata igual, y solo tras `COMBATE_SEGUNDOS_DE_CERO_PARA_
+CONFIRMAR_FIN` segundos sostenidos se da el combate por terminado de
+verdad. Suite completa verde (2834). Ver
+`tests/test_hgss_battle_lane.py::test_una_lectura_invalida_en_direccion_
+confirmada_tampoco_la_descarta`.
+
+**Detección de desmayo, causa real encontrada con el usuario en vivo**: un
+Rattata rematado en dos golpes NO se detectó como debilitado. Un script de
+lectura directa (sin tocar la app) reveló que el bloque de equipo -que
+normalmente no se actualiza durante el combate- **sí se escribe al
+instante en cuanto alguien se desmaya**, incluso antes de que el combate
+termine del todo (con la pantalla todavía pidiendo sustituto). Pero el
+arreglo del margen de 4 s suprimía TODA publicación mientras durara -para
+evitar el salto a PS completo-, así que también tapaba esta transición
+real, dejando el desmayo sin detectar hasta que el combate terminaba.
+Arreglado: durante el margen, se deja pasar específicamente la
+publicación cuando el bloque de equipo acaba de bajar a 0 al combatiente
+que se venía siguiendo -nunca es el salto a PS completo que hay que
+evitar, siempre es una muerte real recién escrita-. Suite completa verde
+(2835). Ver `tests/test_hgss_realtime_ui.py::test_un_desmayo_real_
+durante_el_margen_si_se_publica`.
+
+**Octava vuelta: el criterio de "cambió una vez" no era suficientemente
+fuerte**. Probando en vivo, el lector se quedó enganchado a Totodile en
+`51/51` -su PS máximo real y de sobra plausible- mientras Rattata era
+quien combatía de verdad, sin corregirse nunca. Causa: con 127-174
+candidatos estructurales por sesión, la probabilidad de que ALGUNO -sin
+relación con el combate- cambie de valor una sola vez por su cuenta -otro
+sistema del juego tocando esa misma memoria- ya no es despreciable, y una
+dirección "confirmada" nunca se vuelve a poner en duda. Arreglado
+exigiendo DOS transiciones DISTINTAS en la MISMA dirección
+(`COMBATE_CAMBIOS_PARA_CONFIRMAR = 2`) antes de confiar en ella cuando hay
+más de un candidato -si es único en toda la RAM, una transición sigue
+bastando, ese caso no tenía el problema-. Reduce la probabilidad de un
+enganche falso multiplicativamente, a costa de necesitar un golpe más
+antes de resolverse por primera vez. Suite completa verde (2835). Ver
+`tests/test_hgss_battle_lane.py::test_el_candidato_que_cambia_de_valor_se_
+publica` (actualizado para exigir la segunda transición).
+
+**Novena vuelta, el mismo día**: probando en vivo con un script de
+monitorización, un Rattata a 14/14 murió de UN solo golpe -y con eso ya
+no queda combate después para dar una segunda transición-, así que exigir
+SIEMPRE dos transiciones dejaba sin forma de confirmarse a cualquier
+Pokémon rematado de un solo golpe: la protección contra el enganche falso
+había cerrado también la puerta a la detección de muertes instantáneas.
+Arreglado con una excepción específica: una transición QUE LLEGA A CERO
+basta sola -que una coincidencia sin relación con el combate aterrice
+justo en cero, ADEMÁS de coincidir con el PS máximo EXACTO de un miembro
+real, es mucho menos probable que aterrizar en cualquier otro valor-;
+cualquier otra transición sigue exigiendo la segunda. Suite completa
+verde (2837). Ver `tests/test_hgss_battle_lane.py::test_una_transicion_a_
+cero_basta_sola_para_un_ohko`. Pendiente de validación física.
+
+## HeartGold: daño y desmayo en tiempo real cuando dos miembros comparten PS máximo (06-09-2026)
+
+El daño en combate y el desmayo no se veían en vivo -solo al terminar el
+combate, aunque después sí ofrecía sustituto del PC-. Causa:
+`HgssMelonDSReader.read_battle_probe` identifica al combatiente activo por
+su PS máximo, la única ancla disponible sin una tabla con una fila por
+miembro (a diferencia de ORAS/B2W2). Si dos Pokémon del equipo comparten
+ese PS máximo -nada raro a nivel bajo-, la coincidencia deja de ser única
+en CADA sondeo mientras siguen en combate, no solo en el instante del
+cambio, y sin combatiente identificado no se publica ningún PS en vivo.
+Arreglado recordando el último hueco confirmado sin ambigüedad y
+reutilizando esa identidad mientras siga siendo uno de los candidatos,
+mismo espíritu que la caché de identidad ya añadida a X/Y esta sesión.
+Suite completa verde (2809). Ver `tests/test_hgss_battle_lane.py`.
+
+## HeartGold: el campo de sanidad vive fuera del checksum (06-09-2026)
+
+Sexto incidente real del día, y el primero que reveló la causa raíz de
+fondo compartida con varios anteriores: un Hoothoot que RoleRun leía y
+mostraba perfectamente normal -nivel, movimientos y estadísticas
+coherentes, checksum válido- resultó ser un Huevo malo de verdad, guardado
+en el archivo real. Causa: el campo de sanidad de un PK4 (bit 2 = Huevo
+malo) vive en los primeros 8 bytes de cabecera, y el checksum solo cubre
+los 128 bytes siguientes -puede llevar el bit activo sin que ninguna
+comprobación de checksum lo note nunca-, y ese campo solo se usaba para
+comparar si había CAMBIADO entre dos lecturas, nunca como regla de
+contenido. Arreglado en los tres sitios que leen antes de escribir
+(`_transaccion_de_equipo`, `_transaccion_equipo_y_pc`, `_pc_en_confirmado`):
+si el bit ya está activo en cualquiera de las dos lecturas de un hueco, se
+niega la operación entera. El registro corrupto de Hoothoot no fue
+recuperable -el cuerpo con checksum también llevaba basura, no solo la
+cabecera-, así que el usuario lo retiró él mismo por el menú del propio
+juego. Suite completa verde. Ver `tests/test_hgss_write.py::test_un_
+huevo_malo_ya_puesto_no_deja_escribir_nada`.
+
+## HeartGold: `block_is_live` ya no se queda pegado en `False` (06-09-2026)
+
+La comprobación de "cuál bloque del guardado usa el juego" solo se
+intentaba una vez por conexión; si esa primera muestra caía en un instante
+sin movimiento en la RAM del equipo, ninguna escritura volvía a funcionar
+en toda la sesión pese a reintentar -cinco intentos fallidos seguidos
+durante casi un minuto-. La muestra es barata (~0,12 s), así que
+`_bloque_demostrado` ahora la repite una vez antes de rendirse
+(`HgssMelonDSReader.retry_block_liveness`). Ver `tests/test_hgss_live.py`.
+
+## HeartGold: el rollback también necesitaba su segunda verificación (06-09-2026)
+
+Quinto incidente, reconstruido por el log en vez de asumido: Wooper apareció
+como Huevo malo tras enviar OTRO Pokémon al PC, pero el log muestra que
+justo antes una curación de todo el equipo se había abortado por "el juego
+tocó el miembro 3" (Rattata) -ese mensaje solo nombra al primer hueco
+distinto que encuentra, no a todos los que pudieran estarlo a la vez-. El
+`deshacer()` posterior reescribe todos los huecos tocados pero solo
+verificaba con una lectura inmediata, sin el margen que la escritura normal
+ya tiene desde el incidente de Gastly. Wooper probablemente ya venía roto
+de ese rollback, y las operaciones de PC posteriores (sobre Spinarak, que
+se ve bien) solo lo hicieron visible. Corregido añadiendo la misma segunda
+verificación tardía también al rollback, en los dos armazones de escritura.
+Suite completa verde (2811). El usuario aclaró que esta partida es de
+prueba y nunca la guarda, así que reactivó `MELONDS_GEN4_ESCRIBE` aceptando
+el riesgo residual mientras se sigue puliendo esto.
+
+## HeartGold: cuarto incidente sin causa encontrada, escritura pausada (06-09-2026)
+
+Con la regresión del PS actual corregida, un cuarto incidente real: sacar a
+Spinarak del PC lo dejó en Huevo malo A ÉL MISMO -a diferencia del tercer
+incidente (Rattata, un tercero ajeno a la operación), aquí es el propio
+sujeto de "box-to-party"-. La doble lectura del PC no lo detectó porque no
+hay inestabilidad entre dos lecturas seguidas: el dato sale mal de forma
+consistente, apuntando a un fallo en la propia construcción del bloque de
+combate (`_party_block`/`pk4_party_block`) más que en una lectura pillada a
+medias. Revisado ese código por segunda vez sin encontrar nada. Documentado
+también, sin arreglar (no es de escritura): `block_is_live` en
+`hgss_live.py` solo se comprueba una vez por conexión, y si esa única
+muestra no ve movimiento en la RAM, toda escritura queda bloqueada el resto
+de la sesión pese a reintentar -se recupera reiniciando RoleRun-.
+
+Van CUATRO incidentes reales de corrupción el mismo día. `MELONDS_GEN4_
+ESCRIBE` ha vuelto a `False` y esta vez se pausa la escritura hasta
+investigar el cuarto caso con más calma, sin más intentos en vivo por hoy.
+
+## HeartGold: tercer incidente cierra la causa raíz de fondo (06-09-2026)
+
+Tras el segundo Huevo malo (causa no confirmada, solo mitigada por
+analogía), un tercer incidente el mismo día lo explicó todo: enviar un
+Pokémon al PC dejó a OTRO, ajeno a la operación, mostrando "Envenenado"
+donde iba el nivel. Causa real, ahora sí confirmada: `_transaccion_equipo_
+y_pc` -el armazón compartido por todas las operaciones Equipo↔PC- lee el
+equipo una sola vez y reescribe el bloque ENTERO en cada operación; la
+extensión de combate sigue sin checksum propio (mismo hallazgo que Gastly),
+así que una lectura pillada a medias en CUALQUIER hueco se persiste igual
+de fiel aunque la operación no lo mencione. Arreglado exigiendo que dos
+lecturas independientes del equipo completo coincidan en nivel, estado y PS
+de los seis huecos antes de mutar nada -mismo criterio que ya cerró el caso
+de Gastly, aplicado ahora a los dos armazones de escritura de HGSS-. Los
+tres incidentes del día quedan explicados por la misma causa raíz.
+`MELONDS_GEN4_ESCRIBE` ha vuelto a `False`. Ver
+`tests/test_hgss_party_pc.py::test_una_ficha_ajena_inestable_impide_depositar`.
+
+## HeartGold: segundo Huevo malo real, causa no confirmada (06-09-2026)
+
+Reactivada la escritura tras el arreglo de Gastly, un segundo incidente:
+sacar un Pokémon del PC al equipo ("box-to-party") dejó un Huevo malo DE
+VERDAD -marcado por el propio juego, no solo estadísticas raras-. Revisado
+a fondo `_party_block`/`pk4_party_block` sin encontrar el mecanismo exacto
+-el PK4 guardado sí lleva checksum propio, a diferencia de la extensión de
+combate del incidente anterior-. Se aplicó por analogía la misma defensa
+que sí cerró el caso de Gastly: `HgssRealTimeAdapter._pc_en_confirmado`
+exige que dos lecturas independientes del hueco del PC coincidan antes de
+construir nada. Es una mitigación razonable, no una causa confirmada.
+`MELONDS_GEN4_ESCRIBE` ha vuelto a `False`; reactivarla es decisión
+explícita del usuario, no automática por que los tests pasen.
+
+## HeartGold: el "Huevo malo" de la extensión sin checksum (06-09-2026)
+
+**Causa raíz real, por fin encontrada**, del quinto incidente de corrupción
+en HGSS: `_get_b2w2_rom_profile` desviaba las llamadas hechas con el motor
+de HGSS conectado hacia el buscador de ROM de quinta generación, que
+fallaba en silencio y dejaba la caché compartida (`_gen5_rom_checked_for`)
+marcada como "ya intentado" -bloqueando para siempre el intento correcto de
+`_get_gen4_rom_profile` y explicando por qué los aprendizajes por rol nunca
+se activaban-. Corregido, y el mecanismo quedó validado físicamente por el
+usuario en la partida real.
+
+Con eso resuelto, el usuario pidió reactivar `MELONDS_GEN4_ESCRIBE`. Un
+cambio de rol doble (Gastly + Spinarak simultáneos) corrompió a Gastly en
+la propia partida -nivel y PS ilegibles en melonDS- aunque el log registró
+la escritura como resuelta sin error. Sin guardar de por medio, cerrar y
+reabrir sin guardar lo recuperó intacto. Causa real: la extensión de
+combate del PK4 (nivel, PS, estadísticas) no lleva checksum propio, solo un
+filtro de plausibilidad ya endurecido una vez antes; un valor DENTRO de
+rango pero incorrecto -un nivel torcido por una lectura pillada a medias-
+lo pasa igual, y el readback posterior no lo detecta porque compara contra
+lo que la propia función acababa de calcular con ESE MISMO dato torcido.
+Arreglado exigiendo que dos lecturas independientes coincidan en nivel y PS
+antes de mutar nada (`HgssMelonDSWriter._transaccion_de_equipo`).
+`MELONDS_GEN4_ESCRIBE` ha vuelto a `False` hasta hablarlo de nuevo con el
+usuario. Ver `tests/test_hgss_write.py` y `tests/test_pk4.py`.
+
+## HeartGold: los aprendizajes por rol nunca llegaban a activarse (06-09-2026)
+
+Reportado por el usuario tras probar de verdad: Hoothoot aprendió Reflejo
+como Tanque, un movimiento que la propia Consulta de Movimientos del juego
+declara incompatible con ese rol. Investigado contra el registro de
+diagnóstico (`Logs/escrituras_vivas.jsonl`, 19236 líneas desde el
+27-08-2026): **cero** apariciones de `hgss_levelup_*` o `rom-cuarta-*` en
+todo el historial. El mecanismo, aunque escrito, probado y validado por
+separado el mismo día, **nunca se había activado ni una sola vez** en la
+partida real -Hoothoot llevaba enseñando su lista 100% vainilla todo el
+tiempo; Picotazo y Alboroto no eran sustituciones, son sus movimientos
+naturales-.
+
+Causa: `_ensure_hgss_levelup_registered` solo se dispara dentro de
+`_get_gen4_rom_profile("hgss")`, y esa función solo la llaman dos sitios de
+la interfaz -ver el detalle de potencia/PP de un movimiento, o la pestaña de
+MT-. A diferencia de quinta (donde curar, fijar roles y leer MT disparan
+`_get_gen5_rom_profile` con solo jugar con normalidad), nada en el uso normal
+de HeartGold pasa por ahí: Consulta de Movimientos compara contra los pools,
+no contra la ROM, y Recuerda-Movimientos solo lee el historial ya guardado.
+El registro llevaba escrito desde por la mañana y llevaba toda la tarde sin
+tener ocasión de dispararse.
+
+**Corregido**: `_sync_hgss_levelup_moves` -que ya corre en cada sondeo
+periódico mientras HeartGold esté conectado- pide la ROM por su cuenta en
+cuanto detecta que le falta la tabla, sin depender de ninguna pantalla
+concreta. `_get_gen4_rom_profile` ya se protege a sí mismo (un intento por
+guardado), así que esto no repite el intento en cada sondeo si ya falló.
+
+De camino, a petición del usuario: `Reflejo` (115) añadido al pool
+`tanque_subir_defensa_fisica` y `Pantalla de Luz` (113) a
+`prisma_subir_defensa_especial` en `data/moves.json` -encajan por efecto con
+esas categorías ya existentes-.
+
+- `tests/test_hgss_levelup_sync.py`: 2 casos nuevos.
+- Suite completa: 2805 passed, 1 skipped.
+
+## La barra flotante: MENÚ dejaba de aparecer en cualquier juego sin curación (06-09-2026)
+
+Reportado al llevar HeartGold a la barra flotante: le faltaban CURAR **y**
+MENÚ, aunque MENÚ no tiene nada que ver con escribir. Causa: los dos botones
+colgaban del mismo `if self._floating_live_actions_available()`, y esa
+función en realidad solo pregunta si el backend puede CURAR en vivo
+(`_live_party_heal_available`). Cualquier juego sin esa capacidad —hoy solo
+HeartGold, mientras su escritura de equipo siga apagada— se quedaba también
+sin poder abrir el lanzador, un acoplamiento que nunca tuvo sentido.
+
+Separados: el marco de acciones se crea siempre; CURAR sigue condicionado a
+`_floating_live_actions_available()` (correcto, es una capacidad real);
+MENÚ es incondicional, igual que en el resto de juegos.
+
+- `tests/test_menu_flotante_independiente_de_curar.py`: 3 casos.
+- Suite completa: 2803 passed, 1 skipped.
+
+## HeartGold: cerrado un agujero real de seguridad — rol/curación/PC se escribían sin protección (06-09-2026)
+
+Investigando cómo desbloquear solo mochila/dinero para probar los
+aprendizajes por rol, apareció algo más serio: **`_oras_live_unsupported_changes`
+y `_request_oras_live_auto_apply` trataban a "hgss" igual que a "b2w2"/"bw"**
+en cuanto entraba en `MELONDS_REALTIME_GAME_KEYS` (necesario solo para poder
+LEER en vivo), dejando pasar sin ninguna comprobación cambios de rol,
+curación y movimientos del PC — pese a que `MELONDS_GEN4_ESCRIBE = False`
+sigue en pie por el historial real de cuatro «Huevo malo». No era una
+decisión tomada a propósito: era un agujero real, y las escrituras de PC a
+HeartGold que se ampliaron ayer (alpha.27, "pedido del usuario") ya viajaban
+por él sin red de seguridad.
+
+**Corregido**: HeartGold, mientras `MELONDS_GEN4_ESCRIBE` siga en `False`,
+ahora solo deja pasar `PendingInventoryChange` (mochila y dinero, que no
+tocan ningún PK4). Rol, curación, movimientos y Equipo↔PC vuelven a aparecer
+como «no soportado» y no se auto-aplican, igual que se pretendía desde el
+principio. Mochila y dinero **no necesitaban ningún cambio**: ya viajaban por
+una vía distinta (`MELONDS_REALTIME_GAME_KEYS`, no `MELONDS_GEN4_ESCRIBE`) y
+ya funcionaban.
+
+- `tests/test_hgss_escritura_de_equipo_sigue_apagada.py`: 7 casos nuevos.
+- `tests/test_oras_pc_empty_box_drop.py` actualizado: HeartGold ya no se
+  espera como "soportado sin condición" en la prueba de las dos compuertas.
+- Suite completa: 2800 passed, 1 skipped.
+
+## HeartGold: aprendizajes por rol, mecanismo completo (06-09-2026)
+
+Primera pieza importante de la retomada: HGSS pasa a tener aprendizajes por
+nivel ajustados al rol, con la misma técnica ya validada en quinta -parchear
+la imagen de la ROM que melonDS mantiene en su propia memoria, en vez de un
+archivo LayeredFS-. Esto es independiente de `MELONDS_GEN4_ESCRIBE`: no toca
+el bloque de guardado, así que funciona aunque la escritura de equipo siga
+apagada.
+
+**Localizado el 06-09-2026 contra la ROM real, con Project Pokemon como
+referencia de la ruta**: la tabla vive en ``a/0/3/3`` (508 archivos). El
+formato es distinto al de quinta -aquí movimiento y nivel comparten un solo
+u16 empaquetado (7 bits de nivel, 9 de movimiento), no dos separados-,
+identificado decodificando el aprendizaje real de Bulbasaur (``Placaje@1,
+Gruñido@3, Drenadoras@7, Látigo Cepa@9, Polvo Veneno@13``) y confirmado con
+una prueba estructural fuerte: 507 de 508 especies con niveles crecientes -la
+única excepción, Banette, reaprende un movimiento ya conocido, un rasgo real
+de su tabla-.
+
+Módulos nuevos: `app/gen4_levelup_moves.py` (decodificar/calcular el parche,
+reutilizando `role_levelup_moves.compute_species_patch` sin cambios) y
+`app/gen4_levelup_memory.py` (localizar la imagen y escribir, mismo algoritmo
+que `gen5_levelup_memory.py` con el re-empaquetado propio de cuarta). Cableado
+completo en `app/ui.py`: registro al cargar la ROM, sincronización en el
+sondeo pasivo y en el punto de cambio de rol, reversión al cerrar, e
+historial de RECUERDA-MOVIMIENTOS (mismo cuidado que los otros cinco juegos:
+calculado sobre la tabla COMPLETA de la especie, no sobre el subconjunto
+recién cruzado).
+
+**Validado, solo lectura y con un ciclo de escritura+reversión seguro**
+(especie fuera del equipo actual, sin efecto visible): tabla localizada en
+0,09 s, lectura en vivo de Bulbasaur nivel 1 coincide con el archivo, y un
+ciclo completo parchear→leer→revertir (Placaje→Hidrobomba→Placaje) conservó
+el nivel en los tres pasos.
+
+**Sin validar todavía**: si HeartGold cachea la tabla como X/Y (necesitaría
+red de seguridad reactiva + parcheo del cartel) o la relee como ORAS/quinta
+(bastaría esta única capa) — eso exige que el usuario suba de nivel de verdad
+en su partida.
+
+- `tests/test_gen4_levelup_moves.py`: 12 casos. `tests/test_gen4_levelup_memory.py`:
+  10 casos. `tests/test_hgss_levelup_sync.py`: 13 casos.
+- Suite completa: 2793 passed, 1 skipped.
+
+## HeartGold: segunda verificación tras la escritura (06-09-2026)
+
+Cierra parte del hueco que alpha.96 dejó explícito: «lo que pase después del
+readback no lo ve nadie». Cada transacción de equipo hace ahora una tercera
+lectura, tras un margen configurable (`SEGUNDA_VERIFICACION_ESPERA = 0.05`,
+50 ms), y repite exactamente las mismas comprobaciones que el readback
+inmediato -la marca de huevo malo por hueco tocado, y el contenido completo
+esperado-. Si algo cambió en ese margen, se deshace igual que si hubiera
+fallado el primer readback.
+
+**No es la solución completa**: el hueco de fondo (una escritura de 236 bytes
+no atómica para el juego emulado) sigue sin cerrarse — esto reduce la ventana
+ciega, no la elimina. `MELONDS_GEN4_ESCRIBE` sigue en `False`.
+
+`HgssMelonDSWriter.segunda_verificacion_espera` es configurable (0 en tests,
+para no esperar de verdad). Reutiliza el mismo `deshacer()` del intento: un
+fallo aquí entra por el mismo camino de reintento/rollback ya validado.
+
+- `tests/test_hgss_write.py`: 3 casos nuevos, incluida la reproducción exacta
+  de un huevo malo que aparece SOLO en la segunda verificación (la primera
+  pasa limpia a propósito, para probar que es la segunda quien lo caza).
+- Suite completa: 2758 passed, 1 skipped.
+
+## HeartGold: identificado el campo `sanity` de alpha.96 (06-09-2026)
+
+Pendiente desde alpha.96: «no se sabe qué significa cada valor» del campo de
+0x04 que rompió a Wooper (`sanity=0x0004`) mientras los otros cinco huecos y
+los 24 casos de PKHeX daban `0x0000`.
+
+Identificado contra documentación externa (Bulbapedia, «Pokémon data
+structure (Generation IV)», bytes sin cifrar): es un campo de bits, no un
+valor suelto — bit 0-1 salta la comprobación de checksum, **bit 2 es la
+bandera de HUEVO MALO**, bit 3-7 sin uso. `0x0004 = 0b100` = bit 2 activo: el
+propio juego marcó ese registro como huevo malo mientras RoleRun lo escribía.
+Confirma, con nombre, exactamente lo que alpha.96 ya sospechaba por el
+comentario del código («si mira el registro a medio escribir, el checksum no
+le cuadra y lo marca») — no era una sospecha sin fundamento, es literalmente
+la bandera oficial del formato.
+
+**No cambia la estrategia de seguridad**: seguir tratando cualquier cambio en
+el campo como señal de interferencia y deshacer sigue siendo lo correcto,
+porque el hueco real (una escritura de 236 bytes no atómica para el juego
+emulado, y ningún readback ve lo que pasa después de confirmarse) sigue sin
+cerrarse. Lo que cambia es que ya no es un misterio: es el propio detector de
+corrupción del juego reaccionando a la misma no-atomicidad ya documentada.
+
+Corregido el comentario de `PK4_SANITY` en `app/pk4.py` y el de
+`hgss_write.py`, que afirmaban ignorancia. La escritura sigue apagada
+(`MELONDS_GEN4_ESCRIBE = False`).
+
+## HeartGold: carril de combate, desde cero (06-09-2026)
+
+Primera implementación real de tiempo real en HeartGold desde que se retomó.
+Localizado con búsqueda de valor exacto en tres instantes sobre la partida
+real del usuario, sin suponer ninguna estructura: `0x022CC4EC` (`<PS actual,
+PS máximo>`) más `0x022CC484` de confirmación redundante (solo PS actual).
+
+A diferencia de ORAS/X-Y/Blanco/Negro 2, cuarta generación **no mantiene una
+tabla con una fila por miembro** — se buscó alrededor de cada candidato y no
+apareció ninguna. Solo se demuestra al que está en el campo, igual que el
+diseño original (pre-tabla) de X/Y. Las dos copias vuelven a `(0, 0)` al
+terminar el combate, lo que da la detección de "hay combate" sin coste
+adicional.
+
+**VALIDADO FÍSICAMENTE** en la partida real, dos veces: Totodile 42→38 tras un
+golpe, cambio a Spinarak (23→20) sin retraso en la misma pelea, y en una
+segunda pelea distinta Totodile 38→32.
+
+`HgssMelonDSReader.read_battle_probe`, `Gen4Memory.battle_hp_primary/secondary`,
+enganchado en `HgssRealTimeAdapter._capture`. `tests/test_hgss_battle_lane.py`:
+6 casos nuevos; `tests/test_hgss_adapter.py` con 3 casos de integración.
+
+## Retomados Diamante/Perla, Platino y HeartGold/SoulSilver (06-09-2026)
+
+Ocultos desde alpha.97 tras cuatro incidentes reales de «Huevo malo» al
+escribir cuarta generación (alpha.87-96), el último con una causa —un campo
+`sanity`— que quedó **sin explicar**. A petición del usuario, se retoma el
+trabajo activamente en vez de dejarlo aparcado.
+
+`GAMES_OCULTOS` queda vacío: los diez juegos vuelven a ser seleccionables.
+HeartGold ya lee todo en vivo de forma fiable (equipo, PC, mochila, dinero,
+medallas, MT); escribir sigue apagado (`MELONDS_GEN4_ESCRIBE = False`) hasta
+investigar la causa pendiente. Diamante/Perla y Platino no tienen NINGUNA
+dirección de RAM medida todavía — parten del mismo punto cero que Blanco/Negro
+antes de alpha.65: solo lectura de ROM y un motor de archivo `.sav`
+experimental, sin carril de tiempo real. `tests/test_fundido_de_la_tarjeta.py`
+actualizado a los diez banners visibles.
+
+## Validaciones físicas sueltas (06-09-2026)
+- **BDSP**: intercambio PC↔PC **entre cajas distintas**, confirmado por el
+  usuario. Con esto el intercambio de dos casillas ocupadas queda validado en
+  los ocho juegos, sin excepciones.
+- **Blanco/Negro**: el carril de combate por equipo entero (alpha.66,
+  `battle_stride=0x224`) confirmado en pantalla con los seis PS reales
+  durante un combate. Ya no es solo mecanismo probado por traza.
+
+# v0.3.1-alpha.34 — Negro 2/Blanco 2: medido el paso de combate, y una fila que no se leía por un campo que sobraba
+
+Pendiente de alpha.32: «Negro 2 pasaría de 5 de 6 en gris a 5 de 6 medidos si
+se midiera su `battle_stride`, como ya se hizo en Blanco». Medido sobre la
+partida real del usuario (seis miembros, buscando especie+PS máximo de cada
+uno alrededor de `battle_presentation`): **0x224, el mismo paso que Blanco**.
+
+## Un hallazgo mayor de camino: no son dos tablas, es una sola
+
+`battle_presentation` (0x0225B1B0) y `battle_logical` (0x0225B5F8) difieren en
+exactamente 2×0x224 — no son dos tablas independientes como en Blanco (que
+difieren en 0xEFC, y una traza de dos estados demostró que se actualizan con
+~3,3 s de diferencia). En Negro 2/Blanco 2 son la MISMA tabla de seis filas,
+una por **puesto del equipo** (fila k = puesto k, sin el intercambio de
+activo a la fila 0 que sí tienen ORAS/X-Y). Confirmado con dos cambios de
+combatiente seguidos en la partida real: el PS de cada miembro se quedó donde
+debía tras salir del campo, sin resetear — mejor comportamiento que ningún
+otro juego investigado hasta ahora, no necesita ni resolución de intercambio
+ni caché de confirmados.
+
+## El bug de fondo: el campo "nivel" es basura en cualquier fila que no sea la activa
+
+`parse_battle_copies` exigía que (especie, PS máximo, habilidad, **nivel**)
+coincidieran los cuatro para aceptar una fila. Medido en la partida real: ese
+campo sale con valores imposibles (260, 516, 773, 1027, 1285) en las cinco
+filas que no son la del combatiente recién activo — exactamente el mismo
+"nivel imposible" que la traza del 27-08-2026 ya había documentado para una
+fila aislada, solo que ahora se ve que es la norma, no la excepción. Especie +
+PS máximo + habilidad ya identifican sin ambigüedad; exigir también el nivel
+descartaba las cinco filas enteras.
+
+## Corregido
+`parse_battle_copies` deja de exigir el nivel. `GEN5_MEMORY["b2w2"].battle_stride
+= 0x224`. Con esto, `read_battle_party` —ya escrito y validado para Blanco—
+funciona también en Negro 2 sin más cambios.
+
+## Validado físicamente (06-09-2026)
+Con el equipo real del usuario a mitad de combate (Lillipup debilitada 0/18,
+Mareep banqueado a 7/25, Azurill banqueado a 11/23, tres sin tocar), las seis
+filas se leyeron correctas.
+
+- `tests/test_negro_2_lee_una_fila_por_miembro_del_equipo` y
+  `test_negro_2_no_exige_que_el_nivel_coincida_en_filas_banqueadas` en
+  `tests/test_bw_memory.py`.
+- Suite completa: 2746 passed, 2 skipped.
+
+# v0.3.1-alpha.33 — X/Y: investigada la tabla de combate, y dos bugs reales de fondo
+
+Pendiente de alpha.32: «X/Y: ORAS lee las seis filas de combate. Merece
+comprobarse si X/Y usa la misma tabla». Se comprobó, y la respuesta cambió de
+signo dos veces antes de encontrar el arreglo de verdad.
+
+## La tabla existe, pero no es fiable
+
+Medido en la partida real: el puntero de X/Y sí es la primera fila de una
+tabla de seis con el mismo paso de 580 bytes que ORAS, con el mismo
+intercambio del activo a la fila 0. Pero, a diferencia de ORAS (direcciones
+fijas), el puntero de X/Y pasa por indirección, y tras el SEGUNDO cambio de
+combatiente un miembro desapareció de la tabla por completo mientras aparecía
+una fila que no correspondía a nadie — de forma estable, no transitoria.
+Publicar esos PS habría mostrado "curado" a un Pokémon que seguía dañado de
+verdad. Descartada: X/Y se queda demostrando solo la fila del activo, como
+antes.
+
+## Los dos bugs de fondo, encontrados persiguiendo la tabla
+
+1. **El respaldo de los benqueados estaba desfasado.** El bloque de equipo
+   (`XY_PARTY_ADDRESS`) no sigue el daño de un miembro ya benqueado —queda
+   congelado en su valor de antes de esa pelea—, así que usarlo como
+   respaldo "curaba" en pantalla a quien seguía dañado. Un Pokémon en el
+   banquillo no puede perder ni ganar PS por nada ajeno al combate activo, así
+   que ahora se cachea el último PS confirmado (por partida doble) mientras
+   SÍ estuvo en el campo, y se usa en vez del bloque de equipo mientras siga
+   fuera.
+2. **Todo el equipo debe confirmarse al EMPEZAR el combate, no según va
+   saliendo.** Corregido (1), los cinco que nunca habían salido se quedaban en
+   gris hasta que les tocaba turno. Pero fuera de combate el bloque de equipo
+   SÍ es la verdad — en el instante justo antes de la pelea, los seis PS ya
+   son exactos. Se siembra esa línea base para los seis en el primer instante
+   resuelto de cada combate.
+3. **Un solo tick sin rival válido no es un combate terminado.** El puntero
+   del rival tiene la misma indirección que el del jugador, y puede leerse
+   inválido durante el instante de transición de un K.O. (medido: justo al
+   caer el Pokémon del jugador). Creérselo de golpe declaraba el combate
+   terminado y publicaba el bloque de equipo crudo — sin el daño de esa
+   pelea — como si fuera la verdad, "curando" a todo el mundo en pantalla.
+   Ahora se exige que la ausencia se repita dos tics seguidos.
+
+## Corregido
+`XYLiveReader._battle_confirmed_hp` (línea base al empezar combate + último PS
+confirmado por partida doble mientras cada uno estuvo activo) y
+`_battle_opponent_absent_streak` (dos tics seguidos antes de dar el combate
+por terminado). `app/oras_live.py::resolve_battle_row_mapping` se extrajo a
+función propia sin cambiar su comportamiento (ORAS no se toca).
+
+## Validado físicamente (06-09-2026)
+Tres capturas en vivo del usuario: un solo cambio de combatiente ya "curaba"
+al benqueado; un K.O. apagaba a los cinco restantes hasta sacarlos uno a uno;
+un K.O. "curaba" a todo el mundo en pantalla. Las tres, confirmadas
+resueltas tras cada arreglo.
+
+- `tests/test_xy_ps_confirmados_no_se_curan_al_benquear.py`: 6 casos.
+- Suite completa: 2746 passed, 1 skipped.
+
+# v0.3.1-alpha.32 — la barra pintaba en verde unos PS que no había medido
+
+Planteado por el usuario: «si la barra puede dejar de mostrar la vida
+correcta, eso hay que cambiarlo inmediatamente». Podía.
+
+## El defecto
+Durante un combate, varios juegos solo miden los PS del Pokémon que está en el
+campo. Los demás arrastran los del bloque de equipo — y en quinta está
+**demostrado** que ese bloque no se actualiza hasta que el combate acaba. Como
+`SavePokemon.current_hp` era un número suelto **sin procedencia**, el valor
+medido y el arrastrado ocupaban el mismo campo y la barra los pintaba igual:
+verde lleno para un Pokémon que podía estar a la mitad.
+
+## Alcance auditado, los ocho juegos
+| Juego | Quién tiene PS medidos en combate | Podía mentir |
+| --- | --- | --- |
+| HeartGold | nadie (no tiene carril de combate) | **sí, los 6, siempre** |
+| Negro 2 | solo el del campo (`battle_stride` sin medir) | **sí, 5 de 6, siempre** |
+| X/Y | solo el del campo | **sí, 5 de 6** |
+| Blanco | todos (una fila por miembro) | solo filas que no validan |
+| USUM | todos | solo slots sin fila única |
+| ORAS | todos | solo entradas que no validan |
+| Sol/Luna | todos | no — congela en vez de mezclar |
+| Perla Reluciente | todos | no — retención de presentación deliberada |
+
+## Corregido
+`SavePokemon.hp_is_live` (por defecto `True`, así que ninguna lectura fuera de
+combate cambia). Los caminos de combate de X/Y, quinta, ORAS y USUM lo ponen
+en `False` para los miembros cuyos PS no han medido. La barra pinta esos en
+**gris neutro** en vez del color de salud: se sigue viendo la última lectura
+buena, pero sin afirmar que siga siendo cierta — el color es la afirmación más
+fuerte que hace la barra, y verde dice «este está bien».
+
+`_floating_hp_is_live` elige la marca con la MISMA autoridad que
+`_floating_health_values` elige el número, para que no puedan discrepar.
+
+## Lo que NO cambia
+La detección de bajas. El que se debilita es siempre el que está en el campo,
+y de ese sí se miden los PS en vivo en todos los juegos con carril de combate.
+
+## Pendiente
+- **HeartGold** sigue sin poder marcarlo: no tiene carril de combate y ni
+  siquiera sabe si hay un combate en curso, así que no puede distinguir cuándo
+  su bloque de equipo miente. Está oculto del selector y con las escrituras
+  apagadas, así que hoy no es alcanzable.
+- **Negro 2** pasaría de 5 de 6 en gris a 5 de 6 medidos si se midiera su
+  `battle_stride`, como ya se hizo en Blanco.
+- **X/Y**: ORAS lee las seis filas de combate. Merece comprobarse si X/Y usa la
+  misma tabla — sería medir, no marcar.
+
+- `tests/test_ps_no_medidos_en_combate.py`: 12 casos.
+- Suite completa: 2739 passed, 2 skipped.
+
+# v0.3.1-alpha.31 — el MENÚ flotante se abría encima del selector abierto
+
+Reportado por el usuario: con RECUERDA-MOVIMIENTOS abierto, pulsar MENÚ en la
+barra flotante abría el lanzador **encima**, dejando el selector detrás y sin
+forma de volver a él.
+
+Estas capas (`_levelup_history_popover`, `_move_info_popover`,
+`_role_info_popover`) se dibujan DENTRO de la ventana principal, así que no
+pueden competir por el foco con un `Toplevel` que además es `-topmost`: la
+única salida es no abrirlo.
+
+`_capa_abierta_bloquea_el_menu` comprueba las tres. El guardia solo impide
+ABRIR: si el lanzador ya estaba abierto, cerrarlo sigue funcionando. Y una
+capa cuyo widget ya no responde no bloquea nada, para que un resto no pueda
+dejar el MENÚ inutilizable.
+
+- `tests/test_menu_flotante_no_tapa_capas.py`: 7 casos.
+- Suite completa: 2727 passed, 2 skipped.
+
+# v0.3.1-alpha.30 — RECUERDA-MOVIMIENTOS registraba un movimiento distinto del que el juego enseña
+
+Reportado por el usuario validando quinta: Patrat **aprendió Llama Fusión** y
+RECUERDA-MOVIMIENTOS **registró Onda Certera**. Los dos compatibles con su
+rol, pero distintos. Y un Cambio de Marcha que no reconocía.
+
+## Causa raíz
+`compute_species_patch` excluye de los candidatos los movimientos que la
+especie YA tiene en su tabla. El parche calcula sobre la tabla COMPLETA de la
+especie; el historial calculaba sobre el **subconjunto recién cruzado**. Dos
+conjuntos de exclusión distintos → dos sustitutos distintos para la misma
+entrada. Medido sobre la ROM real: **13 de las 14 entradas de Patrat
+discrepaban**.
+
+La corrección del 2026-09-04 (semilla determinista por `clave` estable, no por
+posición) era necesaria pero **no suficiente**: la semilla ya coincidía; lo
+que no coincidía era la exclusión.
+
+## Alcance: cinco juegos, no uno
+No era solo de quinta. `_append_*_levelup_history_entries` calculaba sobre el
+subconjunto en **ORAS, X/Y, Sol/Luna, UltraSol/UltraLuna y quinta**. Los cinco
+pasan a calcular sobre la tabla completa de la especie —lo mismo que el
+parche— y a leer de ahí solo las entradas que les interesan, así que coinciden
+por construcción.
+
+BDSP no estaba afectado: en los cruces reales registra el movimiento **ya
+confirmado en RAM**, no uno recalculado.
+
+## El Cambio de Marcha
+No era un fallo: con Patrat como Asesino, el parche sustituye `Mal de Ojo` por
+`Cambio de Marcha` a nivel 31. El juego lo enseñó correctamente; no se
+reconocía porque el historial mostraba otro nombre.
+
+## Tests
+Uno nuevo con dientes: comprueba que lo registrado coincide con lo que escribe
+el parche, y además **verifica que el cálculo ingenuo sobre el subconjunto sí
+diverge**, para que la prueba no pueda pasar por casualidad.
+
+Suite completa: 2721 passed, 1 skipped.
+
+**VALIDADO FÍSICAMENTE** (06-09-2026): tras reiniciar RoleRun, el usuario
+confirma que lo que anuncia el juego y lo que registra RECUERDA-MOVIMIENTOS ya
+coinciden.
+
+**Nota para runs existentes**: las entradas ya guardadas conservan el nombre
+equivocado. La corrección solo afecta a lo que se registre a partir de ahora —
+el usuario decidió no migrarlas.
+
+# v0.3.1-alpha.29 — aprendizajes por rol en quinta, con UNA sola capa
+
+B2/W2 y Blanco/Negro eran los únicos juegos con escritura viva sin
+aprendizajes por rol. Ya lo tienen — y mejor terminado que en 3DS.
+
+## Por qué basta una capa
+En NDS no existe nada parecido al LayeredFS, así que no hay archivo de mod.
+Pero **melonDS mantiene la imagen entera de la ROM en su propia memoria, en
+una región de escritura**, así que la tabla se parchea ahí. Es la misma
+técnica de «parcheo de tablas en vivo» que ya usa BDSP.
+
+Y, a diferencia de X/Y, Sol/Luna y UltraSol/UltraLuna, **quinta no cachea la
+tabla**: la relee en cada aprendizaje. Eso hace innecesarias las otras dos
+capas — ni red de seguridad reactiva (Enfoque B) ni parcheo del cartel
+(Enfoque C): el juego **anuncia** directamente el nombre correcto.
+
+## Cómo se demostró, antes de escribir una línea de writer
+1. La tabla vive en `a/0/1/8`: 709 archivos, exactamente las 709 especies de
+   la tabla personal de B2/W2. Valida contra aprendizajes conocidos
+   (Bulbasaur `Placaje@1, Gruñido@3, Drenadoras@7, Látigo Cepa@9`; Pikachu;
+   los tres iniciales de Teselia) y pasa una prueba estructural fuerte: 709
+   de 709 con niveles crecientes dentro de 1..100, cero anomalías.
+2. La imagen de la ROM está en la memoria de melonDS: base confirmada por dos
+   caminos independientes (la cabecera `POKEMON B2` en la base, y la tabla de
+   Tepig idéntica byte a byte a la del archivo), y su región es `READWRITE`.
+3. Ninguna copia cacheada en los 16 MB de RAM del DS.
+4. **Prueba física**: se cambió el aprendizaje de nivel 5 de Lillipup
+   (`Rastreo` → `Hidrobomba`, dejando el nivel intacto) y el juego **anunció y
+   aprendió Hidrobomba**, con su tipo AGUA y sus PP. Después se restauraron
+   los bytes originales.
+
+## Qué se añade
+- `app/nds_rom.py`: `narc_slices` y `NdsRom.narc_absolute_slices` — dónde vive
+  cada archivo dentro del .nds, no solo su contenido. `read_narc` pasa a
+  construirse sobre ello, sin cambiar de comportamiento.
+- `app/gen5_levelup_moves.py`: decodifica la tabla y calcula qué entradas no
+  encajan con cada rol. La «clave» de cada entrada es su desplazamiento
+  absoluto en el .nds. La lógica de qué sustituye a qué es la compartida de
+  siempre (`role_levelup_moves`), sin reescribir nada.
+- `app/gen5_levelup_memory.py`: localiza la imagen y escribe los dos bytes del
+  movimiento, nunca el nivel. **La ROM del usuario se abre siempre en solo
+  lectura**: lo que se parchea es la copia en memoria.
+- `app/ui.py`: registro al detectar la ROM, sincronización en cada sondeo con
+  el mismo adelanto a evoluciones futuras que ya tiene X/Y, reversión al
+  cerrar, e historial para **RECUERDA MOVIMIENTOS**, que quinta también gana.
+
+## Localizar la imagen: de 48 s a 0,07 s
+El barrido inicial recorría 1,2 GB a ~25 MB/s. Ahora se agrupan las regiones
+por asignación y solo se miran las que **podrían contener la ROM entera**: de
+343 asignaciones queda 1. Dentro de ella se busca la cabecera al principio
+(melonDS deja la imagen a 0x1040 del inicio). El barrido completo del ancla
+sigue ahí como respaldo si eso fallara, y una base ya encontrada se revalida
+en 0,001 s. Sin relajar nada: la cabecera se verifica, una segunda especie
+hace de testigo, y varias bases válidas se rechazan por ambiguas.
+
+## Tests
+31 nuevos en tres archivos: posiciones del NARC contra su contenido, decodificación
+y terminador, el parche solo toca especies con rol, el escritor respeta el
+nivel y se niega si no cuadra, adelanto a evoluciones, reversión al retirar un
+rol, y el historial de recuerda-movimientos.
+
+Suite completa: 2720 passed, 1 skipped.
+
+**VALIDADO FÍSICAMENTE** (06-09-2026) en Negro 2: el juego anuncia y enseña
+directamente el movimiento del rol, y RECUERDA-MOVIMIENTOS lo refleja
+(este último tras la corrección de alpha.30).
+
+**VALIDADO FÍSICAMENTE también en Blanco** (06-09-2026, alpha.34): mismo
+resultado en la partida real de Blanco tras comprobar en solo lectura que su
+tabla de aprendizajes (668 especies) es coherente. Con esto, quinta generación
+queda validada en los dos juegos, no solo en Negro 2.
+
+# v0.3.1-alpha.28 — BDSP: mover a otra caja fallaba en 1.185 de 1.189 huecos
+
+Reportado por el usuario al validar alpha.27: «BDSP: no se puede cambiar de
+caja al Pokémon». El log lo señaló exacto — `El hueco de destino no contiene
+el vacío canónico demostrado`, y **no venía del intercambio nuevo** (los tres
+suyos se escribieron bien) sino de `move-box-slot`, que ya estaba en
+producción.
+
+## Causa raíz, medida sobre el PC real
+Lectura de los 1.200 huecos de su partida: 11 ocupados y 1.189 vacíos. De
+esos vacíos, **1.185 no coinciden byte a byte con el vacío que escribe
+RoleRun**. La diferencia está ENTERA en los 16 bytes de cola
+(`PB8_STORED_SIZE`..`PB8_PARTY_SIZE`) — el espejo de estadísticas de party,
+que no describe al Pokémon —: el juego los deja con un residuo constante
+(`00007ee9…db67`) y RoleRun escribe ceros. Los 328 bytes del Pokémon están a
+cero en los 1.189, sin excepción.
+
+Solo hay dos representaciones, y la «canónica» resultó ser **la minoritaria**:
+los 4 huecos que la propia RoleRun había vaciado antes. Por eso el traslado
+parecía funcionar a veces — funcionaba justo sobre esos cuatro.
+
+## Corregido
+`_box_slot_is_clean_empty` comprueba lo que «vacío» significa de verdad: los
+328 bytes del bloque guardado, todos a cero. La cola no se mira. Es además
+más estricto que sus dos hermanos ya validados (`party-to-box` y
+`replace-fainted`), que solo exigen `species == 0`: un hueco con restos de un
+Pokémon anterior dentro del bloque guardado se sigue rechazando.
+
+Corregido de paso un fallo que solo asomaba al relajar la precondición: los
+bytes «originales» del destino que se guardaban para el rollback eran el
+canónico, no los reales. Restaurar habría cambiado los bytes.
+
+## Tests
+Cuatro nuevos, con la cola exacta medida en la partida real: el vacío del
+juego se acepta, el vacío con residuo en el bloque guardado se rechaza, los
+dos son «sin Pokémon» para el parser, y el rollback devuelve el vacío DEL
+JUEGO. Comprobado que este último falla con el código viejo (cero escrituras:
+la precondición abortaba antes).
+
+Suite completa: 2688 passed.
+
+**VALIDADO FÍSICAMENTE** (06-09-2026): el usuario confirma que ya puede mover
+un Pokémon entre cajas en Perla Reluciente.
+
+# v0.3.1-alpha.27 — intercambiar dos casillas del PC, en los ocho juegos
+
+Pedido del usuario: el intercambio entre dos casillas **ocupadas** del PC
+existía solo en ORAS y X/Y. Ahora lo tienen los ocho backends con escritura
+viva.
+
+## Qué es y qué no es
+No es una escritura nueva en ningún juego. Es la MISMA transacción que su
+traslado a hueco libre (`move-box-slot`) ya tenía demostrada, sobre la MISMA
+matriz PC, con dos diferencias:
+
+- El destino está **ocupado**, así que no interviene ningún vacío canónico ni
+  cifrado: ninguna casilla queda libre en ningún momento del plan.
+- Las **dos** identidades se conocen de antemano, así que ambas son ancla. Si
+  cualquiera de las dos ha dejado de contener lo que la interfaz declaró, se
+  aborta antes de escribir un solo byte. Es una garantía MÁS fuerte que la del
+  traslado, donde el hueco vacío no demuestra nada por sí mismo.
+
+Ninguna dirección nueva ni prestada de otro juego: cada backend reutiliza la
+localización de su propia matriz.
+
+## Writers nuevos
+| Juego | Writer |
+| --- | --- |
+| Sol/Luna | `SMLiveWriter._apply_pc_swap` |
+| UltraSol/UltraLuna | `USUMLiveWriter._apply_pc_swap` |
+| Perla Reluciente | `BDSPLiveWriter._apply_box_swap` |
+| B2/W2 y Blanco/Negro | `B2W2MelonDSReader.prepare_pc_swap` + `swap_pc_slots` |
+| HeartGold/SoulSilver | `HgssWriter.swap_pc_slots` |
+
+Todos escriben destino primero y origen después, con readback por bloque,
+verificación semántica de las DOS casillas y rollback verificado — el mismo
+contrato transaccional de su hermano ya validado.
+
+## Compuertas
+`PC_SWAP_GAME_KEYS` pasa de `{"oras", "xy"}` al mismo conjunto que
+`PC_A_PC_GAME_KEYS`. Se declaran aparte a propósito: son dos escrituras
+distintas y un backend podría tener una sin la otra.
+
+Actualizadas además las tres compuertas por juego que ya habían causado el
+fallo de «el cambio se queda proyectado para siempre» en versiones anteriores
+(`_request_oras_live_auto_apply` y `_oras_live_unsupported_changes`, ramas de
+BDSP, melonDS y Gen 7), y el metadato `pc_write_modes` de SM/USUM, que se
+había quedado sin declarar `move-box-slot` desde el 04-09.
+
+## Corregido de paso: un rollback que no cubría la escritura parcial
+Encontrado revisando el propio port. `WindowsProcessMemory.write` lanza
+también cuando `WriteProcessMemory` devuelve `ERROR_PARTIAL_COPY` — y para
+entonces **parte de los bytes ya han caído**. En SM y USUM el apunte para el
+rollback (`attempted.append`) se hacía DESPUÉS de escribir, así que:
+
+- si fallaba la primera escritura, `attempted` seguía vacío y no se intentaba
+  ningún rollback: la casilla quedaba medio escrita;
+- si fallaba la segunda, se restauraba solo la primera y se informaba de que
+  «RoleRun restauró y verificó ambos huecos», con la otra casilla corrupta.
+
+Con las dos casillas ocupadas eso es perder un Pokémon. Corregido en los dos
+`_apply_pc_swap` **y en los dos `_apply_pc_move` hermanos**, donde el mismo
+fallo estaba latente: su segunda escritura también apunta a una casilla
+todavía ocupada. X/Y, ORAS, BDSP, B2/W2 y HGSS ya lo hacían bien.
+
+## Tests
+31 nuevos, repartidos por backend: cruce byte a byte de los dos bloques sin
+tocar el equipo, rechazo de un destino vacío (eso es un traslado), rechazo de
+una identidad desfasada sin escribir, exigencia de las dos identidades,
+rollback verificado de las dos casillas ante un fallo a mitad, y un test que
+recorre los ocho juegos comprobando **las dos** compuertas que se tragan
+cambios en silencio.
+
+Cuatro de ellos usan un doble de memoria que escribe la MITAD de los bytes y
+solo entonces falla — un doble que solo lanza, sin escribir, no destapa el
+fallo de arriba. Comprobado que fallan con el orden viejo y pasan con el nuevo.
+
+Suite completa: 2686 passed, 1 skipped.
+
+## VALIDADO FÍSICAMENTE (06-09-2026)
+Sol/Luna, UltraSol/UltraLuna, Negro 2/Blanco 2 y Blanco/Negro: intercambio
+correcto. Perla Reluciente escribió bien sus intercambios desde el primer
+intento; lo que falló allí fue el traslado a otra caja, un fallo distinto y
+anterior, corregido en alpha.28.
+
+HGSS queda implementado pero sin poder probarse: sus escrituras siguen
+apagadas en bloque (`MELONDS_GEN4_ESCRIBE = False`).
+
+# v0.3.1-alpha.26 — el roce de la tarjeta de equipo solo aguantaba en el borde
+
+Reportado tras alpha.25 ("recorrer todos los descendientes"): con ese cambio
+solo, el roce pasó a marcarse **únicamente** en el borde exterior de la
+tarjeta -la única franja sin ningún hijo debajo-; el interior seguía sin
+mantenerlo.
+
+## Causa raíz
+Cada hijo de Tk es una ventana real propia. Moverse de la tarjeta a uno de
+sus hijos -aunque visualmente el cursor sigue "dentro" de la tarjeta- sigue
+disparando `<Leave>` en la tarjeta y `<Enter>` en el hijo, en ese orden. El
+`on_leave` de esta vista difiere su efecto con `after_idle` mientras que
+`on_enter` actúa al momento, así que el `<Leave>` diferido siempre ganaba la
+carrera y deshacía el marcado justo después de que `<Enter>` lo hubiera
+puesto. Solo la franja exterior, sin ningún hijo debajo, no sufre esa
+transición Leave→Enter constante -por eso parecía la única que funcionaba-.
+
+## Corregido
+`_bind_hover_tree` (`app/ui_views/team_pc_view.py`) sigue enganchando todos
+los descendientes (alpha.25), pero ahora su `<Leave>` comprueba, con las
+coordenadas del evento, si el puntero sigue dentro del rectángulo del widget
+RAÍZ -no del hijo que disparó el evento- antes de llamar a `on_leave`. Si
+sigue dentro, solo cambió de hijo y se ignora; si de verdad salió, se llama
+con normalidad. Es la solución estándar de Tk para el roce de un contenedor
+con hijos.
+
+## Tests
+`tests/test_bind_hover_tree_recursivo.py`, dos casos nuevos: salir de un
+hijo hacia otro hijo de la misma tarjeta no deshace el roce; salir de
+verdad de la tarjeta sí lo hace.
+
+Suite completa: 2576 passed, 2 skipped.
+
+# v0.3.1-alpha.25 — la tarjeta de equipo perdía el roce sobre su propio contenido
+
+Reportado: al pasar el ratón por las tarjetas de equipo, solo se marcaban
+como rozadas mientras el cursor estaba sobre el fondo de la tarjeta -en
+cuanto pasaba por encima de un texto, la barra de PS o cualquier otro
+contenido, dejaban de estarlo-.
+
+## Causa raíz
+`_bind_hover_tree` (`app/ui_views/team_pc_view.py`) solo enganchaba
+`<Enter>`/`<Leave>` en el widget raíz y en sus hijos **directos**. Su
+función hermana para el clic, `_bind_click_tree`, sí recorre todos los
+descendientes de forma recursiva -y por eso el clic sí funcionaba en toda la
+tarjeta, pero el roce no-. Un nieto (un texto dentro de una fila de
+estadísticas, por ejemplo) no tenía esos eventos enganchados, así que entrar
+en él seguía disparando el `<Leave>` del antepasado que sí los tenía, y
+nada volvía a marcar la tarjeta como rozada.
+
+## Corregido
+`_bind_hover_tree` recorre ahora todos los descendientes, igual que
+`_bind_click_tree`. La exclusión del botón de información de rol (`info`)
+se conserva: al excluirlo, tampoco se recorren sus propios hijos.
+
+## Tests
+`tests/test_bind_hover_tree_recursivo.py`: un nieto y un bisnieto quedan
+enganchados; un widget excluido y sus hijos no.
+
+Suite completa: 2575 passed, 1 skipped.
+
+# v0.3.1-alpha.24 — Sol/Luna: destino exacto Equipo→PC, y un clic que revienta en silencio
+
+## Corregido: Equipo→PC siempre iba al primer hueco libre
+
+Reportado: incluso arrastrando a una casilla PC concreta, el Pokémon
+aparecía en la primera libre (se podía mover después dentro del PC, pero no
+llegar directo).
+
+**Causa raíz**: la UI (`app/ui.py`, `_team_pc_drop`/`send_pokemon_to_pc`) sí
+calculaba y pasaba el destino exacto correctamente. El problema estaba en
+`SMLiveWriter._apply_team_swap` (`app/sm_live.py`): para `"party-to-box"`
+ignoraba `change.box`/`change.box_slot` por completo y siempre buscaba el
+primer hueco libre de la matriz live, con un comentario explícito de que
+"la UI puede haber calculado un destino desde un main/caché desfasado" -cierto
+en su momento, pero ya no desde que `_team_pc_drop` calcula el destino desde
+la propia matriz live, no desde el save-.
+
+**Corregido**: réplica exacta del contrato ya validado en
+`USUMLiveWriter._apply_team_swap` -que sí distingue "sin destino explícito
+→ primer hueco libre real" de "destino explícito → se valida contra la
+matriz live y se usa tal cual, o se rechaza si ya está ocupado"-.
+
+Tests: `test_party_to_box_writes_the_exact_requested_destination` y
+`test_party_to_box_rejects_an_exact_destination_that_is_already_occupied`
+(`tests/test_sm_alpha30_pc_swap_write.py`), réplica de los equivalentes ya
+existentes en USUM. Se sustituyó el test que fijaba el comportamiento
+anterior como intencionado (`test_alpha37_party_to_box_uses_first_free_live_slot_not_stale_requested_slot`).
+
+## Mitigado (causa raíz todavía sin demostrar): un clic dejaba de abrir la ficha
+
+Reportado: tras intercambiar Ledyba (del PC) por un Pikipek (al PC), pulsar
+la tarjeta de Ledyba en Equipo dejó de abrir su ficha -sin aviso ni error
+visible-. El resto de tarjetas seguían funcionando con normalidad.
+
+Cada tarjeta engancha su clic una sola vez, con la identidad del Pokémon
+capturada en ese instante, y relee `_team_card_pokemon` en cada pulsación
+-para que una tarjeta reutilizada en sitio no quede atada al Pokémon de
+cuando se creó-. Si esa identidad deja de tener una entrada vigente ahí,
+`_select_team(None)` llamaba a `identity_for(None)`, que revienta: Tkinter
+solo lo imprime en consola, así que para el usuario el clic simplemente «no
+hacía nada».
+
+**No se ha podido demostrar todavía** por qué esa identidad quedaba sin
+entrada vigente -la sospecha, sin confirmar, es una carrera entre el
+repintado optimista/proyectado del intercambio PC↔Equipo y el repintado que
+llega después con la confirmación de la RAM-. Sin poder reproducirlo fuera
+de una partida real, se aplica solo una mitigación segura: `_click_team_card`
+(nuevo, `app/ui_views/team_pc_view.py`) ya no deja que ese caso reviente -no
+selecciona nada, sin más- y deja un diagnóstico (`perf.mark`) con la
+identidad exacta y las claves vigentes de `_team_card_pokemon` en ese
+instante, para poder localizar la causa real si vuelve a pasar.
+
+Tests: `tests/test_click_tarjeta_equipo_sin_pokemon.py` fija el contrato
+(una identidad sin Pokémon vigente no revienta ni selecciona; una identidad
+vigente sigue seleccionando con normalidad) sin reproducir la carrera en sí.
+
+## Pendiente
+- Validación física: mover un Pokémon del Equipo a una casilla PC concreta
+  en Sol/Luna y confirmar que llega exactamente ahí.
+- Reproducir el clic muerto en Ledyba con el diagnóstico ya activo -mirar
+  `Logs/perf_*.jsonl` o el registro de `perf.mark` tras el siguiente
+  intercambio PC↔Equipo- para localizar la causa raíz real.
+
+Suite completa: 2572 passed, 2 skipped.
+
+# v0.3.1-alpha.23 — Gen 7: el testigo "recién salido al PC" nunca podía cumplirse
+
+Reportado: tras alpha.22 (que dejó de bloquear el arranque), CAJAS PC de
+Sol/Luna seguía sin abrir ni con "REINTENTAR" -incluso después de guardar la
+partida dentro del juego, descartando la hipótesis del archivo desfasado-.
+
+## Causa raíz
+`_open_pc_selector_from_live_matrix` (`app/ui.py`) construye los `anchors`
+del selector de PC mezclando varias fuentes: los Pokémon del guardado, los
+recordados de sesiones anteriores (`_anclas_del_pc_recordadas`) y, entre
+ellos, **el equipo vivo completo** (`anchors.extend(tuple(self.current_game.party))`)
+-para poder mostrar nombre/nivel localizado si algún testigo con caja/slot
+conocidos coincide con un Pokémon actual-.
+
+`_resolve_pc_from_livehex_reference` (y sus equivalentes
+`_resolve_pc_from_live_save_mirror`/`_resolve_pc_from_direct_pk7_matrix`, en
+`app/sm_live.py` y `app/usum_live.py`) usan esos mismos `anchors` para dos
+comprobaciones distintas:
+
+1. ningún Pokémon del equipo vivo puede aparecer en la matriz candidata
+   (`boxpokemon-overlaps-live-party` si aparece);
+2. si existe un testigo "recién salido al PC" (`box`/`box_slot` desconocidos
+   en el anchor), su identidad **debe** aparecer en la matriz candidata
+   (`missing-recent-party-to-pc-witness` si no aparece).
+
+Un Pokémon de equipo llega con `box=None`/`box_slot=None` -igual que un
+testigo real de salida reciente-, así que sin excluir la party viva de esa
+segunda comprobación, el testigo exigido era exactamente lo que la primera
+ya prohíbe encontrar en el PC. Ninguna dirección podía superar nunca las dos
+pruebas a la vez, ni siquiera la correcta: una contradicción interna, no un
+problema de datos ni de RAM.
+
+## Corregido
+`unlocated_anchor_ids`/`recent_pc_ids` restan ahora `live_party_ids` antes de
+exigir el testigo, en las tres funciones de `sm_live.py` y las dos
+equivalentes de `usum_live.py`. Un Pokémon todavía en el equipo nunca cuenta
+como testigo de que "recién se fue al PC"; un testigo genuino (uno que de
+verdad acaba de salir del equipo) nunca es, por definición, un miembro
+actual del equipo, así que esta resta no debilita la prueba real.
+
+No se ha tocado ninguna dirección RAM, stride ni el resto de comprobaciones
+host==guest.
+
+## Tests
+- `tests/test_sm_alpha25_pc_livehex_reference.py::test_pc_selector_anchors_including_the_live_party_do_not_block_a_valid_match`
+  reproduce exactamente el escenario -el propio Charizard de la party como
+  único anchor- y comprueba que una matriz PC válida y sin solapamiento real
+  se acepta.
+- El mismo cambio en USUM sigue el patrón ya demostrado en Sol/Luna; no se
+  añadió un test sintético dedicado para USUM en esta entrega.
+- Suite completa: 2570 passed, 1 skipped.
+
+## Pendiente
+Validación física: reabrir CAJAS PC de Sol/Luna con Azahar/AzaharPlus y
+confirmar que la matriz se demuestra y las cajas se ven.
+
+# v0.3.1-alpha.22 — Sol/Luna ya no se quedaba estancado en "Preparando Equipo y PC…"
+
+Reportado: tras la primera sesión (la que sirvió para reportar el resto de
+bugs de esta tanda), RoleRun dejó de abrir nunca más con esa Run de Sol/Luna
+-se quedaba indefinidamente en la pantalla de carga "Preparando Equipo y
+PC…", con Azahar realmente abierto, enlazado y en la partida-.
+
+## Causa raíz
+Confirmado con el propio log del usuario
+(`Documents/RoleRun Manager/Logs/sm_pc_diagnostic_latest.json`): la party se
+leía perfectamente (6 Pokémon, sin error), pero la matriz PC **en vivo** no
+llegaba a demostrarse esa sesión (`"rejected": "missing-recent-party-to-pc-witness"`,
+sin testigo party→PC reciente ni candidatas válidas en el main).
+
+`_retire_initial_shell_when_ready` (`app/ui.py`) tenía una condición
+exclusiva de `"sm"`: no publicaba la primera página hasta que
+`pc_data.raw["live_matrix"]` fuese verdadero. Esa barrera declara
+explícitamente que no publica por timeout -a propósito-, así que si la
+matriz nunca se demostraba, RoleRun no abría **nunca**.
+
+USUM y Perla Reluciente usan exactamente el mismo mecanismo de matriz PC
+completa (`FULL_MATRIX_LIVE_PC_GAME_KEYS`) y no tienen esa condición: si la
+prueba falla al arrancar, `_ensure_live_pc_matrix_loaded` la reintenta
+DESPUÉS de publicar la página, y si sigue sin demostrarse,
+`_fail_team_pc_load` dejaba el aviso ya conocido "NO SE PUDIERON ABRIR LAS
+CAJAS · REINTENTAR" sin tapar el resto de la app -exactamente el aviso que
+el usuario ya había visto en su primera sesión, funcionando como se espera-.
+Solo Sol/Luna tenía esta excepción, que la privaba de esa misma degradación
+ya probada en los demás juegos.
+
+## Corregido
+Se retira la condición exclusiva de `"sm"`: el arranque ya no espera la
+matriz PC en vivo para ningún juego, igualándola al resto. La party lista +
+compuesta + con PS resueltos basta para publicar; la matriz PC en vivo sigue
+demostrándose después, con su propio indicador de carga y su propio aviso de
+fallo con REINTENTAR si no puede probarse.
+
+No se ha relajado ninguna prueba de la matriz PC en sí -sigue exigiendo la
+misma doble lectura host==guest y el mismo testigo-; solo deja de bloquear
+el arranque completo por ella.
+
+## Tests
+- `tests/test_design_evolution_phase_a.py::test_sm_initial_shell_does_not_wait_for_the_proven_live_pc_matrix`
+  reemplaza al test anterior que fijaba el bloqueo indefinido como
+  comportamiento esperado (`test_sm_initial_shell_waits_for_the_proven_live_pc_matrix`).
+- Suite completa: 2569 passed, 1 skipped.
+
+## Pendiente
+Validación física: reabrir RoleRun con esta misma Run de Sol/Luna y
+confirmar que ya no se queda en "Preparando Equipo y PC…", que Equipo se ve
+correctamente y que, si la matriz PC en vivo sigue sin demostrarse esa
+sesión, aparece el aviso "NO SE PUDIERON ABRIR LAS CAJAS · REINTENTAR" en
+vez de bloquear la app.
+
+# v0.3.1-alpha.21 — Sol/Luna: mover dentro del PC (a hueco vacío)
+
+Pedido del usuario: mover un Pokémon del PC a otro hueco del PC no existía
+para Sol/Luna, solo Equipo→PC (`PC_A_PC_GAME_KEYS` no incluía `"sm"`). ORAS,
+BDSP y USUM ya lo tenían.
+
+## Causa
+No era un bug de escritura: era una capacidad no implementada. `apply()` en
+`app/sm_live.py` no tenía ninguna rama para `"move-box-slot"`, y la puerta de
+la UI (`PC_A_PC_GAME_KEYS`, `app/ui.py`) excluía explícitamente `"sm"`.
+
+## Añadido
+`SMLiveWriter._apply_pc_move` (`app/sm_live.py`), réplica del contrato ya
+validado en `USUMLiveWriter._apply_pc_move`, sobre la matriz PC de SM que
+`_ensure_pc_live_cache_for_team_write`/`_read_proven_pc_matrix` ya demuestran
+para `party-to-box`/`box-to-party` -no una dirección nueva, ni prestada de
+otro juego (AGENTS.md: «no trasladar offsets entre ORAS, XY, SM y USUM por
+simetría»)-. Preflight host+guest de origen y destino, escribe destino antes
+que origen, deja el origen con la representación vacía cifrada válida, dos
+reverificaciones tardías de la matriz completa y rollback total si cualquier
+paso falla.
+
+`apply()` despacha `"move-box-slot"` a este writer. `"sm"` se añade a
+`PC_A_PC_GAME_KEYS` (`app/ui.py`) y a las dos puertas que decidían qué
+cambios pendientes se auto-aplican en vivo para Gen 7 (antes solo aceptaban
+`"move-box-slot"` para `usum`).
+
+Solo mueve a un hueco **vacío**: intercambiar con un Pokémon ya presente en
+el destino queda fuera de alcance, igual que en UltraSol/UltraLuna
+(`PC_SWAP_GAME_KEYS` solo tiene `"oras"`; ni siquiera USUM llegó a esa
+operación).
+
+## Tests
+- Nuevos en `tests/test_sm_alpha30_pc_swap_write.py`: mueve un PK7 exacto a
+  un hueco vacío de otra caja (origen queda vacío cifrado, destino conserva
+  especie/rol/identidad exactos); rechaza sin escribir nada si el destino ya
+  está ocupado; la puerta de capacidad de la UI ya acepta la operación.
+- Ajustado `test_xy_v024_party_heal.py` (el control que fijaba `sm` como no
+  soportado para PC→PC pasa a esperar que sí lo esté).
+- Suite completa: 2568 passed, 2 skipped.
+
+## Pendiente
+Validación física en Sol/Luna con Azahar: mover un Pokémon del PC a un hueco
+vacío de otra caja y confirmar en el juego que llega intacto, con origen
+vacío. El intercambio con un hueco ocupado sigue sin implementar.
+
+# v0.3.1-alpha.20 — ELIMINAR en un movimiento de rol ya vacía el hueco
+
+Reportado (Sol/Luna, captura de la ficha de Pikipek): un movimiento marcado
+en rojo por incompatibilidad de rol (Gruñido) perdía el aviso SUSTITUIR/
+ELIMINAR al pulsar ELIMINAR, pero seguía enseñándose en el hueco como si
+fuera legal.
+
+## Causa raíz
+`ELIMINAR` sí encolaba una baja real (`PendingChange` con `new_move_id=0`,
+resuelta por `save_engine.replace_move` al guardar). El problema era de
+pintado: la rejilla de movimientos de la ficha y de las dos tarjetas de
+equipo (`app/ui_views/team_pc_view.py`) leía el nombre/id del movimiento
+directamente de `pokemon.moves`/`pokemon.move_ids` -crudo, sin cambios en
+cola-, mientras que el aviso rojo salía de `_collect_pokemon_move_issues`
+(`app/ui.py`), que sí proyecta `pending_changes` a través de
+`_effective_moves_for_review`. En cuanto la baja quedaba en cola, el aviso
+desaparecía por esa proyección, pero la celda seguía mostrando el movimiento
+antiguo por leer una fuente distinta.
+
+## Corregido
+Las tres celdas de movimiento (tarjeta compacta, tarjeta completa y ficha)
+ahora leen el nombre/id a través de la misma proyección que ya usa el aviso,
+mediante un nuevo callback `effective_moves_for` (conectado en `app/ui.py` a
+`self._effective_moves_for_review`, opcional y con el comportamiento previo
+como valor por defecto). Nombre y aviso quedan así sincronizados: un hueco
+recién vaciado se ve vacío, no "legal con el movimiento de antes".
+
+No se ha tocado el encolado de la baja en sí, ni SUSTITUIR, ni el guardado.
+
+## Tests
+- Nueva regresión `tests/test_eliminar_movimiento_de_rol.py`: reproduce la
+  divergencia (issue ya proyectado como resuelto + nombre sin proyectar) y
+  comprueba que el hueco se vacía; control de que un movimiento incompatible
+  sin baja en cola sigue viéndose y en rojo; control de compatibilidad con
+  llamantes que no conectan `effective_moves_for`.
+- Ajustadas dos pruebas que dependían del detalle de implementación anterior
+  (`test_design_evolution_phase_a.py`, `test_team_card_update.py`).
+- Suite completa: 2566 passed, 1 skipped.
+
+## Pendiente
+Validación física en Sol/Luna: comprobar en el emulador que, tras pulsar
+ELIMINAR sobre un movimiento marcado por rol, el hueco queda vacío en la
+ficha y que guardar aplica la baja en el PK7 real.
+
 # v0.3.1-alpha.19 — encender el juego después de un rato ya sincroniza
 
 Reportado: dejar RoleRun abierto un rato sin el juego encendido y luego

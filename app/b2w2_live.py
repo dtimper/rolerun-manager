@@ -451,6 +451,24 @@ class B2W2PCMovePlan:
 
 
 @dataclass(frozen=True, slots=True)
+class B2W2PCSwapPlan:
+    """Intercambio de dos huecos del PC **ocupados los dos**.
+
+    Distinto de ``B2W2PCMovePlan`` en lo único que importa: aquí hay dos
+    criaturas que conservar, así que el plan trae las dos y ninguna casilla
+    queda vacía en ningún momento.
+    """
+
+    source_offset: int
+    destination_offset: int
+    source: bytes
+    destination: bytes
+    expected: bytes
+    source_pokemon: B2W2BoxPokemon
+    destination_pokemon: B2W2BoxPokemon
+
+
+@dataclass(frozen=True, slots=True)
 class B2W2BattleRead:
     active: bool
     party_slot: int | None = None
@@ -1017,11 +1035,21 @@ class B2W2MelonDSReader:
         # de ahí que ni los PS ni la baja se vieran en tiempo real.
         corrobora = (old[0], old[1], old[5], old[6]) == (live[0], live[1], live[5], live[6])
 
+        # 06-09-2026: en Negro 2/Blanco 2 el "nivel imposible" de arriba no es
+        # una fila obsoleta aislada -es la norma para CUALQUIER fila que no sea
+        # la del combatiente recién activo-. Medido con el paso de combate ya
+        # localizado: `battle_presentation` y `battle_logical` son la MISMA
+        # tabla de seis filas (a 2*paso de distancia), y ese campo sale
+        # incrementando de forma espuria en las cinco filas que no son la
+        # activa (260, 516, 773, 1027, 1285 en una captura real de seis
+        # miembros), mientras especie/PS máximo/habilidad siguen siendo
+        # exactos y ya bastan para identificar sin ambigüedad. Exigir el nivel
+        # descartaba esas cinco filas enteras.
         matches = [
             pokemon for pokemon in party
             if (
-                pokemon.species_id, pokemon.max_hp, pokemon.ability_id, pokemon.level
-            ) == (old[0], old[1], old[5], old[6])
+                pokemon.species_id, pokemon.max_hp, pokemon.ability_id,
+            ) == (old[0], old[1], old[5])
         ]
         if len(matches) != 1:
             raise B2W2LiveError(
@@ -1208,6 +1236,47 @@ class B2W2MelonDSReader:
         )
 
     @staticmethod
+    def prepare_pc_swap(
+        raw: bytes, source_box: int, source_slot: int,
+        destination_box: int, destination_slot: int,
+    ) -> B2W2PCSwapPlan:
+        """Plan de intercambio entre dos huecos del PC **ocupados**.
+
+        Misma aritmética que ``prepare_pc_move`` -que ya cruza los dos bloques
+        para construir su matriz esperada-; lo único que cambia es la
+        exigencia: allí el destino tiene que estar vacío, aquí tiene que estar
+        ocupado, y se devuelven las dos criaturas para poder verificar las dos
+        identidades después de escribir.
+        """
+        if len(raw) != PC_MATRIX_SIZE:
+            raise B2W2LiveError("La matriz PC B2/W2 tiene tamaño inválido.")
+        for box, slot in ((source_box, source_slot), (destination_box, destination_slot)):
+            if not 1 <= int(box) <= PC_BOX_COUNT or not 1 <= int(slot) <= PC_BOX_SLOT_COUNT:
+                raise B2W2LiveError("Origen o destino PC B2/W2 fuera de rango.")
+        if (source_box, source_slot) == (destination_box, destination_slot):
+            raise B2W2LiveError("Origen y destino PC B2/W2 son el mismo slot.")
+        source_offset = (source_box - 1) * PC_BOX_STRIDE + (source_slot - 1) * PK5_STORED_SIZE
+        destination_offset = (
+            (destination_box - 1) * PC_BOX_STRIDE
+            + (destination_slot - 1) * PK5_STORED_SIZE
+        )
+        source = raw[source_offset:source_offset + PK5_STORED_SIZE]
+        destination = raw[destination_offset:destination_offset + PK5_STORED_SIZE]
+        source_pokemon = parse_pk5_boxed(source, source_box, source_slot)
+        if source_pokemon is None:
+            raise B2W2LiveError("El origen PC B2/W2 está vacío.")
+        destination_pokemon = parse_pk5_boxed(destination, destination_box, destination_slot)
+        if destination_pokemon is None:
+            raise B2W2LiveError("El destino PC B2/W2 está vacío; eso es un traslado, no un intercambio.")
+        expected = bytearray(raw)
+        expected[source_offset:source_offset + PK5_STORED_SIZE] = destination
+        expected[destination_offset:destination_offset + PK5_STORED_SIZE] = source
+        return B2W2PCSwapPlan(
+            source_offset, destination_offset, source, destination,
+            bytes(expected), source_pokemon, destination_pokemon,
+        )
+
+    @staticmethod
     def _write_process_bytes(process_id: int, host_address: int, payload: bytes) -> None:
         # Instancia privada: los tipos ya están fijados una sola vez y ningún
         # otro módulo puede invalidarlos a mitad de llamada.
@@ -1280,6 +1349,80 @@ class B2W2MelonDSReader:
                 plan.pokemon.pid, plan.pokemon.tid, plan.pokemon.sid,
             ):
                 raise B2W2LiveError("La identidad escrita en el destino no coincide.")
+            return after
+        except Exception:
+            restore()
+            raise
+
+    @_serialized
+    def swap_pc_slots(
+        self, party_read: B2W2PartyRead, source_box: int, source_slot: int,
+        destination_box: int, destination_slot: int,
+        *, source_identity: tuple[int, int, int],
+        destination_identity: tuple[int, int, int],
+    ) -> B2W2PCRead:
+        """Intercambia dos huecos del PC ocupados, con las dos identidades como ancla.
+
+        Mismo contrato que ``move_pc_slot`` -destino primero, readback completo
+        de la matriz, rollback verificado-, pero sin ningún hueco vacío: las
+        dos criaturas se conservan y ninguna casilla queda a cero en ningún
+        momento del plan.
+        """
+        before = self.read_pc(party_read)
+        plan = self.prepare_pc_swap(
+            before.raw, source_box, source_slot, destination_box, destination_slot,
+        )
+        for pokemon, esperada, etiqueta in (
+            (plan.source_pokemon, tuple(source_identity), "origen"),
+            (plan.destination_pokemon, tuple(destination_identity), "destino"),
+        ):
+            if (pokemon.pid, pokemon.tid, pokemon.sid) != esperada:
+                raise B2W2LiveError(
+                    f"La identidad del {etiqueta} PC B2/W2 cambió justo antes de escribir."
+                )
+        matrix_host = party_read.allocation_base + (self.memory.pc - DS_RAM_BASE)
+
+        def restore() -> None:
+            self._write_process_bytes(
+                party_read.process_id, matrix_host + plan.source_offset, plan.source,
+            )
+            self._write_process_bytes(
+                party_read.process_id, matrix_host + plan.destination_offset, plan.destination,
+            )
+            if self.read_pc(party_read).raw != before.raw:
+                raise B2W2LiveError(
+                    "Rollback PC B2/W2 no confirmado; no guardes la partida."
+                )
+
+        try:
+            # Destino primero, igual que `move_pc_slot`. Pero ojo: allí el
+            # destino está vacío, así que tras la primera escritura la criatura
+            # existe en dos sitios. Aquí, sin casilla de apoyo libre, NINGÚN
+            # orden elimina la ventana -entre las dos escrituras uno de los dos
+            # Pokémon solo existe en `plan`-. Lo que la cubre es `restore()`,
+            # que se llama ante cualquier excepción, no el orden.
+            self._write_process_bytes(
+                party_read.process_id, matrix_host + plan.destination_offset, plan.source,
+            )
+            self._write_process_bytes(
+                party_read.process_id, matrix_host + plan.source_offset, plan.destination,
+            )
+            after = self.read_pc(party_read)
+            if after.raw != plan.expected:
+                raise B2W2LiveError("El readback completo PC B2/W2 no coincide.")
+            for (box, slot), pokemon in (
+                ((destination_box, destination_slot), plan.source_pokemon),
+                ((source_box, source_slot), plan.destination_pokemon),
+            ):
+                llegado = next((
+                    item for item in after.pokemon if (item.box, item.slot) == (box, slot)
+                ), None)
+                if llegado is None or (llegado.pid, llegado.tid, llegado.sid) != (
+                    pokemon.pid, pokemon.tid, pokemon.sid,
+                ):
+                    raise B2W2LiveError(
+                        f"La identidad escrita en la caja {box}, hueco {slot} no coincide."
+                    )
             return after
         except Exception:
             restore()

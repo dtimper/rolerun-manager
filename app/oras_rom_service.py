@@ -44,6 +44,7 @@ _TM_FIRST_BLOCK = 92
 _TM_SECOND_BLOCK_OFFSET_ORAS = 98
 _ORAS_MAX_MOVE_ID = 621
 _ORAS_PERSONAL_PATH = "a/1/9/5"
+_ORAS_LEVELUP_MOVES_PATH = "a/1/9/1"
 _ORAS_SPECIES_COUNT = 721
 _PERSONAL_TM_OFFSET = 40
 _PERSONAL_TM_BYTES = 14
@@ -556,23 +557,27 @@ def _split_qsettings_list(value: str) -> list[str]:
 
 
 def _read_azahar_paths_config(config_path: Path) -> list[Path]:
+    """Lee ``recentFiles`` del ``qt-config.ini`` real de Azahar/AzaharPlus.
+
+    Demostrado el 2026-09-03 contra una instalación real: QSettings no
+    escribe una sección ``[Paths]`` de verdad. "Paths" es un prefijo de la
+    propia clave (``Paths\\recentFiles``), y esa clave vive dentro de la
+    sección ``[UI]`` junto con muchas otras del mismo estilo
+    (``GameList\\...``, ``Shortcuts\\...``). Buscar una sección llamada
+    "Paths" no encontraba nunca nada, así que ``discover_azahar_oras_source``
+    devolvía ``None`` incluso con Azahar realmente conectado.
+    """
     try:
         lines = config_path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return []
-    in_paths = False
     result: list[Path] = []
     for raw_line in lines:
         line = raw_line.strip()
-        if not line or line.startswith(";") or line.startswith("#"):
-            continue
-        if line.startswith("[") and line.endswith("]"):
-            in_paths = line[1:-1].casefold() == "paths"
-            continue
-        if not in_paths or "=" not in line:
+        if not line or line.startswith(";") or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        if key.strip() == "recentFiles":
+        if key.strip() == "Paths\\recentFiles":
             result.extend(Path(item) for item in _split_qsettings_list(value))
     return result
 
@@ -596,22 +601,46 @@ def _read_azahar_log_paths(log_path: Path) -> list[Path]:
 
 
 def azahar_user_roots() -> tuple[Path, ...]:
-    """Rutas estándar de datos de Azahar, sin recorrer el disco del usuario."""
-    candidates: list[Path] = []
+    """Rutas de datos de Azahar y sus variantes, sin recorrer el disco del usuario.
+
+    Una lista de nombres conocidos ("Azahar", "azahar-emu") no basta: cada
+    fork del emulador (p. ej. "AzaharPlus", confirmado el 2026-09-03 contra
+    una instalación real) usa su propia carpeta de usuario con el nombre de
+    ese fork. Escribirlos a mano repetiría el fallo ya conocido en el
+    proyecto de listas de claves incompletas (ver docs de progreso). En su
+    lugar, además de los nombres conocidos, se detecta cualquier carpeta
+    hermana que tenga la firma real de un directorio de usuario de Azahar:
+    contiene ``config/qt-config.ini``.
+    """
+    named_candidates: list[Path] = []
     appdata = os.environ.get("APPDATA")
     localappdata = os.environ.get("LOCALAPPDATA")
     if appdata:
-        candidates.extend((Path(appdata) / "Azahar", Path(appdata) / "azahar-emu"))
+        named_candidates.extend((Path(appdata) / "Azahar", Path(appdata) / "azahar-emu"))
     if localappdata:
-        candidates.extend((Path(localappdata) / "Azahar", Path(localappdata) / "azahar-emu"))
+        named_candidates.extend((Path(localappdata) / "Azahar", Path(localappdata) / "azahar-emu"))
     home = Path.home()
-    candidates.extend((
+    named_candidates.extend((
         home / "AppData" / "Roaming" / "Azahar",
         home / "AppData" / "Roaming" / "azahar-emu",
         home / ".local" / "share" / "azahar-emu",
     ))
+
+    scan_bases = [Path(value) for value in (appdata, localappdata) if value]
+    scan_bases.append(home / ".local" / "share")
+    discovered: list[Path] = []
+    for base in scan_bases:
+        try:
+            if not base.is_dir():
+                continue
+            for child in base.iterdir():
+                if child.is_dir() and (child / "config" / "qt-config.ini").is_file():
+                    discovered.append(child)
+        except OSError:
+            continue
+
     unique: list[Path] = []
-    for candidate in candidates:
+    for candidate in (*named_candidates, *discovered):
         try:
             resolved = candidate.expanduser().resolve()
         except OSError:
@@ -636,7 +665,17 @@ def discover_azahar_oras_source(process_name: str | None = None) -> ORASRomSourc
     No se infiere por el nombre del archivo: cada candidata se abre solo hasta
     su cabecera NCCH y debe coincidir con el proceso ``sango-1``/``sango-2``
     que RoleRun acaba de validar por RPC.
+
+    Más de un fork de Azahar instalado a la vez (p. ej. Azahar y AzaharPlus,
+    confirmado el 2026-09-03 contra una instalación real) puede tener la
+    misma ROM en su lista de recientes aunque solo uno esté realmente en
+    marcha. Cuando varias carpetas de usuario coinciden con la misma ROM, se
+    prefiere la que modificó su ``qt-config.ini`` más recientemente: es la
+    que de verdad se está usando ahora. Antes se devolvía la primera carpeta
+    que coincidiera, y con dos instalaciones abiertas alguna vez eso podía
+    devolver la carpeta equivocada, silenciosamente.
     """
+    matches: list[tuple[float, Path, Path]] = []
     for root in azahar_user_roots():
         candidates = [
             *_read_azahar_log_paths(root / "log" / "azahar_log.txt"),
@@ -652,8 +691,16 @@ def discover_azahar_oras_source(process_name: str | None = None) -> ORASRomSourc
                 continue
             seen.add(candidate)
             if _matches_oras_candidate(candidate, process_name):
-                return ORASRomSource(candidate, root)
-    return None
+                try:
+                    mtime = (root / "config" / "qt-config.ini").stat().st_mtime
+                except OSError:
+                    mtime = 0.0
+                matches.append((mtime, root, candidate))
+    if not matches:
+        return None
+    matches.sort(key=lambda item: item[0], reverse=True)
+    _, best_root, best_candidate = matches[0]
+    return ORASRomSource(best_candidate, best_root)
 
 
 def _find_update(base_title: int, roots: Iterable[Path]) -> Path | None:
@@ -951,3 +998,61 @@ def load_oras_rom_tm_profile(
         source, tms, compatibility, source_kind="rom", source_detail=detail,
         personal_stats=personal_stats,
     )
+
+
+def _read_romfs_file_from_ncch_path(source: Path, romfs_path: str) -> bytes | None:
+    """Lee un único archivo RomFS de una imagen NCCH, o ``None`` si falta."""
+    try:
+        with source.open("rb") as handle:
+            ncch_offset = _ncch_offset(handle)
+            header = _read_exact(handle, ncch_offset, 0x220, "Cabecera NCCH")
+            if header[0x100:0x104] != _NCCH_MAGIC:
+                return None
+            romfs_offset = ncch_offset + _u32(header, 0x1B0, "Cabecera NCCH") * _MEDIA_UNIT
+            offset, size = _find_romfs_file(handle, romfs_offset, romfs_path)
+            return _read_exact(handle, offset, size, "Archivo RomFS")
+    except (OSError, ORASRomProfileError):
+        return None
+
+
+def load_oras_levelup_moves_blob(
+    path: str | Path,
+    *,
+    process_name: str | None = None,
+    azahar_root: str | Path | None = None,
+) -> tuple[bytes, int]:
+    """Devuelve el GARC vainilla de aprendizajes por nivel de ORAS y su Title ID.
+
+    Deliberadamente NO consulta ``load/mods/<título>/romfs/a/1/9/1``: ese
+    archivo es el que gestiona ``app/oras_levelup_moves.py`` para aplicar los
+    roles, y leerlo aquí como si fuera "la ROM" crearía un bucle que
+    confundiría la última sustitución escrita con el original. Sí respeta una
+    actualización oficial del juego, igual que ya hace la tabla personal en
+    :func:`load_oras_rom_tm_profile`.
+    """
+    source = Path(path).expanduser().resolve()
+    if not source.is_file():
+        raise ORASRomProfileError("No se encuentra el archivo de ROM seleccionado.")
+    base = _read_ncch(source)
+    base_title = _assert_oras_image(base, process_name)
+    blob = _read_romfs_file_from_ncch_path(source, _ORAS_LEVELUP_MOVES_PATH)
+
+    roots: list[Path] = []
+    if azahar_root is not None:
+        root = Path(azahar_root).expanduser().resolve()
+        if root.is_dir():
+            roots.append(root)
+    for root in azahar_user_roots():
+        if root not in roots:
+            roots.append(root)
+    update_path = _find_update(base_title, roots)
+    if update_path is not None:
+        updated = _read_romfs_file_from_ncch_path(update_path, _ORAS_LEVELUP_MOVES_PATH)
+        if updated is not None:
+            blob = updated
+
+    if blob is None:
+        raise ORASRomProfileError(
+            "La ROM ORAS activa no contiene la tabla de aprendizajes por nivel."
+        )
+    return blob, base_title

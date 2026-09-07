@@ -645,6 +645,8 @@ def load_gen7_move_metadata(path: Path) -> dict[int, dict[str, object]]:
                 parsed = 0
             values[field] = parsed if parsed > 0 else None
         values["description_es"] = str(entry.get("description_es", "") or "").strip()
+        type_id = entry.get("type_id")
+        values["type_id"] = int(type_id) if isinstance(type_id, int) else None
         result[move_id] = values
     return result
 
@@ -3623,13 +3625,23 @@ class SMLiveWriter:
             SM_SAVE_BOX_LAYOUT_BLOCK_OFFSET:SM_SAVE_BOX_LAYOUT_BLOCK_OFFSET + SM_SAVE_BOX_LAYOUT_BLOCK_SIZE
         ])
 
-        unlocated_anchor_ids = {
-            _pc_identity(pokemon) for pokemon in anchors
-            if pokemon.box is None and pokemon.box_slot is None and _pc_identity(pokemon) is not None
-        }
         live_party_ids = {
             _pc_identity(pokemon) for pokemon in current.party if _pc_identity(pokemon) is not None
         }
+        # Reportado por el usuario 04-09-2026: `_open_pc_selector_from_live_matrix`
+        # (app/ui.py) mete el equipo vivo completo entre los anchors -para dar
+        # nombre/nivel localizado a testigos con caja/slot conocidos-, y esos
+        # Pokémon de equipo llegan con box=None/box_slot=None igual que un
+        # testigo real "recién salido al PC". Sin restar `live_party_ids` aquí,
+        # el testigo exigido era exactamente lo que la comprobación de más abajo
+        # (`boxpokemon-overlaps-live-party`) ya prohíbe encontrar en el PC: la
+        # prueba nunca podía superarse para ninguna dirección, aunque fuera la
+        # correcta. Un Pokémon todavía en el equipo nunca es un testigo válido
+        # de que "recién se fue al PC".
+        unlocated_anchor_ids = {
+            _pc_identity(pokemon) for pokemon in anchors
+            if pokemon.box is None and pokemon.box_slot is None and _pc_identity(pokemon) is not None
+        } - live_party_ids
 
         evaluated: list[dict[str, object]] = []
         proofs: dict[int, tuple[int, int, dict[tuple[int, int], SavePokemon | None]]] = {}
@@ -3831,10 +3843,16 @@ class SMLiveWriter:
         live_party_ids = {
             _pc_identity(pokemon) for pokemon in current.party if _pc_identity(pokemon) is not None
         }
+        # Reportado por el usuario 04-09-2026: ver el comentario equivalente en
+        # `_resolve_pc_from_live_save_mirror`. `_open_pc_selector_from_live_matrix`
+        # mete el equipo vivo entero como anchors con box=None/box_slot=None, así
+        # que sin restar `live_party_ids` el testigo exigido era justo lo que la
+        # comprobación `boxpokemon-overlaps-live-party` de abajo ya prohíbe
+        # encontrar en el PC: la prueba nunca podía superarse.
         recent_pc_ids = {
             _pc_identity(pokemon) for pokemon in anchors
             if pokemon.box is None and pokemon.box_slot is None and _pc_identity(pokemon) is not None
-        }
+        } - live_party_ids
 
         evaluated: list[dict[str, object]] = []
         proofs: dict[tuple[int, int], tuple[dict[tuple[int, int], SavePokemon | None], int]] = {}
@@ -3943,10 +3961,11 @@ class SMLiveWriter:
         live_party_ids = {
             _pc_identity(pokemon) for pokemon in current.party if _pc_identity(pokemon) is not None
         }
+        # Ver el comentario equivalente en `_resolve_pc_from_live_save_mirror`.
         recent_pc_ids = {
             _pc_identity(pokemon) for pokemon in anchors
             if pokemon.box is None and pokemon.box_slot is None and _pc_identity(pokemon) is not None
-        }
+        } - live_party_ids
 
         # Varias copias de party dentro de la misma asignación RW no justifican
         # releer/reescanear el backing completo. Se agrupan por región.
@@ -4992,6 +5011,346 @@ class SMLiveWriter:
                 except Exception:
                     pass
 
+    def _apply_pc_move(self, current: SaveGameData, change: PendingTeamChange) -> SMLiveWriteResult:
+        """Mueve un PK7 stored exacto entre dos huecos de la matriz PC validada.
+
+        Pedido del usuario 04-09-2026: mover un Pokémon del PC a otro hueco del
+        PC (vacío) no existía para Sol/Luna, solo Equipo→PC. Réplica de
+        ``USUMLiveWriter._apply_pc_move`` sobre la matriz PC de SM, que ya está
+        demostrada por ``_ensure_pc_live_cache_for_team_write``/
+        ``_read_proven_pc_matrix`` -las mismas funciones que ya usa
+        ``party-to-box``/``box-to-party`` más abajo-, no una dirección nueva ni
+        prestada de otro juego (AGENTS.md: «no trasladar offsets entre ORAS,
+        XY, SM y USUM por simetría»; aquí no hay offset nuevo, es la propia
+        matriz SM ya probada, en una transacción distinta).
+
+        No reconstruye la criatura ni toca PartyData. El hueco origen recibe la
+        representación vacía cifrada válida. Solo mueve a un hueco VACÍO -el
+        intercambio con un Pokémon ya presente en el destino queda fuera de
+        alcance por ahora, igual que en UltraSol/UltraLuna-.
+        """
+        if None in (change.box, change.box_slot, change.destination_box, change.destination_box_slot):
+            raise SMLiveError("El movimiento PC→PC no contiene origen y destino completos.")
+        source = (int(change.box), int(change.box_slot))
+        destination = (int(change.destination_box), int(change.destination_box_slot))
+        if source == destination:
+            raise SMLiveError("El origen y el destino PC son la misma casilla.")
+        host_memory = None
+        host_handle = None
+        attempted: list[tuple[int, int, bytes, str]] = []
+        try:
+            with self.reader.client_factory() as client:
+                process = self.reader._find_sm_process(client.process_list())
+                client.set_process(process.process_id)
+                party_base = self.reader._locate_party_base(client, process, current)
+                original_capture, capture_attempt = self._capture_stable_party(client, party_base)
+                if not self._read_party_members(original_capture, current):
+                    raise SMLiveError("La party viva quedó vacía antes del movimiento PC→PC.")
+                host_memory = self.host_memory_factory()
+                cached = self._ensure_pc_live_cache_for_team_write(
+                    client=client, process=process, party_base=int(party_base),
+                    original_capture=original_capture, current=current, host_memory=host_memory,
+                )
+                host_pid, host_pc_base, guest_pc_base = int(cached[1]), int(cached[2]), int(cached[3])
+                box_count, box_slot_count = int(cached[4]), int(cached[5])
+                for box, slot in (source, destination):
+                    if not (1 <= box <= box_count and 1 <= slot <= box_slot_count):
+                        raise SMLiveError("El movimiento PC→PC queda fuera de la matriz validada.")
+
+                matrix_raw, matrix_parsed = self._read_proven_pc_matrix(
+                    client=client, host_memory=host_memory, host_pid=host_pid,
+                    host_base=host_pc_base, guest_base=guest_pc_base,
+                    box_count=box_count, box_slot_count=box_slot_count,
+                )
+                boxed = matrix_parsed.get(source)
+                if boxed is None:
+                    raise SMLiveError("La casilla origen del PC ya está vacía; no se escribió ningún byte.")
+                source_identity = self._pokemon_identity(boxed)
+                if change.incoming_identity and source_identity != change.incoming_identity:
+                    raise SMLiveError("La identidad de la casilla origen cambió antes de escribir.")
+                if matrix_parsed.get(destination) is not None:
+                    raise SMLiveError("La casilla destino del PC ya está ocupada; no se escribió ningún byte.")
+
+                source_offset = _pc_slot_index(*source, box_slot_count) * PK7_STORED_SIZE
+                destination_offset = _pc_slot_index(*destination, box_slot_count) * PK7_STORED_SIZE
+                source_original = bytes(matrix_raw[source_offset:source_offset + PK7_STORED_SIZE])
+                destination_original = bytes(matrix_raw[destination_offset:destination_offset + PK7_STORED_SIZE])
+                empty_stored = encrypt_pk6_stored(bytes(PK7_STORED_SIZE))
+                source_host = host_pc_base + source_offset
+                source_guest = guest_pc_base + source_offset
+                destination_host = host_pc_base + destination_offset
+                destination_guest = guest_pc_base + destination_offset
+                host_handle = host_memory.open_process(host_pid)
+
+                # Preflight inmediato de ambas representaciones antes del primer byte.
+                if bytes(host_memory.read(host_handle, source_host, PK7_STORED_SIZE)) != source_original:
+                    raise SMLiveError("El origen host cambió durante el preflight PC→PC.")
+                if bytes(client.read_memory(source_guest, PK7_STORED_SIZE)) != source_original:
+                    raise SMLiveError("El origen guest cambió durante el preflight PC→PC.")
+                if bytes(host_memory.read(host_handle, destination_host, PK7_STORED_SIZE)) != destination_original:
+                    raise SMLiveError("El destino host cambió durante el preflight PC→PC.")
+                if bytes(client.read_memory(destination_guest, PK7_STORED_SIZE)) != destination_original:
+                    raise SMLiveError("El destino guest cambió durante el preflight PC→PC.")
+
+                try:
+                    # Primero preservamos la criatura en destino; solo después
+                    # vaciamos origen. El rollback recorre el orden inverso.
+                    #
+                    # 05-09-2026: el apunte va ANTES de cada escritura, no
+                    # después. `WindowsProcessMemory.write` lanza también cuando
+                    # la escritura fue PARCIAL (`wrote != len`) y esos bytes ya
+                    # han caído; con el apunte después, la segunda escritura
+                    # -que apunta al origen, todavía OCUPADO- podía dejarlo
+                    # medio vaciado y fuera del rollback, informando además de
+                    # que se había restaurado todo.
+                    attempted.append((destination_host, destination_guest, destination_original, "destino PC"))
+                    host_memory.write(host_handle, destination_host, source_original)
+                    if bytes(host_memory.read(host_handle, destination_host, PK7_STORED_SIZE)) != source_original:
+                        raise SMLiveError("El destino host no confirmó los 0xE8 bytes exactos.")
+                    attempted.append((source_host, source_guest, source_original, "origen PC"))
+                    host_memory.write(host_handle, source_host, empty_stored)
+                    if bytes(host_memory.read(host_handle, source_host, PK7_STORED_SIZE)) != empty_stored:
+                        raise SMLiveError("El origen host no confirmó el PK7 vacío válido.")
+
+                    def verify_matrix() -> None:
+                        raw, parsed = self._read_proven_pc_matrix(
+                            client=client, host_memory=host_memory, host_pid=host_pid,
+                            host_base=host_pc_base, guest_base=guest_pc_base,
+                            box_count=box_count, box_slot_count=box_slot_count,
+                        )
+                        if parsed.get(source) is not None:
+                            raise SMLiveError("La matriz PC no confirmó el origen vacío.")
+                        moved = parsed.get(destination)
+                        if moved is None or self._pokemon_identity(moved) != source_identity:
+                            raise SMLiveError("La matriz PC no confirmó la identidad en el destino.")
+                        if bytes(raw[source_offset:source_offset + PK7_STORED_SIZE]) != empty_stored:
+                            raise SMLiveError("La matriz PC no confirmó el vacío cifrado exacto.")
+                        if bytes(raw[destination_offset:destination_offset + PK7_STORED_SIZE]) != source_original:
+                            raise SMLiveError("La matriz PC no confirmó el PK7 exacto en destino.")
+
+                    time.sleep(max(0.12, float(getattr(self.reader, "stable_delay", 0.06)) * 2.0))
+                    verify_matrix()
+                    time.sleep(max(0.45, float(getattr(self.reader, "stable_delay", 0.06)) * 5.0))
+                    verify_matrix()
+                    game = self.reader._build_game(
+                        original_capture, current, process, party_base, live_write=True,
+                    )
+                    return SMLiveWriteResult(
+                        game=game, process=process, attempts=int(capture_attempt),
+                        applied_count=1, already_applied=False,
+                    )
+                except Exception as exc:
+                    rollback_errors: list[str] = []
+                    for host_addr, guest_addr, original, label in reversed(attempted):
+                        try:
+                            host_memory.write(host_handle, host_addr, original)
+                            if bytes(host_memory.read(host_handle, host_addr, len(original))) != original:
+                                rollback_errors.append(f"{label}: host")
+                            if bytes(client.read_memory(guest_addr, len(original))) != original:
+                                rollback_errors.append(f"{label}: guest")
+                        except Exception as rollback_exc:
+                            rollback_errors.append(f"{label}: {rollback_exc}")
+                    if rollback_errors:
+                        raise SMLiveError(
+                            f"El movimiento PC→PC falló: {exc}. Rollback incompleto: " + "; ".join(rollback_errors)
+                        ) from exc
+                    if attempted:
+                        raise SMLiveError(
+                            f"El movimiento PC→PC falló: {exc}. RoleRun restauró y verificó ambos huecos."
+                        ) from exc
+                    raise
+        except AzaharRPCError as exc:
+            raise SMLiveError(str(exc)) from exc
+        finally:
+            if host_memory is not None and host_handle is not None:
+                try:
+                    host_memory.close_process(host_handle)
+                except Exception:
+                    pass
+
+    def _apply_pc_swap(self, current: SaveGameData, change: PendingTeamChange) -> SMLiveWriteResult:
+        """Intercambia dos casillas OCUPADAS del PC, sin tocar el equipo.
+
+        Pedido del usuario 05-09-2026: llevar a Sol/Luna el intercambio que
+        ORAS y X/Y ya tenían. Es el caso que ``_apply_pc_move`` no cubre —allí
+        el destino tiene que estar libre y el origen se queda con el vacío
+        cifrado—. Aquí las dos casillas están ocupadas, las dos identidades se
+        conocen de antemano y ninguna casilla vacía interviene: son las mismas
+        dos escrituras de 0xE8 bytes sobre la MISMA matriz PC ya demostrada por
+        ``_ensure_pc_live_cache_for_team_write``/``_read_proven_pc_matrix``, sin
+        ninguna dirección nueva ni prestada de otro juego.
+
+        Se escribe destino primero y origen después, igual que en
+        ``_apply_pc_move``. Ojo con una diferencia que el hermano SÍ tiene y
+        este NO: allí el destino está vacío, así que tras la primera escritura
+        la criatura existe en dos sitios y en ningún momento en cero. Aquí, sin
+        una casilla de apoyo libre, **ningún orden elimina la ventana**: entre
+        las dos escrituras, uno de los dos Pokémon solo existe en la memoria de
+        RoleRun. Lo que la cubre es el rollback -por eso cada casilla se apunta
+        ANTES de escribirla, incluso ante una escritura parcial-, no el orden.
+        """
+        if None in (change.box, change.box_slot, change.destination_box, change.destination_box_slot):
+            raise SMLiveError("El intercambio PC→PC no contiene origen y destino completos.")
+        source = (int(change.box), int(change.box_slot))
+        destination = (int(change.destination_box), int(change.destination_box_slot))
+        if source == destination:
+            raise SMLiveError("El origen y el destino PC son la misma casilla.")
+        source_identity = str(change.incoming_identity or "")
+        destination_identity = str(change.outgoing_identity or "")
+        if not source_identity or not destination_identity:
+            raise SMLiveError(
+                "El intercambio PC→PC necesita la identidad estable de los DOS Pokémon "
+                "implicados. No se escribió ningún byte."
+            )
+        if source_identity == destination_identity:
+            raise SMLiveError(
+                "Las dos casillas del intercambio PC→PC declaran el mismo Pokémon. "
+                "No se escribió ningún byte."
+            )
+        host_memory = None
+        host_handle = None
+        attempted: list[tuple[int, int, bytes, str]] = []
+        try:
+            with self.reader.client_factory() as client:
+                process = self.reader._find_sm_process(client.process_list())
+                client.set_process(process.process_id)
+                party_base = self.reader._locate_party_base(client, process, current)
+                original_capture, capture_attempt = self._capture_stable_party(client, party_base)
+                if not self._read_party_members(original_capture, current):
+                    raise SMLiveError("La party viva quedó vacía antes del intercambio PC→PC.")
+                host_memory = self.host_memory_factory()
+                cached = self._ensure_pc_live_cache_for_team_write(
+                    client=client, process=process, party_base=int(party_base),
+                    original_capture=original_capture, current=current, host_memory=host_memory,
+                )
+                host_pid, host_pc_base, guest_pc_base = int(cached[1]), int(cached[2]), int(cached[3])
+                box_count, box_slot_count = int(cached[4]), int(cached[5])
+                for box, slot in (source, destination):
+                    if not (1 <= box <= box_count and 1 <= slot <= box_slot_count):
+                        raise SMLiveError("El intercambio PC→PC queda fuera de la matriz validada.")
+
+                matrix_raw, matrix_parsed = self._read_proven_pc_matrix(
+                    client=client, host_memory=host_memory, host_pid=host_pid,
+                    host_base=host_pc_base, guest_base=guest_pc_base,
+                    box_count=box_count, box_slot_count=box_slot_count,
+                )
+                for position, identity, label in (
+                    (source, source_identity, "origen"),
+                    (destination, destination_identity, "destino"),
+                ):
+                    boxed = matrix_parsed.get(position)
+                    if boxed is None:
+                        raise SMLiveError(
+                            f"La casilla de {label} del PC ({position[0]}:{position[1]}) está vacía; "
+                            "no se escribió ningún byte."
+                        )
+                    if self._pokemon_identity(boxed) != identity:
+                        raise SMLiveError(
+                            f"El Pokémon de {label} ({position[0]}:{position[1]}) ya no coincide con "
+                            "el que se arrastró; no se escribió ningún byte."
+                        )
+
+                source_offset = _pc_slot_index(*source, box_slot_count) * PK7_STORED_SIZE
+                destination_offset = _pc_slot_index(*destination, box_slot_count) * PK7_STORED_SIZE
+                source_original = bytes(matrix_raw[source_offset:source_offset + PK7_STORED_SIZE])
+                destination_original = bytes(matrix_raw[destination_offset:destination_offset + PK7_STORED_SIZE])
+                source_host = host_pc_base + source_offset
+                source_guest = guest_pc_base + source_offset
+                destination_host = host_pc_base + destination_offset
+                destination_guest = guest_pc_base + destination_offset
+                host_handle = host_memory.open_process(host_pid)
+
+                # Preflight inmediato de ambas representaciones antes del primer byte.
+                if bytes(host_memory.read(host_handle, source_host, PK7_STORED_SIZE)) != source_original:
+                    raise SMLiveError("El origen host cambió durante el preflight del intercambio PC→PC.")
+                if bytes(client.read_memory(source_guest, PK7_STORED_SIZE)) != source_original:
+                    raise SMLiveError("El origen guest cambió durante el preflight del intercambio PC→PC.")
+                if bytes(host_memory.read(host_handle, destination_host, PK7_STORED_SIZE)) != destination_original:
+                    raise SMLiveError("El destino host cambió durante el preflight del intercambio PC→PC.")
+                if bytes(client.read_memory(destination_guest, PK7_STORED_SIZE)) != destination_original:
+                    raise SMLiveError("El destino guest cambió durante el preflight del intercambio PC→PC.")
+
+                try:
+                    # El apunte para el rollback va SIEMPRE antes de escribir.
+                    # `WindowsProcessMemory.write` lanza también cuando la
+                    # escritura fue PARCIAL (`wrote != len`), y para entonces
+                    # esos bytes ya han caído: si el apunte fuera después, esa
+                    # casilla quedaría medio escrita y fuera del rollback, y
+                    # además se informaría de que se restauró todo. Aquí las dos
+                    # casillas están OCUPADAS, así que eso sería perder un
+                    # Pokémon de verdad.
+                    attempted.append((destination_host, destination_guest, destination_original, "destino PC"))
+                    host_memory.write(host_handle, destination_host, source_original)
+                    if bytes(host_memory.read(host_handle, destination_host, PK7_STORED_SIZE)) != source_original:
+                        raise SMLiveError("El destino host no confirmó los 0xE8 bytes exactos.")
+                    attempted.append((source_host, source_guest, source_original, "origen PC"))
+                    host_memory.write(host_handle, source_host, destination_original)
+                    if bytes(host_memory.read(host_handle, source_host, PK7_STORED_SIZE)) != destination_original:
+                        raise SMLiveError("El origen host no confirmó los 0xE8 bytes exactos.")
+
+                    def verify_matrix() -> None:
+                        raw, parsed = self._read_proven_pc_matrix(
+                            client=client, host_memory=host_memory, host_pid=host_pid,
+                            host_base=host_pc_base, guest_base=guest_pc_base,
+                            box_count=box_count, box_slot_count=box_slot_count,
+                        )
+                        for position, offset, expected_raw, identity in (
+                            (source, source_offset, destination_original, destination_identity),
+                            (destination, destination_offset, source_original, source_identity),
+                        ):
+                            boxed = parsed.get(position)
+                            if boxed is None or self._pokemon_identity(boxed) != identity:
+                                raise SMLiveError(
+                                    f"La matriz PC no confirmó la identidad esperada en "
+                                    f"{position[0]}:{position[1]} tras el intercambio."
+                                )
+                            if bytes(raw[offset:offset + PK7_STORED_SIZE]) != expected_raw:
+                                raise SMLiveError(
+                                    f"La matriz PC no confirmó el PK7 exacto en "
+                                    f"{position[0]}:{position[1]} tras el intercambio."
+                                )
+
+                    time.sleep(max(0.12, float(getattr(self.reader, "stable_delay", 0.06)) * 2.0))
+                    verify_matrix()
+                    time.sleep(max(0.45, float(getattr(self.reader, "stable_delay", 0.06)) * 5.0))
+                    verify_matrix()
+                    game = self.reader._build_game(
+                        original_capture, current, process, party_base, live_write=True,
+                    )
+                    return SMLiveWriteResult(
+                        game=game, process=process, attempts=int(capture_attempt),
+                        applied_count=1, already_applied=False,
+                    )
+                except Exception as exc:
+                    rollback_errors: list[str] = []
+                    for host_addr, guest_addr, original, label in reversed(attempted):
+                        try:
+                            host_memory.write(host_handle, host_addr, original)
+                            if bytes(host_memory.read(host_handle, host_addr, len(original))) != original:
+                                rollback_errors.append(f"{label}: host")
+                            if bytes(client.read_memory(guest_addr, len(original))) != original:
+                                rollback_errors.append(f"{label}: guest")
+                        except Exception as rollback_exc:
+                            rollback_errors.append(f"{label}: {rollback_exc}")
+                    if rollback_errors:
+                        raise SMLiveError(
+                            f"El intercambio PC→PC falló: {exc}. Rollback incompleto: "
+                            + "; ".join(rollback_errors)
+                        ) from exc
+                    if attempted:
+                        raise SMLiveError(
+                            f"El intercambio PC→PC falló: {exc}. RoleRun restauró y verificó ambos huecos."
+                        ) from exc
+                    raise
+        except AzaharRPCError as exc:
+            raise SMLiveError(str(exc)) from exc
+        finally:
+            if host_memory is not None and host_handle is not None:
+                try:
+                    host_memory.close_process(host_handle)
+                except Exception:
+                    pass
+
     def _apply_team_swap(self, current: SaveGameData, change: PendingTeamChange) -> SMLiveWriteResult:
         """Aplica un traslado Equipo↔PC sobre las representaciones live demostradas.
 
@@ -5060,19 +5419,35 @@ class SMLiveWriter:
                     box_count=box_count, box_slot_count=box_slot_count,
                 )
 
-                # ENVIAR AL PC significa «primer hueco libre REAL». La UI puede
-                # haber calculado un destino desde un main/caché desfasado; para
-                # Sol/Luna la autoridad es la matriz live que acabamos de demostrar.
+                # Reportado por el usuario 04-09-2026: mover del Equipo a una
+                # casilla PC concreta siempre acababa en el primer hueco libre.
+                # Esta rama ignoraba `change.box`/`change.box_slot` por
+                # completo para "party-to-box" -incluso cuando la UI ya los
+                # había calculado desde la propia matriz live, no desde un
+                # main/caché desfasado (ver `_team_pc_drop` en app/ui.py,
+                # `exact_destination`)-. El botón ENVIAR AL PC (sin destino
+                # explícito) mantiene «primer hueco libre REAL»; un arrastre a
+                # una casilla concreta se valida contra esta misma matriz live
+                # dentro de la transacción, igual que ya hace USUM.
                 if operation == "party-to-box":
-                    destination = next((
-                        (box_no, slot_no)
-                        for box_no in range(1, box_count + 1)
-                        for slot_no in range(1, box_slot_count + 1)
-                        if matrix_parsed.get((box_no, slot_no)) is None
-                    ), None)
-                    if destination is None:
-                        raise SMLiveError("El PC vivo está lleno; no se escribió ningún byte.")
-                    box, box_slot = destination
+                    if change.box is not None or change.box_slot is not None:
+                        if change.box is None or change.box_slot is None:
+                            raise SMLiveError("El destino PC exacto está incompleto; no se escribió ningún byte.")
+                        box, box_slot = int(change.box), int(change.box_slot)
+                        if not (1 <= box <= box_count and 1 <= box_slot <= box_slot_count):
+                            raise SMLiveError("El destino PC exacto queda fuera de la matriz validada; no se escribió ningún byte.")
+                        if matrix_parsed.get((box, box_slot)) is not None:
+                            raise SMLiveError("La casilla PC elegida ya está ocupada; no se escribió ningún byte.")
+                    else:
+                        destination = next((
+                            (box_no, slot_no)
+                            for box_no in range(1, box_count + 1)
+                            for slot_no in range(1, box_slot_count + 1)
+                            if matrix_parsed.get((box_no, slot_no)) is None
+                        ), None)
+                        if destination is None:
+                            raise SMLiveError("El PC vivo está lleno; no se escribió ningún byte.")
+                        box, box_slot = destination
                 else:
                     box = int(change.box)
                     box_slot = int(change.box_slot)
@@ -5662,6 +6037,10 @@ class SMLiveWriter:
                 )
             if str(team_changes[0].operation) == "replace-fainted":
                 return self._apply_faint_replacement(current, team_changes[0])
+            if str(team_changes[0].operation) == "move-box-slot":
+                return self._apply_pc_move(current, team_changes[0])
+            if str(team_changes[0].operation) == "swap-box-slots":
+                return self._apply_pc_swap(current, team_changes[0])
             return self._apply_team_swap(current, team_changes[0])
         if any(isinstance(change, PendingInventoryChange) for change in changes):
             raise SMLiveError(
