@@ -42,7 +42,10 @@ from app.config import GITHUB_OWNER, GITHUB_REPO  # noqa: E402
 from app.update_checker import _parse_version, is_newer  # noqa: E402
 
 CONFIG = RAIZ / "app" / "config.py"
-_LINEA_VERSION = re.compile(r'^APP_VERSION = "([^"]*)"$', re.MULTILINE)
+# `\r?`: GitHub (Windows) descarga el código con saltos CRLF, y `$` solo
+# encaja antes de `\n`. Sin él, la comprobación de la etiqueta de v0.5.0
+# falló allí aunque aquí pasaba.
+_LINEA_VERSION = re.compile(r'^APP_VERSION = "([^"]*)"(?=\r?$)', re.MULTILINE)
 
 
 def leer_app_version(texto_config: str) -> str:

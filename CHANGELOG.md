@@ -19,6 +19,17 @@ drafteo automáticos en los siete juegos, botón REPORTAR FALLO en el menú
 flotante, atajos compartidos entre todas las Runs, tours de bienvenida, y el
 mando se detecta aunque Ryujinx no esté abierto.
 
+## La publicación automática fallaba en GitHub por los saltos de línea (25-09-2026)
+
+La primera etiqueta v0.5.0 no llegó a publicarse: el paso «La etiqueta
+coincide con APP_VERSION» falló en GitHub y pasaba aquí. El ordenador de
+GitHub (Windows, `core.autocrlf=true`) descarga el código con saltos CRLF, y
+el patrón de `tools/publicar_version.py` exigía `"` justo antes del `\n`
+(`$` no encaja antes de `\r`). Reproducido aquí convirtiendo `config.py` a
+CRLF; el patrón admite ahora `\r?`. Regresión en
+`tests/test_publicar_version.py`. La etiqueta v0.5.0, que no llegó a crear
+ninguna Release, se movió al commit con el arreglo.
+
 ## Tanque y Prisma: Confidencia, y la Ayuda coincide con lo que se aplica (25-09-2026)
 
 Al revisar la web, el usuario confirmó la regla que ya había dado el

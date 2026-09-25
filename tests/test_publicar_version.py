@@ -39,3 +39,12 @@ def test_se_niega_si_no_hay_exactamente_una_linea_de_version(texto: str) -> None
 def test_preparar_rechaza_una_version_que_no_es_mas_nueva(capsys) -> None:
     assert publicar_version.preparar("0.0.1") == 1
     assert "no es más nueva" in capsys.readouterr().out
+
+
+def test_tambien_con_saltos_de_linea_de_windows() -> None:
+    """GitHub descarga el código con CRLF: con la versión anterior del patrón,
+    la comprobación de la etiqueta de v0.5.0 falló allí y aquí no."""
+    windows = CONFIG.replace("\n", "\r\n")
+    assert publicar_version.leer_app_version(windows) == "0.3.1"
+    nuevo = publicar_version.con_nueva_version(windows, "0.4.0")
+    assert nuevo == windows.replace('"0.3.1"', '"0.4.0"')
