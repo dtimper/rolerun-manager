@@ -1,6 +1,18 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+## La web se muda a rolerun.github.io (25-09-2026)
+
+Pedido del usuario: una dirección más corta que
+`dtimper.github.io/rolerun-manager`, gratis. El usuario creó la organización
+de GitHub `rolerun` y su repositorio `rolerun.github.io`; la web vive ahora
+allí (se publica sola al subir a su `main`) y se quita la carpeta `web/` de
+este repositorio para no tener dos copias. `.github/workflows/web.yml`
+publica en su lugar una página que redirige a https://rolerun.github.io/
+conservando el ancla (`#descarga`…), para que no se rompan los enlaces ya
+compartidos ni el de las notas de v0.5.0. El programa no cambia: el aviso de
+versión y la descarga siguen leyendo las Releases de este repositorio.
+
 # v0.5.0 — publicada el 25-09-2026
 
 - **Instalador nuevo que funciona en cualquier ordenador**: lleva Python y
