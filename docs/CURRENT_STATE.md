@@ -1,8 +1,8 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-09-25
-- Versión de aplicación: `0.4.0` (`app/config.py`; Release publicada en GitHub
-  el 25-09-2026, la anterior era `v0.3.1` del 07-09-2026)
+- Versión de aplicación: `0.4.1` (`app/config.py`; Release publicada en GitHub
+  el 25-09-2026, tras `v0.4.0` del mismo día y `v0.3.1` del 07-09-2026)
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 conserva la evolución histórica; `ROADMAP.md` conserva tanto
@@ -20,7 +20,8 @@ sección es la foto de hoy. Lo posterior al 14-09 está solo en `CHANGELOG.md`.
   Reluciente (Ryujinx).
 - **Ocultos del selector** (`GAMES_OCULTOS`, `app/ui.py`): Diamante/Perla y
   Platino (sin direcciones de RAM medidas) y HeartGold/SoulSilver (aparcado:
-  escritura apagada, combate sin estabilizar).
+  combate sin estabilizar; la escritura sigue encendida desde el 06-09-2026,
+  `MELONDS_GEN4_ESCRIBE` en `app/ui.py`).
 - **Combate de seis Pokémon** (vida + drafteo automáticos): validado
   físicamente en los siete juegos seleccionables.
 - **Bugs abiertos confirmados**: estado alterado mal mostrado en la barra

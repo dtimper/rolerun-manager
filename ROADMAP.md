@@ -21,8 +21,9 @@ party, etc.). Esta lista es lo que de verdad queda abierto.
 - [ ] Diamante/Perla y Platino: sin ninguna dirección de RAM medida; ocultos
   del selector.
 
-**Aparcado hasta nuevo aviso**: HeartGold/SoulSilver (escritura apagada por el
-incidente `sanity` sin explicar; carril de combate sin estabilizar). Oculto del
+**Aparcado hasta nuevo aviso**: HeartGold/SoulSilver (carril de combate sin
+estabilizar; la escritura está encendida desde el 06-09-2026 aceptando un riesgo
+residual, ver `MELONDS_GEN4_ESCRIBE` en `app/ui.py`). Oculto del
 selector junto con DP/Pt.
 
 ## Prioridades vigentes en v0.2.6-alpha.13

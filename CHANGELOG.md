@@ -1,6 +1,11 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.4.1 — publicada el 25-09-2026
+
+- La ventana de REPORTAR FALLO (y cualquier otra ventana secundaria) muestra
+  el icono de RoleRun en vez del de CustomTkinter.
+
 ## La ventana de REPORTAR FALLO mostraba el icono de CustomTkinter (25-09-2026)
 
 Reportado por el usuario con captura: el cuadrado azul de CustomTkinter en la

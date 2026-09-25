@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "RoleRun Manager"
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.4.1"
 
 # Repositorio de GitHub donde se publican las Releases (pestaña "Releases" del
 # repo, cada una con su tag de versión). Con cualquiera de los dos vacío, la
