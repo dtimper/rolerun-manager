@@ -147,4 +147,10 @@ def main(argumentos: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    # Con la salida redirigida (Git Bash, una tubería), Windows usaba cp1252 y
+    # los acentos salían rotos.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
     raise SystemExit(main(sys.argv[1:]))

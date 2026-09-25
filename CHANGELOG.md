@@ -1,6 +1,21 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.4.0 — publicada el 25-09-2026
+
+Primera Release desde `v0.3.1` (07-09-2026). Reúne todas las entradas de
+este archivo desde «Diamante/Perla, Platino y HeartGold/SoulSilver vuelven a
+ocultarse (07-09-2026)» hasta aquí. Lo que nota el jugador:
+
+- Combate de seis Pokémon: vida y drafteo automáticos al ganarlo, en los siete
+  juegos seleccionables.
+- REPORTAR FALLO en el menú flotante, con capturas, que llega por correo.
+- Atajos, mando y controles de menú compartidos entre todas las Runs.
+- Tours de bienvenida en Equipo/PC, Movimientos y Drafteos.
+- Mando detectado aunque Ryujinx no esté abierto; más pantallas manejables con
+  flechas y mando.
+- El aviso de versión nueva explica cómo actualizar.
+
 ## REPORTAR FALLO envía por un buzón de Google, sin contraseña en el programa (25-09-2026)
 
 Para que el botón funcione en las copias descargadas sin publicar la

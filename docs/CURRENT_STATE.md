@@ -1,8 +1,8 @@
 # RoleRun Manager — estado funcional canónico
 
 - Fecha de corte: 2026-09-25
-- Versión de aplicación: `0.3.1` (`app/config.py`; única Release publicada en
-  GitHub, 07-09-2026 — lo posterior está en el árbol local sin publicar)
+- Versión de aplicación: `0.4.0` (`app/config.py`; Release publicada en GitHub
+  el 25-09-2026, la anterior era `v0.3.1` del 07-09-2026)
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
 conserva la evolución histórica; `ROADMAP.md` conserva tanto

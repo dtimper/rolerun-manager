@@ -10,11 +10,8 @@ Todo lo que sigue a esta sección es historial: muchas casillas `[ ]` de más
 abajo ya se cerraron después (combate de seis, X/Y cambiando el tamaño de la
 party, etc.). Esta lista es lo que de verdad queda abierto.
 
-- [ ] Publicar una Release nueva. La única publicada es `v0.3.1` (07-09-2026);
-  todo lo añadido después (combate de seis automático en siete juegos,
-  REPORTAR FALLO, atajos compartidos entre Runs, tours de bienvenida, mando por
-  XInput…) no le llega a nadie hasta que se suba `APP_VERSION`, se publique
-  en GitHub y se cree la Release con la misma etiqueta.
+- [x] Publicar una Release nueva: `v0.4.0` (25-09-2026) reúne todo lo añadido
+  desde `v0.3.1`. Para las siguientes, `tools/publicar_version.py`.
 - [ ] Estado alterado en la barra flotante: ORAS muestra un estado equivocado
   (parálisis como sueño) y BDSP no muestra ninguno — el offset `0x94` de
   `PlayerWork._playerParty` no lleva el estado vivo. Confirmado, sin arreglar.
