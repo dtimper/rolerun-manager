@@ -7,6 +7,9 @@ venv/
 # Datos locales
 backups/
 logs/
+# Contraseña del respaldo SMTP de REPORTAR FALLO: nunca se publica, el
+# programa publicado usa el buzón (tools/buzon_de_reportes.gs).
+data/reporte_correo.dat
 
 # Builds
 build/

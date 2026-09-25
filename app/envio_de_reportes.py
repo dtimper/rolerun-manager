@@ -6,14 +6,17 @@ rechaza el envío, el fallo no se pierde: queda en ``Documentos\\RoleRun
 Manager\\Bugs`` y el botón puede reintentar sobre la misma carpeta sin
 duplicarla.
 
-El envío va por el SMTP de Gmail con una cuenta **dedicada solo a esto**,
-distinta de la que recibe los reportes. Sus credenciales viven en
-``data/reporte_correo.dat``, que se genera con
-``tools/configurar_correo_de_reportes.py``. El archivo solo está ofuscado, no
-cifrado: cualquiera con el programa puede sacar la contraseña. Por eso la
-cuenta de envío tiene que ser desechable y nunca la personal. Lo único que la
-ofuscación evita es que un rastreador automático la encuentre buscando texto
-plano en el repositorio.
+El camino normal es el **buzón** (``BUZON_URL``): un Google Apps Script
+publicado como aplicación web en la cuenta de envío (código en
+``tools/buzon_de_reportes.gs``). El programa le manda el reporte por HTTPS y
+el script lo reenvía a ``DESTINATARIO``. Así el programa no lleva ninguna
+contraseña: esa dirección solo sirve para mandar un reporte a
+``DESTINATARIO``, no para entrar en la cuenta ni escribir a nadie más.
+
+Queda como respaldo el SMTP de Gmail con las credenciales de
+``data/reporte_correo.dat`` (``tools/configurar_correo_de_reportes.py``), que
+NO se publica: solo está ofuscado, no cifrado, y cualquiera con el programa
+podría sacar la contraseña.
 """
 
 from __future__ import annotations
@@ -23,11 +26,13 @@ import io
 import json
 import smtplib
 import ssl
+import urllib.request
 import zipfile
 from dataclasses import dataclass
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any, Callable, Iterable
+from urllib.error import HTTPError, URLError
 
 from .config import APP_VERSION, DATA_DIR
 from .reporte_de_bugs import guardar_reporte
@@ -36,6 +41,16 @@ DESTINATARIO = "timpertwitchtv@gmail.com"
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PUERTO = 465
 SMTP_TIMEOUT = 30
+
+#: Dirección de la aplicación web de ``tools/buzon_de_reportes.gs``, implementada
+#: el 25-09-2026 en rolerunreports@gmail.com y probada con un reporte real.
+#: Vacía, se usa el respaldo SMTP.
+BUZON_URL = (
+    "https://script.google.com/macros/s/"
+    "AKfycbwKWtX4CV4gIra7Tx4G7DY_Efv0F0EOEfSX-Dga0SxakX76ZC6HgVNZ2mX7W3zgPQlhLw/exec"
+)
+#: Google tarda en reenviar un correo con varias capturas; más margen que SMTP.
+BUZON_TIMEOUT = 60
 
 CREDENCIALES = DATA_DIR / "reporte_correo.dat"
 _CLAVE_OFUSCACION = b"RoleRun-Reportes"
@@ -228,13 +243,78 @@ def construir_correo(carpeta: Path, remitente: str) -> EmailMessage:
     return correo
 
 
+def peticion_al_buzon(correo: EmailMessage) -> dict[str, Any]:
+    """El mismo correo, en el JSON que espera ``tools/buzon_de_reportes.gs``."""
+    return {
+        "asunto": str(correo["Subject"] or ""),
+        "cuerpo": correo.get_body(preferencelist=("plain",)).get_content(),
+        "adjuntos": [
+            {
+                "nombre": parte.get_filename(),
+                "tipo": parte.get_content_type(),
+                "datos": base64.b64encode(parte.get_payload(decode=True)).decode("ascii"),
+            }
+            for parte in correo.iter_attachments()
+        ],
+    }
+
+
+def _enviar_al_buzon(correo: EmailMessage, url: str, abrir_url: Callable[..., Any] | None) -> None:
+    peticion = urllib.request.Request(
+        url,
+        data=json.dumps(peticion_al_buzon(correo)).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    # Apps Script ejecuta el POST y contesta con una redirección a la
+    # respuesta; urllib la sigue como GET sin reenviar el cuerpo, que es
+    # exactamente lo que Google espera.
+    abrir = abrir_url or (lambda p: urllib.request.urlopen(p, timeout=BUZON_TIMEOUT))
+    try:
+        with abrir(peticion) as respuesta:
+            resultado = json.load(respuesta)
+    except HTTPError as error:
+        # Antes que URLError, del que hereda: el buzón existe pero falla.
+        raise EnvioNoDisponible(
+            f"El buzón de reportes no respondió bien ({error.code}). Avisa al creador de la app."
+        ) from error
+    except (URLError, OSError) as error:
+        raise EnvioNoDisponible(
+            "No hay conexión a Internet o el buzón de reportes no responde."
+        ) from error
+    except ValueError as error:
+        raise EnvioNoDisponible(
+            "El buzón de reportes contestó algo inesperado. Avisa al creador de la app."
+        ) from error
+    if isinstance(resultado, dict) and resultado.get("ok") is True:
+        return
+    if isinstance(resultado, dict) and resultado.get("error") == "limite":
+        raise EnvioNoDisponible(
+            "Se han mandado muchos reportes en la última hora. Prueba más tarde."
+        )
+    raise EnvioNoDisponible(
+        "El buzón de reportes rechazó el envío. Avisa al creador de la app."
+    )
+
+
 def enviar_reporte(
     carpeta: Path,
     *,
     credenciales: Credenciales | None = None,
     smtp_factory: Callable[..., Any] | None = None,
+    buzon_url: str | None = None,
+    abrir_url: Callable[..., Any] | None = None,
 ) -> None:
-    """Manda la carpeta por correo. Lanza ``EnvioNoDisponible`` con un texto para el usuario."""
+    """Manda la carpeta por correo. Lanza ``EnvioNoDisponible`` con un texto para el usuario.
+
+    Va por el buzón si hay uno configurado y no se ha pedido SMTP de forma
+    expresa (``credenciales``/``smtp_factory``, que usan
+    ``tools/configurar_correo_de_reportes.py`` y los tests del SMTP).
+    """
+    url = BUZON_URL if buzon_url is None else buzon_url
+    if url and credenciales is None and smtp_factory is None:
+        _enviar_al_buzon(construir_correo(carpeta, "buzon"), url, abrir_url)
+        return
     datos = credenciales or cargar_credenciales()
     if datos is None:
         raise EnvioNoDisponible(

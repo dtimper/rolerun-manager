@@ -220,3 +220,82 @@ def test_el_boton_se_llama_reportar_fallo() -> None:
     fuente = inspect.getsource(ui.RoleRunManager._show_floating_menu_home)
     assert "REPORTAR FALLO" in fuente
     assert "GUARDAR FALLO" not in fuente
+
+
+# --------------------------------------------------------------------------
+# Buzón (Google Apps Script): el programa ya no lleva ninguna contraseña
+# --------------------------------------------------------------------------
+
+
+class _BuzonFalso:
+    """Hace de ``urlopen``: guarda la petición y contesta lo que se le diga."""
+
+    def __init__(self, respuesta: object = None, fallo: Exception | None = None) -> None:
+        self.respuesta = {"ok": True} if respuesta is None else respuesta
+        self.fallo = fallo
+        self.peticiones: list = []
+
+    def __call__(self, peticion):
+        self.peticiones.append(peticion)
+        if self.fallo is not None:
+            raise self.fallo
+        import io
+
+        cuerpo = io.BytesIO(json.dumps(self.respuesta).encode("utf-8"))
+        cuerpo.__enter__ = lambda: cuerpo  # type: ignore[method-assign]
+        return cuerpo
+
+
+def test_el_buzon_recibe_texto_capturas_y_contexto_sin_contrasena(tmp_path) -> None:
+    import base64
+
+    carpeta = preparar_reporte(
+        {"juego": "Negro 2"}, "La barra no baja", [_imagen(), _imagen(color=(0, 0, 255))],
+        carpeta_base=tmp_path,
+    )
+    buzon = _BuzonFalso()
+
+    enviar_reporte(carpeta, buzon_url="https://buzon.example/exec", abrir_url=buzon)
+
+    (peticion,) = buzon.peticiones
+    assert peticion.full_url == "https://buzon.example/exec"
+    assert peticion.get_method() == "POST"
+    enviado = json.loads(peticion.data.decode("utf-8"))
+    assert "La barra no baja" in enviado["asunto"]
+    assert "La barra no baja" in enviado["cuerpo"]
+    nombres = [adjunto["nombre"] for adjunto in enviado["adjuntos"]]
+    assert nombres[:2] == ["captura_1.png", "captura_2.png"]
+    assert "contexto.json" in nombres
+    primera = base64.b64decode(enviado["adjuntos"][0]["datos"])
+    assert primera == (carpeta / "captura_1.png").read_bytes()
+    assert "contrasena" not in peticion.data.decode("utf-8")
+
+
+def test_con_buzon_configurado_no_se_usa_el_smtp(tmp_path, monkeypatch) -> None:
+    import app.envio_de_reportes as modulo
+
+    monkeypatch.setattr(modulo, "BUZON_URL", "https://buzon.example/exec")
+    monkeypatch.setattr(modulo, "CREDENCIALES", tmp_path / "no_existe.dat")
+    carpeta = preparar_reporte({}, "algo", carpeta_base=tmp_path)
+    buzon = _BuzonFalso()
+
+    enviar_reporte(carpeta, abrir_url=buzon)
+
+    assert len(buzon.peticiones) == 1
+
+
+@pytest.mark.parametrize(
+    "buzon, mensaje",
+    [
+        (_BuzonFalso(fallo=OSError("sin red")), "conexión a Internet"),
+        (_BuzonFalso(respuesta={"ok": False, "error": "limite"}), "última hora"),
+        (_BuzonFalso(respuesta={"ok": False, "error": "Exception: x"}), "rechazó"),
+    ],
+)
+def test_un_buzon_que_falla_deja_el_reporte_y_un_mensaje_claro(tmp_path, monkeypatch, buzon, mensaje) -> None:
+    import app.reporte_de_bugs as bugs
+
+    monkeypatch.setattr(bugs, "BUGS_DIR", tmp_path)
+    with pytest.raises(EnvioNoDisponible, match=mensaje) as fallo:
+        preparar_y_enviar({}, "hola", [], buzon_url="https://buzon.example/exec", abrir_url=buzon)
+    assert (fallo.value.carpeta / "nota.txt").is_file()

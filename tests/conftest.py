@@ -25,3 +25,14 @@ def isolated_role_run_log_dir(
             monkeypatch.setattr(module, "LOG_DIR", log_dir)
 
     return log_dir
+
+
+@pytest.fixture(autouse=True)
+def buzon_de_reportes_desconectado(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ningún test manda un correo real al buzón de REPORTAR FALLO.
+
+    Los que prueban el buzón pasan su propia dirección y un ``abrir_url`` falso.
+    """
+    from app import envio_de_reportes
+
+    monkeypatch.setattr(envio_de_reportes, "BUZON_URL", "")

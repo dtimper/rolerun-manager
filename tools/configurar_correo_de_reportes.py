@@ -7,7 +7,9 @@ Uso (desde la carpeta de RoleRun):
 Pide el correo de la cuenta de envío y su contraseña de aplicación, manda un
 correo de prueba a ``DESTINATARIO`` y, solo si llega a enviarse, guarda
 ``data/reporte_correo.dat``. Esa cuenta tiene que ser una creada solo para
-esto: el archivo viaja con el programa y está ofuscado, no cifrado.
+esto: el archivo está ofuscado, no cifrado. Es solo el respaldo local (está en
+``.gitignore`` y no se publica); el programa publicado envía por el buzón de
+``tools/buzon_de_reportes.gs``.
 """
 
 from __future__ import annotations

@@ -1,6 +1,31 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+## REPORTAR FALLO envía por un buzón de Google, sin contraseña en el programa (25-09-2026)
+
+Para que el botón funcione en las copias descargadas sin publicar la
+contraseña de la cuenta de envío (el `data/reporte_correo.dat` ofuscado habría
+quedado al alcance de cualquiera), el reporte va ahora a un Google Apps Script
+implementado como aplicación web en rolerunreports@gmail.com
+(`tools/buzon_de_reportes.gs`), que lo reenvía a `DESTINATARIO`. Su dirección
+(`BUZON_URL`) solo permite mandar un reporte a esa dirección; limita a 30
+envíos por hora y a 12 adjuntos, y se puede revocar archivando la
+implementación.
+
+- `enviar_reporte` usa el buzón salvo que se pidan credenciales/SMTP de forma
+  expresa (la herramienta de configuración y sus tests). El SMTP queda como
+  respaldo local; `data/reporte_correo.dat` pasa a `.gitignore`.
+- El correo es el mismo de siempre (`construir_correo`), convertido a JSON con
+  los adjuntos en base64 (`peticion_al_buzon`).
+- Mensajes claros para sin red, límite por hora y rechazo del buzón; el
+  reporte sigue guardado en disco en todos los casos.
+- `tests/conftest.py` desconecta el buzón en todos los tests.
+
+Validado: `doGet` responde y un reporte real con una captura llegó a enviarse
+por el buzón (respuesta `ok: true` de Google). Durante la configuración, la
+autorización de Google falló con «No se puede abrir el archivo» por tener
+varias cuentas abiertas a la vez; se resolvió en una ventana privada.
+
 ## Tests: la ROM de referencia de quinta, y la versión ya no fijada (25-09-2026)
 
 - `test_gen5_rom_service.py::test_la_tabla_personal_real_coincide_con_pkhex`
