@@ -26,7 +26,7 @@ la detección de combate en tiempo real (ver [CHANGELOG.md](CHANGELOG.md)).
 
 ## Instalar
 
-La forma normal es la **[página de RoleRun](https://dtimper.github.io/rolerun-manager/)**,
+La forma normal es la **[página de RoleRun](https://rolerun.github.io/)**,
 que explica el formato a fondo y tiene el botón de descarga. También puedes
 bajar el instalador directamente desde [Releases](../../releases/latest):
 
