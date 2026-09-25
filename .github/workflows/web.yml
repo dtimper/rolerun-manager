@@ -1,0 +1,41 @@
+# Publica la página web (carpeta web/) en GitHub Pages:
+# https://dtimper.github.io/rolerun-manager/
+#
+# Se lanza sola al subir cambios de web/. La descarga de la página apunta a
+# /releases/latest/download/RoleRunManager-Setup.exe y lee la versión de la
+# API de GitHub, así que publicar una versión nueva NO necesita tocar la web.
+#
+# Requisito de una sola vez en GitHub: Settings → Pages → Source: «GitHub
+# Actions».
+
+name: Página web
+
+on:
+  push:
+    branches: [main]
+    paths: ["web/**", ".github/workflows/web.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.despliegue.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+      - id: despliegue
+        uses: actions/deploy-pages@v4

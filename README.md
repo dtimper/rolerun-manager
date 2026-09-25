@@ -24,33 +24,36 @@ Diamante/Perla, Platino y HeartGold/SoulSilver tienen motor propio en el
 código pero están ocultos del selector por ahora, a la espera de estabilizar
 la detección de combate en tiempo real (ver [CHANGELOG.md](CHANGELOG.md)).
 
-## Primeros pasos
+## Instalar
 
-1. Descarga o clona este repositorio.
-2. Haz doble clic en `instalar_y_abrir.bat` la primera vez (instala las
-   dependencias de Python automáticamente). En los siguientes usos, basta con
-   `abrir_rolerun.bat`.
-3. Abre tu emulador con la partida cargada y selecciona el archivo de
-   guardado desde RoleRun Manager.
+La forma normal es la **[página de RoleRun](https://dtimper.github.io/rolerun-manager/)**,
+que explica el formato a fondo y tiene el botón de descarga. También puedes
+bajar el instalador directamente desde [Releases](../../releases/latest):
 
-Requiere Python 3 instalado en Windows.
+1. Descarga **RoleRunManager-Setup.exe** y ábrelo.
+2. Si Windows avisa de que «protegió su PC», pulsa «Más información» y luego
+   «Ejecutar de todas formas»: el programa no tiene firma digital de pago.
+3. Sigue los pasos. No hace falta instalar nada más: Python y .NET van dentro.
+
+Después, abre tu emulador con la partida cargada y elige tu juego en RoleRun
+Manager.
 
 ## Actualizaciones
 
 Al abrir el programa, comprueba en segundo plano si hay una versión más
-nueva publicada en la pestaña [Releases](../../releases) de este repositorio
-y avisa con un enlace de descarga — no se autoactualiza ni descarga nada sin
-que lo pidas.
+nueva y avisa con sus novedades y un botón que baja el instalador. No se
+autoactualiza ni descarga nada sin que lo pidas. El instalador nuevo se
+instala encima del anterior, y tus Runs no se tocan: se guardan aparte, en
+`Documentos\RoleRun Manager`.
 
-Para actualizar:
+## Ejecutar desde el código
 
-1. En la página de la versión nueva, descarga **Source code (zip)**.
-2. Cierra RoleRun Manager.
-3. Descomprime el zip y copia todo lo que hay dentro de su carpeta en tu
-   carpeta de RoleRun Manager, aceptando reemplazar los archivos.
-4. Abre `instalar_y_abrir.bat`.
-
-Tus Runs no se pierden: se guardan aparte, en `Documentos\RoleRun Manager`.
+Para desarrollar: clona el repositorio y usa `instalar_y_abrir.bat` la
+primera vez (necesita Python 3 y el SDK de .NET 10 para compilar el motor) y
+`abrir_rolerun.bat` después. `tools/construir_instalador.py` fabrica el
+instalador y `tools/probar_instalador.py` lo prueba como en un ordenador sin
+Python ni .NET; al subir una etiqueta `vX.Y.Z`, GitHub hace las dos cosas y
+publica la versión solo (`.github/workflows/publicar.yml`).
 
 ## Más documentación
 

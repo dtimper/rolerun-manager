@@ -452,4 +452,5 @@ Prioridad de robustez X/Y/Citra:
 - [ ] Automatización completa de combates importantes/drafteos.
 - [ ] Hub interno ampliado.
 - [ ] Integración OBS avanzada.
-- [ ] Empaquetado/instalador y fase beta.
+- [x] Empaquetado/instalador (v0.5.0: instalador sin requisitos, publicado y probado
+  automáticamente por GitHub). Fase beta pendiente.

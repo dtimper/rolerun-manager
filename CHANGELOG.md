@@ -1,6 +1,62 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+## Instalador sin requisitos, publicación automática y página web (25-09-2026)
+
+Pedido del usuario: un instalador que funcione en cualquier ordenador (a un
+amigo no le funcionó el de agosto hasta instalar .NET a mano), una página
+web con el formato a fondo y una sección de descarga, y que publicar una
+versión no obligue a subir nada a mano.
+
+**Instalador** (`tools/construir_instalador.py` + `tools/instalador.iss`):
+en vez de comprobar e instalar requisitos, no deja ninguno. El motor se
+compila *self-contained* (lleva su propio .NET) y el programa se congela con
+PyInstaller (lleva su propio Python). Inno Setup instala por usuario, sin
+administrador, en `%LOCALAPPDATA%\Programs\RoleRun Manager`, con acceso
+directo y desinstalador. Detalles que importan:
+
+- El motor lleva `rolerun_engine_version.txt` con `role-markers-v3`: sin ese
+  archivo `SaveEngineClient` usaría en silencio el formato antiguo de marcas.
+  Comprobado: el motor nuevo y el de desarrollo dan marcas idénticas sobre la
+  misma partida (los nombres de rol del motor difieren, pero el programa no
+  los usa: decodifica las marcas él mismo).
+- Solo se empaquetan archivos que Git conoce: nada privado ni en caché.
+- Se excluye numpy (PyInstaller lo arrastraba por Pillow): 27 MB menos.
+- Sustituye limpiamente la instalación de agosto (1.13.0-alpha.25, misma
+  carpeta, otra estructura): borra sus archivos de programa y su entrada de
+  "Agregar o quitar programas", nunca Documentos. La detección se cachea: el
+  Check de `[InstallDelete]` se evalúa antes de cada borrado y la segunda
+  marca desaparecía a mitad.
+- `AllowNoIcons=yes` para que `/NOICONS` funcione: sin él, las pruebas
+  pisaban el acceso del menú Inicio de la instalación de verdad.
+
+**Prueba** (`tools/probar_instalador.py`): instala en silencio, comprueba la
+marca del motor, exporta el catálogo con el motor y arranca el programa con
+PATH mínimo y `DOTNET_ROOT` inválido (sin Python ni .NET visibles), y
+desinstala pase lo que pase. Validado además a mano en este equipo: el
+programa instalado abrió la Run de Negro 2 y leyó equipo, movimientos y PC.
+
+**Publicación automática** (`.github/workflows/publicar.yml`): al subir una
+etiqueta vX.Y.Z, GitHub comprueba que coincide con `APP_VERSION`
+(`publicar_version.py etiqueta`), saca las notas de la cabecera `# vX.Y.Z`
+del CHANGELOG (`tools/notas_de_version.py`), construye, prueba y crea la
+Release con el instalador. Ya no hay que crearla a mano.
+
+**Aviso de versión nueva**: si la Release trae `RoleRunManager-Setup.exe`,
+DESCARGAR lo baja directamente y los pasos explican el aviso de SmartScreen
+(`update_checker.pasos_para_actualizar`); si no, se mantienen los pasos del
+zip.
+
+**Página web** (`web/`, publicada por `.github/workflows/web.yml` en
+GitHub Pages): portada, la idea, reglas base, ciclo, los seis roles
+desplegables, simulador de vidas, drafteos, DualRole, el programa, descarga
+y preguntas. La descarga lee la última Release de la API de GitHub, así que
+no hay que tocar la web al publicar. Los textos de los roles siguen lo que el
+programa aplica: Tanque puede bajar el Ataque rival y Prisma el Ataque
+Especial (grupos `tanque_bajar_ataque` y `prisma_bajar_ataque_esp`), aunque
+la Ayuda del programa diga lo contrario del Tanque — pendiente de que el
+usuario confirme cuál es la regla.
+
 # v0.4.1 — publicada el 25-09-2026
 
 - La ventana de REPORTAR FALLO (y cualquier otra ventana secundaria) muestra

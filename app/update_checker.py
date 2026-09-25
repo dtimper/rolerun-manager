@@ -20,12 +20,19 @@ from urllib.error import HTTPError, URLError
 _USER_AGENT = "RoleRunManager-UpdateChecker"
 _PRERELEASE_STAGE_ORDER = {"alpha": 0, "beta": 1, "rc": 2}
 
+#: Nombre del instalador que adjunta a cada Release
+#: ``.github/workflows/publicar.yml`` (ver ``tools/construir_instalador.py``).
+NOMBRE_INSTALADOR = "RoleRunManager-Setup.exe"
+
 
 @dataclass(frozen=True, slots=True)
 class UpdateInfo:
     version: str
     url: str
     notes: str
+    #: Descarga directa del instalador, si la Release lo trae. Las anteriores
+    #: a la 0.5.0 solo tienen el zip de código de GitHub.
+    installer_url: str = ""
 
 
 def _parse_version(version: str) -> tuple:
@@ -100,7 +107,43 @@ def check_for_update(
         version=tag.lstrip("vV"),
         url=str(payload.get("html_url") or f"https://github.com/{owner}/{repo}/releases/latest"),
         notes=str(payload.get("body") or "").strip(),
+        installer_url=_url_del_instalador(payload.get("assets")),
     )
+
+
+def pasos_para_actualizar(info: UpdateInfo, carpeta_de_datos: str | Path) -> str:
+    """Qué hacer después de pulsar DESCARGAR, según lo que traiga la Release."""
+    runs = f"Tus Runs no se pierden: se guardan aparte, en {carpeta_de_datos}."
+    if info.installer_url:
+        # DESCARGAR baja el instalador directamente. Sin firma digital de
+        # pago, Windows SmartScreen avisa la primera vez.
+        return (
+            f"1. Pulsa DESCARGAR: se bajará {NOMBRE_INSTALADOR}.\n"
+            "2. Ábrelo. Si Windows avisa de que «protegió su PC», pulsa «Más información» "
+            "y luego «Ejecutar de todas formas».\n"
+            "3. Sigue los pasos: se instala encima. Si RoleRun está abierto, el "
+            "instalador te ofrecerá cerrarlo.\n"
+            + runs
+        )
+    # Solo el zip de código: copiar encima de la carpeta actual conserva el
+    # motor ya compilado (`engine/publish` no viaja en el zip).
+    return (
+        "1. Pulsa DESCARGAR. En la página que se abre, baja «Source code (zip)».\n"
+        "2. Cierra RoleRun Manager.\n"
+        "3. Descomprime el zip y copia todo lo que hay dentro de su carpeta en tu "
+        "carpeta de RoleRun Manager, aceptando reemplazar los archivos.\n"
+        "4. Abre instalar_y_abrir.bat.\n"
+        + runs
+    )
+
+
+def _url_del_instalador(adjuntos: object) -> str:
+    if not isinstance(adjuntos, list):
+        return ""
+    for adjunto in adjuntos:
+        if isinstance(adjunto, dict) and adjunto.get("name") == NOMBRE_INSTALADOR:
+            return str(adjunto.get("browser_download_url") or "")
+    return ""
 
 
 _MARKDOWN_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$")

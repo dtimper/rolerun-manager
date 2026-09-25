@@ -82,3 +82,50 @@ def test_unas_notas_sin_markdown_no_cambian() -> None:
     notas = "Primera versión publicada en GitHub. Avisará de las siguientes."
     assert notas_legibles(notas) == notas
     assert notas_legibles("") == ""
+
+
+def test_con_instalador_descargar_lo_baja_y_los_pasos_lo_explican(monkeypatch) -> None:
+    import io
+    import json as json_
+
+    from app import update_checker
+
+    respuesta = {
+        "tag_name": "v0.5.0",
+        "html_url": "https://github.com/x/y/releases/tag/v0.5.0",
+        "body": "## Novedades",
+        "assets": [
+            {"name": "otro.zip", "browser_download_url": "https://ejemplo/otro.zip"},
+            {"name": update_checker.NOMBRE_INSTALADOR,
+             "browser_download_url": "https://ejemplo/RoleRunManager-Setup.exe"},
+        ],
+    }
+
+    class _Respuesta(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    monkeypatch.setattr(
+        update_checker.urllib.request, "urlopen",
+        lambda *_a, **_k: _Respuesta(json_.dumps(respuesta).encode("utf-8")),
+    )
+    info = update_checker.check_for_update("0.4.1", "x", "y")
+
+    assert info.installer_url == "https://ejemplo/RoleRunManager-Setup.exe"
+    pasos = update_checker.pasos_para_actualizar(info, "C:/Docs/RoleRun Manager")
+    assert "RoleRunManager-Setup.exe" in pasos
+    assert "Ejecutar de todas formas" in pasos
+    assert "instalar_y_abrir.bat" not in pasos
+    assert "C:/Docs/RoleRun Manager" in pasos
+
+
+def test_sin_instalador_se_explica_el_zip_como_hasta_ahora() -> None:
+    from app.update_checker import UpdateInfo, pasos_para_actualizar
+
+    info = UpdateInfo(version="0.4.1", url="https://github.com/x/y/releases/tag/v0.4.1", notes="")
+    assert info.installer_url == ""
+    pasos = pasos_para_actualizar(info, "C:/Docs/RoleRun Manager")
+    assert "Source code (zip)" in pasos and "instalar_y_abrir.bat" in pasos

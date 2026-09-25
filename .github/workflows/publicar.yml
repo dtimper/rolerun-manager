@@ -1,0 +1,84 @@
+# Publica una versión de RoleRun Manager con su instalador.
+#
+# Al subir una etiqueta vX.Y.Z (tools/publicar_version.py explica los pasos),
+# GitHub construye RoleRunManager-Setup.exe, lo prueba como en un ordenador
+# sin Python ni .NET y, solo si todo pasa, crea la Release con el instalador
+# y las notas de la cabecera «# vX.Y.Z» del CHANGELOG. La web descarga
+# siempre /releases/latest/download/RoleRunManager-Setup.exe, así que no hay
+# que tocarla en cada versión.
+#
+# Lanzado a mano (pestaña Actions → «Run workflow»), o al subir a main un
+# cambio en lo que fabrica el instalador, construye y prueba y deja el
+# instalador como artefacto descargable, pero no publica nada: es el ensayo
+# que avisa de una construcción rota antes de sacar una versión.
+
+name: Publicar versión
+
+on:
+  push:
+    tags: ["v*"]
+    branches: [main]
+    paths:
+      - "tools/construir_instalador.py"
+      - "tools/instalador.iss"
+      - "tools/probar_instalador.py"
+      - "requirements.txt"
+      - ".github/workflows/publicar.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  instalador:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: La etiqueta coincide con APP_VERSION
+        if: startsWith(github.ref, 'refs/tags/')
+        run: python tools/publicar_version.py etiqueta "${{ github.ref_name }}"
+
+      - name: Notas de la versión (del CHANGELOG)
+        if: startsWith(github.ref, 'refs/tags/')
+        run: python tools/notas_de_version.py "${{ github.ref_name }}" notas.md
+
+      - name: Herramientas
+        run: |
+          python -m pip install -r requirements.txt pyinstaller==6.22.3
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+          }
+
+      - name: Construir el instalador
+        run: python tools/construir_instalador.py
+
+      - name: Probar el instalador sin Python ni .NET
+        run: python tools/probar_instalador.py build/salida/RoleRunManager-Setup.exe
+
+      - name: Guardar el instalador como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: RoleRunManager-Setup
+          path: build/salida/RoleRunManager-Setup.exe
+          retention-days: 14
+
+      - name: Publicar la Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "${{ github.ref_name }}"
+          build/salida/RoleRunManager-Setup.exe
+          --title "${{ github.ref_name }}"
+          --notes-file notas.md
+          --verify-tag

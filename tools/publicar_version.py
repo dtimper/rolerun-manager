@@ -16,6 +16,14 @@ Uso (desde la carpeta de RoleRun):
     python tools/publicar_version.py comprobar
         Tras publicar: confirma que el config.py de la última Release de
         GitHub dice la misma versión que su etiqueta.
+
+    python tools/publicar_version.py etiqueta v0.4.0
+        Falla si APP_VERSION no coincide con esa etiqueta. Lo usa GitHub
+        (.github/workflows/publicar.yml) antes de construir nada.
+
+Desde la 0.5.0 la Release no se crea a mano: al subir la etiqueta, GitHub
+construye el instalador, lo prueba y publica la Release con él y con las
+notas de la cabecera «# vX.Y.Z» del CHANGELOG (tools/notas_de_version.py).
 """
 
 from __future__ import annotations
@@ -101,13 +109,23 @@ def preparar(version: str) -> int:
     print(f"APP_VERSION: {actual} -> {version}")
     print()
     print("Pasos siguientes, en este orden:")
-    print("  1. Añadir al principio de CHANGELOG.md qué trae esta versión.")
+    print(f"  1. Añadir al principio de CHANGELOG.md la cabecera «# {etiqueta}» y,")
+    print("     debajo, qué trae para el jugador: son las notas de la Release y del")
+    print("     aviso de versión nueva (tools/notas_de_version.py).")
     print(f'  2. git add -A && git commit -m "Publica {etiqueta}"')
     print(f"  3. git tag {etiqueta} && git push origin main {etiqueta}")
-    print(f"  4. Crear la Release desde la etiqueta {etiqueta}:")
-    print(f"     https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/new?tag={etiqueta}")
-    print("     Las notas se escriben para el jugador: el aviso las enseña tal cual.")
+    print("  4. GitHub construye, prueba y publica solo (pestaña Actions, ~10 min):")
+    print(f"     https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/actions")
     print("  5. python tools/publicar_version.py comprobar")
+    return 0
+
+
+def etiqueta(nombre: str) -> int:
+    actual = leer_app_version(CONFIG.read_bytes().decode("utf-8"))
+    if nombre.strip().lstrip("vV") != actual:
+        print(f"La etiqueta {nombre} no coincide con APP_VERSION = \"{actual}\".")
+        return 1
+    print(f"La etiqueta {nombre} coincide con APP_VERSION.")
     return 0
 
 
@@ -142,6 +160,8 @@ def main(argumentos: list[str]) -> int:
         return preparar(argumentos[1])
     if argumentos == ["comprobar"]:
         return comprobar()
+    if len(argumentos) == 2 and argumentos[0] == "etiqueta":
+        return etiqueta(argumentos[1])
     print(__doc__)
     return 1
 

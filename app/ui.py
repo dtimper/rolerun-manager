@@ -28678,10 +28678,9 @@ class RoleRunManager(ctk.CTk):
         button_row.pack(side="bottom", fill="x", padx=26, pady=(0, 22))
         button_row.grid_columnconfigure((0, 1, 2), weight=1)
 
-        # El jugador no tiene por qué saber qué hacer con el zip de GitHub.
-        # Copiar encima de la carpeta actual conserva el motor ya compilado
-        # (`engine/publish` no viaja en el zip), y las Runs viven en
-        # Documentos, fuera de la carpeta del programa -ver `USER_DATA_DIR`.
+        # El jugador no tiene por qué saber qué hacer con lo que descarga: los
+        # pasos dependen de si la Release trae instalador o solo el zip de
+        # GitHub -ver `update_checker.pasos_para_actualizar`-.
         steps_frame = ctk.CTkFrame(window, fg_color="transparent")
         steps_frame.pack(side="bottom", fill="x", padx=26, pady=(0, 16))
         ctk.CTkLabel(
@@ -28690,14 +28689,7 @@ class RoleRunManager(ctk.CTk):
         ).pack(anchor="w", pady=(0, 4))
         ctk.CTkLabel(
             steps_frame,
-            text=(
-                "1. Pulsa DESCARGAR. En la página que se abre, baja «Source code (zip)».\n"
-                "2. Cierra RoleRun Manager.\n"
-                "3. Descomprime el zip y copia todo lo que hay dentro de su carpeta en tu "
-                "carpeta de RoleRun Manager, aceptando reemplazar los archivos.\n"
-                "4. Abre instalar_y_abrir.bat.\n"
-                f"Tus Runs no se pierden: se guardan aparte, en {USER_DATA_DIR}."
-            ),
+            text=update_checker.pasos_para_actualizar(info, USER_DATA_DIR),
             text_color=TEXT, wraplength=540, justify="left",
             font=ctk.CTkFont("Segoe UI", 12),
         ).pack(anchor="w")
@@ -28730,7 +28722,7 @@ class RoleRunManager(ctk.CTk):
         dismiss_button.grid(row=0, column=1, sticky="ew", padx=6)
         download_button = ctk.CTkButton(
             button_row, text="DESCARGAR", height=38,
-            command=lambda: (webbrowser.open(info.url), _close()),
+            command=lambda: (webbrowser.open(info.installer_url or info.url), _close()),
             fg_color=GOLD, hover_color="#D8B26E", text_color="#111111",
         )
         download_button.grid(row=0, column=2, sticky="ew", padx=(6, 0))
