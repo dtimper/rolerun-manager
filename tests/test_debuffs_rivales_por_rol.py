@@ -35,6 +35,10 @@ PLAY_NICE = 589
 
 CAPTIVATE = 445
 EERIE_IMPULSE = 598  # baja At. Especial rival.
+# Baja SOLO el At. Especial rival. Faltaba en el pool de Prisma: el usuario
+# confirmó la regla otra vez el 2026-09-25 al revisar la web, y al buscar en
+# las descripciones de todos los movimientos de estado era el único hueco.
+CONFIDE = 590
 
 # Bajan Ataque Y At. Especial rival a la vez: no valen ni para Tanque ni para Prisma.
 NOBLE_ROAR = 568
@@ -68,12 +72,12 @@ class DebuffsRivalesPorRolTests(unittest.TestCase):
 
     def test_prisma_admite_movimientos_que_bajan_el_ataque_especial_rival(self) -> None:
         allowed = self._allowed("Prisma")
-        for move_id in (CAPTIVATE, EERIE_IMPULSE):
+        for move_id in (CAPTIVATE, EERIE_IMPULSE, CONFIDE):
             self.assertIn(move_id, allowed)
 
     def test_tanque_rechaza_movimientos_que_tambien_bajan_el_ataque_especial_rival(self) -> None:
         allowed = self._allowed("Tanque")
-        for move_id in (NOBLE_ROAR, TEARFUL_LOOK, MEMENTO):
+        for move_id in (NOBLE_ROAR, TEARFUL_LOOK, MEMENTO, CONFIDE):
             self.assertNotIn(move_id, allowed)
 
     def test_prisma_rechaza_movimientos_que_tambien_bajan_el_ataque_rival(self) -> None:
@@ -86,7 +90,7 @@ class DebuffsRivalesPorRolTests(unittest.TestCase):
         pegar más fuerte -eso lo hace bajar la DEFENSA correspondiente,
         pool ya existente-, así que estos movimientos no deben colarse en
         los pools de Asesino/Mago."""
-        for move_id in (FEATHER_DANCE, GROWL, CHARM, CAPTIVATE, EERIE_IMPULSE):
+        for move_id in (FEATHER_DANCE, GROWL, CHARM, CAPTIVATE, EERIE_IMPULSE, CONFIDE):
             self.assertNotIn(move_id, self._allowed("Asesino"))
             self.assertNotIn(move_id, self._allowed("Mago"))
 

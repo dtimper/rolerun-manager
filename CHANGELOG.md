@@ -1,6 +1,45 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.5.0 — publicada el 25-09-2026
+
+- **Instalador nuevo que funciona en cualquier ordenador**: lleva Python y
+  .NET dentro, así que no hace falta instalar nada más. Se instala encima de
+  la versión anterior y no toca tus Runs.
+- **Página web de RoleRun**, con el formato explicado a fondo y la descarga:
+  https://dtimper.github.io/rolerun-manager/
+- **Actualizar es más fácil**: el aviso de versión nueva descarga el
+  instalador directamente.
+- **Prisma** puede usar **Confidencia** (baja el Ataque Especial del rival),
+  como Seducción y Onda Anómala. La ayuda explica ahora bien qué puede bajar
+  del rival el Tanque (el Ataque) y el Prisma (el Ataque Especial).
+
+**Si vienes de la 0.3.1**, además: combate de seis Pokémon con vida y
+drafteo automáticos en los siete juegos, botón REPORTAR FALLO en el menú
+flotante, atajos compartidos entre todas las Runs, tours de bienvenida, y el
+mando se detecta aunque Ryujinx no esté abierto.
+
+## Tanque y Prisma: Confidencia, y la Ayuda coincide con lo que se aplica (25-09-2026)
+
+Al revisar la web, el usuario confirmó la regla que ya había dado el
+05-09-2026: Tanque baja el Ataque rival salvo que también baje el At.
+Especial, y Prisma baja el At. Especial rival salvo que también baje el
+Ataque. Buscando en las descripciones de todos los movimientos de estado
+(`data/gen7_move_metadata.json`), el único hueco era **Confidencia** (590,
+baja solo el At. Especial): no estaba en `prisma_bajar_ataque_esp`. Añadida;
+regresión en `tests/test_debuffs_rivales_por_rol.py`, que fallaba antes.
+Absorbefuerza baja el Ataque pero cura al usuario, así que sigue fuera del
+Tanque (no puede curarse).
+
+La Ayuda (`app/role_content.py`) decía que el Tanque "no tiene ninguna
+herramienta para bajar las estadísticas del rival, salvo la Velocidad",
+contra lo que el programa ya aplicaba (`tanque_bajar_ataque`). Corregida, y
+la del Prisma menciona ahora sus movimientos para bajar el At. Especial. La
+web usa la misma redacción. Comprobado con el `DraftEngine` real: Gruñido,
+Encanto, Danza Pluma, Ojitos Tiernos, Cosquillas y Camaradería solo para
+Tanque; Seducción, Onda Anómala y Confidencia solo para Prisma; Rugido de
+Guerra, Ojos Llorosos, Legado y Absorbefuerza para ninguno de los dos.
+
 ## Instalador sin requisitos, publicación automática y página web (25-09-2026)
 
 Pedido del usuario: un instalador que funcione en cualquier ordenador (a un

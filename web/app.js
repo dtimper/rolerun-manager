@@ -29,13 +29,13 @@ const ROLES = [
   {
     clave: "tanque", nombre: "Tanque", simbolo: "♥",
     resumen: "Defensor físico: puede atacar por cualquier lado, pero sus herramientas de estado deben reforzar la Defensa física.",
-    permitido: "Movimientos de daño físico o especial que no recuperen PS; protecciones; Acua Aro, Arraigo y Drenadoras; movimientos que bajen el Ataque del rival (Gruñido, Encanto, Cosquillas…); boosts que aumenten la Defensa física sin aumentar la Defensa Especial (Corpulencia, Danza Triunfal…); y cualquier movimiento de estado que solo afecte a la Velocidad.",
-    limites: "No puede recuperar PS con movimientos de daño ni con curación directa. Un boost que suba la Defensa Especial es ilegal aunque también suba la física: Masa Cósmica no vale. Del rival solo puede bajar el Ataque y la Velocidad.",
+    permitido: "Movimientos de daño físico o especial que no recuperen PS; protecciones; Acua Aro, Arraigo y Drenadoras; movimientos que bajen el Ataque del rival (Gruñido, Encanto, Danza Pluma…), salvo que también bajen su Ataque Especial; boosts que aumenten la Defensa física sin aumentar la Defensa Especial (Corpulencia, Danza Triunfal…); y cualquier movimiento de estado que solo afecte a la Velocidad.",
+    limites: "No puede recuperar PS con movimientos de daño ni con curación directa. Un boost que suba la Defensa Especial es ilegal aunque también suba la física: Masa Cósmica no vale. Del rival solo puede bajar el Ataque y la Velocidad: Rugido de Guerra u Ojos Llorosos, que bajan también el Ataque Especial, no valen.",
   },
   {
     clave: "prisma", nombre: "Prisma", simbolo: "★",
     resumen: "Defensor especial: puede atacar por cualquier lado, pero sus boosts deben incluir Defensa Especial sin aumentar la Defensa física.",
-    permitido: "Movimientos de daño físico o especial que no recuperen PS; movimientos que provoquen un problema de estado, incluido envenenar sin dañar (Hilo Venenoso); Acua Aro, Arraigo y Drenadoras; movimientos que bajen el Ataque Especial del rival (Seducción, Onda Anómala); movimientos de estado que solo afecten a la Velocidad, o que la suban junto con la Defensa Especial (Danza Aleteo, Geocontrol); y boosts que suban la Defensa Especial sin subir la física (Paz Mental…).",
+    permitido: "Movimientos de daño físico o especial que no recuperen PS; movimientos que provoquen un problema de estado, incluido envenenar sin dañar (Hilo Venenoso); Acua Aro, Arraigo y Drenadoras; movimientos que bajen el Ataque Especial del rival (Seducción, Onda Anómala, Confidencia), salvo que también bajen su Ataque; movimientos de estado que solo afecten a la Velocidad, o que la suban junto con la Defensa Especial (Danza Aleteo, Geocontrol); y boosts que suban la Defensa Especial sin subir la física (Paz Mental…).",
     limites: "No puede recuperar PS con movimientos de daño ni con curación directa. Cualquier boost que suba la Defensa física es ilegal, aunque también suba la Especial: Masa Cósmica no vale.",
   },
   {

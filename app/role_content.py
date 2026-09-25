@@ -23,8 +23,8 @@ ROLE_GUIDE: dict[str, dict[str, str]] = {
     },
     "Tanque": {
         "summary": "Defensor físico: puede atacar por cualquier lado, pero sus herramientas de estado deben reforzar la Defensa física.",
-        "allowed": "Movimientos de daño físico o especial que no recuperen PS; protecciones; Acua Aro, Arraigo y Drenadoras; boosts que aumenten la Defensa física sin aumentar nunca la Defensa Especial (por ejemplo, Corpulencia o Danza Triunfal); y cualquier movimiento de estado que solo afecte a la Velocidad (Agilidad, Espacio Raro...).",
-        "limits": "No puede recuperar PS con movimientos de daño ni con curación directa. Un movimiento de estado que aumente Defensa Especial es ilegal aunque también aumente Defensa física, por lo que Masa Cósmica no es válida. No tiene ninguna herramienta para bajar las estadísticas del rival, salvo la Velocidad.",
+        "allowed": "Movimientos de daño físico o especial que no recuperen PS; protecciones; Acua Aro, Arraigo y Drenadoras; movimientos que bajen el Ataque del rival (Gruñido, Encanto, Danza Pluma...), salvo que también bajen su Ataque Especial; boosts que aumenten la Defensa física sin aumentar nunca la Defensa Especial (por ejemplo, Corpulencia o Danza Triunfal); y cualquier movimiento de estado que solo afecte a la Velocidad (Agilidad, Espacio Raro...).",
+        "limits": "No puede recuperar PS con movimientos de daño ni con curación directa. Un movimiento de estado que aumente Defensa Especial es ilegal aunque también aumente Defensa física, por lo que Masa Cósmica no es válida. Del rival solo puede bajar el Ataque y la Velocidad: un movimiento que baje también su Ataque Especial (Rugido de Guerra, Ojos Llorosos) no es válido.",
         "preparation": "Si el moveset no cumple estas condiciones, la casilla permanece en preparación hasta corregirlo.",
     },
     "Asesino": {
@@ -47,7 +47,7 @@ ROLE_GUIDE: dict[str, dict[str, str]] = {
     },
     "Prisma": {
         "summary": "Defensor especial: puede atacar por cualquier lado, pero sus boosts deben incluir Defensa Especial sin aumentar Defensa física.",
-        "allowed": "Movimientos de daño físico o especial que no recuperen PS; movimientos que provoquen directamente un problema de estado principal, incluido envenenar sin dañar (Hilo Venenoso: solo Prisma, Support y Líbero pueden); Acua Aro, Arraigo y Drenadoras; cualquier movimiento de estado que solo afecte a la Velocidad, o que suba Velocidad junto con Defensa Especial (Danza Aleteo, Geocontrol); y boosts que aumenten Defensa Especial pudiendo aumentar además otras estadísticas salvo Defensa física (por ejemplo, Paz Mental).",
+        "allowed": "Movimientos de daño físico o especial que no recuperen PS; movimientos que provoquen directamente un problema de estado principal, incluido envenenar sin dañar (Hilo Venenoso: solo Prisma, Support y Líbero pueden); movimientos que bajen el Ataque Especial del rival (Seducción, Onda Anómala, Confidencia), salvo que también bajen su Ataque; Acua Aro, Arraigo y Drenadoras; cualquier movimiento de estado que solo afecte a la Velocidad, o que suba Velocidad junto con Defensa Especial (Danza Aleteo, Geocontrol); y boosts que aumenten Defensa Especial pudiendo aumentar además otras estadísticas salvo Defensa física (por ejemplo, Paz Mental).",
         "limits": "No puede recuperar PS con movimientos de daño ni con curación directa. Cualquier boost que aumente Defensa física es ilegal, incluso si también aumenta Defensa Especial; Masa Cósmica no es válida.",
         "preparation": "Si el moveset no cumple estas condiciones, la casilla permanece en preparación hasta corregirlo.",
     },
