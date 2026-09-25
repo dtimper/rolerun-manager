@@ -1,6 +1,18 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+## La ventana de REPORTAR FALLO mostraba el icono de CustomTkinter (25-09-2026)
+
+Reportado por el usuario con captura: el cuadrado azul de CustomTkinter en la
+barra de título en vez del icono de RoleRun. `CTkToplevel.__init__` (CTk
+5.2.2) programa `after(200, iconbitmap(<icono de CTk>))` sin comprobar si ya
+había otro, y `_apply_window_icon` hacía su última pasada a los 80 ms, así que
+quedaba pisada. Ahora repite también a los 350 ms
+(`_ICON_REAPPLY_AFTER_CTK_MS`). Afecta a toda ventana `CTkToplevel` que pase
+por ese método. Validado con captura de la barra de título antes y después;
+regresión en `tests/test_icono_de_ventanas.py`, que lee el retraso real del
+código de CTk y falla con la versión anterior.
+
 # v0.4.0 — publicada el 25-09-2026
 
 Primera Release desde `v0.3.1` (07-09-2026). Reúne todas las entradas de

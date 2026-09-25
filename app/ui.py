@@ -1363,6 +1363,9 @@ class RoleRunManager(ctk.CTk):
         except Exception:
             pass
 
+    #: Posterior a los 200 ms a los que CTkToplevel pone su propio icono.
+    _ICON_REAPPLY_AFTER_CTK_MS = 350
+
     def _apply_window_icon(self, window) -> None:
         """Aplica el icono de RoleRun también a ventanas secundarias de Tk/CTk.
 
@@ -1382,10 +1385,16 @@ class RoleRunManager(ctk.CTk):
                 pass
 
         apply()
-        try:
-            window.after(80, apply)
-        except Exception:
-            pass
+        # Reportado por el usuario 25-09-2026 (ventana de REPORTAR FALLO con el
+        # cuadrado azul de CustomTkinter): `CTkToplevel.__init__` (CTk 5.2.2)
+        # programa `after(200, iconbitmap(<icono de CTk>))` sin mirar si ya
+        # había otro, así que la segunda pasada a los 80 ms llegaba antes y
+        # quedaba pisada. La de `_ICON_REAPPLY_AFTER_CTK_MS` llega después.
+        for delay in (80, self._ICON_REAPPLY_AFTER_CTK_MS):
+            try:
+                window.after(delay, apply)
+            except Exception:
+                pass
 
     # ---------- FLOATING BAR ----------
 
