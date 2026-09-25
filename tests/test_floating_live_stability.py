@@ -56,6 +56,40 @@ def test_party_swap_updates_bar_but_not_hidden_main_window() -> None:
     assert ("sync", True) in calls
 
 
+def test_a_successful_live_snapshot_clears_the_cached_no_tm_bag_reason() -> None:
+    """Reportado por el usuario 09-09-2026 con Pokémon X: abrir RoleRun con
+    el juego cerrado deja la bolsa de MT vacía, y ni abrir el juego ni pulsar
+    F5 la cargaban después. `_load_global_tm_context` cachea el motivo en
+    `_global_tm_sin_mochila`, y `_render_global_tm_page` deja de reintentar
+    la lectura mientras ese texto no esté vacío -nada volvía a limpiarlo tras
+    una sincronización en vivo correcta."""
+    game = SimpleNamespace(party=[])
+    manager = SimpleNamespace(
+        current_game=game,
+        _oras_live_active=False,
+        _oras_live_process_name="azahar.exe",
+        _global_tm_sin_mochila="Abre el juego y espera a que RoleRun confirme la conexión…",
+        _clear_oras_rom_tm_runtime_profile=lambda: None,
+        _register_party_roles=lambda value: None,
+        _pc_cache=object(),
+        _pc_cache_signature=object(),
+        sprite_pil_cache={},
+        _load_sprite_async=lambda pokemon: None,
+        _oras_live_health_snapshot=None,
+        _floating_bar_is_visible=lambda: False,
+        _sync_live_layout=lambda refresh_floating=True: None,
+        _smooth_render_page=lambda **kwargs: None,
+        _schedule_team_integrity_check=lambda: None,
+        _main_ui_dirty_while_floating=False,
+        active_page="tms",
+    )
+    snapshot = SimpleNamespace(game=game, process=SimpleNamespace(name="Azahar.exe"))
+
+    RoleRunManager._publish_oras_live_snapshot(manager, snapshot, difference=_difference(party=True))
+
+    assert manager._global_tm_sin_mochila == ""
+
+
 def test_spurious_main_map_cannot_close_bar_while_another_process_is_foreground() -> None:
     calls: list[str] = []
     bar = SimpleNamespace(

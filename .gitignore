@@ -17,6 +17,8 @@ dist/
 engine/publish/
 
 # Windows
+# Instaladores descargados que acaban en la raíz del proyecto por error.
+/*.exe
 Thumbs.db
 desktop.ini
 *.lnk

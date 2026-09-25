@@ -1203,6 +1203,41 @@ class B2W2MelonDSReader:
     def read_battle(self, party_read: B2W2PartyRead) -> B2W2BattleRead:
         return self._read_battle_rows(party_read)
 
+    def read_battle_opponent_identity(
+        self, party_read: B2W2PartyRead,
+    ) -> tuple[int, int] | None:
+        """Identidad del combatiente rival activo, para el combate de seis.
+
+        Demostrado el 23-09-2026 monitorizando TODA la RAM en vivo durante un
+        combate real de seis, narrado por el usuario (patrat, bibarel,
+        lillipup, zangoose, lickitung, smeargle): una única dirección mostró
+        las seis especies exactamente en ese orden, con 3,7-4,9 s entre cada
+        una. A diferencia de la fila del jugador, aquí NO hay PS máximo ni
+        PS actual acompañando a la especie -fuera de combate los 12 bytes
+        siguientes están a cero mientras la especie persiste-, así que la
+        identidad se basa solo en la especie; se devuelve dos veces para
+        encajar en la misma forma `(species_id, instance_key)` que usa X/Y,
+        sin un segundo campo real que distinga individuos repetidos.
+
+        Aislada a propósito de `_read_battle_rows`/`read_battle_party`: un
+        fallo aquí (dirección no demostrada en este juego, melonDS cerrado a
+        mitad de lectura) nunca debe impedir que se publique el resto del
+        carril de batalla del jugador. Devuelve ``None`` en cualquier caso no
+        concluyente en vez de lanzar, porque quien llama solo la usa cuando ya
+        hay combate confirmado.
+        """
+        direccion = self.memory.battle_opponent_active
+        if direccion is None:
+            return None
+        try:
+            crudo = self._read_guest_twice(party_read, direccion, 2)
+        except (B2W2LiveError, OSError):
+            return None
+        (species,) = struct.unpack("<H", crudo)
+        if not 1 <= species <= 649:
+            return None
+        return (species, species)
+
     @staticmethod
     def prepare_pc_move(
         raw: bytes, source_box: int, source_slot: int,

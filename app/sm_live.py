@@ -71,6 +71,20 @@ SM_BATTLE_PLAYER_ACTUAL_HP_BASE = 0x30009760
 SM_BATTLE_PLAYER_STRIDE = 0x330
 SM_BATTLE_HP_SIZE = 2
 
+# Regla de "combate de seis" (dictada 09-09-2026, ver memoria
+# `six-mon-battle-auto-reward`): mismas direcciones que
+# `usum_live.USUM_BATTLE_PLAYER_IDENTITY_BASE`/`USUM_BATTLE_OPPONENT_IDENTITY_BASE`
+# -confirmado en vivo el 14-09-2026 que sumoCheatMenu documenta exactamente
+# los mismos offsets que USUMCheatMenu para esta estructura, y que funcionan
+# sin cambios contra una partida real de Sol/Luna-. El roster del rival es
+# estático durante todo el combate, igual que en USUM: basta leer los seis
+# huecos una vez.
+SM_BATTLE_PLAYER_IDENTITY_BASE = 0x3254EE60
+SM_BATTLE_OPPONENT_IDENTITY_BASE = 0x3254F4AC
+SM_BATTLE_IDENTITY_STRIDE = 0x104
+SM_BATTLE_IDENTITY_SIZE = PK7_STORED_SIZE
+SM_BATTLE_OPPONENT_TEAM_SIZE = 6
+
 # Azahar 263745c RPC: HandleWriteMemory permite PROCESS_IMAGE, HEAP,
 # LINEAR_HEAP y N3DS_EXTRA_RAM, pero NO NEW_LINEAR_HEAP (0x30000000...).
 # La party SM validada vive en 0x34xxxxxx. Alpha.11 comprobó en la ejecución
@@ -293,6 +307,9 @@ class SMBattleProbe:
     actual_hp_pairs: tuple[tuple[int, int], ...] = ()
     validated: bool = False
     reason: str = ""
+    # Nº de huecos del roster del rival con un PK7 válido, solo cuando
+    # ``state == "battle"``. Ver `SM_BATTLE_OPPONENT_IDENTITY_BASE`.
+    opponent_team_size: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1303,6 +1320,36 @@ class SMLiveReader:
         memory_blocks: Sequence[tuple[int, int]] = (),
     ) -> SMLiveSnapshot:
         return self._capture(current, memory_blocks=memory_blocks)
+
+    def read_battle_opponent_team_size(self) -> int | None:
+        """Cuenta cuántos huecos del roster del rival tienen un PK7 válido.
+
+        Regla de "combate de seis" (dictada 09-09-2026): lectura deliberadamente
+        aislada de `read_battle_probe` -mismo patrón que
+        `usum_live.USUMLiveReader.read_battle_opponent_team_size`-, nunca puede
+        tumbar la sonda principal: cualquier fallo se traduce en ``None`` y el
+        llamador simplemente no evalúa la regla ese sondeo.
+        """
+        try:
+            with self.client_factory() as client:
+                process = self._find_sm_process(client.process_list())
+                client.set_process(process.process_id)
+                valid = 0
+                for slot in range(SM_BATTLE_OPPONENT_TEAM_SIZE):
+                    address = (
+                        SM_BATTLE_OPPONENT_IDENTITY_BASE
+                        + slot * SM_BATTLE_IDENTITY_STRIDE
+                    )
+                    raw = client.read_memory(address, SM_BATTLE_IDENTITY_SIZE)
+                    try:
+                        pokemon = parse_pk7_boxed(raw, 1, 1, {})
+                    except Exception:
+                        pokemon = None
+                    if pokemon is not None:
+                        valid += 1
+                return valid
+        except Exception:
+            return None
 
     def read_battle_probe(self, current: SaveGameData) -> SMBattleProbe | None:
         """Lee PS visibles de batalla sin mezclarlos con la captura estable.

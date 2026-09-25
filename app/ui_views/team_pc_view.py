@@ -282,6 +282,8 @@ class UnifiedTeamPCView:
         self._drag_box_hover_direction: int | None = None
         self._previous_box_button: Any | None = None
         self._next_box_button: Any | None = None
+        self.heal_party_button: Any | None = None
+        self.fix_roles_button: Any | None = None
         self._suppress_click_once = False
         self._global_search = False
         self._viewport_canvas = None
@@ -566,20 +568,22 @@ class UnifiedTeamPCView:
             font=ctk.CTkFont("Segoe UI", 17, "bold"),
         ).pack(side="left")
         if self.on_heal_party is not None and not self.mode_banner:
-            ctk.CTkButton(
+            self.heal_party_button = ctk.CTkButton(
                 heading, text="✚  CURAR EQUIPO", command=self.on_heal_party,
                 width=132, height=30, corner_radius=8, fg_color="transparent",
                 hover_color="#303030", border_width=1, border_color=GOLD,
                 text_color=GOLD, font=ctk.CTkFont("Segoe UI", 11, "bold"),
-            ).pack(side="right")
+            )
+            self.heal_party_button.pack(side="right")
         # Solo aparece si hay algo que fijar: un botón que no hace nada estorba.
         if self.on_fix_roles is not None and not self.mode_banner:
-            ctk.CTkButton(
+            self.fix_roles_button = ctk.CTkButton(
                 heading, text="◆  FIJAR ROLES", command=self.on_fix_roles,
                 width=126, height=30, corner_radius=8, fg_color="transparent",
                 hover_color="#332B1D", border_width=1, border_color=GOLD,
                 text_color=GOLD, font=ctk.CTkFont("Segoe UI", 11, "bold"),
-            ).pack(side="right", padx=(0, 6))
+            )
+            self.fix_roles_button.pack(side="right", padx=(0, 6))
         slots = ctk.CTkFrame(self.team_panel, fg_color="transparent")
         slots.pack(
             fill="both", expand=True, padx=9,

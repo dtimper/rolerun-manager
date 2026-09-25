@@ -88,16 +88,22 @@ class IntegratedFormatHelpView:
         ).grid(row=0, column=1, sticky="sw", padx=(0, 22), pady=(22, 2))
         ctk.CTkLabel(
             hero,
-            text="Pokémon con clases de RPG",
+            text="Un Nuzlocke más dinámico, con menos paradas y menos azar",
             text_color=TEXT,
             font=ctk.CTkFont("Segoe UI", 18, "bold"),
         ).grid(row=1, column=1, sticky="w", padx=(0, 22))
         ctk.CTkLabel(
             hero,
             text=(
-                "Cada miembro cumple un rol distinto. El reto consiste en construir "
-                "un equipo estratégico, sobrevivir con tus Pokémon y usar los "
-                "drafteos para ampliar sus herramientas."
+                "RoleRun nace para arreglar dos cosas de los Nuzlockes clásicos: el "
+                "backtracking constante a curar al Centro Pokémon, y que el reto "
+                "dependa demasiado de qué movimientos te toquen al azar -a veces te "
+                "sale un Pokémon tan roto que la partida deja de dar miedo-. La "
+                "solución son los roles: solo UNO de tus seis Pokémon (Líbero, el "
+                "\"rol libre\") puede aprender cualquier movimiento del juego. Los "
+                "otros cinco están limitados al conjunto de su rol, ya pensado para "
+                "no romper el reto. Si sale algo desequilibrado, es solo uno; el "
+                "resto del equipo tiene ataques coherentes con lo que hace."
             ),
             text_color=MUTED,
             wraplength=760,
@@ -109,9 +115,9 @@ class IntegratedFormatHelpView:
         cards.grid(row=2, column=0, sticky="ew")
         cards.grid_columnconfigure((0, 1, 2), weight=1, uniform="format_intro")
         concepts = (
-            ("SEIS ROLES", "Cada Pokémon listo para combatir ocupa una casilla de rol única."),
-            ("SUPERVIVENCIA", "Una baja resta una vida y el Pokémon pasa al Cementerio al elegir sustituto."),
-            ("DRAFTEOS", "Generar o volver atrás no consume nada; el uso se descuenta al elegir qué ataque sustituir."),
+            ("SEIS ROLES", "Solo Líbero puede aprender cualquier movimiento. Los otros cinco están limitados al conjunto de su rol."),
+            ("SUPERVIVENCIA", "Como en cualquier Nuzlocke: una captura por ruta, y un Pokémon debilitado se va al Cementerio para siempre."),
+            ("10 VIDAS", "Llegan a 0 y la Run se pierde. Suben o bajan según cómo termines cada combate de seis Pokémon -detalle más abajo."),
         )
         for column, (title, detail) in enumerate(concepts):
             card = ctk.CTkFrame(cards, fg_color=PANEL, corner_radius=14, border_width=1, border_color="#383838")
@@ -146,14 +152,48 @@ class IntegratedFormatHelpView:
                 font=ctk.CTkFont("Segoe UI", 11),
             ).pack(pady=(2, 0))
 
+        def bullet_card(row: int, title: str, bullets: list[str]) -> None:
+            card = ctk.CTkFrame(
+                self.frame, fg_color=PANEL, corner_radius=16,
+                border_width=1, border_color="#383838",
+            )
+            card.grid(row=row, column=0, sticky="ew", pady=8)
+            ctk.CTkLabel(
+                card, text=title, text_color=GOLD,
+                font=ctk.CTkFont("Segoe UI", 18, "bold"),
+            ).pack(anchor="w", padx=20, pady=(16, 8))
+            for index, bullet in enumerate(bullets):
+                line = ctk.CTkFrame(card, fg_color="transparent")
+                line.pack(fill="x", padx=20, pady=(3, 15 if index == len(bullets) - 1 else 3))
+                ctk.CTkLabel(
+                    line, text="◆", text_color=GOLD, width=22,
+                    font=ctk.CTkFont("Segoe UI Symbol", 12, "bold"),
+                ).pack(side="left")
+                ctk.CTkLabel(
+                    line, text=bullet, text_color=TEXT, anchor="w",
+                    wraplength=880, justify="left",
+                    font=ctk.CTkFont("Segoe UI", 13),
+                ).pack(side="left", fill="x", expand=True)
+
+        # Números concretos -pedido del usuario 09-09-2026, dictados por él
+        # mismo: son la regla real de su serie, no una aproximación genérica
+        # de "Nuzlocke con vidas". No inventar otros valores aquí.
+        bullet_card(4, "LAS VIDAS, EN NÚMEROS", [
+            "Empiezas con 10 vidas. Si llegan a 0, la Run está perdida.",
+            "Lo que mueve las vidas es un combate de seis Pokémon -un líder de gimnasio, el Alto Mando, un rival importante-, no cualquier combate suelto.",
+            "Si superas uno de esos combates sin perder ningún Pokémon, sumas una vida. Si pierdes Pokémon en él, restas una vida por cada uno perdido en ESE combate.",
+            "Superar un combate de seis Pokémon, pierdas o no vidas en él, también te da un drafteo.",
+            "Cada vez que entras en un combate contra un líder de gimnasio, ganas una curación.",
+            "Completar la Run es derrotar al Campeón de la Liga. Un Pokémon debilitado se va al Cementerio para siempre: no vuelve a estar disponible en esta Run.",
+        ])
         ctk.CTkLabel(
             self.frame,
             text="LOS SEIS ROLES",
             text_color=TEXT,
             font=ctk.CTkFont("Segoe UI", 20, "bold"),
-        ).grid(row=4, column=0, sticky="w", pady=(5, 9))
+        ).grid(row=5, column=0, sticky="w", pady=(5, 9))
         role_grid = ctk.CTkFrame(self.frame, fg_color="transparent")
-        role_grid.grid(row=5, column=0, sticky="ew")
+        role_grid.grid(row=6, column=0, sticky="ew")
         role_grid.grid_columnconfigure((0, 1), weight=1, uniform="format_roles")
         for index, role in enumerate(role_order):
             entry = role_guide[role]
@@ -186,7 +226,7 @@ class IntegratedFormatHelpView:
             ).pack(anchor="w", fill="x", padx=15, pady=(5, 13))
 
         note = ctk.CTkFrame(self.frame, fg_color="#211B11", corner_radius=12, border_width=1, border_color=GOLD)
-        note.grid(row=6, column=0, sticky="ew", pady=(12, 8))
+        note.grid(row=7, column=0, sticky="ew", pady=(12, 8))
         ctk.CTkLabel(
             note,
             text=global_role_note,
@@ -196,8 +236,16 @@ class IntegratedFormatHelpView:
             font=ctk.CTkFont("Segoe UI", 12),
         ).pack(fill="x", padx=16, pady=13)
 
+        bullet_card(8, "MODO DUALROLE (OPCIONAL) · el equivalente a un DualLocke", [
+            "Dos jugadores, cada uno con su propia Run, se enfrentan al mejor de tres justo al conseguir la 3ª medalla, justo al conseguir la 6ª medalla y justo antes de entrar a la Liga.",
+            "Cada mejor-de-tres reparte puntos: 2-1 da 2 puntos a quien gana y 1 a quien pierde; 2-0 da 2 y 0.",
+            "Superar la Liga también da puntos: tantos como Pokémon te queden vivos al terminarla.",
+            "Si te haces wipe en la Liga, esa liga te da 0 puntos; con vidas todavía disponibles puedes reintentarla, pero si el wipe te deja a 0 vidas, pierdes el DualRole.",
+            "RoleRun Manager no lleva la cuenta de estos puntos por ti -cada jugador gestiona su propia Run por separado-; el DualRole es una forma de jugar, no una función del programa.",
+        ])
+
         actions = ctk.CTkFrame(self.frame, fg_color="transparent")
-        actions.grid(row=7, column=0, sticky="ew", pady=(8, 20))
+        actions.grid(row=9, column=0, sticky="ew", pady=(8, 20))
         ctk.CTkButton(
             actions, text="ABRIR EQUIPO Y PC", command=on_open_team,
             height=42, fg_color=GOLD, hover_color="#D3AF70", text_color="#111111",

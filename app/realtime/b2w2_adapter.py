@@ -757,6 +757,17 @@ class B2W2RealTimeAdapter(RealTimeGameAdapter):
                     f"mirror {'convergido' if battle_raw.converged else 'esperando animación'}.",
                     "0x0225B1B0 presentation gate · 0x0225B5F8 logical witness",
                 )
+                # Regla del combate de seis (09-09-2026). Aislado del resto de la
+                # lectura de batalla, en su propio try/except: un fallo aquí
+                # jamás debe convertir un combate real en "unknown". El rival no
+                # tiene un roster estático legible como en ORAS, así que se
+                # acumula identidad (especie, PS máximo) igual que en X/Y.
+                try:
+                    identity = self.reader.read_battle_opponent_identity(raw)
+                except Exception:
+                    identity = None
+                if identity is not None:
+                    battle = replace(battle, opponent_identity=identity)
         except Exception as exc:
             battle_diagnostic = LiveDiagnostic(
                 "battle", DiagnosticLevel.WARNING, str(exc),

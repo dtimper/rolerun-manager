@@ -348,10 +348,18 @@ class USUMRealTimeAdapter(RealTimeGameAdapter):
         else:
             state = str(getattr(probe, "state", "unknown") or "unknown")
             validated = bool(getattr(probe, "validated", False))
+            # Regla de "combate de seis" (dictada 09-09-2026): lectura aparte y
+            # deliberadamente aislada de la sonda de PS -ver
+            # `USUMLiveReader.read_battle_opponent_team_size`-, nunca puede
+            # tumbar el carril de batalla si falla.
+            opponent_team_size = (
+                self.reader.read_battle_opponent_team_size() if state == "battle" else None
+            )
             battle = BattleState(
                 state=state,
                 health_game=getattr(probe, "health_game", None),
                 hp_pairs=tuple(getattr(probe, "hp_pairs", ()) or ()),
+                opponent_team_size=opponent_team_size,
             )
             if state == "battle" and not validated:
                 level = DiagnosticLevel.WARNING
@@ -446,10 +454,14 @@ class USUMRealTimeAdapter(RealTimeGameAdapter):
         else:
             state = str(getattr(probe, "state", "unknown") or "unknown")
             validated = bool(getattr(probe, "validated", False))
+            opponent_team_size = (
+                self.reader.read_battle_opponent_team_size() if state == "battle" else None
+            )
             battle = BattleState(
                 state=state,
                 health_game=getattr(probe, "health_game", None),
                 hp_pairs=tuple(getattr(probe, "hp_pairs", ()) or ()),
+                opponent_team_size=opponent_team_size,
             )
             if state == "battle" and not validated:
                 level = DiagnosticLevel.WARNING

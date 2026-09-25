@@ -118,7 +118,7 @@ def test_floating_status_uses_pkhex_status_condition_values(status: int, expecte
     assert RoleRunManager._floating_status_style(0) is None
 
 
-def test_all_hotkey_actions_require_emulator_foreground() -> None:
+def test_all_hotkey_actions_require_emulator_or_rolerun_foreground() -> None:
     """``floating_menu`` (botón guide, el central) sigue abriendo el menú.
 
     ``open_full_app`` (botón back, dos cuadrados a la izquierda del central)
@@ -126,10 +126,15 @@ def test_all_hotkey_actions_require_emulator_foreground() -> None:
     pulsar el logo de la barra flotante con el ratón. Son botones distintos
     a propósito — el primer intento repuso "guide" por error y el usuario lo
     corrigió: "guide" era y sigue siendo el menú.
+
+    Pedido del usuario 09-09-2026: quiere sumar/restar vida etc. también
+    mirando el propio RoleRun, no solo con el emulador delante -de ahí que el
+    ámbito ahora sea `_foreground_allows_global_hotkeys` (emulador O RoleRun),
+    no solo el emulador-. Cualquier otra aplicación sigue sin activarlos.
     """
     calls: list[str] = []
     manager = SimpleNamespace(
-        _foreground_is_supported_emulator=lambda: False,
+        _foreground_allows_global_hotkeys=lambda: False,
         after=lambda _delay, callback: callback(),
         _heal_bdsp_party=lambda: calls.append("heal"),
         _toggle_floating_launcher=lambda: calls.append("menu"),
@@ -145,12 +150,28 @@ def test_all_hotkey_actions_require_emulator_foreground() -> None:
     RoleRunManager._hotkey_action(manager, "vidas_mas")
     assert calls == []
 
-    manager._foreground_is_supported_emulator = lambda: True
+    manager._foreground_allows_global_hotkeys = lambda: True
     RoleRunManager._hotkey_action(manager, "heal_party")
     RoleRunManager._hotkey_action(manager, "floating_menu")
     RoleRunManager._hotkey_action(manager, "open_full_app")
     RoleRunManager._hotkey_action(manager, "vidas_mas")
     assert calls == ["heal", "menu", "app_completa", "vidas:1"]
+
+
+def test_global_hotkeys_are_also_allowed_with_rolerun_in_foreground() -> None:
+    """El ámbito real: emulador soportado, O el propio proceso de RoleRun."""
+    manager = SimpleNamespace(
+        _foreground_is_supported_emulator=lambda: False,
+        _foreground_belongs_to_this_process=lambda: False,
+    )
+    assert RoleRunManager._foreground_allows_global_hotkeys(manager) is False
+
+    manager._foreground_belongs_to_this_process = lambda: True
+    assert RoleRunManager._foreground_allows_global_hotkeys(manager) is True
+
+    manager._foreground_belongs_to_this_process = lambda: False
+    manager._foreground_is_supported_emulator = lambda: True
+    assert RoleRunManager._foreground_allows_global_hotkeys(manager) is True
 
 
 def test_enabling_floating_preference_opens_the_bar_immediately() -> None:
@@ -1223,6 +1244,7 @@ def _reconcile_manager(*, previous_state: str) -> tuple[SimpleNamespace, list[tu
         _oras_live_health_snapshot=_game(21),
         _process_oras_health_snapshot=lambda game, source: calls.append(("health", (game, source))),
         _process_oras_battle_state=lambda state: calls.append(("battle", state)),
+        _process_six_mon_battle_probe=lambda probe, state: calls.append(("six-mon", state)),
         _reconcile_pending_faints_against_party=lambda game: calls.append(("reconcile", game)),
         _publish_oras_live_snapshot=lambda snapshot, difference=None: calls.append(("publish", snapshot)),
         _schedule_oras_live_reconciliation=lambda delay: calls.append(("schedule", delay)),
@@ -1319,6 +1341,7 @@ def test_bdsp_deposit_reconciles_pc_with_the_pre_deposit_party_anchor() -> None:
         _oras_live_health_snapshot=before,
         _process_oras_health_snapshot=lambda game, source: calls.append(("health", (game, source))),
         _process_oras_battle_state=lambda state: calls.append(("battle", state)),
+        _process_six_mon_battle_probe=lambda probe, state: calls.append(("six-mon", state)),
         _reconcile_pending_faints_against_party=lambda game: calls.append(("reconcile", game)),
         _incoming_oras_role_changes=lambda _old, _new: [],
         _publish_oras_live_snapshot=lambda value, difference=None: (
@@ -1386,6 +1409,7 @@ def test_bdsp_direct_pc_swap_inherits_and_verifies_role_before_publishing_party(
         ),
         _process_oras_health_snapshot=lambda game, source: calls.append(("health", (game, source))),
         _process_oras_battle_state=lambda state: calls.append(("battle", state)),
+        _process_six_mon_battle_probe=lambda probe, state: calls.append(("six-mon", state)),
         _reconcile_pending_faints_against_party=lambda game: calls.append(("reconcile", game)),
         _save_oras_live_changes=lambda changes, automatic, base_game: (
             calls.append(("write", (list(changes), automatic, base_game))) or writer_started

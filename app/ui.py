@@ -51,6 +51,8 @@ from .config import (
 )
 from . import perf
 from . import update_checker
+from .onboarding_state import OnboardingTourStore
+from .ui_components.onboarding_tour import BoundingBoxOf, OnboardingTour, OnboardingTourStep
 from .draft_engine import DraftEngine
 from . import drafteos_guardados
 from .role_content import GLOBAL_ROLE_NOTE, ROLE_GUIDE
@@ -67,6 +69,8 @@ from .save_service import SaveInfo, SaveService
 from .run_service import RunProject, RunProjectService
 from .game_source_service import GameSourceProfile, GameSourceProfileService
 from .reporte_de_bugs import BUGS_DIR, guardar_reporte, informes
+from .envio_de_reportes import MAX_CAPTURAS, preparar_y_enviar
+from .ui_components.reporte_de_fallo_dialog import ReporteDeFalloDialog
 from .ventana_activa import mayor_tapadura
 from .win_hotkeys import WindowsHotkeyManager
 from .sdl_gamepad import (
@@ -75,6 +79,8 @@ from .sdl_gamepad import (
     SDLGamepad,
     ryujinx_ignora_el_mando_sin_foco,
 )
+from .xinput_gamepad import XInputGamepad
+from .ui_state.spatial_navigation import SpatialSelection, SpatialTarget
 from .obs_sync import ObsSyncService, SaveFileWatcher
 from .bdsp_tm_service import (
     BDSPTMProfile, discover_personal_masterdatas, load_bdsp_tm_profile,
@@ -819,6 +825,20 @@ class RoleRunManager(ctk.CTk):
         # Estado de la sonda independiente de batalla. ``unknown`` significa que
         # ese tick no pudo leerse; nunca debe invalidar el monitor principal.
         self._oras_battle_probe_last_state: str = "unknown"
+        # Confirmación de fin de combate para la regla de "combate de seis"
+        # (dictada 09-09-2026): un "none" puede ser el instante de transición
+        # de un KO o -demostrado en vivo el 14-09-2026 en X/Y, ver memoria
+        # `six-mon-battle-auto-reward`- de una SUSTITUCIÓN real, no el fin
+        # real del combate. En X/Y ese hueco duró ~5 s reales -el objeto de
+        # combate del rival tarda en reconstruirse tras un KO-, muy por
+        # encima de lo que un conteo de muestras podía cubrir a cualquier
+        # cadencia de sondeo real. Por eso se mide tiempo de reloj, no
+        # muestras: se exige "none" sostenido durante
+        # `_SIX_MON_BATTLE_EXIT_SECONDS` segundos seguidos, reiniciando el
+        # cronómetro en cuanto vuelve a verse "trainer". No se persiste: es
+        # solo la confirmación de ESTA sesión, y `RunProject.six_mon_battle_active`
+        # ya sobrevive un cierre/reabierto a mitad de combate.
+        self._six_mon_battle_exit_since: float | None = None
         self._oras_faint_replacement_window: ctk.CTkToplevel | None = None
         # alpha.36: el selector de sustituto usa un único estado de solicitud.
         # En alpha.35 varios ``after`` podían competir al volver de la barra y
@@ -910,11 +930,12 @@ class RoleRunManager(ctk.CTk):
         self.operation_status_store = OperationStatusStore()
         self._operation_autocollapse_after_id: str | None = None
         self._capturing_hotkey_action: str | None = None
+        self._reporte_de_fallo: ReporteDeFalloDialog | None = None
         self.hotkey_manager = WindowsHotkeyManager(
             self._hotkey_action,
-            # Ningún atajo se registra mientras el usuario escribe o navega en
-            # RoleRun. Solo la ventana real del emulador abre el ámbito global.
-            active_predicate=self._foreground_is_supported_emulator,
+            # El emulador o el propio RoleRun abren el ámbito global; ninguna
+            # otra aplicación lo hace. Ver `_foreground_allows_global_hotkeys`.
+            active_predicate=self._foreground_allows_global_hotkeys,
         )
         self.hotkey_registration_errors: list[str] = []
         # Apagados. Los efectos sintetizados no convencieron -suenan a Windows,
@@ -946,6 +967,16 @@ class RoleRunManager(ctk.CTk):
         # (preserve_scroll, reset_scroll, cuando se pidio).
         self._arranque_repintado_aplazado: tuple[bool, bool, float] | None = None
         self._soltando_repintado_de_arranque = False
+        # `_retire_initial_shell_when_ready` es "la única rueda que gira sola
+        # durante el arranque" (su propio comentario) -se reprograma con
+        # `self.after(...)` cada 35-45 ms sin guardar el id en ningún sitio.
+        # `_cancel_initial_game_load` (VOLVER AL INICIO) necesita poder
+        # cortarla de verdad: sin esto, un tick ya en cola cuando se pulsa el
+        # botón se dispara igualmente más tarde, contra `self.body`/
+        # `self.page_title`/etc. ya puestos a `None` por `_clear_root` -bug
+        # encontrado el 08-09-2026, con captura del usuario, ver
+        # `_cancel_initial_game_load`.
+        self._initial_shell_retire_after_id: str | None = None
         self._presented_team_pc_view = None
         self._initial_shell_gate_trace_state = None
         self._initial_shell_reveal_phase = "idle"
@@ -987,6 +1018,13 @@ class RoleRunManager(ctk.CTk):
         self._floating_menu_control_bindings: list[str] = []
         self._floating_launcher_close_button: ctk.CTkButton | None = None
         self._gamepad: SDLGamepad | None = None
+        # `SDLGamepad` solo lee el mando pidiéndole prestada a Ryujinx su
+        # propia copia de `SDL2.dll` -sin Ryujinx abierto, nunca hay nada que
+        # leer, ni siquiera para la pantalla de asignación de botón. XInput
+        # (viene con Windows, no depende de ningún emulador) es el respaldo:
+        # `_poll_gamepad` solo recurre a él cuando SDL no tiene un mando
+        # conectado. Ver `xinput_gamepad.py`.
+        self._xinput_gamepad = XInputGamepad()
         self._gamepad_previous_buttons: frozenset[str] = frozenset()
         self._gamepad_reserved_buttons: set[str] = set()
         self._gamepad_capture_action: str | None = None
@@ -1116,6 +1154,15 @@ class RoleRunManager(ctk.CTk):
         # retirada bloquea todos los clicks y arrastres de la barra en Windows.
         self._floating_suspended_modal = None
         self._floating_suspended_modal_had_grab = False
+        # `TransparentWindowSurface` (el editor de rol) no toma nunca un grab
+        # real de Tk -sus dos `CTkToplevel` (velo + contenido) están pensados
+        # para verse "flotando" sobre Equipo/PC, no para bloquear con un
+        # grab-, así que `grab_current()` nunca lo encuentra y el mecanismo
+        # de arriba lo deja fuera. Sin este rastro aparte se quedaba flotando
+        # -topmost, encima de TODO, emulador incluido- en cuanto RoleRun
+        # pasaba a la barra flotante con el editor todavía abierto. Reportado
+        # por el usuario 09-09-2026, con captura.
+        self._active_transparent_popover = None
 
         # Cambio automático entre ventana principal y barra flotante. El guard evita
         # que withdraw/deiconify disparen recursivamente los eventos de minimizado.
@@ -1153,6 +1200,13 @@ class RoleRunManager(ctk.CTk):
         self._update_dismissals = update_checker.DismissedVersionStore(
             CONFIG_DIR / "update_prefs.json"
         )
+
+        # Tour de bienvenida: un recuadro dorado y una ficha explican cada
+        # zona de la pantalla la primera vez que el jugador la ve. Un solo
+        # JSON en disco recuerda qué tours ya se enseñaron -ver
+        # `app/onboarding_state.py`- para no repetirlos en cada arranque.
+        self._onboarding_tours = OnboardingTourStore(CONFIG_DIR / "onboarding.json")
+        self._active_onboarding_tour: OnboardingTour | None = None
 
         self._render_startup_splash()
         self.after(100, self._poll_sprite_queue)
@@ -2006,10 +2060,21 @@ class RoleRunManager(ctk.CTk):
         # personaje— pero esa razón **solo existe si hay un mando enchufado**.
         # Sin mando no hay flanco posible, y parar el juego es coste sin
         # beneficio.
+        #
+        # Antes también exigía `save_engine.key == "bdsp"` y `current_game`
+        # cargado -es decir, que la Run ABIERTA en RoleRun fuera justo esa
+        # partida de BDSP-. `_hay_mando` ya implica por sí solo que Ryujinx
+        # está corriendo con un mando conectado (`SDLGamepad.from_ryujinx_
+        # process`, ver `app/sdl_gamepad.py`): exigir además una Run de BDSP
+        # cargada dejaba sin proteger el caso, real, de navegar los menús de
+        # RoleRun -Ajustes, el selector de partida, cualquier otra Run- con
+        # Ryujinx abierto de fondo, que es exactamente cuando el flanco del
+        # mando se colaba también al personaje. Reportado por el usuario
+        # 08-09-2026: "moviéndome por el programa, me muevo a la vez en el
+        # juego". Sigue sin coste sin mando conectado, por la misma razón de
+        # siempre.
         should_hold = bool(
-            getattr(getattr(self, "save_engine", None), "key", "") == "bdsp"
-            and getattr(self, "current_game", None) is not None
-            and getattr(self, "_hay_mando", False)
+            getattr(self, "_hay_mando", False)
             # Y solo si el emulador no se protege ya solo. Ryujinx tiene la
             # opción `disable_input_when_out_of_focus`: con ella puesta no lee el
             # mando sin el foco, así que RoleRun puede navegar sus menús sin que
@@ -2080,6 +2145,23 @@ class RoleRunManager(ctk.CTk):
                 return True
         return False
 
+    def _foreground_allows_global_hotkeys(self) -> bool:
+        """Ámbito de los atajos de teclado (sumar/restar vida, curar, etc.).
+
+        Pedido del usuario 09-09-2026: quiere poder usarlos también mirando el
+        propio RoleRun (el dashboard, por ejemplo), no solo con el emulador
+        delante. Cualquier OTRA aplicación -escribir en un chat, un buscador,
+        lo que sea- sigue sin activarlos: son atajos globales de Windows, y
+        ampliarlos a "siempre" haría que escribir un 7 en cualquier sitio
+        ajeno a RoleRun sumara vida sin que el usuario lo pidiera.
+
+        Con REPORTAR FALLO abierto se apagan todos: se está escribiendo, y un
+        7 del teclado numérico tiene que llegar al mensaje, no sumar una vida.
+        """
+        if getattr(self, "_reporte_de_fallo", None) is not None:
+            return False
+        return self._foreground_is_supported_emulator() or self._foreground_belongs_to_this_process()
+
     def _suspend_modal_for_floating_bar(self) -> None:
         """Libera y oculta el modal activo antes de retirar la ventana principal.
 
@@ -2087,6 +2169,17 @@ class RoleRunManager(ctk.CTk):
         automática aparece en ese estado, todos los eventos de ratón siguen
         dirigidos al modal invisible y la barra parece totalmente bloqueada.
         """
+        # Aparte del mecanismo de abajo (basado en `grab_current()`, que
+        # `TransparentWindowSurface` nunca activa -ver el comentario en
+        # `__init__`-): si el editor de rol está abierto, se oculta aquí
+        # igual que cualquier otro modal.
+        popover = self._active_transparent_popover
+        if popover is not None:
+            try:
+                if popover.winfo_exists() and str(popover.state()) != "withdrawn":
+                    popover.withdraw()
+            except Exception:
+                pass
         current = self._floating_suspended_modal
         if current is not None:
             try:
@@ -2135,6 +2228,17 @@ class RoleRunManager(ctk.CTk):
         self._floating_suspended_modal_had_grab = had_grab
 
     def _restore_suspended_modal_after_floating(self) -> None:
+        popover = self._active_transparent_popover
+        if popover is not None:
+            try:
+                if (
+                    popover.winfo_exists()
+                    and str(popover.state()) == "withdrawn"
+                    and str(self.state()) not in {"withdrawn", "iconic"}
+                ):
+                    popover.deiconify()
+            except Exception:
+                pass
         modal = self._floating_suspended_modal
         if modal is None:
             return
@@ -3548,7 +3652,7 @@ class RoleRunManager(ctk.CTk):
         # Un fallo se apunta en el momento o se pierde. Cierra el menú primero
         # para que la captura recoja lo que había debajo, no este panel.
         reportar = ctk.CTkButton(
-            shell, text="⚑  GUARDAR FALLO", width=170, height=34, corner_radius=10,
+            shell, text="⚑  REPORTAR FALLO", width=180, height=34, corner_radius=10,
             fg_color="#2A1D1D", hover_color="#3A2222", border_width=1,
             border_color=DANGER, text_color=DANGER,
             font=ctk.CTkFont("Segoe UI", 12, "bold"),
@@ -3566,23 +3670,46 @@ class RoleRunManager(ctk.CTk):
         self._bind_floating_menu_keyboard(launcher)
         self._paint_floating_menu_selection()
 
-    def _bind_floating_menu_keyboard(self, launcher) -> None:
-        def move(_event, delta: int):
-            if not self._floating_menu_buttons:
-                return "break"
-            self._floating_menu_index = (self._floating_menu_index + delta) % len(self._floating_menu_buttons)
-            self._paint_floating_menu_selection()
-            return "break"
+    # Destino de cada flecha en el menú raíz, por índice de
+    # `_floating_menu_buttons`: 0 EQUIPO Y PC, 1 MOVIMIENTOS, 2 DRAFTEOS,
+    # 3 BOLSA, 4 engranaje, 5 REPORTAR FALLO. Sigue la posición visible:
+    # REPORTAR FALLO está encima de EQUIPO Y PC y el engranaje encima de
+    # MOVIMIENTOS. Una flecha hacia fuera del menú no hace nada; antes el
+    # índice daba la vuelta y, p. ej., «abajo» en DRAFTEOS saltaba a EQUIPO.
+    _FLOATING_HOME_NAVIGATION = {
+        "up": {0: 5, 1: 4, 2: 0, 3: 1},
+        "down": {5: 0, 4: 1, 0: 2, 1: 3},
+        "left": {1: 0, 3: 2, 4: 5},
+        "right": {0: 1, 2: 3, 5: 4},
+    }
 
-        def direction(event, name: str, delta: int):
+    def _move_floating_menu_selection(self, direction: str) -> None:
+        """Mueve la selección del menú flotante; teclado y mando pasan por aquí."""
+        buttons = self._floating_menu_buttons
+        if not buttons:
+            return
+        index = self._floating_menu_index
+        if self._floating_menu_level == "home":
+            target = RoleRunManager._FLOATING_HOME_NAVIGATION[direction].get(index, index)
+        else:
+            delta = {"left": -1, "right": 1, "up": -2, "down": 2}[direction]
+            target = (index + delta) % len(buttons)
+        if target == index or not 0 <= target < len(buttons):
+            return
+        self._floating_menu_index = target
+        self._paint_floating_menu_selection()
+
+    def _bind_floating_menu_keyboard(self, launcher) -> None:
+        def direction(event, name: str):
             if self._floating_menu_level in {"home", "bag"}:
-                return move(event, delta)
+                RoleRunManager._move_floating_menu_selection(self, name)
+                return "break"
             return self._dispatch_game_overlay_key(event, name)
 
-        launcher.bind("<KeyPress-Left>", lambda event: direction(event, "left", -1))
-        launcher.bind("<KeyPress-Right>", lambda event: direction(event, "right", 1))
-        launcher.bind("<KeyPress-Up>", lambda event: direction(event, "up", -2))
-        launcher.bind("<KeyPress-Down>", lambda event: direction(event, "down", 2))
+        launcher.bind("<KeyPress-Left>", lambda event: direction(event, "left"))
+        launcher.bind("<KeyPress-Right>", lambda event: direction(event, "right"))
+        launcher.bind("<KeyPress-Up>", lambda event: direction(event, "up"))
+        launcher.bind("<KeyPress-Down>", lambda event: direction(event, "down"))
         for sequence in self._floating_menu_control_bindings:
             try:
                 launcher.unbind(sequence)
@@ -3622,6 +3749,23 @@ class RoleRunManager(ctk.CTk):
         self._gamepad_discovery_last_attempt = moment
         return True
 
+    def _read_gamepad_buttons(self) -> tuple[frozenset[str], bool]:
+        """Botones pulsados ahora mismo, y si hay algún mando legible.
+
+        SDL/Ryujinx tiene prioridad -es el único origen que `RyujinxInputGate`
+        sabe coordinar (suspenderlo, esperar a que suelte los botones...)-.
+        XInput (`_xinput_gamepad`, ver su comentario en `__init__`) solo entra
+        cuando SDL no tiene ningún mando conectado que ofrecer -normalmente,
+        cuando Ryujinx no está abierto-, así que nunca compite con él.
+        """
+        sample = self._gamepad.sample() if self._gamepad is not None else None
+        if sample is not None and sample.connected:
+            return sample.pressed, True
+        xinput_sample = self._xinput_gamepad.sample()
+        if xinput_sample.connected:
+            return xinput_sample.pressed, True
+        return frozenset(), False
+
     @perf.timed_aggregate("ui.poll_gamepad")
     def _poll_gamepad(self) -> None:
         """Publica flancos SDL2 y reserva automáticamente cada atajo.
@@ -3638,12 +3782,7 @@ class RoleRunManager(ctk.CTk):
             self._sync_role_run_foreground_input_gate()
             if self._gamepad is None and self._gamepad_discovery_is_due():
                 self._gamepad = SDLGamepad.from_ryujinx_process()
-            sample = self._gamepad.sample() if self._gamepad is not None else None
-            # Sin mando enchufado no hay ningún flanco que pueda alcanzar al
-            # emulador, y retenerlo sería coste puro. Se apunta aquí y lo lee la
-            # retención en el siguiente ciclo, 16 ms después.
-            self._hay_mando = bool(sample is not None and sample.connected)
-            current = sample.pressed if sample and sample.connected else frozenset()
+            current, self._hay_mando = self._read_gamepad_buttons()
             previous = self._gamepad_previous_buttons
             pressed = current - previous
             self._gamepad_previous_buttons = current
@@ -3784,12 +3923,7 @@ class RoleRunManager(ctk.CTk):
 
     def _dispatch_controller_direction(self, direction: str) -> None:
         if self._floating_menu_level in {"home", "bag"}:
-            delta = {"left": -1, "right": 1, "up": -2, "down": 2}[direction]
-            if self._floating_menu_buttons:
-                self._floating_menu_index = (
-                    self._floating_menu_index + delta
-                ) % len(self._floating_menu_buttons)
-                self._paint_floating_menu_selection()
+            RoleRunManager._move_floating_menu_selection(self, direction)
             return
         self._dispatch_game_overlay_key(None, direction)
 
@@ -3889,9 +4023,101 @@ class RoleRunManager(ctk.CTk):
         return "break"
 
     def _reportar_bug_desde_el_menu(self) -> None:
-        """Cierra el menú y guarda. La captura debe recoger el juego, no el menú."""
+        """Cierra el menú y abre REPORTAR FALLO con la captura del juego ya puesta.
+
+        El menú se cierra antes de capturar para que la imagen recoja el juego,
+        no este panel. F8 sigue siendo el guardado mudo de una pulsación.
+        """
         self._close_floating_launcher()
-        self.after(120, self.reportar_bug)
+        self.after(120, self._abrir_reporte_de_fallo)
+
+    def _rect_del_emulador(self) -> tuple[int, int, int, int] | None:
+        """Rectángulo de la última ventana de emulador vista, si sigue a la vista."""
+        hwnd = int(getattr(self, "_last_supported_emulator_hwnd", 0) or 0)
+        if os.name != "nt" or not hwnd:
+            return None
+        try:
+            user32 = ctypes.windll.user32
+
+            class RECT(ctypes.Structure):
+                _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                            ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+            user32.IsWindowVisible.argtypes = [ctypes.c_void_p]
+            user32.IsIconic.argtypes = [ctypes.c_void_p]
+            user32.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            if not user32.IsWindowVisible(ctypes.c_void_p(hwnd)) or user32.IsIconic(ctypes.c_void_p(hwnd)):
+                return None
+            rect = RECT()
+            if not user32.GetWindowRect(ctypes.c_void_p(hwnd), ctypes.byref(rect)):
+                return None
+        except Exception:
+            return None
+        if rect.right - rect.left < 50 or rect.bottom - rect.top < 50:
+            return None
+        return int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)
+
+    def _abrir_reporte_de_fallo(self) -> None:
+        """Ventana para describir el fallo y mandarlo por correo.
+
+        El contexto y la captura se toman **ahora**, al abrirla: es el instante
+        del fallo. Lo que se tarde en escribir no debe cambiarlos.
+        """
+        abierto = self._reporte_de_fallo
+        if abierto is not None:
+            try:
+                if abierto.winfo_exists():
+                    abierto.deiconify()
+                    abierto.lift()
+                    abierto.focus_force()
+                    return
+            except Exception:
+                pass
+            self._reporte_de_fallo = None
+        contexto = self._contexto_para_un_bug()
+        rect = self._rect_del_emulador()
+        captura = None
+        try:
+            from PIL import ImageGrab
+
+            captura = ImageGrab.grab(bbox=rect, all_screens=True) if rect else ImageGrab.grab()
+        except Exception:
+            captura = None
+        centro = (
+            ((rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2) if rect else None
+        )
+
+        def al_cerrar(carpeta: Path | None, enviado: bool) -> None:
+            self._reporte_de_fallo = None
+            if enviado:
+                self._set_operation_status(
+                    "done", "FALLO ENVIADO", "Gracias. Lo revisaremos lo antes posible.",
+                )
+            elif carpeta is not None:
+                self._set_operation_status(
+                    "failed", "FALLO GUARDADO SIN ENVIAR",
+                    f"Queda en Documentos\\RoleRun Manager\\Bugs\\{carpeta.name}.",
+                )
+
+        try:
+            dialogo = ReporteDeFalloDialog(
+                self,
+                enviar=lambda texto, capturas, carpeta: preparar_y_enviar(
+                    contexto, texto, capturas, carpeta,
+                ),
+                captura_inicial=captura,
+                al_cerrar=al_cerrar,
+                centro=centro,
+                max_capturas=MAX_CAPTURAS,
+            )
+        except Exception as error:
+            self._reporte_de_fallo = None
+            self._set_operation_status(
+                "failed", "NO SE PUDO ABRIR EL REPORTE", str(error), persistent=True,
+            )
+            return
+        self._apply_window_icon(dialogo)
+        self._reporte_de_fallo = dialogo
 
     def _open_settings_from_floating_launcher(self) -> None:
         """Cierra la capa de juego y abre Configuración en la ventana principal."""
@@ -4739,7 +4965,10 @@ class RoleRunManager(ctk.CTk):
         # de partida.
         for attr in (
             "content",
-            "sidebar", "sidebar_run", "page_title", "page_subtitle",
+            "sidebar", "sidebar_run",
+            "sidebar_run_eyebrow", "sidebar_run_name", "sidebar_run_stats",
+            "sidebar_run_stat_vidas", "sidebar_run_stat_medallas", "sidebar_run_stat_pending",
+            "page_title", "page_subtitle",
             "top_status", "header_actions", "floating_controls", "pending_controls", "review_changes_button",
             "discard_changes_button", "save_changes_button", "section_controls",
             "operation_bar", "body",
@@ -5192,6 +5421,21 @@ class RoleRunManager(ctk.CTk):
             "Hay cambios pendientes. Si cambias de partida se descartarán. ¿Continuar?",
         ):
             return
+        # Pedido del usuario 08-09-2026: VOLVER AL INICIO (`_cancel_initial_game_load`)
+        # puede llamar a esto mientras la raíz sigue con `-alpha 0.0` -puesta
+        # así desde el primer instante de `select_save`, ver el comentario
+        # ahí sobre por qué se dejó de usar `withdraw()`-. Sin restaurarla
+        # aquí, la ventana volvía a la pantalla de bienvenida realmente
+        # activa -Windows la enseñaba en el visor de la barra de tareas, con
+        # el contenido correcto en la miniatura- pero invisible para
+        # siempre: pulsar el botón "no hacía nada" en apariencia, cuando en
+        # realidad sí volvía, solo que transparente. `attributes("-alpha",
+        # 1.0)` no tiene efecto si ya valía 1.0, así que es seguro para
+        # cualquiera de los otros sitios que ya llamaban a este método.
+        try:
+            self.attributes("-alpha", 1.0)
+        except Exception:
+            pass
         self._session_generation += 1
         self._cancel_oras_initial_auto_sync()
         self._clear_oras_live_auto_apply()
@@ -5301,22 +5545,63 @@ class RoleRunManager(ctk.CTk):
         ctk.CTkLabel(brand, text="MANAGER", text_color=TEXT,
                      font=ctk.CTkFont("Segoe UI", 22, "bold")).pack(anchor="w")
 
-        # Tarjeta informativa: ya no abre nada al pulsarla, así que sin
-        # `command=` ni `hover_color` distinto que sugiera que es un botón.
-        self.sidebar_run = ctk.CTkButton(
+        # Tarjeta informativa: ya no abre nada al pulsarla, así que un frame
+        # -sin `command=` ni estado de hover que sugiera que es un botón-.
+        # Antes era un único CTkButton con las tres líneas metidas en el
+        # mismo texto y la misma fuente pequeña, unidas con "·" porque un
+        # CTkButton no admite tamaños distintos dentro de su propio texto.
+        # Separarlo en filas de verdad (pedido del usuario 08-09-2026: "así
+        # se ve muy cutre... más grande, quitaría los ·") deja sitio para un
+        # nombre de run más grande y cada estadística en su propio hueco,
+        # con espaciado real en vez de puntos entre medias.
+        self.sidebar_run = ctk.CTkFrame(
             self.sidebar_expanded_content,
-            text="",
-            height=92,
             corner_radius=13,
             fg_color="#15130F",
-            hover_color="#15130F",
             border_width=1,
-            border_color="#4A3D25",
-            text_color=MUTED,
-            anchor="w",
-            font=ctk.CTkFont("Segoe UI", 12, "bold"),
+            # GOLD de verdad, no el tono apagado de antes (#4A3D25) -pedido
+            # del usuario 08-09-2026: comparado con el dorado del resto del
+            # programa, ese tono daba sensación de tarjeta desactivada.
+            border_color=GOLD,
         )
         self.sidebar_run.pack(fill="x", padx=17, pady=(0, 18))
+
+        self.sidebar_run_eyebrow = ctk.CTkLabel(
+            self.sidebar_run, text="RUN ACTIVA", text_color=MUTED, anchor="center",
+            font=ctk.CTkFont("Segoe UI", 11, "bold"),
+        )
+        self.sidebar_run_eyebrow.pack(fill="x", padx=18, pady=(16, 0))
+
+        self.sidebar_run_name = ctk.CTkLabel(
+            self.sidebar_run, text="", text_color=GOLD, anchor="center", justify="center",
+            font=ctk.CTkFont("Segoe UI", 19, "bold"), wraplength=210,
+        )
+        self.sidebar_run_name.pack(fill="x", padx=18, pady=(3, 12))
+
+        # Sin `fill="x"`: una fila de labels lado a lado se reduce a su ancho
+        # natural, y `pack()` la centra sola dentro de `sidebar_run` (su
+        # `anchor` por defecto es "center") -pedido del usuario 08-09-2026
+        # de que toda la tarjeta se vea más centrada, no pegada a la izquierda.
+        self.sidebar_run_stats = ctk.CTkFrame(self.sidebar_run, fg_color="transparent")
+        self.sidebar_run_stats.pack(padx=18, pady=(0, 16))
+
+        self.sidebar_run_stat_vidas = ctk.CTkLabel(
+            self.sidebar_run_stats, text="", text_color=TEXT, anchor="w",
+            font=ctk.CTkFont("Segoe UI", 14, "bold"),
+        )
+        self.sidebar_run_stat_vidas.pack(side="left")
+
+        self.sidebar_run_stat_medallas = ctk.CTkLabel(
+            self.sidebar_run_stats, text="", text_color=TEXT, anchor="w",
+            font=ctk.CTkFont("Segoe UI", 14, "bold"),
+        )
+        self.sidebar_run_stat_medallas.pack(side="left", padx=(22, 0))
+
+        self.sidebar_run_stat_pending = ctk.CTkLabel(
+            self.sidebar_run_stats, text="", text_color=DANGER, anchor="w",
+            font=ctk.CTkFont("Segoe UI", 13, "bold"),
+        )
+        self.sidebar_run_stat_pending.pack(side="left", padx=(22, 0))
 
         nav = ctk.CTkFrame(self.sidebar_expanded_content, fg_color="transparent")
         nav.pack(fill="x", padx=13)
@@ -5455,6 +5740,7 @@ class RoleRunManager(ctk.CTk):
             ("999", utility_image("max-repel.png"), "Repelentes Máximos x999", lambda: self.queue_inventory_change("max-repel", "Repelente Máximo", 999)),
             ("₽ ∞", None, "Dinero al máximo", lambda: self.queue_inventory_change("money-max", "Dinero máximo", 999999)),
         )
+        self.header_utility_buttons: list[ctk.CTkButton] = []
         for column, (label, icon_image, tooltip, command) in enumerate(utility_definitions):
             self.header_run_counters.grid_columnconfigure(column, weight=0)
             button = ctk.CTkButton(
@@ -5464,8 +5750,10 @@ class RoleRunManager(ctk.CTk):
                 font=ctk.CTkFont("Segoe UI Symbol", 11, "bold"), command=command,
             )
             button.grid(row=0, column=column, padx=3, pady=4, sticky="nsew")
+            self.header_utility_buttons.append(button)
             # El texto largo queda como nombre accesible en el propio callback;
             # la cabecera conserva una huella compacta a 1920 px.
+        self.header_counter_cells: dict[str, ctk.CTkFrame] = {}
         for counter_index, (key, symbol, icon_image) in enumerate(counter_definitions):
             column = counter_index + len(utility_definitions)
             self.header_run_counters.grid_columnconfigure(column, weight=1, uniform="header_counters")
@@ -5477,6 +5765,7 @@ class RoleRunManager(ctk.CTk):
                 border_color="#4A3D25",
             )
             cell.grid(row=0, column=column, sticky="nsew", padx=3)
+            self.header_counter_cells[key] = cell
             cell.grid_columnconfigure(1, weight=1)
             cell.grid_rowconfigure((0, 1), weight=1)
             ctk.CTkLabel(
@@ -5642,7 +5931,14 @@ class RoleRunManager(ctk.CTk):
         self._navigation_owner = view
         if view is None:
             return
-        view.navigation_guard = lambda current=view: self._navigation_owner is current
+        # Un tour (OnboardingTour) no bloqueaba las flechas de la vista de
+        # fondo -solo pone un velo visual, sin `grab_set` ni bind propio de
+        # flechas-, así que se podía seguir navegando la página por debajo
+        # mientras el tour seguía abierto encima. Pedido del usuario
+        # 09-09-2026: bloquear la navegación hasta acabar o saltar el tour.
+        view.navigation_guard = lambda current=view: (
+            self._navigation_owner is current and self._active_onboarding_tour is None
+        )
         if hasattr(view, "navigation_intercept"):
             view.navigation_intercept = self._handle_sidebar_navigation
 
@@ -6878,6 +7174,12 @@ class RoleRunManager(ctk.CTk):
             return None
 
     def _clear(self, parent) -> None:
+        # Defensa de última línea: `_clear_root` pone a `None` `self.body` y
+        # el resto de contenedores de la shell al volver a la bienvenida, así
+        # que un callback aplazado que llegara tarde (p. ej. un `after` de
+        # arranque no cancelado) podía recibir aquí un `parent` ya nulo.
+        if parent is None:
+            return
         for child in parent.winfo_children():
             child.destroy()
 
@@ -6907,18 +7209,40 @@ class RoleRunManager(ctk.CTk):
         if self.current_game and self.project:
             counters = self.project.counters
             pending_faints = len(self.project.pending_faints)
-            pending_text = f" · {pending_faints} baja(s)" if pending_faints else ""
-            self.sidebar_run.configure(
-                text=(
-                    f"RUN ACTIVA\n{self.project.name}\n"
-                    f"♥ {int(counters.get('vidas', 0))}  ·  ◆ {int(counters.get('medallas', 0))}"
-                    f"{pending_text}"
-                ),
-                text_color=GOLD,
-                state="normal",
-            )
+            self.sidebar_run_eyebrow.configure(text="RUN ACTIVA", text_color=MUTED)
+            self.sidebar_run_eyebrow.pack(fill="x", padx=18, pady=(16, 0))
+            # `project.name` se guarda como "{versión} · {entrenador}" (ver
+            # `RunService.open_or_create`) -p.ej. "X · Timper"-. Anteponer
+            # "Pokémon" es solo cuestión de presentación en esta tarjeta, así
+            # que se parte aquí en vez de tocar el formato persistido (usado
+            # también para el slug de la carpeta de la Run).
+            game_part, _, trainer_part = self.project.name.partition(" · ")
+            run_display = f"Pokémon {game_part}" + (f" · {trainer_part}" if trainer_part else "")
+            self.sidebar_run_name.configure(text=run_display, text_color=GOLD)
+            self.sidebar_run_name.pack(fill="x", padx=18, pady=(3, 12))
+            self.sidebar_run_stat_vidas.configure(text=f"♥  {int(counters.get('vidas', 0))}")
+            self.sidebar_run_stat_medallas.configure(text=f"◆  {int(counters.get('medallas', 0))}")
+            self.sidebar_run_stats.pack(padx=18, pady=(0, 16))
+            if pending_faints:
+                self.sidebar_run_stat_pending.configure(text=f"⚠  {pending_faints} baja(s)")
+                self.sidebar_run_stat_pending.pack(side="left", padx=(22, 0))
+            else:
+                self.sidebar_run_stat_pending.configure(text="")
+                self.sidebar_run_stat_pending.pack_forget()
         else:
-            self.sidebar_run.configure(text="SIN RUN ACTIVA", text_color=MUTED, state="disabled")
+            # Se retiran del todo (no solo se vacía el texto): una etiqueta
+            # vacía sigue reservando el alto de su fuente, y dejarlas
+            # ahí sin RUN activa dejaba un hueco muerto bajo "SIN RUN
+            # ACTIVA" -detectado al revisar la tarjeta rediseñada en vivo.
+            self.sidebar_run_eyebrow.configure(text="SIN RUN ACTIVA", text_color=MUTED)
+            self.sidebar_run_eyebrow.pack(fill="x", padx=18, pady=(16, 16))
+            self.sidebar_run_name.configure(text="")
+            self.sidebar_run_name.pack_forget()
+            self.sidebar_run_stat_vidas.configure(text="")
+            self.sidebar_run_stat_medallas.configure(text="")
+            self.sidebar_run_stat_pending.configure(text="")
+            self.sidebar_run_stat_pending.pack_forget()
+            self.sidebar_run_stats.pack_forget()
         for page, button in self.nav_buttons.items():
             selected = page == primary_page_for(self.active_page)
             configurar_si_cambia(
@@ -8658,7 +8982,7 @@ class RoleRunManager(ctk.CTk):
             self._register_global_hotkeys(show_error=True)
             cancelled["value"] = True
             overlay.destroy()
-            self._smooth_render_page()
+            self._smooth_render_page(preserve_scroll=True)
             return True
 
         def capture_event(event):
@@ -8717,7 +9041,7 @@ class RoleRunManager(ctk.CTk):
         overlay = IntegratedWindowSurface(self)
         self._apply_window_icon(overlay)
         overlay.title("Asignar botón de mando")
-        overlay.geometry("500x230")
+        overlay.geometry("500x300")
         overlay.resizable(False, False)
         overlay.transient(self)
         overlay.grab_set()
@@ -8725,16 +9049,28 @@ class RoleRunManager(ctk.CTk):
         ctk.CTkLabel(
             overlay, text="PULSA EL BOTÓN QUE QUIERES ASIGNAR",
             text_color=GOLD, font=ctk.CTkFont("Segoe UI", 15, "bold"),
-        ).pack(pady=(34, 8))
+        ).pack(pady=(28, 8))
         status = ctk.CTkLabel(
             overlay,
             text=(
                 "Pulsa ahora el botón que prefieras. Se usará en todas las\n"
-                "pantallas de RoleRun donde corresponda esa acción."
+                "pantallas de RoleRun donde corresponda esa acción. ESC cancela."
             ),
             text_color=MUTED, justify="center",
         )
         status.pack()
+        # Solo detecta el mando mientras RoleRun puede leerlo -ahora mismo,
+        # eso exige tener Ryujinx abierto (ver `SDLGamepad.from_ryujinx_process`)-,
+        # así que sin eso ningún botón, de ningún mando, iba a registrarse nunca.
+        # Reportado por el usuario 08-09-2026: "me he metido en la pantalla para
+        # presionar el botón que sea... pero no lo pilla". Antes esta pantalla no
+        # decía nada al respecto, dejando ese silencio indistinguible de un fallo.
+        pad_hint = ctk.CTkLabel(
+            overlay, text="", text_color=MUTED, justify="center", wraplength=440,
+        )
+        pad_hint.pack(pady=(10, 0))
+
+        cancelled = {"value": False}
 
         def finish(button: str) -> None:
             if not overlay.winfo_exists():
@@ -8762,21 +9098,54 @@ class RoleRunManager(ctk.CTk):
                 self.project_service.set_controller_hotkeys(
                     self.project, self.project.controller_hotkeys,
                 )
+            cancelled["value"] = True
             overlay.destroy()
-            self._smooth_render_page()
+            self._smooth_render_page(preserve_scroll=True)
 
         def cancel(_event=None):
+            cancelled["value"] = True
             self._gamepad_capture_action = None
             self._gamepad_capture_callback = None
             if overlay.winfo_exists():
                 overlay.destroy()
             return "break"
 
+        def poll_pad_hint() -> None:
+            if cancelled["value"] or not overlay.winfo_exists():
+                return
+            if getattr(self, "_hay_mando", False):
+                configurar_si_cambia(
+                    pad_hint,
+                    text="Mando detectado. Pulsa el botón que quieras asignar.",
+                    text_color=MUTED,
+                )
+            else:
+                configurar_si_cambia(
+                    pad_hint,
+                    text=(
+                        "Todavía no se detecta ningún mando: RoleRun solo puede leerlo\n"
+                        "mientras Ryujinx está abierto (por ejemplo, jugando a BDSP).\n"
+                        "Ábrelo y prueba de nuevo, o pulsa CANCELAR para salir."
+                    ),
+                    text_color=DANGER,
+                )
+            overlay.after(300, poll_pad_hint)
+
+        cancel_button = ctk.CTkButton(
+            overlay, text="CANCELAR (ESC)", command=cancel,
+            width=220, height=34, corner_radius=8,
+            fg_color="transparent", hover_color="#242424",
+            border_width=1, border_color=GOLD, text_color=GOLD,
+            font=ctk.CTkFont("Segoe UI", 12, "bold"),
+        )
+        cancel_button.pack(pady=(20, 0))
+
         self._gamepad_capture_action = action
         self._gamepad_capture_callback = finish
         overlay.bind("<Escape>", cancel)
         overlay.protocol("WM_DELETE_WINDOW", cancel)
         overlay.after(100, overlay.focus_force)
+        overlay.after(150, poll_pad_hint)
 
     def begin_menu_key_capture(self, control: str) -> None:
         if not self.project:
@@ -8813,7 +9182,7 @@ class RoleRunManager(ctk.CTk):
                     self.project.controller_menu_buttons,
                 )
                 overlay.destroy()
-                self._smooth_render_page()
+                self._smooth_render_page(preserve_scroll=True)
             return "break"
 
         overlay.bind("<KeyPress>", capture)
@@ -8822,9 +9191,9 @@ class RoleRunManager(ctk.CTk):
 
     def _hotkey_action(self, action: str) -> None:
         # Segunda barrera contra carreras de foco: el registro Win32 se retira
-        # al abandonar el emulador, pero un WM_HOTKEY ya encolado no debe poder
-        # ejecutar ninguna acción después de volver a RoleRun u otra aplicación.
-        if not self._foreground_is_supported_emulator():
+        # al abandonar el emulador o RoleRun, pero un WM_HOTKEY ya encolado no
+        # debe poder ejecutar ninguna acción tras pasar a otra aplicación.
+        if not self._foreground_allows_global_hotkeys():
             return
         if action == "reportar_bug":
             self.after(0, self.reportar_bug)
@@ -9171,6 +9540,57 @@ class RoleRunManager(ctk.CTk):
         # token hace que su callback quede obsoleto y no publique otra Run.
         self._oras_auto_sync_token += 1
 
+    def _cancel_initial_game_load(self) -> None:
+        """Escapa de la carga inicial de una Run, en cualquier fase.
+
+        Pedido del usuario 08-09-2026, en dos vueltas: primero para BDSP/
+        Sol-Luna sin emulador abierto («se queda en pantalla sin ninguna
+        otra opción más que esperar o cerrar el programa»), luego ampliado a
+        la carga de cualquier juego. BDSP y Sol-Luna, a diferencia de ORAS/
+        X-Y/Ultra Sol-Ultra Luna, no publican la shell hasta demostrar una
+        captura en vivo -ver el comentario en `_finish_oras_initial_auto_sync`
+        sobre por qué BDSP necesita esa captura para conocer PS fiables-, así
+        que sin Ryujinx/Azahar abierto esa fase podía reintentar cada 1,6 s
+        para siempre; pero incluso para el resto de juegos, la lectura del
+        guardado o la composición de Equipo y PC podían en teoría colgarse
+        sin que hubiera nunca ningún control para salir de ahí, solo cerrar
+        el programa entero.
+
+        Seguro en CUALQUIER momento de la carga -incluso antes de que exista
+        `_oras_auto_sync_after_id`, `_cancel_oras_initial_auto_sync` no
+        necesita que haya nada pendiente-: corta el reintento en vivo si lo
+        hay, retira la barrera de verdad (no solo la oculta:
+        `_hide_busy_indicator` la destruye) y vuelve a la pantalla de
+        bienvenida. `_return_to_welcome` ya sube `_session_generation`, que
+        es lo que invalida cualquier callback de una lectura en segundo
+        plano todavía en curso -el mismo guardia que usan `_finish_save_load`
+        y `_finish_save_load_error` para descartarse solos si llegan tarde.
+
+        `_initial_shell_waiting = False` (arriba) hace que la PRÓXIMA
+        invocación de `_retire_initial_shell_when_ready` se limite a soltar
+        el repintado aplazado y volver, pero esa rueda ya puede tener un
+        tick en cola (se reprograma sola cada 35-45 ms) que dispararía
+        igualmente sobre `self.body`/`self.page_title`, ya puestos a `None`
+        por `_clear_root` dentro de `_return_to_welcome` -reportado por el
+        usuario 08-09-2026 como texto extraño superpuesto sobre un frame de
+        Equipo y PC real, brevemente visible durante la transición. Hay que
+        cortar ese tick pendiente aquí mismo, y descartar cualquier
+        repintado que estuviera aplazado (ya no hay página de arranque a la
+        que aplicárselo).
+        """
+        self._cancel_oras_initial_auto_sync()
+        self._initial_shell_waiting = False
+        retire_after_id = self._initial_shell_retire_after_id
+        self._initial_shell_retire_after_id = None
+        if retire_after_id:
+            try:
+                self.after_cancel(retire_after_id)
+            except Exception:
+                pass
+        self._arranque_repintado_aplazado = None
+        self._hide_busy_indicator("initial-shell")
+        self._return_to_welcome()
+
     def _schedule_oras_initial_auto_sync(self, delay_ms: int = 300) -> None:
         """Busca la Run 3DS activa en Azahar hasta conseguir una captura estable.
 
@@ -9373,6 +9793,16 @@ class RoleRunManager(ctk.CTk):
                         if live_key == "bdsp" else
                         "Conectando con Azahar y validando el equipo de Sol/Luna…"
                     ),
+                )
+                # Reafirma el botón de escape sobre esta MISMA barrera -ya
+                # revelado desde el principio de `select_save` para toda
+                # carga inicial-: esta espera concreta (sin emulador
+                # abierto) es la que de verdad puede no terminar nunca,
+                # así que conviene no depender solo de que nadie la haya
+                # ocultado entre medias.
+                self._set_overlay_cancel_action(
+                    self._busy_indicator, self._cancel_initial_game_load,
+                    "VOLVER AL INICIO",
                 )
             else:
                 self._initial_shell_live_probe_complete = True
@@ -9849,6 +10279,82 @@ class RoleRunManager(ctk.CTk):
                 became_ready = True
         if became_ready:
             self._schedule_pending_faint_picker(180)
+
+    # Cuánto "none" sostenido (segundos reales, no muestras) hace falta para
+    # dar el combate de seis por terminado de verdad. Demostrado en vivo el
+    # 14-09-2026 en X/Y: el objeto de combate del rival tarda unos segundos
+    # reales en reconstruirse tras una sustitución, y durante ese hueco la
+    # sonda devuelve "none" varias veces seguidas aunque el combate sigue -un
+    # combate real de seis se fragmentó en más de veinte resoluciones
+    # prematuras de 1-2 rivales cada una a lo largo de la sesión, y ninguna
+    # llegó a pagar la regla-. El propio registro de esa sesión midió esos
+    # huecos falsos siempre en 8 s o menos, con el hueco real más corto entre
+    # combates distintos en 14 s: 10 s cae limpiamente entre ambos. Contar
+    # muestras no sirve porque la cadencia de sondeo varía; medir tiempo de
+    # reloj sí es estable frente a eso.
+    _SIX_MON_BATTLE_EXIT_SECONDS = 10.0
+
+    def _process_six_mon_battle_probe(self, battle_probe, probe_state: str | None) -> None:
+        """Alimenta la regla de "combate de seis" (dictada 09-09-2026).
+
+        Dos vías según lo que exponga el juego activo (ambas descubiertas en
+        vivo el 14-09-2026, ver memoria `six-mon-battle-auto-reward`): ORAS
+        expone ``opponent_team_size`` -su roster rival es estático, se lee de
+        una vez-; X/Y expone en su lugar ``opponent_identity`` -su puntero de
+        rival SÍ sigue las sustituciones reales, así que hay que acumular
+        cada rival distinto conforme sale-. Cualquier otro juego no rellena
+        ninguno de los dos y esta función no hace nada, así que no hay riesgo
+        de disparar la regla sin datos reales. Exige "none" sostenido durante
+        `_SIX_MON_BATTLE_EXIT_SECONDS` para cerrar el combate -ver esa
+        constante- para no confundir una sustitución real con el fin real del
+        combate.
+        """
+        if not self.project:
+            return
+        if probe_state == "trainer":
+            self._six_mon_battle_exit_since = None
+            team_size = getattr(battle_probe, "opponent_team_size", None)
+            if team_size is not None:
+                self.project_service.note_trainer_battle_seen(self.project, team_size)
+            else:
+                identity = getattr(battle_probe, "opponent_identity", None)
+                if identity is not None:
+                    species_id, instance_key = identity
+                    self.project_service.note_trainer_battle_opponent_seen(
+                        self.project, species_id, instance_key,
+                    )
+            return
+        if probe_state != "none":
+            return
+        if not self.project.six_mon_battle_active:
+            self._six_mon_battle_exit_since = None
+            return
+        now = time.monotonic()
+        if self._six_mon_battle_exit_since is None:
+            self._six_mon_battle_exit_since = now
+            return
+        if now - self._six_mon_battle_exit_since < self._SIX_MON_BATTLE_EXIT_SECONDS:
+            return
+        self._six_mon_battle_exit_since = None
+        outcome = self.project_service.resolve_six_mon_battle_end(self.project)
+        if outcome is not None:
+            self._apply_six_mon_battle_outcome(outcome)
+
+    def _apply_six_mon_battle_outcome(self, outcome: dict[str, Any]) -> None:
+        if not self.project:
+            return
+        self.project = self.project_service.load(self.project.slug) or self.project
+        self.run.history = self.project_service.history(self.project)
+        self._sync_obs_state(self.current_game)
+        if self.active_page == "dashboard":
+            self._refresh_dashboard_counter("drafteos")
+            if outcome.get("vidas") is not None:
+                self._refresh_dashboard_counter("vidas")
+        self.sync_status = f"✓ {outcome['label']}"
+        self._update_top_status()
+        self._floating_bar_last_signature = None
+        if self._floating_bar_is_visible():
+            self._render_floating_bar(force=True)
 
     def _process_oras_battle_snapshot(self, snapshot) -> None:
         # Compatibilidad con tests/rutas antiguas; alpha.33 usa la sonda separada.
@@ -11337,6 +11843,15 @@ class RoleRunManager(ctk.CTk):
         """
         self.current_game = snapshot.game
         self._oras_live_active = True
+        # `_load_global_tm_context` cachea el motivo de "sin mochila que
+        # mostrar" (`_global_tm_sin_mochila`) y, mientras no esté vacío,
+        # `_render_global_tm_page` deja de reintentar la lectura -ver el
+        # guard `context is None and not self._global_tm_sin_mochila`-. Sin
+        # limpiarlo aquí, abrir RoleRun con el juego cerrado dejaba la
+        # bolsa de MT vacía para siempre, incluso después de abrir el juego
+        # y resincronizar con F5: nada volvía a avisar que ya se podía
+        # reintentar. Reportado por el usuario 09-09-2026 con Pokémon X.
+        self._global_tm_sin_mochila = ""
         process_name = str(getattr(snapshot.process, "name", "") or "").casefold() or None
         # Medido el 2026-09-03: una lectura vacía/puntual de `snapshot.process`
         # (un hipo transitorio del RPC, ya visto por separado en
@@ -11639,6 +12154,12 @@ class RoleRunManager(ctk.CTk):
                 else "none" if probe_state == "none"
                 else None
             )
+            self._process_six_mon_battle_probe(
+                battle_probe,
+                "trainer" if probe_state == "battle"
+                else "none" if probe_state == "none"
+                else None,
+            )
             # Y si el usuario resuelve la baja desde el PC del propio juego,
             # RoleRun debe enterarse en lugar de seguir esperando.
             self._reconcile_pending_faints_against_party(snapshot.game)
@@ -11733,10 +12254,12 @@ class RoleRunManager(ctk.CTk):
                             probe_health, source="battle-visible",
                         )
                 self._process_oras_battle_state("trainer")
+                self._process_six_mon_battle_probe(battle_probe, "trainer")
             elif probe_state == "none":
                 self._oras_battle_probe_last_state = "none"
                 self._process_oras_health_snapshot(snapshot.game, source="overworld")
                 self._process_oras_battle_state("none")
+                self._process_six_mon_battle_probe(battle_probe, "none")
             else:
                 if previous_probe_state != "battle":
                     self._process_oras_health_snapshot(snapshot.game, source="overworld")
@@ -11860,10 +12383,12 @@ class RoleRunManager(ctk.CTk):
                     else:
                         self._process_oras_health_snapshot(probe_health, source="battle-visible")
                 self._process_oras_battle_state("trainer")  # token común = dentro de combate
+                self._process_six_mon_battle_probe(battle_probe, "trainer")
             elif probe_state == "none":
                 self._oras_battle_probe_last_state = "none"
                 self._process_oras_health_snapshot(snapshot.game, source="overworld")
                 self._process_oras_battle_state("none")
+                self._process_six_mon_battle_probe(battle_probe, "none")
             else:
                 # Una lectura opcional fallida no puede convertir HP overworld
                 # obsoletos en HP de batalla. Solo usamos el fallback normal si no
@@ -11943,6 +12468,7 @@ class RoleRunManager(ctk.CTk):
             self._process_oras_health_snapshot(snapshot.game, source="overworld")
 
         self._process_oras_battle_state(probe_state)
+        self._process_six_mon_battle_probe(battle_probe, probe_state)
         self._reconcile_pending_faints_against_party(snapshot.game)
         badge_changed = self._process_oras_badge_value(
             badge_value, source=badge_source,
@@ -14587,6 +15113,25 @@ class RoleRunManager(ctk.CTk):
             self._draft_fade_in_pending = False
             draft_view = self._draft_view
             self.after(0, draft_view.fade_in)
+        # A diferencia de Equipo y PC/Movimientos, `IntegratedDraftFlow` se
+        # reconstruye entero en CADA paso (esta misma función), no solo al
+        # entrar a la página -`_draft_transition` llama a
+        # `_smooth_render_page` en cada cambio de paso-. El tour solo tiene
+        # sentido en el paso 1 (las tarjetas y botones de los pasos 2/3 son
+        # de usar y tirar, sin atributo estable al que apuntar); en el resto
+        # de pasos `_maybe_show_drafteos_tour` sale enseguida por el propio
+        # `step != 1`.
+        #
+        # Un `after(60, ...)` fijo -lo que había aquí- disparaba el tour
+        # antes de que `self.frame` terminara de asentar su alto real
+        # (`_fit_frame_to_viewport` reajusta en pasadas a 0/80/180 ms): el
+        # recuadro del primer paso salía calculado contra una geometría
+        # todavía provisional, con el marco dorado mal recortado -reportado
+        # por el usuario 08-09-2026, con captura ("visualmente está
+        # bugueadísimo")-. Mismo arreglo que ya usa Movimientos: sondear
+        # `is_fully_composed()` en vez de adivinar un retraso fijo.
+        self._maybe_show_drafteos_tour_when_ready(self._draft_view)
+        self._maybe_show_drafteos_step2_tour_when_ready(self._draft_view)
 
     def _open_moves_from_draft(self) -> None:
         self._moves_return_page = "drafts"
@@ -16277,6 +16822,7 @@ class RoleRunManager(ctk.CTk):
         )
         self._set_navigation_owner(self._global_tm_view)
         self._pin_body_scrollregion_soon()
+        self._maybe_show_movimientos_tour_when_ready(self._global_tm_view)
 
     def _open_global_tm_compatible_moves(self, profile, inventory, source_detail, pokemon) -> None:
         """VER MT COMPATIBLES: abre el paso 1 (lista de MT) para un Pokémon.
@@ -16634,6 +17180,483 @@ class RoleRunManager(ctk.CTk):
             return
         if self._initial_shell_waiting:
             self._retire_initial_shell_when_ready()
+        # En el primer arranque esta composición puede llegar mientras la
+        # barrera de carga todavía tapa la página con "Preparando Equipo y
+        # PC…" -y encima puede repetirse varias veces según van llegando los
+        # datos en vivo (hallazgo del usuario 08-09-2026: el tour aparecía
+        # sobre la pantalla de carga, señalando un hueco vacío). Mientras la
+        # barrera siga en pie, `_retire_initial_shell_when_ready` es quien
+        # dispara el tour de verdad, justo cuando publica la página final.
+        if self._initial_shell_waiting:
+            return
+        self.after(60, lambda: self._maybe_show_team_pc_tour(view))
+        self.after(60, lambda: self._maybe_show_sin_rol_tip(view))
+
+    def _maybe_show_team_pc_tour(self, view) -> None:
+        """Primer vistazo a Equipo y PC: un recuadro dorado explica la zona.
+
+        Se dispara como mucho una vez por instalación -`OnboardingTourStore`
+        lo recuerda en disco- y nunca si ya hay un tour abierto, para no
+        reabrirlo en cada repintado mientras el usuario todavía lo está viendo.
+        """
+        if view is not getattr(self, "_team_pc_view", None):
+            return
+        if self._active_onboarding_tour is not None:
+            return
+        if self._onboarding_tours.is_seen("team_pc_intro"):
+            return
+
+        def _on_finished() -> None:
+            self._active_onboarding_tour = None
+            self._onboarding_tours.mark_seen("team_pc_intro")
+
+        self._active_onboarding_tour = OnboardingTour(
+            view.frame,
+            [
+                OnboardingTourStep(
+                    target=lambda: self._team_pc_view.team_panel,
+                    title="TU EQUIPO",
+                    text=(
+                        "Aquí está tu equipo. Cada Pokémon corresponde a un rol, "
+                        "que limita los movimientos que puede aprender. Aprende sus "
+                        "compatibilidades haciendo clic en los símbolos de rol. Los "
+                        "movimientos en rojo no son aptos para el rol del Pokémon."
+                    ),
+                ),
+                OnboardingTourStep(
+                    target=lambda: self._team_pc_view.heal_party_button,
+                    title="CURAR EQUIPO",
+                    text=(
+                        "Cura de golpe a todo tu equipo: PS al máximo, sin "
+                        "estados alterados y PP al tope."
+                    ),
+                ),
+                OnboardingTourStep(
+                    target=lambda: self._team_pc_view.pc_panel,
+                    title="TU PC",
+                    text=(
+                        "Aquí está tu PC. Usa las flechas para cambiar de caja o el "
+                        "buscador para localizar un Pokémon por nombre, especie, "
+                        "habilidad o movimiento. Arrastra un Pokémon entre el equipo "
+                        "y una casilla para moverlo de sitio."
+                    ),
+                ),
+                OnboardingTourStep(
+                    target=lambda: self._team_pc_view.inspector_panel,
+                    title="LA FICHA",
+                    text=(
+                        "Esta es la ficha del Pokémon seleccionado: sus "
+                        "estadísticas, su objeto y sus movimientos. Desde aquí "
+                        "puedes cambiarle el rol o enseñarle una MT."
+                    ),
+                ),
+                OnboardingTourStep(
+                    target=lambda: BoundingBoxOf(*self.header_utility_buttons),
+                    title="ATAJOS RÁPIDOS",
+                    text=(
+                        "Presiona estos botones para conseguir automáticamente "
+                        "estos objetos o dinero infinito en tu partida."
+                    ),
+                ),
+                OnboardingTourStep(
+                    target=lambda: self.header_counter_cells["vidas"],
+                    title="VIDAS",
+                    text=(
+                        "Cuántas vidas te quedan en la run. Bajan solas cuando "
+                        "un Pokémon muere en combate, y también puedes "
+                        "ajustarlas a mano con − y +."
+                    ),
+                ),
+                OnboardingTourStep(
+                    target=lambda: self.header_counter_cells["pociones"],
+                    title="CURACIONES",
+                    text=(
+                        "Cuántas curaciones tienes disponibles. En RoleRun "
+                        "consigues una nada más entrar en combate contra un "
+                        "líder de gimnasio. Súbelo o bájalo tú mismo con − y + "
+                        "según las uses en tu partida."
+                    ),
+                ),
+                OnboardingTourStep(
+                    target=lambda: self.header_counter_cells["medallas"],
+                    title="MEDALLAS",
+                    text=(
+                        "Tu progreso de medallas. Es un contador automático: lo "
+                        "lleva el propio juego y no se puede mover a mano."
+                    ),
+                ),
+                OnboardingTourStep(
+                    target=lambda: self.header_counter_cells["drafteos"],
+                    title="DRAFTEOS",
+                    text=(
+                        "Cuántos drafteos tienes disponibles. Consigues uno "
+                        "nuevo cada vez que derrotas a un entrenador "
+                        "importante."
+                    ),
+                ),
+                OnboardingTourStep(
+                    target=lambda: self.review_changes_button,
+                    title="REVISAR CAMBIOS",
+                    text=(
+                        "Aquí repasas todo lo que has hecho desde RoleRun y "
+                        "puedes deshacer roles, movimientos, MT o cambios "
+                        "entre equipo y PC."
+                    ),
+                ),
+                OnboardingTourStep(
+                    target=lambda: self.floating_bar_button,
+                    title="BARRA FLOTANTE",
+                    text=(
+                        "Actívala para tener un resumen de RoleRun siempre "
+                        "encima del juego mientras juegas, sin salir de la "
+                        "partida."
+                    ),
+                ),
+                OnboardingTourStep(
+                    target=lambda: self.sidebar_toggle,
+                    title="MENÚ",
+                    text=(
+                        "Pulsa aquí para desplegar el menú completo de RoleRun "
+                        "con todas sus secciones."
+                    ),
+                ),
+            ],
+            on_finished=_on_finished,
+        )
+
+    def _maybe_show_sin_rol_tip(self, view) -> None:
+        """Explica FIJAR ROLES la primera vez que el botón llega a aparecer.
+
+        Pedido del usuario 08-09-2026: una sola vez para siempre, igual que
+        el tour de bienvenida -no cada vez que vuelva a haber un SIN ROL-.
+        Persistido en el mismo `OnboardingTourStore` en disco, con su propio
+        identificador para no interferir con `team_pc_intro`.
+        """
+        if view is not getattr(self, "_team_pc_view", None):
+            return
+        if self._onboarding_tours.is_seen("sin_rol_tip"):
+            return
+        if self._active_onboarding_tour is not None:
+            return
+        pending_now = bool(
+            self._faint_replacement_mode is None and self._roles_pendientes_de_fijar()
+        )
+        if not pending_now:
+            return
+
+        def _on_finished() -> None:
+            self._active_onboarding_tour = None
+            self._onboarding_tours.mark_seen("sin_rol_tip")
+
+        self._active_onboarding_tour = OnboardingTour(
+            view.frame,
+            [
+                OnboardingTourStep(
+                    target=lambda: self._team_pc_view.fix_roles_button,
+                    title="ROL SIN ASIGNAR",
+                    text=(
+                        "Has añadido un Pokémon sin rol asignado. Cuando "
+                        "tengas claro qué rol le quieres dar a cada uno, "
+                        "pulsa aquí. No te preocupes: puedes cambiarles el "
+                        "rol todas las veces que quieras."
+                    ),
+                ),
+            ],
+            on_finished=_on_finished,
+        )
+
+    def _maybe_show_movimientos_tour_when_ready(self, view, attempt: int = 0) -> None:
+        """Espera a que Movimientos termine de componerse antes del tour.
+
+        `GlobalTMView`, a diferencia de `UnifiedTeamPCView`, no tiene un
+        `on_composed` propio: se asienta sola en pasadas a horario fijo
+        (`_fit_to_viewport`) y expone `is_fully_composed()`, el mismo idioma
+        que ya usa `_retire_tm_close_when_ready` para esperarla. Las
+        comprobaciones baratas (tour ya visto / ya abierto) van primero para
+        no sondear de balde una vez el tour ya se mostró.
+        """
+        if view is not getattr(self, "_global_tm_view", None):
+            return
+        if self._active_onboarding_tour is not None:
+            return
+        if self._onboarding_tours.is_seen("movimientos_intro"):
+            return
+        ready = bool(
+            callable(getattr(view, "is_fully_composed", None)) and view.is_fully_composed()
+        )
+        if not ready:
+            if attempt >= 120:
+                return
+            self.after(
+                35, lambda: self._maybe_show_movimientos_tour_when_ready(view, attempt + 1),
+            )
+            return
+        self.after(60, lambda: self._maybe_show_movimientos_tour(view))
+
+    def _maybe_show_movimientos_tour(self, view) -> None:
+        """Primer vistazo a Movimientos: MT, drafteos y quién los aprende.
+
+        Se dispara como mucho una vez por instalación, igual que el tour de
+        Equipo y PC ([[onboarding-tour-team-pc]]) y con su propio
+        identificador en el mismo `OnboardingTourStore` para no interferir
+        con él.
+        """
+        if view is not getattr(self, "_global_tm_view", None):
+            return
+        if self._active_onboarding_tour is not None:
+            return
+        if self._onboarding_tours.is_seen("movimientos_intro"):
+            return
+
+        def _on_finished() -> None:
+            self._active_onboarding_tour = None
+            self._onboarding_tours.mark_seen("movimientos_intro")
+
+        self._active_onboarding_tour = OnboardingTour(
+            view.frame,
+            [
+                OnboardingTourStep(
+                    target=lambda: self._global_tm_view.tabs,
+                    title="MT Y DRAFTEOS",
+                    text=(
+                        "Cambia entre las MT que tienes en la mochila y los "
+                        "movimientos que ya sorteaste en un drafteo y "
+                        "guardaste para más tarde."
+                    ),
+                ),
+                OnboardingTourStep(
+                    target=lambda: self._global_tm_view.search,
+                    title="BUSCADOR",
+                    text=(
+                        "Busca por número de MT o por el nombre del "
+                        "movimiento para encontrarlo más rápido."
+                    ),
+                ),
+                OnboardingTourStep(
+                    target=lambda: self._global_tm_view.list_scroll,
+                    title="LA LISTA",
+                    text=(
+                        "Cada tarjeta es un movimiento que tu equipo puede "
+                        "aprender: su tipo, potencia, precisión y PP. Un "
+                        "drafteo guardado nunca vuelve a costarte nada."
+                    ),
+                ),
+                OnboardingTourStep(
+                    target=lambda: self._global_tm_view.team_panel,
+                    title="QUIÉN LO APRENDE",
+                    text=(
+                        "Al elegir un movimiento, aquí ves qué Pokémon de tu "
+                        "equipo pueden aprenderlo según su rol. Pulsa ELEGIR "
+                        "para enseñárselo directamente."
+                    ),
+                ),
+                OnboardingTourStep(
+                    target=lambda: self.section_controls,
+                    title="CONSULTA DE MOVIMIENTOS",
+                    text=(
+                        "Esta pestaña comprueba qué movimientos admite cada "
+                        "rol en el juego, sin depender de tu mochila ni de "
+                        "tu equipo actual."
+                    ),
+                ),
+            ],
+            on_finished=_on_finished,
+        )
+
+    def _maybe_show_drafteos_tour_when_ready(self, view, attempt: int = 0) -> None:
+        """Espera a que Drafteos termine de asentar su alto real antes del tour.
+
+        Un `after(60, ...)` fijo -lo que había aquí antes- podía disparar
+        el tour mientras `self.frame` todavía no había recibido su tamaño
+        definitivo (`_fit_frame_to_viewport` reajusta en pasadas a 0/80/180
+        ms): el recuadro del primer paso salía calculado contra un ancho o
+        alto provisional, con el marco dorado visiblemente mal recortado
+        -reportado por el usuario 08-09-2026, con captura-. Mismo idioma que
+        ya usa Movimientos: sondear `is_fully_composed()` en vez de adivinar
+        un retraso fijo.
+        """
+        if view is not getattr(self, "_draft_view", None):
+            return
+        if getattr(view, "step", None) != 1:
+            return
+        if self._active_onboarding_tour is not None:
+            return
+        if self._onboarding_tours.is_seen("drafteos_intro"):
+            return
+        ready = bool(
+            callable(getattr(view, "is_fully_composed", None)) and view.is_fully_composed()
+        )
+        if not ready:
+            if attempt >= 60:
+                return
+            self.after(
+                35, lambda: self._maybe_show_drafteos_tour_when_ready(view, attempt + 1),
+            )
+            return
+        self.after(60, lambda: self._maybe_show_drafteos_tour(view))
+
+    def _maybe_show_drafteos_tour(self, view) -> None:
+        """Primer vistazo a Drafteos: qué es, a quién elegir y qué hacer con el resto.
+
+        A diferencia de Equipo y PC/Movimientos, `IntegratedDraftFlow` se
+        reconstruye entero en cada paso del propio flujo, no solo al entrar
+        a la página -ver el comentario en `render_workflow`-, así que este
+        método se llama con mucha más frecuencia que sus equivalentes. Las
+        comprobaciones baratas (ya visto / ya hay un tour abierto) evitan
+        que eso importe, y `view.step != 1` corta cualquier intento fuera
+        del primer paso. El paso del propio ENSEÑAR AHORA/GUARDAR/↻ vive en
+        `_maybe_show_drafteos_step2_tour`, un tour SEPARADO -las tarjetas de
+        resultado no existen todavía aquí, solo tras elegir un Pokémon.
+        """
+        if view is not getattr(self, "_draft_view", None):
+            return
+        if getattr(view, "step", None) != 1:
+            return
+        if self._active_onboarding_tour is not None:
+            return
+        if self._onboarding_tours.is_seen("drafteos_intro"):
+            return
+
+        def _on_finished() -> None:
+            self._active_onboarding_tour = None
+            self._onboarding_tours.mark_seen("drafteos_intro")
+
+        steps = [
+            OnboardingTourStep(
+                # Pedido del usuario 08-09-2026: antes de explicar CÓMO
+                # tirar, hay que explicar QUÉ es un drafteo -el paso ya
+                # asumía que el usuario lo sabía-. Apunta a `frame`
+                # (toda la pantalla), no a `content`, para que se lea
+                # como introducción general antes de estrechar el foco
+                # al paso siguiente.
+                target=lambda: self._draft_view.frame,
+                title="QUÉ ES UN DRAFTEO",
+                text=(
+                    "Un drafteo es una recompensa: te deja enseñar a un "
+                    "Pokémon un movimiento aleatorio, compatible con el "
+                    "rol que tenga asignado."
+                ),
+            ),
+            OnboardingTourStep(
+                target=lambda: self._draft_view.content,
+                title="ELIGE TU POKÉMON",
+                text=(
+                    "Pulsa ELEGIR en la tarjeta del Pokémon que va a "
+                    "intentar el drafteo. Solo puede intentarlo si ya "
+                    "tiene un rol asignado."
+                ),
+            ),
+        ]
+        # Pedido del usuario 08-09-2026: solo si hay algún Líbero en el
+        # equipo -si no, `target` no resuelve a nada y el tour salta este
+        # paso solo, como ya hace con cualquier objetivo ausente. Mecánica
+        # confirmada contra `DraftEngine._generate_libero`
+        # (`app/draft_engine.py`): además de sus dos ataques fijos, sortea
+        # tres categorías auxiliares al azar entre las de otros roles.
+        if getattr(self._draft_view, "first_libero_card", None) is not None:
+            steps.append(
+                OnboardingTourStep(
+                    target=lambda: self._draft_view.first_libero_card,
+                    title="EL CASO DE LÍBERO",
+                    text=(
+                        "Líbero tiene sus dos ataques fijos (físico y "
+                        "especial) más tres categorías auxiliares sorteadas "
+                        "al azar entre las de otros roles: sus drafteos son "
+                        "los más variados de todos."
+                    ),
+                ),
+            )
+        steps.append(
+            OnboardingTourStep(
+                target=lambda: self._draft_view.open_moves_button,
+                title="CONSULTA DE MOVIMIENTOS",
+                text=(
+                    "Antes de tirar, comprueba aquí qué movimientos "
+                    "admite cada rol en el juego actual."
+                ),
+            ),
+        )
+
+        self._active_onboarding_tour = OnboardingTour(
+            view.frame, steps, on_finished=_on_finished,
+        )
+
+    def _maybe_show_drafteos_step2_tour_when_ready(self, view, attempt: int = 0) -> None:
+        """Igual que `_maybe_show_drafteos_tour_when_ready`, para el paso 2.
+
+        Tour independiente con su propio identificador -pedido del usuario
+        08-09-2026: "en esta pantalla sigue sin aparecer el tour explicando
+        lo de enseñar ahora, guardar y rehacer"-. El subtítulo del paso 2 ya
+        lo explica en texto (mismo día, ver `IntegratedDraftFlow._render_header`),
+        pero el usuario quiere también el recuadro+flecha señalando cada
+        botón de verdad, no solo el texto de apoyo. Vive aparte de
+        `"drafteos_intro"` porque el usuario puede tardar sesiones enteras
+        en llegar al paso 2 por primera vez -o no llegar nunca en la
+        primera-, y no debe depender de haber visto (o no) el tour del
+        paso 1.
+        """
+        if view is not getattr(self, "_draft_view", None):
+            return
+        if getattr(view, "step", None) != 2:
+            return
+        if self._active_onboarding_tour is not None:
+            return
+        if self._onboarding_tours.is_seen("drafteos_paso2_intro"):
+            return
+        ready = bool(
+            callable(getattr(view, "is_fully_composed", None)) and view.is_fully_composed()
+        )
+        if not ready:
+            if attempt >= 60:
+                return
+            self.after(
+                35, lambda: self._maybe_show_drafteos_step2_tour_when_ready(view, attempt + 1),
+            )
+            return
+        self.after(60, lambda: self._maybe_show_drafteos_step2_tour(view))
+
+    def _maybe_show_drafteos_step2_tour(self, view) -> None:
+        if view is not getattr(self, "_draft_view", None):
+            return
+        if getattr(view, "step", None) != 2:
+            return
+        if self._active_onboarding_tour is not None:
+            return
+        if self._onboarding_tours.is_seen("drafteos_paso2_intro"):
+            return
+
+        def _on_finished() -> None:
+            self._active_onboarding_tour = None
+            self._onboarding_tours.mark_seen("drafteos_paso2_intro")
+
+        self._active_onboarding_tour = OnboardingTour(
+            view.frame,
+            [
+                OnboardingTourStep(
+                    target=lambda: self._draft_view.first_result_choose_button,
+                    title="ENSEÑAR AHORA",
+                    text="Aplica este movimiento al momento, gastando un drafteo.",
+                ),
+                OnboardingTourStep(
+                    target=lambda: self._draft_view.first_result_save_button,
+                    title="GUARDAR",
+                    text=(
+                        "Guarda este movimiento en Movimientos para "
+                        "enseñarlo más tarde. Gasta el mismo drafteo que "
+                        "ENSEÑAR AHORA."
+                    ),
+                ),
+                OnboardingTourStep(
+                    target=lambda: self._draft_view.first_result_reroll_button,
+                    title="REHACER",
+                    text=(
+                        "Si tu Pokémon ya conoce este movimiento, repite "
+                        "solo esta tirada, gratis."
+                    ),
+                ),
+            ],
+            on_finished=_on_finished,
+        )
 
     def _team_pc_cached_data(self) -> SavePCData | None:
         if self._pc_cache is None:
@@ -21313,6 +22336,19 @@ class RoleRunManager(ctk.CTk):
             # el flujo y evita publicar una mezcla de sus dos árboles.
             self.after(34, finish_close)
 
+        def open_moves() -> None:
+            # Teardown directo y síncrono, sin la barrera ocupada/foto
+            # congelada de `close_flow`: esa barrera asume que revela la
+            # MISMA página de la que se abrió el flujo (`return_page`), pero
+            # Movimientos es una página distinta -`self.navigate("moves")`
+            # ya construye su propia transición correcta, la misma que usa
+            # la pestaña de la barra lateral-.
+            flow = self._tm_teach_flow
+            self._tm_teach_flow = None
+            if flow is not None:
+                flow.destroy()
+            self.navigate("moves")
+
         def apply(slot: int, candidate: dict[str, object]) -> None:
             self._set_operation_status(
                 "prepared",
@@ -21352,9 +22388,10 @@ class RoleRunManager(ctk.CTk):
                 source_detail=profile_description,
                 on_apply=apply,
                 on_close=close_flow,
-                on_open_moves=lambda: self.navigate("moves"),
+                on_open_moves=open_moves,
                 navigation_keys=self.project.menu_keys if self.project else None,
                 category_icons=self.category_icons,
+                entry_step=2 if initial_move_id is not None else 1,
             )
             self._set_navigation_owner(self._tm_teach_flow)
             if initial_move_id is not None:
@@ -21448,6 +22485,19 @@ class RoleRunManager(ctk.CTk):
                 and callable(getattr(view, "is_fully_composed", None))
                 and view.is_fully_composed()
             )
+        elif self.active_page == "moves":
+            # `_render_moves_page` construye todo de un tirón (widgets
+            # locales con `.pack()`/`.grid()`, sin vista propia ni
+            # composición diferida) -a diferencia de `GlobalTMView` o
+            # `UnifiedTeamPCView`-, así que una vez `render_page()` ha
+            # vuelto ya está lista de verdad. Antes esta página caía al
+            # `else` de abajo y comprobaba `_team_pc_view` -una vista que el
+            # usuario ya no está mirando y que nunca llega a demostrarse
+            # lista desde aquí-, agotando siempre los 120 reintentos
+            # (~4 s) y mostrando "LA VISTA NO TERMINÓ DE COMPONERSE" al
+            # volver a Movimientos desde el selector de MT (reportado por
+            # el usuario 08-09-2026, con captura).
+            ready = not self._body_swap_in_progress
         else:
             view = getattr(self, "_team_pc_view", None)
             pc_data = self._team_pc_cached_data()
@@ -23653,11 +24703,108 @@ class RoleRunManager(ctk.CTk):
         self._record_edit_transition()
         self._request_oras_live_auto_apply_since(pending_ids_before)
 
+    @staticmethod
+    def _bind_role_grid_arrow_navigation(
+        toplevel, buttons: dict[str, Any], render_preview, accept_role, current_role: str,
+        *, cancel_button, confirm_button, cancel_action,
+    ) -> None:
+        """Flechas/mando sobre la rejilla de roles de un editor -4 columnas.
+
+        Pedido del usuario 09-09-2026, con captura: estos editores (equipo y
+        PC) no se podían recorrer con flechas, solo con ratón -"debería
+        dejarte pasar de un rol a otro, seleccionarlo, etc."-. Reutiliza el
+        mismo motor de rejilla lógica que ya usan Equipo/PC, Movimientos y
+        Drafteos, en vez de reinventar la aritmética de filas/columnas aquí.
+
+        Pedido del usuario, misma tarde: CANCELAR/ACEPTAR ROL también deben
+        alcanzarse con flechas, no solo la rejilla de roles -se añaden como
+        una fila más, justo debajo de la última fila de roles.
+        """
+        CANCEL_KEY = ("__action__", "cancel")
+        ACCEPT_KEY = ("__action__", "accept")
+        role_targets = [
+            SpatialTarget(role, index // 4, index % 4)
+            for index, role in enumerate(buttons)
+        ]
+        action_row = (max(target.row for target in role_targets) + 1) if role_targets else 0
+        targets = [
+            *role_targets,
+            SpatialTarget(CANCEL_KEY, action_row, 0),
+            SpatialTarget(ACCEPT_KEY, action_row, 1),
+        ]
+        nav = SpatialSelection(targets)
+        nav.selected_key = current_role if current_role in buttons else None
+
+        # Ninguno de los dos botones dibuja ya un borde propio pensado para
+        # resaltarse -CANCELAR es un borde "de reposo" fijo, ACEPTAR ROL no
+        # tiene ninguno-, así que su borde original se guarda aquí para
+        # devolvérselo en cuanto el cursor de flechas se va a otro sitio.
+        idle_border = {
+            CANCEL_KEY: (cancel_button.cget("border_color"), cancel_button.cget("border_width")),
+            ACCEPT_KEY: (confirm_button.cget("border_color"), confirm_button.cget("border_width")),
+        }
+
+        def focus_action_button(focused_key) -> None:
+            for key, button in ((CANCEL_KEY, cancel_button), (ACCEPT_KEY, confirm_button)):
+                idle_color, idle_width = idle_border[key]
+                configurar_si_cambia(
+                    button,
+                    border_color="#F2C45E" if key == focused_key else idle_color,
+                    border_width=3 if key == focused_key else idle_width,
+                )
+
+        def move(direction: str) -> str:
+            nav.move(direction)
+            target = nav.current
+            if target is None:
+                return "break"
+            if target.key in (CANCEL_KEY, ACCEPT_KEY):
+                focus_action_button(target.key)
+            else:
+                focus_action_button(None)
+                render_preview(target.key)
+            return "break"
+
+        def activate(_event=None) -> str:
+            target = nav.current
+            if target is not None and target.key == CANCEL_KEY:
+                cancel_action()
+            else:
+                # Un rol o nada seleccionado: Return sigue confirmando con el
+                # rol previsualizado, igual que antes de añadir CANCELAR/
+                # ACEPTAR ROL a la rejilla -no hace falta bajar hasta el
+                # botón para lo que ya era el atajo de siempre.
+                accept_role()
+            return "break"
+
+        for sequence, direction in (
+            ("<KeyPress-Left>", "left"), ("<KeyPress-Right>", "right"),
+            ("<KeyPress-Up>", "up"), ("<KeyPress-Down>", "down"),
+        ):
+            toplevel.bind(sequence, lambda _e, d=direction: move(d), add="+")
+        toplevel.bind("<KeyPress-Return>", activate, add="+")
+
     def _open_pc_role_editor(self, pokemon: SavePokemon, parent, on_changed=None) -> None:
         if pokemon.box is None or pokemon.box_slot is None:
             return
         current_role, current_symbol = self._pc_effective_role(pokemon)
         window = IntegratedWindowSurface(parent)
+        # `IntegratedWindowSurface` vive dentro del mismo root que la página
+        # de fondo -a diferencia de `TransparentWindowSurface`, que es un
+        # `CTkToplevel` propio-, así que las flechas que se van a enlazar más
+        # abajo caerían en el MISMO widget que ya escuchan Equipo/PC (y
+        # cualquier otra vista): sin apartar la autoridad de navegación
+        # mientras este editor está abierto, un flechazo movería el resalte
+        # de la página de fondo A LA VEZ que la rejilla de roles.
+        previous_navigation_owner = getattr(self, "_navigation_owner", None)
+        self._set_navigation_owner(None)
+        original_window_destroy = window.destroy
+
+        def destroy_and_restore_navigation() -> None:
+            self._set_navigation_owner(previous_navigation_owner)
+            original_window_destroy()
+
+        window.destroy = destroy_and_restore_navigation
         self._apply_window_icon(window)
         window.title(f"Rol de {pokemon.nickname or pokemon.species} · PC")
         window.geometry("750x710")
@@ -23694,11 +24841,17 @@ class RoleRunManager(ctk.CTk):
         # botones quedaban fuera del área visible.
         actions = ctk.CTkFrame(window, fg_color="transparent")
         actions.pack(side="bottom", fill="x", padx=24, pady=(0, 18))
-        ctk.CTkButton(actions, text="CANCELAR", command=window.destroy, height=42,
-                      fg_color="transparent", border_width=1, border_color="#4A4A4A", hover_color=PANEL_ALT, text_color=MUTED).pack(side="left", fill="x", expand=True, padx=(0, 5))
-        ctk.CTkButton(actions, text="ACEPTAR ROL", command=accept, height=42,
-                      fg_color=GOLD, hover_color="#D3AF70", text_color="#111111",
-                      font=ctk.CTkFont("Segoe UI", 11, "bold")).pack(side="left", fill="x", expand=True, padx=(5, 0))
+        pc_cancel_button = ctk.CTkButton(
+            actions, text="CANCELAR", command=window.destroy, height=42,
+            fg_color="transparent", border_width=1, border_color="#4A4A4A", hover_color=PANEL_ALT, text_color=MUTED,
+        )
+        pc_cancel_button.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        pc_confirm_button = ctk.CTkButton(
+            actions, text="ACEPTAR ROL", command=accept, height=42,
+            fg_color=GOLD, hover_color="#D3AF70", text_color="#111111",
+            font=ctk.CTkFont("Segoe UI", 11, "bold"),
+        )
+        pc_confirm_button.pack(side="left", fill="x", expand=True, padx=(5, 0))
 
         occupied_active_roles = {
             self._effective_role(member)[0] for member in self._projected_party()
@@ -23774,6 +24927,12 @@ class RoleRunManager(ctk.CTk):
             buttons[role] = button
 
         render_preview(current_role)
+        self._bind_role_grid_arrow_navigation(
+            window.winfo_toplevel(), buttons, render_preview,
+            lambda _e=None: (accept(), "break")[-1], current_role,
+            cancel_button=pc_cancel_button, confirm_button=pc_confirm_button,
+            cancel_action=window.destroy,
+        )
 
     def open_pc_selector(
         self, replace_pokemon: SavePokemon | None = None,
@@ -25317,6 +26476,15 @@ class RoleRunManager(ctk.CTk):
         # tapados — a diferencia del resto de diálogos, que siguen con
         # IntegratedWindowSurface sin tocar.
         window = TransparentWindowSurface(self)
+        self._active_transparent_popover = window
+        original_destroy = window.destroy
+
+        def destroy_and_untrack() -> None:
+            if self._active_transparent_popover is window:
+                self._active_transparent_popover = None
+            original_destroy()
+
+        window.destroy = destroy_and_untrack
         self._apply_window_icon(window)
         window.title(f"Rol de {pokemon.nickname or pokemon.species}")
         # Pedido del usuario 02-09-2026: con 760x720 el selector de EV de
@@ -25357,21 +26525,26 @@ class RoleRunManager(ctk.CTk):
         # previa se comía todo el alto disponible en 760x720 y los botones
         # quedaban fuera del área visible: se podía elegir Líbero, pero no
         # había con qué confirmarlo salvo agrandando la ventana a mano.
-        actions = ctk.CTkFrame(window, fg_color="transparent")
-        actions.pack(side="bottom", fill="x", padx=24, pady=(0, 18))
-        ctk.CTkButton(
-            actions, text="CANCELAR", command=window.destroy, height=42,
-            fg_color="transparent", border_width=1, border_color="#4A4A4A", hover_color=PANEL_ALT, text_color=MUTED,
-        ).pack(side="left", fill="x", expand=True, padx=(0, 5))
-        ctk.CTkButton(
-            actions, text="ACEPTAR ROL",
-            command=lambda: self.assign_role(
+        def accept_role(_event=None) -> str:
+            self.assign_role(
                 pokemon, selected_role.get(), window,
                 tuple(key for key in STAT_KEYS if key in selected_libero_stats),
-            ),
+            )
+            return "break"
+
+        actions = ctk.CTkFrame(window, fg_color="transparent")
+        actions.pack(side="bottom", fill="x", padx=24, pady=(0, 18))
+        team_cancel_button = ctk.CTkButton(
+            actions, text="CANCELAR", command=window.destroy, height=42,
+            fg_color="transparent", border_width=1, border_color="#4A4A4A", hover_color=PANEL_ALT, text_color=MUTED,
+        )
+        team_cancel_button.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        team_confirm_button = ctk.CTkButton(
+            actions, text="ACEPTAR ROL", command=accept_role,
             height=42, fg_color=GOLD, hover_color="#D3AF70", text_color="#111111",
             font=ctk.CTkFont("Segoe UI", 11, "bold"),
-        ).pack(side="left", fill="x", expand=True, padx=(5, 0))
+        )
+        team_confirm_button.pack(side="left", fill="x", expand=True, padx=(5, 0))
 
         pokemon_identity = self._pokemon_identity(pokemon)
         occupied_by_others = {
@@ -25667,6 +26840,11 @@ class RoleRunManager(ctk.CTk):
             buttons[role] = button
 
         render_preview(current_role)
+        self._bind_role_grid_arrow_navigation(
+            window.winfo_toplevel(), buttons, render_preview, accept_role, current_role,
+            cancel_button=team_cancel_button, confirm_button=team_confirm_button,
+            cancel_action=window.destroy,
+        )
         # `preview` es el único bloque con `expand=True`: todo lo que la
         # ventana mida de más frente a lo que su contenido real pide, se lo
         # queda él solo. Medirlo y descontar la diferencia sustituye a
@@ -26504,21 +27682,23 @@ class RoleRunManager(ctk.CTk):
                 ).pack(side="left", fill="x", expand=True)
 
         section(4, "◆", "Tu Run de un vistazo", "Los cuatro contadores y dónde mirarlos.", [
-            "VIDAS, POCIONES, MEDALLAS y DRAFTEOS son el estado de la Run, y los tienes siempre delante en la barra de arriba.",
+            "VIDAS, POCIONES, MEDALLAS y DRAFTEOS son el estado de la Run, y los tienes siempre delante en la barra de arriba. Para las reglas exactas de cuándo suben o bajan, mira ¿QUÉ ES ROLERUN? más arriba.",
             "Los contadores automáticos los lleva el juego, no tú: se marcan como tales y RoleRun ignora cualquier intento de moverlos a mano. Las medallas son el caso típico.",
-            "El resto los mueves pulsando sus botones, o con los atajos globales para no salir del juego. Los atajos están en CONFIGURACIÓN → ATAJOS, con tecla y botón de mando por separado.",
+            "El resto los mueves pulsando sus botones, o con atajos de teclado y de mando independientes, en CONFIGURACIÓN → ATAJOS. Los de teclado funcionan tanto con el emulador delante como con el propio RoleRun; cualquier otra aplicación no los activa.",
         ])
         section(5, "♟", "Equipo y PC", "Seis roles, seis casillas, y las cajas al lado.", [
-            "Un Pokémon SIN ROL puede estar en el equipo mientras lo preparas, pero todavía no es apto para combatir.",
+            "Un Pokémon SIN ROL puede estar en el equipo mientras lo preparas, pero todavía no es apto para combatir -RoleRun no te lo impide dentro del emulador; es la regla que te comprometes a seguir.",
             "Arrastra para mover: del equipo al PC, del PC al equipo y de una casilla del PC a otra vacía. El borde del destino te dice en verde o rojo si ese gesto vale antes de soltarlo.",
             "Si das a un Pokémon un rol que ya tiene otro, los dos lo intercambian. Así nunca aparece un SIN ROL de más.",
             "De los Pokémon guardados en el PC, RoleRun recuerda el último rol que tuvieron. Es solo memoria para reconocerlos al volver: sus movimientos no se tocan nunca solos.",
             "Los movimientos que no cumplen el rol salen en rojo, y cada uno ofrece SUSTITUIR con una MT compatible con el ROL. La compatibilidad de especie del juego no se usa: manda el rol.",
+            "Todo -casillas, editor de rol- se puede recorrer con las flechas del teclado o del mando, no solo con ratón.",
         ])
         section(6, "▣", "Movimientos", "Todo lo que puedes enseñar hoy, en un sitio.", [
-            "Dos pestañas a la izquierda: MT son las de tu mochila; DRAFTEOS son las tiradas que te guardaste sin enseñar.",
+            "Dos pestañas a la izquierda: MT son las de tu mochila; DRAFTEOS son las tiradas que te guardaste sin enseñar. Se alternan con las flechas igual que el resto de la lista.",
             "A la derecha está tu equipo, siempre. Pasa el ratón por un movimiento y verás encendidos los que pueden aprenderlo y apagados los que no, con el motivo.",
             "Lo que puede aprender cada Pokémon lo decide su ROL, no su especie: RoleRun ignora a propósito la compatibilidad de especie del juego.",
+            "Cada tarjeta del equipo tiene tres opciones -ELEGIR, VER MT COMPATIBLES, RECUERDA-MOVIMIENTOS-, y las tres se alcanzan con las flechas, no solo ELEGIR.",
             "La papelera de un drafteo aparece al pasar el ratón por su fila. Pregunta antes, porque no devuelve el drafteo que costó.",
             "Si lo que quieres es mirar sin enseñar nada, MOVIMIENTOS → CONSULTA DE MOVIMIENTOS busca en el catálogo del juego y separa lo que cada rol admite de lo que no.",
         ])
@@ -26889,7 +28069,7 @@ class RoleRunManager(ctk.CTk):
         hotkey_card.grid(row=row, column=0, sticky="ew", pady=(16, 5))
         ctk.CTkLabel(hotkey_card, text="ATAJOS GLOBALES", text_color=TEXT,
                      font=ctk.CTkFont("Segoe UI", 16, "bold")).pack(anchor="w", padx=18, pady=(16, 2))
-        ctk.CTkLabel(hotkey_card, text="Cada acción admite una tecla y un botón de mando independientes. Los atajos se reservan únicamente mientras el emulador compatible está en primer plano; fuera del juego vuelven a funcionar con normalidad.",
+        ctk.CTkLabel(hotkey_card, text="Cada acción admite una tecla y un botón de mando independientes. Los atajos de teclado se reservan mientras el emulador compatible o RoleRun están en primer plano; en cualquier otra aplicación vuelven a funcionar con normalidad.",
                      text_color=MUTED, wraplength=760, justify="left").pack(anchor="w", padx=18, pady=(0, 12))
         if not self.project:
             ctk.CTkLabel(hotkey_card, text="Abre una Run para configurar sus atajos.", text_color=MUTED).pack(anchor="w", padx=18, pady=(0, 16))
@@ -26901,7 +28081,6 @@ class RoleRunManager(ctk.CTk):
             ("heal_party", "Curar por completo el equipo"),
             ("floating_menu", "Abrir/cerrar menú flotante"),
             ("open_full_app", "Abrir RoleRun completo desde la barra flotante"),
-            ("reportar_bug", "Guardar un fallo para revisarlo después"),
             ("vidas_mas", "Sumar vida"), ("vidas_menos", "Restar vida"),
             ("pociones_mas", "Sumar curación"), ("pociones_menos", "Restar curación"),
             ("drafteos_mas", "Sumar drafteo"), ("drafteos_menos", "Restar drafteo"),
@@ -26910,7 +28089,7 @@ class RoleRunManager(ctk.CTk):
             ("toggle_prisma", "Mostrar/ocultar Prisma"), ("toggle_support", "Mostrar/ocultar Support"),
         ]
         if not self._counter_is_automatic("medallas"):
-            labels[7:7] = [("medallas_mas", "Sumar medalla"), ("medallas_menos", "Restar medalla")]
+            labels[6:6] = [("medallas_mas", "Sumar medalla"), ("medallas_menos", "Restar medalla")]
         grid = ctk.CTkFrame(hotkey_card, fg_color="transparent")
         grid.pack(fill="x", padx=14, pady=(0, 16))
         grid.grid_columnconfigure(0, weight=1)
@@ -27444,13 +28623,29 @@ class RoleRunManager(ctk.CTk):
         self._apply_window_icon(window)
         self._update_notification_window = window
         window.title("Nueva versión disponible")
-        window.geometry("560x480")
-        window.minsize(520, 420)
+        window.geometry("600x640")
+        window.minsize(540, 560)
         window.configure(fg_color=BG)
         window.transient(self)
 
+        # Flechas y mando: igual que en el editor de rol del PC, este aviso
+        # vive dentro del mismo root que la página de fondo, así que se le
+        # quita la autoridad de navegación mientras está abierto -si no, un
+        # flechazo movería también el resalte de la página de debajo-.
+        previous_navigation_owner = getattr(self, "_navigation_owner", None)
+        keyboard_bindings: list[tuple[str, str]] = []
+
         def _close() -> None:
             self._update_notification_window = None
+            top = self.winfo_toplevel()
+            for sequence, binding in keyboard_bindings:
+                try:
+                    top.unbind(sequence, binding)
+                except Exception:
+                    pass
+            keyboard_bindings.clear()
+            if getattr(self, "_navigation_owner", None) is navigation:
+                self._set_navigation_owner(previous_navigation_owner)
             if window.winfo_exists():
                 window.destroy()
 
@@ -27467,6 +28662,37 @@ class RoleRunManager(ctk.CTk):
             font=ctk.CTkFont("Segoe UI", 13),
         ).pack(anchor="w", padx=26, pady=(0, 16))
 
+        # Botones e instrucciones se reservan primero, anclados abajo: si se
+        # empaquetaran después de las notas (que piden `expand=True`), un
+        # texto largo se comería el alto y los dejaría fuera de la vista.
+        button_row = ctk.CTkFrame(window, fg_color="transparent")
+        button_row.pack(side="bottom", fill="x", padx=26, pady=(0, 22))
+        button_row.grid_columnconfigure((0, 1, 2), weight=1)
+
+        # El jugador no tiene por qué saber qué hacer con el zip de GitHub.
+        # Copiar encima de la carpeta actual conserva el motor ya compilado
+        # (`engine/publish` no viaja en el zip), y las Runs viven en
+        # Documentos, fuera de la carpeta del programa -ver `USER_DATA_DIR`.
+        steps_frame = ctk.CTkFrame(window, fg_color="transparent")
+        steps_frame.pack(side="bottom", fill="x", padx=26, pady=(0, 16))
+        ctk.CTkLabel(
+            steps_frame, text="CÓMO ACTUALIZAR", text_color=GOLD,
+            font=ctk.CTkFont("Segoe UI", 12, "bold"),
+        ).pack(anchor="w", pady=(0, 4))
+        ctk.CTkLabel(
+            steps_frame,
+            text=(
+                "1. Pulsa DESCARGAR. En la página que se abre, baja «Source code (zip)».\n"
+                "2. Cierra RoleRun Manager.\n"
+                "3. Descomprime el zip y copia todo lo que hay dentro de su carpeta en tu "
+                "carpeta de RoleRun Manager, aceptando reemplazar los archivos.\n"
+                "4. Abre instalar_y_abrir.bat.\n"
+                f"Tus Runs no se pierden: se guardan aparte, en {USER_DATA_DIR}."
+            ),
+            text_color=TEXT, wraplength=540, justify="left",
+            font=ctk.CTkFont("Segoe UI", 12),
+        ).pack(anchor="w")
+
         notes_frame = ctk.CTkFrame(window, fg_color=PANEL, corner_radius=15)
         notes_frame.pack(fill="both", expand=True, padx=26, pady=(0, 16))
         notes_box = ctk.CTkTextbox(
@@ -27474,29 +28700,84 @@ class RoleRunManager(ctk.CTk):
             font=ctk.CTkFont("Segoe UI", 12), wrap="word",
         )
         notes_box.pack(fill="both", expand=True, padx=14, pady=14)
-        notes_box.insert("1.0", info.notes or "Esta versión no trae notas publicadas.")
+        notes_box.insert(
+            "1.0",
+            update_checker.notas_legibles(info.notes) or "Esta versión no trae notas publicadas.",
+        )
         notes_box.configure(state="disabled")
 
-        button_row = ctk.CTkFrame(window, fg_color="transparent")
-        button_row.pack(fill="x", padx=26, pady=(0, 22))
-        button_row.grid_columnconfigure((0, 1, 2), weight=1)
-
-        ctk.CTkButton(
+        later_button = ctk.CTkButton(
             button_row, text="MÁS TARDE", command=_close, height=38,
             fg_color="transparent", border_width=1, border_color="#4A4A4A",
             hover_color=PANEL_ALT, text_color=MUTED,
-        ).grid(row=0, column=0, sticky="ew", padx=(0, 6))
-        ctk.CTkButton(
+        )
+        later_button.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        dismiss_button = ctk.CTkButton(
             button_row, text="NO AVISAR DE ESTA VERSIÓN", height=38,
             command=lambda: (self._update_dismissals.dismiss(info.version), _close()),
             fg_color="transparent", border_width=1, border_color=GOLD,
             hover_color="#332B1D", text_color=GOLD,
-        ).grid(row=0, column=1, sticky="ew", padx=6)
-        ctk.CTkButton(
+        )
+        dismiss_button.grid(row=0, column=1, sticky="ew", padx=6)
+        download_button = ctk.CTkButton(
             button_row, text="DESCARGAR", height=38,
             command=lambda: (webbrowser.open(info.url), _close()),
             fg_color=GOLD, hover_color="#D8B26E", text_color="#111111",
-        ).grid(row=0, column=2, sticky="ew", padx=(6, 0))
+        )
+        download_button.grid(row=0, column=2, sticky="ew", padx=(6, 0))
+
+        buttons = (later_button, dismiss_button, download_button)
+        idle_border = [(button.cget("border_color"), button.cget("border_width")) for button in buttons]
+        selection = {"index": len(buttons) - 1}  # DESCARGAR, lo que se busca casi siempre
+
+        def paint_selection() -> None:
+            for index, button in enumerate(buttons):
+                idle_color, idle_width = idle_border[index]
+                selected = index == selection["index"]
+                configurar_si_cambia(
+                    button,
+                    border_color="#F2C45E" if selected else idle_color,
+                    border_width=3 if selected else idle_width,
+                )
+
+        def move(_event=None, direction: str = "right") -> str:
+            if not window.winfo_exists():
+                return "break"
+            step = {"left": -1, "right": 1}.get(direction, 0)
+            selection["index"] = max(0, min(len(buttons) - 1, selection["index"] + step))
+            paint_selection()
+            return "break"
+
+        def accept(_event=None) -> str:
+            if window.winfo_exists():
+                buttons[selection["index"]].invoke()
+            return "break"
+
+        def back(_event=None) -> str:
+            _close()
+            return "break"
+
+        class _UpdateNoticeNavigation:
+            """Lo mínimo que `_dispatch_game_overlay_key` y compañía buscan en
+            una vista navegable, para que el mando llegue a este aviso."""
+
+            frame = window
+            _move = staticmethod(move)
+            _accept = staticmethod(accept)
+            _clear_keyboard_selection = staticmethod(back)
+
+        navigation = _UpdateNoticeNavigation()
+        self._set_navigation_owner(navigation)
+        top = self.winfo_toplevel()
+        for sequence, callback in (
+            ("<KeyPress-Left>", lambda event: move(event, "left")),
+            ("<KeyPress-Right>", lambda event: move(event, "right")),
+            ("<KeyPress-Return>", accept),
+        ):
+            binding = top.bind(sequence, callback, add="+")
+            if binding:
+                keyboard_bindings.append((sequence, binding))
+        paint_selection()
 
     def _retry_placeholder_sprites(self) -> None:
         """Permite reintentar la descarga en la siguiente recarga de partida."""
@@ -27636,6 +28917,20 @@ class RoleRunManager(ctk.CTk):
             message_label.place(relx=0.5, rely=0.5, y=58, anchor="n")
             overlay._rolerun_message_label = message_label
             overlay._rolerun_activity_image = activity_image
+            # Escondido por defecto -pedido del usuario 08-09-2026: BDSP/
+            # Sol-Luna sin el emulador todavía abierto dejaban esta barrera
+            # esperando para siempre, sin ningún control, con cerrar el
+            # programa entero como única salida real. `_set_overlay_cancel_action`
+            # es quien lo revela para ese caso concreto; el resto de usos de
+            # esta misma barrera (navegación, guardado, el flujo de MT...) no
+            # lo tocan y siguen sin verlo nunca.
+            cancel_button = ctk.CTkButton(
+                overlay, text="", width=220, height=34, corner_radius=8,
+                fg_color="transparent", hover_color="#242424",
+                border_width=1, border_color=GOLD, text_color=GOLD,
+                font=ctk.CTkFont("Segoe UI", 12, "bold"),
+            )
+            overlay._rolerun_cancel_button = cancel_button
             # La raíz puede cambiar de tamaño después de construir la shell
             # definitiva. Conservar la superficie autoritativa permite que la
             # barrera siga cubriéndola por completo durante ese relayout.
@@ -27775,6 +29070,29 @@ class RoleRunManager(ctk.CTk):
         except Exception:
             pass
 
+    @staticmethod
+    def _set_overlay_cancel_action(overlay, callback, text: str = "VOLVER") -> None:
+        """Muestra u oculta el botón de escape de una barrera de actividad.
+
+        ``callback=None`` lo oculta. Pensado para barreras que, a diferencia
+        de la mayoría (breves, se retiran solas en cuanto termina su tarea),
+        pueden quedarse esperando indefinidamente algo que quizá nunca
+        llegue -BDSP/Sol-Luna sin el emulador todavía abierto es el caso que
+        lo motivó, 08-09-2026-.
+        """
+        button = getattr(overlay, "_rolerun_cancel_button", None)
+        try:
+            if button is None or not button.winfo_exists():
+                return
+            if callback is None:
+                button.place_forget()
+                return
+            button.configure(text=str(text), command=callback)
+            button.place(relx=0.5, rely=0.5, y=140, anchor="n")
+            button.lift()
+        except Exception:
+            pass
+
     def _show_loading_overlay(self, message: str = "Cargando Run..."):
         return self._create_activity_overlay(
             message, content_only=False, independent=True,
@@ -27866,6 +29184,19 @@ class RoleRunManager(ctk.CTk):
         self.hotkey_manager.stop()
         loading_overlay = self._show_loading_overlay("Leyendo partida y cargando equipo...")
         self._loading_overlay = loading_overlay
+        # Pedido del usuario 08-09-2026, ampliando el arreglo de BDSP/Sol-Luna
+        # a TODOS los juegos: esta misma barrera cubre toda la carga inicial
+        # -leer el guardado, preparar Equipo y PC y, en BDSP/Sol-Luna, esperar
+        # el enlace en vivo-, y hasta ahora ninguna fase de ese tramo tenía
+        # forma de salir si algo se atascaba, solo BDSP/Sol-Luna la
+        # consiguieron después. Se revela aquí, desde el primer instante, para
+        # cualquier juego -`_cancel_initial_game_load` invalida con seguridad
+        # cualquier lectura en curso (mismo generation-token que ya usa
+        # `_return_to_welcome`), así que no importa en qué fase exacta se
+        # pulse.
+        self._set_overlay_cancel_action(
+            loading_overlay, self._cancel_initial_game_load, "VOLVER AL INICIO",
+        )
         # La ventana principal no puede publicar ningún widget de la shell
         # hasta que la barrera semántica autorice el primer frame. El cargador
         # es independiente, así que permanece visible mientras la raíz está
@@ -27877,7 +29208,29 @@ class RoleRunManager(ctk.CTk):
                 if self._foreground_belongs_to_this_process():
                     loading_overlay.lift()
                 loading_overlay.update_idletasks()
-                self.withdraw()
+                # `self.withdraw()` -lo que había aquí- es justo lo que
+                # rompía el propio comentario de arriba ("el cargador... es
+                # independiente, permanece visible"): en Windows, un
+                # ``Toplevel`` hijo (`loading_overlay = tk.Toplevel(self)`)
+                # sigue siendo "propiedad" de su ventana raíz incluso sin
+                # `.transient()`, y ocultar al dueño con `withdraw()` oculta
+                # también al hijo -aunque `winfo_viewable()` siga devolviendo
+                # `True`, la ventana desaparece de verdad de la pantalla-.
+                # Confirmado con una réplica mínima el 08-09-2026 (capturas
+                # de pantalla antes/después). Resultado: durante toda la
+                # lectura del guardado -varios segundos con partidas
+                # grandes- el usuario no veía ni la ventana principal NI el
+                # cargador independiente, solo el escritorio, con el icono
+                # de RoleRun fuera de la barra de tareas: "desaparece el
+                # programa" (reporte del usuario 08-09-2026).
+                #
+                # `_reveal_initial_shell_behind_overlay` -la misma barrera,
+                # en el arranque en frío- ya resuelve esto sin `withdraw()`:
+                # deja la raíz MAPEADA (con su icono en la barra de tareas)
+                # pero con `-alpha 0.0`, invisible pero sin arrastrar a sus
+                # ventanas hijas. Usar el mismo truco aquí evita la misma
+                # clase de bug en vez de introducir una segunda solución.
+                self.attributes("-alpha", 0.0)
             except Exception:
                 pass
 
@@ -27928,6 +29281,12 @@ class RoleRunManager(ctk.CTk):
         self._destroy_loading_overlay(overlay)
         self._initial_shell_waiting = False
         try:
+            # La raíz nunca llegó a retirarse de verdad -ver el comentario en
+            # `_load_save_file` sobre por qué se dejó de usar `withdraw()`-,
+            # solo quedó invisible con `-alpha 0.0`. Sin restaurarla aquí, un
+            # guardado que falla al leer deja la ventana principal transparente
+            # para siempre.
+            self.attributes("-alpha", 1.0)
             self.deiconify()
             self.state("zoomed")
         except Exception:
@@ -28142,6 +29501,11 @@ class RoleRunManager(ctk.CTk):
 
     def _retire_initial_shell_when_ready(self, attempt: int = 0) -> None:
         """Publica la primera página solo después de sus fronteras reales."""
+        # El `after(...)` que disparó esta llamada ya se ha consumido: si
+        # `_cancel_initial_game_load` mira este id ahora, no debe encontrar
+        # aquí un id de un tick que ya pasó (solo el que se reprograme más
+        # abajo, si lo hay).
+        self._initial_shell_retire_after_id = None
         if not self._initial_shell_waiting:
             self._soltar_el_repintado_aplazado()
             return
@@ -28237,7 +29601,9 @@ class RoleRunManager(ctk.CTk):
             self._initial_shell_stable_polls = 0
             self._initial_shell_stable_signature = None
             self._reveal_initial_shell_behind_overlay(indicator)
-            self.after(35, lambda: self._retire_initial_shell_when_ready(attempt + 1))
+            self._initial_shell_retire_after_id = self.after(
+                35, lambda: self._retire_initial_shell_when_ready(attempt + 1)
+            )
             return
         if ready and phase == "mapping":
             try:
@@ -28259,7 +29625,9 @@ class RoleRunManager(ctk.CTk):
                 self._initial_shell_stable_signature = geometry_signature
                 self._initial_shell_stable_polls = 1 if geometry_signature else 0
             if self._initial_shell_stable_polls < 4:
-                self.after(45, lambda: self._retire_initial_shell_when_ready(attempt + 1))
+                self._initial_shell_retire_after_id = self.after(
+                    45, lambda: self._retire_initial_shell_when_ready(attempt + 1)
+                )
                 return
 
             # Segunda frontera: el body recompuesto en tamaño final ha mantenido
@@ -28278,6 +29646,12 @@ class RoleRunManager(ctk.CTk):
             # Publicar con un repintado todavia guardado dejaria la pagina
             # vieja en pantalla. Aqui ya no hay barrera: sale de inmediato.
             self._soltar_el_repintado_aplazado()
+            # Aquí -y no antes- es cuando el usuario ve la página de verdad
+            # por primera vez: el momento correcto para el tour, no cualquiera
+            # de las composiciones ocultas detrás de "Preparando Equipo y PC…".
+            if view is not None:
+                self.after(60, lambda: self._maybe_show_team_pc_tour(view))
+                self.after(60, lambda: self._maybe_show_sin_rol_tip(view))
             return
         gate_state = (
             expected_health,
@@ -28308,7 +29682,9 @@ class RoleRunManager(ctk.CTk):
         # No se publica una página incompleta por timeout. Si una frontera no
         # termina, la barrera permanece y el diagnóstico de esa frontera sigue
         # visible; así el fallo no se disfraza como una UI utilizable.
-        self.after(35, lambda: self._retire_initial_shell_when_ready(attempt + 1))
+        self._initial_shell_retire_after_id = self.after(
+            35, lambda: self._retire_initial_shell_when_ready(attempt + 1)
+        )
 
     @staticmethod
     def _party_health_signature(game) -> tuple[tuple[int, int], ...]:

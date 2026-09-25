@@ -15,6 +15,13 @@ SELECTED = "#73A9FF"
 #: Las dos procedencias, en el orden en que se muestran.
 PESTANAS: tuple[tuple[str, str], ...] = (("tm", "MT"), ("draft", "DRAFTEOS"))
 
+#: Las tres categorías de daño que puede tener un movimiento, para el
+#: filtro. `category_key` en cada entrada ya llega en estas mismas claves
+#: (ver `RoleRunManager._damage_class_for_move`).
+_CATEGORIAS_FILTRO: tuple[tuple[str, str], ...] = (
+    ("physical", "FÍSICO"), ("special", "ESPECIAL"), ("status", "ESTADO"),
+)
+
 
 class GlobalTMView:
     """MOVIMIENTOS: lo que puedes enseñar hoy, venga de donde venga.
@@ -97,8 +104,26 @@ class GlobalTMView:
         # letras»-.
         self._fuente_descripcion = ctk.CTkFont("Segoe UI", 13)
         self._tab_buttons: dict[str, Any] = {}
+        # Filtro por categoría/tipo (pedido del usuario 08-09-2026): conjunto
+        # vacío = sin restricción en ese eje. Los dos ejes se combinan con Y
+        # -una MT debe cumplir la categoría Y el tipo seleccionados-, cada uno
+        # por dentro con O -cualquiera de las categorías marcadas vale-.
+        self._filter_categories: set[str] = set()
+        self._filter_types: set[int] = set()
+        self._category_filter_buttons: dict[str, Any] = {}
+        self._type_filter_buttons: dict[int, Any] = {}
         self._team_cards: dict[str, Any] = {}
         self._team_widgets: dict[str, tuple[Any, ...]] = {}
+        # Botones navegables de cada tarjeta -ELEGIR y, si están disponibles,
+        # VER MT COMPATIBLES/RECUERDA-MOVIMIENTOS-, en el orden en que las
+        # flechas los recorren. Pedido del usuario 09-09-2026: antes solo se
+        # podía seleccionar la tarjeta entera (equivalente a ELEGIR); estos
+        # otros dos botones -"siempre disponibles", sin depender de si el
+        # movimiento seleccionado encaja- no eran alcanzables con teclado/mando.
+        self._team_action_buttons: dict[str, tuple[tuple[Any, Callable[[], None]], ...]] = {}
+        # Qué botón de la tarjeta ACTUALMENTE seleccionada está resaltado.
+        # Se reinicia a 0 (ELEGIR) en cuanto la selección cambia de tarjeta.
+        self._keyboard_card_action_index = 0
         self._keyboard = SpatialSelection()
         self._keyboard_targets: dict[object, tuple[Any, Callable[[], None], str, int]] = {}
         self._bindings: list[tuple[str, str]] = []
@@ -128,12 +153,34 @@ class GlobalTMView:
 
         heading = ctk.CTkFrame(self.frame, fg_color="transparent")
         heading.grid(row=0, column=0, columnspan=2, sticky="ew", padx=20, pady=(14, 10))
-        heading.grid_columnconfigure(1, weight=1)
+        heading.grid_columnconfigure(2, weight=1)
         self.search = ctk.CTkEntry(heading, width=300, height=36,
                                    placeholder_text="⌕  Buscar por MT o movimiento…")
-        self.search.grid(row=0, column=0, columnspan=2, sticky="w")
+        self.search.grid(row=0, column=0, sticky="w")
+        # Filtro por categoría y tipo, combinables (pedido del usuario
+        # 08-09-2026): un botón que despliega un panel propio en vez de un
+        # `Toplevel` flotante -evita la complejidad de Z-order/foco de una
+        # ventana aparte para algo que no necesita salirse de la propia
+        # página.
+        self.filter_button = ctk.CTkButton(
+            heading, text="FILTRO", width=110, height=36, corner_radius=8,
+            command=self._toggle_filter_panel,
+            fg_color="transparent", hover_color=PANEL_ALT, border_width=1,
+            border_color="#4A4A4A", text_color=TEXT,
+            font=ctk.CTkFont("Segoe UI", 12, "bold"),
+        )
+        self.filter_button.grid(row=0, column=1, sticky="w", padx=(10, 0))
         ctk.CTkLabel(heading, text="ELIGE QUÉ ENSEÑAR", text_color=GOLD, anchor="w",
-                     font=ctk.CTkFont("Segoe UI", 20, "bold")).grid(row=1, column=0, sticky="w", pady=(9, 0))
+                     font=ctk.CTkFont("Segoe UI", 20, "bold")).grid(
+            row=1, column=0, columnspan=3, sticky="w", pady=(9, 0),
+        )
+        self.filter_panel = ctk.CTkFrame(
+            heading, fg_color="#111111", corner_radius=10,
+            border_width=1, border_color="#3A3A3A",
+        )
+        self.filter_panel.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        self.filter_panel.grid_remove()
+        self._build_filter_panel(self.filter_panel)
         self.search.bind("<KeyRelease>", self._schedule_filter, add="+")
 
         left = ctk.CTkFrame(self.frame, fg_color="#111111", corner_radius=12)
@@ -280,6 +327,126 @@ class GlobalTMView:
                 border_color="#3A3A3A",
             )
 
+    # ---------------------------------------------------------------- filtro
+
+    def _build_filter_panel(self, panel) -> None:
+        ctk.CTkLabel(
+            panel, text="CATEGORÍA", text_color=GOLD,
+            font=ctk.CTkFont("Segoe UI", 11, "bold"),
+        ).grid(row=0, column=0, sticky="w", padx=14, pady=(12, 4))
+        category_row = ctk.CTkFrame(panel, fg_color="transparent")
+        category_row.grid(row=1, column=0, sticky="w", padx=14, pady=(0, 10))
+        for index, (key, label) in enumerate(_CATEGORIAS_FILTRO):
+            boton = ctk.CTkButton(
+                category_row, text=label, width=100, height=30, corner_radius=8,
+                command=lambda value=key: self._toggle_category_filter(value),
+                fg_color="transparent", hover_color=PANEL_ALT, border_width=1,
+                border_color="#4A4A4A", text_color=TEXT,
+                font=ctk.CTkFont("Segoe UI", 11, "bold"),
+            )
+            boton.grid(row=0, column=index, padx=(0, 8))
+            self._category_filter_buttons[key] = boton
+
+        ctk.CTkLabel(
+            panel, text="TIPO", text_color=GOLD,
+            font=ctk.CTkFont("Segoe UI", 11, "bold"),
+        ).grid(row=2, column=0, sticky="w", padx=14, pady=(0, 4))
+        type_grid = ctk.CTkFrame(panel, fg_color="transparent")
+        type_grid.grid(row=3, column=0, sticky="w", padx=14, pady=(0, 6))
+        columnas = 9
+        for index, (type_id, (label, color)) in enumerate(MOVE_TYPE_INFO.items()):
+            boton = ctk.CTkButton(
+                type_grid, text=label, width=92, height=28, corner_radius=8,
+                command=lambda value=type_id: self._toggle_type_filter(value),
+                fg_color="transparent", hover_color=PANEL_ALT, border_width=2,
+                border_color=color, text_color=TEXT,
+                font=ctk.CTkFont("Segoe UI", 10, "bold"),
+            )
+            boton.grid(row=index // columnas, column=index % columnas, padx=4, pady=4)
+            self._type_filter_buttons[type_id] = boton
+
+        footer = ctk.CTkFrame(panel, fg_color="transparent")
+        footer.grid(row=4, column=0, sticky="ew", padx=14, pady=(2, 12))
+        ctk.CTkButton(
+            footer, text="LIMPIAR FILTROS", height=30, width=150, corner_radius=8,
+            command=self._clear_filters,
+            fg_color="transparent", hover_color=PANEL_ALT, border_width=1,
+            border_color="#4A4A4A", text_color=MUTED,
+            font=ctk.CTkFont("Segoe UI", 11, "bold"),
+        ).pack(side="left")
+
+    def _toggle_filter_panel(self) -> None:
+        if self.filter_panel.winfo_ismapped():
+            self.filter_panel.grid_remove()
+        else:
+            self.filter_panel.grid()
+
+    def _toggle_category_filter(self, category: str) -> None:
+        if category in self._filter_categories:
+            self._filter_categories.discard(category)
+        else:
+            self._filter_categories.add(category)
+        self._apply_filter_change()
+
+    def _toggle_type_filter(self, type_id: int) -> None:
+        if type_id in self._filter_types:
+            self._filter_types.discard(type_id)
+        else:
+            self._filter_types.add(type_id)
+        self._apply_filter_change()
+
+    def _clear_filters(self) -> None:
+        if not self._filter_categories and not self._filter_types:
+            return
+        self._filter_categories.clear()
+        self._filter_types.clear()
+        self._apply_filter_change()
+
+    def _apply_filter_change(self) -> None:
+        self._paint_filter_chips()
+        self._update_filter_button_label()
+        self._render_list()
+        self._render_team()
+
+    def _paint_filter_chips(self) -> None:
+        for key, boton in self._category_filter_buttons.items():
+            seleccionada = key in self._filter_categories
+            configurar_si_cambia(
+                boton,
+                fg_color=GOLD if seleccionada else "transparent",
+                text_color="#111111" if seleccionada else TEXT,
+                border_width=0 if seleccionada else 1,
+            )
+        for type_id, boton in self._type_filter_buttons.items():
+            seleccionado = type_id in self._filter_types
+            _nombre, color = MOVE_TYPE_INFO.get(type_id, (None, "#3A3A3A"))
+            configurar_si_cambia(
+                boton,
+                fg_color=color if seleccionado else "transparent",
+                text_color="#111111" if seleccionado else TEXT,
+                border_width=0 if seleccionado else 2,
+            )
+
+    def _update_filter_button_label(self) -> None:
+        total = len(self._filter_categories) + len(self._filter_types)
+        activo = total > 0
+        configurar_si_cambia(
+            self.filter_button,
+            text=f"FILTRO  ·  {total}" if activo else "FILTRO",
+            fg_color=GOLD if activo else "transparent",
+            text_color="#111111" if activo else TEXT,
+            border_width=0 if activo else 1,
+        )
+
+    def _pasa_filtro(self, entry: dict[str, Any]) -> bool:
+        if self._filter_categories and str(entry.get("category_key", "")) not in self._filter_categories:
+            return False
+        if self._filter_types:
+            type_id = entry.get("type_id")
+            if not isinstance(type_id, int) or type_id not in self._filter_types:
+                return False
+        return True
+
     # -------------------------------------------------------------- las listas
 
     @staticmethod
@@ -303,10 +470,12 @@ class GlobalTMView:
     def _filtradas(self, pestana: str | None = None) -> tuple[dict[str, Any], ...]:
         query = self._consulta()
         if (pestana or self.pestana) == "draft":
-            return tuple(item for item in self.drafts if not query or query in
+            base = tuple(item for item in self.drafts if not query or query in
                          f"{item['move_name']} {item.get('role', '')}".casefold())
-        return tuple(item for item in self.entries if not query or query in
-                     f"mt{int(item['number']):02d} {item['move_name']}".casefold())
+        else:
+            base = tuple(item for item in self.entries if not query or query in
+                         f"mt{int(item['number']):02d} {item['move_name']}".casefold())
+        return tuple(item for item in base if self._pasa_filtro(item))
 
     def _schedule_filter(self, _event=None) -> None:
         if self._search_after is not None:
@@ -346,7 +515,15 @@ class GlobalTMView:
             self.preview_key = self._clave(filtradas[0])
         if not filtradas:
             self.preview_key = None
-            if self.pestana == "draft":
+            hay_filtro_activo = bool(self._filter_categories or self._filter_types)
+            origen = self.drafts if self.pestana == "draft" else self.entries
+            if hay_filtro_activo and origen:
+                # Distingue de un buscador vacío -pedido del usuario
+                # 08-09-2026-: si SIN el filtro ya habría algo que enseñar,
+                # el filtro es la razón real de la lista vacía, no la falta
+                # de MT/drafteos.
+                vacio = "Ningún movimiento coincide con los filtros seleccionados."
+            elif self.pestana == "draft":
                 vacio = ("Todavía no has guardado ningún drafteo.\n"
                          "En Drafteos, tira y pulsa GUARDAR para dejarlo aquí.")
             elif self.sin_mt:
@@ -799,6 +976,7 @@ class GlobalTMView:
                                    fg_color="#242424", hover_color="#D3AF70", text_color="#111111",
                                    text_color_disabled="#777777", font=ctk.CTkFont("Segoe UI", 10, "bold"))
             action.pack(fill="x", padx=8, pady=(0, 5))
+            compatible_button = None
             if self.on_view_compatible_moves is not None:
                 # Siempre activo, igual que RECUERDA-MOVIMIENTOS: no depende
                 # de qué MT esté seleccionada a la izquierda ahora mismo.
@@ -810,6 +988,7 @@ class GlobalTMView:
                     command=lambda member=pokemon: self.on_view_compatible_moves(member),
                 )
                 compatible_button.pack(fill="x", padx=8, pady=(0, 4))
+            history_button = None
             if self.on_open_levelup_history is not None:
                 # Siempre activo: a diferencia de ELEGIR, no depende de si el
                 # movimiento seleccionado encaja con este Pokémon.
@@ -823,6 +1002,7 @@ class GlobalTMView:
                 history_button.pack(fill="x", padx=8, pady=(0, 6))
             self._team_widgets[identity] = (
                 pokemon, card, name_label, species_label, role_label, tuple(move_labels), action,
+                compatible_button, history_button,
             )
         self._update_team_compatibility()
 
@@ -839,7 +1019,10 @@ class GlobalTMView:
                 titulo += "   ·   DRAFTEO YA PAGADO"
         configurar_si_cambia(self.team_title, text=titulo)
         for identity, widgets in self._team_widgets.items():
-            pokemon, card, name_label, species_label, role_label, move_labels, action = widgets
+            (
+                pokemon, card, name_label, species_label, role_label, move_labels, action,
+                compatible_button, history_button,
+            ) = widgets
             enabled = identity in compatible
             already = identity in known
             configurar_si_cambia(
@@ -864,6 +1047,14 @@ class GlobalTMView:
                 fg_color=GOLD if enabled else "#242424",
                 command=lambda item=entry, member=pokemon: self._elegir(item, member),
             )
+            actions: list[tuple[Any, Callable[[], None]]] = []
+            if enabled:
+                actions.append((action, lambda item=entry, member=pokemon: self._elegir(item, member)))
+            if compatible_button is not None:
+                actions.append((compatible_button, lambda member=pokemon: self.on_view_compatible_moves(member)))
+            if history_button is not None:
+                actions.append((history_button, lambda member=pokemon: self.on_open_levelup_history(member)))
+            self._team_action_buttons[identity] = tuple(actions)
         self._rebuild_keyboard()
 
     # ----------------------------------------------------------------- teclado
@@ -871,6 +1062,19 @@ class GlobalTMView:
     def _rebuild_keyboard(self) -> None:
         self._keyboard_targets.clear()
         targets: list[SpatialTarget] = []
+        # Pedido del usuario 09-09-2026: las pestañas MT/DRAFTEOS no eran
+        # alcanzables con flechas/mando, solo con ratón. Se colocan en su
+        # propia fila -1, por encima de la lista, para que abajo/arriba
+        # entre y salga de ella con naturalidad.
+        for column, (clave, _etiqueta) in enumerate(PESTANAS):
+            boton = self._tab_buttons.get(clave)
+            if boton is None:
+                continue
+            key = ("tab", clave)
+            self._keyboard_targets[key] = (
+                boton, lambda value=clave: self.cambiar_pestana(value), "#3A3A3A", 1,
+            )
+            targets.append(SpatialTarget(key, -1, column))
         for row, entry in enumerate(self._filtradas()):
             clave = self._clave(entry)
             widget = self._move_frames.get(clave)
@@ -890,13 +1094,31 @@ class GlobalTMView:
         compatible = set(entry.get("compatible", ())) if entry else set()
         for index, pokemon in enumerate(self.party[:6]):
             identity = self.identity_for(pokemon)
-            if identity not in compatible or entry is None:
+            # A diferencia de antes, una tarjeta es alcanzable si tiene AL
+            # MENOS UNA acción navegable -ELEGIR (solo si es compatible), o
+            # VER MT COMPATIBLES/RECUERDA-MOVIMIENTOS, que están siempre
+            # disponibles sin importar la compatibilidad-. Antes, un Pokémon
+            # que no podía aprender el movimiento seleccionado no tenía
+            # ningún target: sus botones "siempre disponibles" solo se
+            # podían pulsar con ratón.
+            card_actions = self._team_action_buttons.get(identity, ())
+            if not card_actions:
                 continue
             widget = self._team_cards.get(identity)
             key = ("pokemon", identity)
-            self._keyboard_targets[key] = (
-                widget, lambda item=entry, member=pokemon: self._elegir(item, member), GOLD, 2,
-            )
+
+            def activate(identity=identity) -> None:
+                actions = self._team_action_buttons.get(identity, ())
+                index = min(self._keyboard_card_action_index, len(actions) - 1)
+                if 0 <= index < len(actions):
+                    actions[index][1]()
+
+            # Mismo idle que ya pinta `_update_team_compatibility` para la
+            # tarjeta -si no coincidieran, la tarjeta parpadearía al dorado
+            # en cuanto se le quitara el foco aunque no sea compatible.
+            idle_color = GOLD if identity in compatible else "#2D2D2D"
+            idle_width = 2 if identity in compatible else 1
+            self._keyboard_targets[key] = (widget, activate, idle_color, idle_width)
             targets.append(SpatialTarget(key, index // 3, 1 + index % 3))
         self._keyboard.reset(targets, preserve=True)
         self._apply_keyboard()
@@ -925,12 +1147,35 @@ class GlobalTMView:
         if callable(intercept) and intercept(direction):
             return "break"
         before = self._keyboard.selected_key
+        # Pedido del usuario 09-09-2026 (dos vueltas): arriba/abajo sobre una
+        # tarjeta de Pokémon recorren primero SUS botones (ELEGIR, VER MT
+        # COMPATIBLES, RECUERDA-MOVIMIENTOS, apilados de arriba abajo en la
+        # propia tarjeta) -antes solo se podía seleccionar la tarjeta entera,
+        # equivalente siempre a ELEGIR-. Solo al llegar al borde de esa lista
+        # se cae a la navegación normal de la rejilla (moverse a la fila de
+        # tarjetas de arriba o de abajo). Izquierda/derecha SIEMPRE mueven a
+        # la tarjeta vecina -la primera vuelta los usó para esto mismo, y el
+        # usuario la corrigió: apilados verticalmente, "derecha" para bajar y
+        # "izquierda" para subir no tenía ningún sentido espacial.
+        if direction in ("up", "down") and isinstance(before, tuple) and before[0] == "pokemon":
+            actions = self._team_action_buttons.get(before[1], ())
+            index = self._keyboard_card_action_index
+            if direction == "down" and index < len(actions) - 1:
+                self._keyboard_card_action_index = index + 1
+                self._apply_keyboard()
+                return "break"
+            if direction == "up" and index > 0:
+                self._keyboard_card_action_index = index - 1
+                self._apply_keyboard()
+                return "break"
         self._keyboard.move(direction)
         current = self._keyboard.current
         if direction == "left" and before == self._keyboard.selected_key:
             if callable(self.on_left_edge):
                 self.on_left_edge()
             return "break"
+        if self._keyboard.selected_key != before:
+            self._keyboard_card_action_index = 0
         if current and isinstance(current.key, tuple) and current.key[0] in {"tm", "draft"}:
             self._preview(current.key)
         self._apply_keyboard()
@@ -972,7 +1217,35 @@ class GlobalTMView:
     def _apply_keyboard(self) -> None:
         selected = None if self._external_navigation_focus else self._keyboard.selected_key
         for key, (widget, _callback, color, width) in self._keyboard_targets.items():
+            is_pokemon = isinstance(key, tuple) and key[0] == "pokemon"
             try:
+                if is_pokemon:
+                    # El resalte vive en el botón concreto que ACEPTAR
+                    # dispararía -ELEGIR, VER MT COMPATIBLES o
+                    # RECUERDA-MOVIMIENTOS-, nunca en la tarjeta entera: antes
+                    # solo existía "la tarjeta entera", equivalente siempre a
+                    # ELEGIR. La tarjeta en sí se queda siempre en su borde
+                    # de reposo.
+                    configurar_si_cambia(widget, border_color=color, border_width=width)
+                    # Bug reportado por el usuario 09-09-2026, con captura:
+                    # varias tarjetas se quedaban con un botón resaltado a la
+                    # vez -esta rama solo se ejecutaba para la tarjeta
+                    # ACTUALMENTE seleccionada, así que la anterior nunca
+                    # perdía su resalte al moverse a otra-. Ahora TODAS las
+                    # tarjetas pasan por aquí en cada pasada, y solo la
+                    # seleccionada de verdad calcula un índice real.
+                    actions = self._team_action_buttons.get(key[1], ())
+                    highlighted = (
+                        min(self._keyboard_card_action_index, len(actions) - 1)
+                        if key == selected else -1
+                    )
+                    for action_index, (button, _action_callback) in enumerate(actions):
+                        configurar_si_cambia(
+                            button,
+                            border_color="#F2C45E" if action_index == highlighted else "#3A3A3A",
+                            border_width=4 if action_index == highlighted else 1,
+                        )
+                    continue
                 configurar_si_cambia(
                     widget,
                     border_color="#F2C45E" if key == selected else color,

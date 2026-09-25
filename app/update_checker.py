@@ -11,6 +11,7 @@ que el programa abra.
 
 import json
 import os
+import re
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -100,6 +101,33 @@ def check_for_update(
         url=str(payload.get("html_url") or f"https://github.com/{owner}/{repo}/releases/latest"),
         notes=str(payload.get("body") or "").strip(),
     )
+
+
+_MARKDOWN_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$")
+_MARKDOWN_BULLET = re.compile(r"^(\s*)[-*+]\s+")
+_MARKDOWN_LINK = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+_MARKDOWN_EMPHASIS = re.compile(r"(\*\*|__)(.+?)\1")
+
+
+def notas_legibles(notas: str) -> str:
+    """Pasa las notas de una Release de Markdown a texto que se lee tal cual.
+
+    GitHub guarda las notas en Markdown y el aviso las pinta en un cuadro de
+    texto plano: sin esto, el jugador vería ``## Novedades`` o ``**vida**``
+    con los símbolos. Solo se tratan las marcas que se usan al escribir unas
+    notas normales -títulos, viñetas, negrita, enlaces y código-; lo demás
+    se deja como está.
+    """
+    lineas = []
+    for linea in notas.replace("\r\n", "\n").split("\n"):
+        titulo = _MARKDOWN_HEADING.match(linea)
+        if titulo:
+            linea = titulo.group(1).upper()
+        linea = _MARKDOWN_BULLET.sub(r"\1• ", linea)
+        linea = _MARKDOWN_LINK.sub(r"\1", linea)
+        linea = _MARKDOWN_EMPHASIS.sub(r"\2", linea)
+        lineas.append(linea.replace("`", ""))
+    return "\n".join(lineas).strip()
 
 
 class DismissedVersionStore:

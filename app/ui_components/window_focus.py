@@ -29,8 +29,23 @@ def foreground_belongs_to_this_process() -> bool:
 _POLL_INTERVAL_MS = 400
 
 
-def guard_topmost_on_focus_loss(anchor, *windows, interval_ms: int = _POLL_INTERVAL_MS):
+def guard_topmost_on_focus_loss(
+    anchor,
+    *windows,
+    interval_ms: int = _POLL_INTERVAL_MS,
+    should_be_visible=None,
+):
     """Mantiene ``-topmost`` en ``windows`` sincronizado con el foco real.
+
+    ``should_be_visible`` decide cuándo tocan estar por delante; ``None``
+    (todos los llamantes hasta ahora) usa ``foreground_belongs_to_this_process``
+    -resuelto en cada sondeo, no capturado como valor por defecto, para que
+    los tests que la sustituyen con ``monkeypatch.setattr(window_focus, ...)``
+    la sigan afectando de verdad. El tour de bienvenida (`onboarding_tour.py`)
+    pasa uno propio: quiere seguir visible sobre CUALQUIER otra ventana -no
+    solo las de este proceso-, pero ocultarse igualmente cuando la que pasa
+    a primer plano es el emulador, el único caso con riesgo real de glitch
+    (ver [[onboarding-tour-engine]]).
 
     ``-topmost`` es global a Windows, no relativo a RoleRun: un
     ``CTkToplevel`` sin marco dejado en `-topmost` mientras el usuario cambia
@@ -70,7 +85,8 @@ def guard_topmost_on_focus_loss(anchor, *windows, interval_ms: int = _POLL_INTER
 
     def tick() -> None:
         state["after_id"] = None
-        deberia_ser_topmost = foreground_belongs_to_this_process()
+        visibility_check = should_be_visible or foreground_belongs_to_this_process
+        deberia_ser_topmost = visibility_check()
         if deberia_ser_topmost != state["topmost"]:
             state["topmost"] = deberia_ser_topmost
             for window in windows:

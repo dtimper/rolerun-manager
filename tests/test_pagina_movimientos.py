@@ -100,6 +100,8 @@ def test_cada_pestana_filtra_su_propia_lista() -> None:
     vista.entries = ({"kind": "tm", "number": 1, "move_name": "Corte", "move_id": 15},)
     vista.drafts = ({"kind": "draft", "move_id": 53, "move_name": "Lanzallamas", "role": "Mago"},)
     vista._consulta = lambda: ""
+    vista._filter_categories = set()
+    vista._filter_types = set()
 
     vista.pestana = "tm"
     assert [item["move_name"] for item in GlobalTMView._filtradas(vista)] == ["Corte"]
@@ -114,6 +116,8 @@ def test_la_busqueda_de_drafteos_tambien_mira_el_rol() -> None:
     vista.drafts = ({"kind": "draft", "move_id": 53, "move_name": "Lanzallamas", "role": "Mago"},)
     vista.pestana = "draft"
     vista._consulta = lambda: "mago"
+    vista._filter_categories = set()
+    vista._filter_types = set()
 
     assert len(GlobalTMView._filtradas(vista)) == 1
 
@@ -301,11 +305,17 @@ def test_el_paso_dos_del_drafteo_ofrece_las_dos_salidas() -> None:
 
 
 def test_el_subtitulo_dice_lo_que_cuesta_cada_cosa() -> None:
+    """Pedido del usuario 08-09-2026: el paso 2 debe explicar ENSEÑAR AHORA,
+    GUARDAR y que repetir con ↻ es gratis -antes solo insinuaba el coste sin
+    decir cuándo conviene usar cada botón."""
     from app.ui_views.draft_flow import IntegratedDraftFlow
 
     fuente = inspect.getsource(IntegratedDraftFlow._render_header)
 
-    assert "Repetir la tirada, no." in fuente
+    assert "ENSEÑAR AHORA lo aplica ya" in fuente
+    assert "GUARDAR lo deja listo en Movimientos" in fuente
+    assert "Las dos gastan el mismo drafteo" in fuente
+    assert "repetirlo gratis" in fuente
 
 
 def test_guardar_es_opcional_para_quien_monte_la_vista() -> None:

@@ -80,6 +80,7 @@ class ORASRealTimeAdapter(RealTimeGameAdapter):
                     state=str(getattr(probe, "state", "unknown") or "unknown"),
                     health_game=getattr(probe, "health_game", None),
                     hp_pairs=tuple(getattr(probe, "hp_pairs", ()) or ()),
+                    opponent_team_size=getattr(probe, "opponent_team_size", None),
                 )
                 diagnostics.append(LiveDiagnostic(
                     "battle", DiagnosticLevel.OK, "Sonda de batalla disponible.",

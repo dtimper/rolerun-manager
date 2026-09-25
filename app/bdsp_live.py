@@ -107,6 +107,25 @@ BDSP_SP_130_BATTLE_PARTY_POINTER = (
     0x20,  # client 0 element
     0x0,   # -> BTL_PARTY
 )
+# Regla de "combate de seis" (dictada 09-09-2026, ver memoria
+# `six-mon-battle-auto-reward`): "POKECON -> BTL_PARTY[5]" (el paso 0x18 de
+# arriba) no apunta directamente al BTL_PARTY del jugador -apunta a un ARRAY
+# de hasta 6 "clientes" de combate, uno por participante-. "cliente 0" (el ya
+# demostrado arriba) es el jugador; confirmado en vivo el 14-09-2026 contra un
+# combate real que "cliente 1" es el equipo COMPLETO del entrenador rival,
+# con la misma forma exacta de BTL_PARTY (mismo header en +0x10, mismo
+# array de punteros BTL_POKEPARAM en +0x20 del member_array). Los clientes
+# 2-4 leyeron ``member_count=0`` en esa misma captura -probablemente slots
+# reservados para formatos de combate con más participantes, vacíos en un
+# 1v1-, y el 5 fue nulo. Esta cadena termina justo DESPUÉS del paso 0x18 y
+# ANTES de indexar ningún cliente -``resolve_main_pointer`` no dereferencia
+# su último salto, así que el resultado sigue siendo la dirección que
+# CONTIENE el puntero al array, hace falta un ``read_u64`` más-.
+BDSP_SP_130_BATTLE_CLIENT_ARRAY_POINTER = BDSP_SP_130_BATTLE_PARTY_POINTER[:8]
+BDSP_SP_130_BATTLE_CLIENT_ARRAY_ELEMENT_OFFSET = 0x20
+BDSP_SP_130_BATTLE_CLIENT_STRIDE = 0x8
+BDSP_SP_130_BATTLE_OPPONENT_CLIENT_INDEX = 1
+BDSP_SP_130_BATTLE_OPPONENT_TEAM_SIZE = 6
 BDSP_BOX_COUNT = 40
 BDSP_BOX_SLOT_COUNT = 30
 PB8_STORED_SIZE = 0x148
@@ -1139,6 +1158,69 @@ class BDSPBattleReader:
             static_fields + 0x8, 2, "El ciclo de vida de BattleProc",
         )
         return bool(initialized), bool(ended)
+
+    def read_opponent_team_size(self) -> int | None:
+        """Cuenta cuántos Pokémon tiene el equipo COMPLETO del rival en combate.
+
+        Regla de "combate de seis" (dictada 09-09-2026): lectura deliberadamente
+        aislada de `read()` -esa función ya tiene un ciclo de vida delicado y
+        muy probado que no conviene tocar para añadir esto-. Nunca puede tumbar
+        la sonda principal: cualquier fallo se traduce en ``None`` y el
+        llamador simplemente no evalúa la regla ese sondeo. Ver
+        `BDSP_SP_130_BATTLE_CLIENT_ARRAY_POINTER` para de dónde sale el "cliente
+        1" -confirmado en vivo el 14-09-2026 como el equipo COMPLETO del
+        rival, estático durante todo el combate igual que en ORAS/USUM/SM, no
+        un puntero al rival activo como en X/Y-.
+        """
+        try:
+            array_holder = self.client.resolve_main_pointer(
+                BDSP_SP_130_BATTLE_CLIENT_ARRAY_POINTER,
+            )
+            array_ptr = self.client.read_u64(array_holder)
+            if not self._valid_guest_pointer(array_ptr):
+                return None
+            client_address = (
+                array_ptr
+                + BDSP_SP_130_BATTLE_CLIENT_ARRAY_ELEMENT_OFFSET
+                + BDSP_SP_130_BATTLE_OPPONENT_CLIENT_INDEX * BDSP_SP_130_BATTLE_CLIENT_STRIDE
+            )
+            client_pointer = self.client.read_u64(client_address)
+            if not self._valid_guest_pointer(client_pointer):
+                return None
+            header = self._stable(client_pointer + 0x10, 9, "La cabecera del BTL_PARTY rival")
+            member_array = int(struct.unpack_from("<Q", header, 0)[0])
+            member_count = int(header[8])
+            if member_count == 0:
+                return 0
+            if not (self._valid_guest_pointer(member_array) and 1 <= member_count <= 6):
+                return None
+            array_length = int(struct.unpack("<Q", self._stable(
+                member_array + 0x18, 8, "La longitud del array BTL_PARTY rival",
+            ))[0])
+            if array_length != BDSP_SP_130_BATTLE_OPPONENT_TEAM_SIZE:
+                return None
+            member_raw = self._stable(
+                member_array + 0x20, 48, "Los punteros del BTL_PARTY rival",
+            )
+            members = struct.unpack("<6Q", member_raw)[:member_count]
+            if any(not self._valid_guest_pointer(value) for value in members):
+                return None
+            valid = 0
+            for battle_param in members:
+                try:
+                    object_fields = self.client.read_memory(int(battle_param) + 0x10, 8)
+                    core_pointer = struct.unpack_from("<Q", object_fields, 0)[0]
+                    if not self._valid_guest_pointer(core_pointer):
+                        continue
+                    core = self.client.read_memory(core_pointer + 0x18, 10)
+                    species = int(struct.unpack_from("<H", core, 8)[0])
+                except Exception:
+                    continue
+                if 1 <= species <= BDSP_MAX_SPECIES_ID:
+                    valid += 1
+            return valid
+        except Exception:
+            return None
 
     def read(self) -> BDSPBattleRead | None:
         try:

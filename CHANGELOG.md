@@ -1,6 +1,485 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+## Tests: la ROM de referencia de quinta, y la versión ya no fijada (25-09-2026)
+
+- `test_gen5_rom_service.py::test_la_tabla_personal_real_coincide_con_pkhex`
+  fallaba desde el 23-09: junto al volcado original de Negro 2 apareció una
+  segunda ROM con el mismo título pero otra compilación (cabecera `0x9CE4`,
+  objeto y EV distintos en cuatro especies), y `_rom_real` cogía la primera por
+  orden alfabético. Ahora exige también el checksum de cabecera del volcado del
+  que sale la referencia de PKHeX (`0x46C8` Negro 2, `0xC780` Blanco; Blanco
+  tenía la misma trampa y solo se salvaba por el nombre del archivo). No afecta
+  al programa, que siempre lee la ROM que el jugador tenga abierta.
+- Cuatro tests fijaban `APP_VERSION == "0.3.1"` y obligaban a tocarlos en cada
+  Release. Ahora comprueban el formato de versión publicada (`X.Y.Z`, sin
+  `-alpha.N`) o que el diagnóstico lleve la versión en ejecución.
+
+## Aviso de versión nueva: cómo actualizar, flechas/mando y notas legibles (25-09-2026)
+
+Revisión del aviso de actualización pedida por el usuario. El mecanismo en sí
+funcionaba (comprobado en vivo contra GitHub: con `0.3.1` no avisa, con una
+`0.3.0` simulada anuncia la `v0.3.1`), pero:
+
+- **No decía cómo actualizar.** DESCARGAR abre la página de la Release, que
+  solo tiene el zip de código de GitHub. El aviso muestra ahora cuatro pasos
+  (bajar «Source code (zip)», cerrar, copiar encima, `instalar_y_abrir.bat`) y
+  recuerda que las Runs están en Documentos. Copiar encima es a propósito:
+  conserva el motor ya compilado (`engine/publish` no viaja en el zip). Los
+  mismos pasos, en el `README.md`.
+- **Las notas se veían con los símbolos de Markdown** (`##`, `**`, `` ` ``).
+  `update_checker.notas_legibles` las pasa a texto plano antes de pintarlas.
+- **No se manejaba con flechas ni mando** (ESC ya cerraba, vía
+  `IntegratedWindowSurface`). Izquierda/derecha mueven el resalte dorado entre
+  los tres botones, Enter/aceptar pulsa el marcado (DESCARGAR por defecto) y
+  atrás cierra. Mientras está abierto se aparta la autoridad de navegación,
+  igual que en el editor de rol del PC, para no mover la página de debajo.
+- **Nada impedía publicar una Release con `APP_VERSION` sin subir**, y quien
+  la descargara vería el aviso en cada arranque. Nuevo
+  `tools/publicar_version.py`: `preparar X.Y.Z` sube `APP_VERSION` solo si es
+  más nueva que la del código y la última publicada, y `comprobar` confirma
+  después que el `config.py` de la Release coincide con su etiqueta.
+
+Validado abriendo el aviso en una `RoleRunManager` real (sin partida): capturas
+del resalte con teclado y con la ruta del mando (`_dispatch_game_overlay_key`),
+ESC y atrás cierran y devuelven la autoridad, izquierda + Enter sobre NO AVISAR
+persiste el descarte. Tests: `tests/test_comprobador_de_actualizaciones.py`
+(notas) y `tests/test_publicar_version.py`.
+
+Limpieza de la carpeta del proyecto: fuera dos instaladores ajenos (a
+Descargas), tres copias de los iconos de categoría, una carpeta vacía, la hoja
+original de los banners de cuarta generación, `README_PRIMEROS_PASOS.txt` (texto
+del prototipo v0.1), los restos compilados de las `tools_extract_*` y las
+capturas antiguas de `diagnostics/` (archivadas fuera del repositorio;
+`diagnostics/manual` se queda porque la usan tests y comentarios del código).
+`.gitignore` ignora cualquier `.exe` suelto en la raíz.
+
+## Menú flotante: las flechas siguen la posición real de los botones (25-09-2026)
+
+Pedido del usuario. En el menú raíz (EQUIPO Y PC / MOVIMIENTOS / DRAFTEOS /
+BOLSA, con REPORTAR FALLO y el engranaje arriba) las flechas sumaban ±1/±2 al
+índice y daban la vuelta, así que «arriba» en EQUIPO Y PC no llevaba a
+REPORTAR FALLO y «abajo» en DRAFTEOS saltaba a EQUIPO Y PC. Ahora hay un mapa
+explícito (`_FLOATING_HOME_NAVIGATION` en `app/ui.py`): arriba desde EQUIPO Y PC
+→ REPORTAR FALLO, desde MOVIMIENTOS → engranaje; REPORTAR FALLO ⇄ engranaje con
+izquierda/derecha; hacia fuera del menú no se mueve nada. Teclado y mando pasan
+por la misma función (`_move_floating_menu_selection`); la BOLSA mantiene su
+navegación de siempre. Regresión en `tests/test_sdl_gamepad.py`.
+
+## REPORTAR FALLO: el botón del menú flotante ahora envía el fallo por correo (25-09-2026)
+
+Pedido del usuario: el botón "GUARDAR FALLO" del menú flotante pasa a llamarse
+**REPORTAR FALLO** y abre una ventana para describir el fallo y mandarlo a
+`timpertwitchtv@gmail.com`.
+
+- La ventana (`app/ui_components/reporte_de_fallo_dialog.py`) trae ya puesta
+  una captura de la ventana del emulador, tomada al cerrar el menú (se puede
+  quitar con ×). Admite hasta 8 capturas: botón **+ AÑADIR CAPTURA** o
+  **Ctrl+V** dentro del mensaje, que adjunta una imagen copiada sin guardar o
+  archivos de imagen copiados en el Explorador; si lo copiado es texto, se
+  pega como texto. Ctrl+Enter envía; Esc solo cierra si el mensaje está vacío.
+- El envío (`app/envio_de_reportes.py`) guarda **primero** el reporte en
+  `Documentos\RoleRun Manager\Bugs` (mismo formato que F8) y luego lo manda
+  por el SMTP de Gmail en un hilo, sin bloquear la interfaz. El correo lleva el
+  texto, las capturas, `contexto.json` y un `registros.zip` con las colas de
+  los registros. Si falla, la ventana dice por qué y dónde quedó guardado, y
+  REINTENTAR reutiliza esa carpeta en vez de crear otra.
+- El envío usa una cuenta Gmail dedicada solo a esto, configurada con
+  `python tools/configurar_correo_de_reportes.py` (manda un correo de prueba y
+  solo entonces escribe `data/reporte_correo.dat`). Ese archivo está ofuscado,
+  no cifrado: la cuenta tiene que ser desechable. Sin él, el reporte se guarda
+  en local y la ventana avisa de que el envío no está configurado.
+- Con la ventana abierta se apagan los atajos globales: los predeterminados
+  son teclas del teclado numérico, y escribir un 7 en el mensaje sumaba una
+  vida.
+- La ventana pide el primer plano enlazando la entrada con el hilo del
+  emulador (el mismo método que `_force_native_main_foreground`). Sin eso,
+  visto en vivo, se abría detrás del juego: el guardia de `-topmost` la veía
+  sin foco y la bajaba. El guardia solo empieza a actuar cuando la ventana ha
+  conseguido el foco.
+- F8 no cambia: sigue siendo el guardado mudo de una pulsación.
+- Sin conexión, cualquier fallo de red (nombre sin resolver, red
+  inalcanzable, tiempo agotado) muestra el mismo mensaje «No hay conexión a
+  Internet o Gmail no responde». Antes, una red caída con el nombre ya
+  resuelto daba un `OSError` genérico y salía «No se pudo enviar (OSError)».
+  Comprobado con fallos de red reales, no simulados.
+
+Tests: `tests/test_envio_de_reportes.py` (15 nuevos, SMTP falso). Suite
+completa: 2925 pasan, 18 saltados, 1 fallo que no tiene que ver con este
+cambio (`test_gen5_rom_service.py::test_la_tabla_personal_real_coincide_con_pkhex`
+lee la ROM local de Negro 2). Probado en vivo en este PC: la ventana sobre
+Azahar, Ctrl+V con una imagen real del portapapeles, fallo → REINTENTAR →
+cierre, y los atajos apagados y vueltos a encender. **Pendiente**: un envío
+real a Gmail (falta la cuenta de envío) y abrirla desde el menú flotante de
+RoleRun reiniciado.
+
+## Combate de seis en Perla Reluciente: "cliente 1" del array de combate es el rival completo (14-09-2026 (10))
+
+Cuarto juego con la regla de "combate de seis" (tras ORAS, X/Y y USUM/SM), y
+el primero fuera de Azahar -Ryujinx, vía `RyujinxHostMappedClient`, mismo
+patrón de conexión en paralelo de sesiones anteriores, solo que aquí lee
+memoria del PROPIO PROCESO de Ryujinx en Windows en vez de un RPC de red-.
+Sin fuente pública que citar esta vez: investigación en vivo desde cero
+contra un combate real del usuario.
+
+Hallazgo clave: `BDSP_SP_130_BATTLE_PARTY_POINTER` (ya existente, usado para
+leer los PS del jugador en combate) NO apunta directamente al BTL_PARTY del
+jugador. El paso "POKECON -> BTL_PARTY[5]" (offset 0x18) apunta a un ARRAY de
+hasta 6 "clientes" de combate -uno por participante-, y el propio código ya
+comentaba "cliente 0 element" sin explicar qué había en los demás índices.
+Confirmado en vivo: "cliente 1" tiene la MISMA forma exacta de BTL_PARTY que
+"cliente 0", y contiene el equipo COMPLETO del entrenador rival (verificado
+con un combate real 6v6: los seis Pokémon decodificados con especie/nivel/PS
+coherentes, con IDs de PokeID 12-17 -distintos del rango 0-5 del jugador,
+confirmando que es una entidad separada-). Los clientes 2-4 declararon
+`member_count=0` en esa misma captura -probablemente reservados para
+formatos con más participantes-, y el 5 fue nulo.
+
+Implementado como `BDSPBattleReader.read_opponent_team_size()`, un método
+NUEVO y completamente aislado de `read()` -esa función ya tiene un ciclo de
+vida muy delicado y probado (lifecycle, terminal/idle, fila reordenada por
+PokeID) que no convenía arriesgar-. `app/realtime/bdsp_adapter.py` lo llama
+en su PROPIO `try/except`, separado del bloque que ya detecta el combate
+-un fallo (o un lector de prueba sin este método) no puede tumbar la
+detección principal-, y solo cuando `state == "battle"`. `ui.py` no necesitó
+tocar `_process_six_mon_battle_probe`: el branch BDSP de
+`_finish_oras_live_reconciliation` ya traduce sus estados a "trainer"/"none",
+igual que ORAS/X-Y.
+
+Un primer intento de conectar `read_opponent_team_size()` DENTRO del mismo
+try/except que la detección principal de combate rompió 8 tests existentes
+-un lector de prueba sin el método nuevo lanzaba `AttributeError`, capturado
+como "combate desconocido" en vez de "battle"-. Corregido moviéndolo a su
+propio bloque aislado; tests nuevos en `tests/test_bdsp_battle_opponent_team_size.py`
+y `tests/test_bdsp_realtime_adapter.py` cubren explícitamente que un fallo
+de esta lectura nunca tumba la detección de combate. Suite completa: 2899
+passed, 18 skipped. Pendiente de confirmación física con un combate de seis
+real ganado en Perla Reluciente.
+
+## Los atajos ahora son compartidos entre todas las Runs, no por juego (14-09-2026)
+
+Pedido del usuario: `RunProject.hotkeys`/`controller_hotkeys`/`menu_keys`/`controller_menu_buttons`
+vivían dentro de cada Run, así que cambiar un atajo en una partida no lo
+cambiaba en las demás. Añadido `global_settings.json`, un archivo nuevo junto
+a `runs/` y `OBS/` (nunca dentro de una Run concreta) que guarda el valor
+compartido. `RunProject` conserva su propia copia de cada uno -todo el resto
+del código sigue leyendo `project.hotkeys` sin ningún cambio-, pero esa copia
+se sincroniza con el archivo compartido en `load`/`open_or_create`/
+`list_projects`, y cada cambio del usuario (`set_hotkeys`/
+`set_controller_hotkeys`/`set_menu_controls`) se escribe también ahí. La
+primera Run que se abre tras esta funcionalidad siembra el archivo compartido
+con sus propios valores -para no perder una personalización ya hecha-; las
+demás convergen a partir de ahí. Cinco tests nuevos en
+`tests/test_run_service.py` (clase `RunProjectGlobalHotkeySettingsTests`).
+Suite completa: 2891 passed, 18 skipped.
+
+## Combate de seis en Sol/Luna: mismas direcciones que USUM, confirmadas de nuevo en vivo (14-09-2026 (8))
+
+Confirmado USUM, el usuario siguió con Sol/Luna (mismo Azahar). El header
+público equivalente de Sol/Luna (`AnalogMan151/sumoCheatMenu
+Sources/pokeutil/pokemon.h`, ya citado en `sm_live.py` como fuente de las
+direcciones de PS de combate) documenta el roster del rival exactamente en
+las mismas direcciones que USUM (`0x3254EE60` jugador, `0x3254F4AC` rival,
+zancada `0x104`). Verificado en vivo al primer intento contra el combate
+real del usuario: los seis huecos decodificaron PK7 válidos (Mankey,
+Makuhita, Combusken, Lucario, Terrakion, Crabrawler, todos nivel 14-15).
+
+Implementado con el mismo patrón que USUM: `SMLiveReader.read_battle_opponent_team_size`
+(método aislado, nunca toca `read_battle_probe`), `opponent_team_size` en
+`SMBattleProbe`, passthrough en `app/realtime/sm_adapter.py`. `ui.py` no
+necesitó ningún cambio nuevo: SM y USUM ya comparten la misma rama de
+`_finish_oras_live_reconciliation`, así que la llamada a
+`_process_six_mon_battle_probe` añadida para USUM ya cubre SM también.
+
+A diferencia de USUM, `SMLiveReader.read_battle_probe` usa un único flag de
+combate sin el par activo/idle ambiguo -no existe el mecanismo de
+convergencia KO→PartyData de USUM en este archivo-, así que el bug de
+"combate ganado sin bajas nunca termina" de la entrada de abajo no debería
+aplicar aquí; sin confirmar todavía con un combate de seis real sin bajas en
+Sol/Luna.
+
+Tests nuevos: `tests/test_sm_battle_opponent_team_size.py`,
+`tests/test_gen7_alpha57_initial_battle_baseline.py`. Suite completa: 2886
+passed, 18 skipped.
+
+## FIX: un combate USUM ganado SIN bajas nunca se declaraba terminado (14-09-2026 (7))
+
+El usuario probó el combate de seis en UltraSol tal como se le recomendó
+-sin perder ningún Pokémon- y la regla nunca sumó nada, aunque el roster
+rival se había detectado y activado bien (los seis marcadores quedaron
+guardados). Investigando a fondo (pedido explícito del usuario tras
+descartar un parche rápido que rompía un test existente a propósito), la
+causa resultó ser un bug real y preexistente de `USUMLiveReader`, ajeno a la
+regla de "combate de seis": el mecanismo de fin de combate de alpha.62
+(`_idle_party_convergence`) solo puede declarar "combate terminado" cuando
+existe al menos UNA baja propia observada durante el combate, cuyo HP=0
+converge después contra PartyData. Sin ninguna baja -ganar limpio-, no hay
+nada que converger y el par de flags `0x00040005/6` (que representa TANTO
+"selección forzada de sustituto en pleno combate" COMO "ya en overworld", sin
+forma de distinguirlos solo con esos dos valores, según la propia
+investigación física de alpha.61-62) se queda ambiguo para siempre. Nunca se
+había validado físicamente contra un UltraSol real hasta esta sesión -el
+propio alpha.62 termina con "queda pendiente de validación física"-, así que
+este hueco llevaba destapado desde entonces sin que nadie lo hubiera notado:
+afecta a cualquier combate USUM ganado sin bajas, no solo a "combate de
+seis".
+
+Un primer intento de arreglo (declarar convergencia automática en cuanto
+`observed` está vacío) se descartó: rompía
+`test_alpha62_preexisting_party_zero_cannot_end_forced_replacement`, que
+protege a propósito el caso de un Pokémon YA debilitado antes de empezar el
+combate -ese caso también tiene `observed` vacío, y debe seguir sin cerrar el
+combate-. Corregido en su lugar con una vía de escape por TIEMPO REAL
+(`USUM_BATTLE_IDLE_NO_FAINT_TIMEOUT_SECONDS = 20.0`, nuevo dict
+`_battle_idle_since_by_process` con reloj `time.monotonic()`): si el par
+idle lleva sostenido 20 s reales sin ninguna baja propia observada, se
+asume overworld. Un selector real de sustituto forzado se resuelve en pocos
+segundos como mucho, así que el margen es generoso a propósito y nunca
+debería dispararse durante uno real -y de hecho no interfiere en absoluto
+con el caso de "sí hubo baja": ese sigue resolviendo al instante en cuanto
+PartyData converge, sin esperar nada-.
+
+Dos tests nuevos en `tests/test_usum_alpha62_battle_exit_convergence.py`
+(con `time.monotonic` mockeado para no depender de 20 s reales de verdad en
+la suite) confirman: (1) sin ninguna baja, el combate se cierra solo tras el
+margen, nunca antes; (2) con una baja real, sigue cerrando al instante como
+ya estaba probado. Suite completa: 2881 passed, 18 skipped.
+
+**El usuario necesita reiniciar RoleRun una vez más.** Al reiniciar, el
+lector arranca sin historial de combate para el proceso, así que el par
+idle actual (que ya lleva un rato así) se publicará como ``none`` de
+inmediato en la primera lectura -ni siquiera hace falta esperar los 20 s-,
+y el combate de seis ya activo y guardado en su Run debería resolverse
+solo en los ~10 s del margen de confirmación habitual de la regla.
+
+## Combate de seis en UltraSol/UltraLuna: dirección pública, confirmada al primer intento (14-09-2026 (6))
+
+Confirmados ORAS y X/Y, el usuario pidió seguir con UltraSol/UltraLuna
+(mismo emulador Azahar ya abierto). A diferencia de X/Y, aquí no hizo falta
+investigación en vivo desde cero: `USUM_BATTLE_PLAYER_IDENTITY_BASE`
+(0x3254EE60, ya en el código, confirmado físicamente el 22-08-2026 contra la
+party real del usuario) cita como fuente pública
+`USUMCheatMenu Sources/pokeutil/pokemon.h`. Ese mismo header, obtenido de
+`github.com/pablogormi/USUMCheatMenu`, define TAMBIÉN un roster del rival:
+`0x3254F4AC + 0x104*N` (N=0..5), la misma zancada que el del jugador, con la
+advertencia explícita "OPPONENT PARTY IN BATTLE IS ONLY UPDATED INSIDE A
+BATTLE / THESE POINTERS DON'T UPDATE INSIDE THE BATTLE PROPERLY" -es decir,
+un roster ESTÁTICO fijado al empezar el combate, igual que ORAS, no un
+puntero al rival activo como X/Y-.
+
+Verificado en vivo al primer intento, con la misma sesión RPC en paralelo de
+siempre, durante el combate de seis real del usuario: los seis huecos
+decodificaron PK7 válidos (Yanma, Cradily, Solosis, Milotic, Venonat,
+Ivysaur, todos nivel 18-19, coherentes con un equipo real de gimnasio), y el
+roster del jugador en la dirección vecina coincidió con su party real. Sin
+necesidad de más pruebas para confirmar la lectura -a diferencia de X/Y, no
+hubo que perseguir sustituciones ni cazar bugs de temporización-.
+
+Implementado igual que ORAS (`opponent_team_size`, lectura de una sola vez),
+pero como método AISLADO (`USUMLiveReader.read_battle_opponent_team_size`)
+en vez de tocar `read_battle_probe`: esa función tiene un ciclo de vida de
+combate mucho más delicado y probado (convergencia KO→party, fases
+idle/terminal/activa) que no convenía arriesgar para esto. El adaptador
+(`app/realtime/usum_adapter.py`) llama al método nuevo solo cuando
+`state == "battle"` y nunca puede tumbar el carril de combate si falla.
+`ui.py` traduce el token "battle"/"none" de SM/USUM al vocabulario común
+"trainer"/"none" antes de llamar a `_process_six_mon_battle_probe`, igual
+que ya hacía con `_process_oras_battle_state`.
+
+Riesgo residual sin descartar: como USUM no distingue "salvaje" de
+"entrenador" a nivel de sonda (solo existe `state == "battle"`, sin el
+equivalente al ``wild``/``trainer`` de ORAS/X-Y), un roster de seis que
+quedara sin refrescar tras un combate de entrenador real podría, en teoría,
+"filtrarse" a un encuentro salvaje inmediatamente posterior y contarse de
+más. No se investigó a fondo por falta de un encuentro salvaje a mano para
+probarlo; si se reporta un +1 vida/+1 drafteo indebido tras un salvaje en
+USUM, empezar por ahí.
+
+Tests nuevos: `tests/test_usum_battle_opponent_team_size.py`,
+`tests/test_gen7_alpha57_initial_battle_baseline.py`. Suite completa: 2879
+passed, 18 skipped.
+
+## Confirmado en vivo en ORAS y X/Y; último bug de fragmentación en X/Y (14-09-2026 (5))
+
+El usuario confirmó en directo el arreglo de ORAS (gimnasio de seis real:
++1 vida y +1 drafteo correctos). Al probar X/Y con un combate de seis real
+(el usuario añadió Pokémon extra al equipo del líder para poder probarlo,
+ya que los gimnasios tempranos de X/Y sin modificar no llegan a seis), la
+regla seguía sin pagar nada. El registro de diagnóstico reveló la causa:
+`RunProject.six_mon_battle_opponents` SÍ acumulaba bien cada rival -la
+detección funcionaba-, pero la sesión se cerraba en falso A MITAD del
+combate. Cada vez que un Pokémon rival caía, el objeto de combate del
+siguiente tardaba varios segundos reales en reconstruirse en memoria, y
+durante ese hueco la sonda devolvía "none" el tiempo suficiente para superar
+la confirmación de dos muestras -un combate real de seis se fragmentó en
+más de veinte resoluciones prematuras de 1-2 rivales cada una a lo largo de
+la sesión de juego, y ninguna llegó nunca a completar el conteo-.
+
+La confirmación por número de muestras nunca iba a ser robusta frente a esto
+porque la cadencia de sondeo varía. Cambiado a medir tiempo de reloj real
+(`_process_six_mon_battle_probe` en `ui.py`): se exige "none" sostenido
+durante `_SIX_MON_BATTLE_EXIT_SECONDS` (10 s) antes de cerrar el combate,
+reiniciando el cronómetro en cuanto vuelve a verse "trainer". El propio
+registro de la sesión real del usuario fijó ese número: los huecos falsos de
+sustitución nunca pasaron de 8 s, y el hueco real más corto entre dos
+combates distintos fue de 14 s.
+
+Confirmado en directo justo después: un combate de seis real en X/Y (con
+Pokémon añadidos al equipo del líder para poder probarlo) detectó los seis
+rivales correctamente, esperó el margen sin cortar en falso, y pagó
++1 vida/+1 drafteo. **La regla queda confirmada funcionando en vivo en ambos
+juegos.** Retirado el registro de diagnóstico temporal
+(`_trace_six_mon_battle`, `six_mon_battle_trace.jsonl`) que sirvió para
+encontrar los tres bugs de esta serie de entradas -ya no hace falta-.
+
+## Combate de seis en X/Y: el puntero del rival SÍ sigue las sustituciones (14-09-2026 (4))
+
+Confirmado el arreglo de ORAS, el usuario pidió seguir con el siguiente
+juego. X/Y comparte el mismo `ORASBattleProbe`/adaptador que ORAS pero solo
+exponía PS del rival (`XY_BATTLE_OPPONENT_PTR_1/2`), sin especie. A
+diferencia de ORAS, aquí no existía ninguna dirección de PK6 rival de la que
+partir -tuvo que investigarse desde cero, con la sesión RPC en paralelo de
+siempre, durante un combate real (dos Burmy distintos, mismo aspecto
+distinto)-.
+
+Hallazgo clave: `XY_BATTLE_OPPONENT_PTR_1/2` son punteros a un objeto de
+combate interno (con vtable en +0x0), NO un PK6 crudo. Confirmado en vivo que
+la especie vive en +0x0C (justo antes de los PS en +0x0E) y que, a diferencia
+de ORAS, **la dirección apuntada SÍ cambia con cada sustitución real**
+-verificado con el segundo Burmy: mismo `species_id=412`, PS reflejando la
+caída del primero, pero un objeto en una dirección nueva-. Un barrido de los
+huecos vecinos (misma zancada de 580 bytes que `ORAS_BATTLE_MON_STRIDE`)
+mostró datos de encuentros previos de la sesión, no el roster fresco de ESTE
+combate -confirma una nota ya existente en el código, "alpha.8 interpretó
+erróneamente PARTY_1+n*4 como seis slots", así que no se repite ese error-.
+No se encontró ningún campo con pinta de PID (nada de entropía alta cerca);
+la propia dirección del objeto sirve como identidad de "individuo distinto"
+dentro de un mismo combate.
+
+Con el puntero demostrado fiable, se recuperó el diseño original de "combate
+de seis" (acumular rivales distintos conforme salen, cerrar tras dos lecturas
+de "none"), esta vez con datos reales. `RunProject.six_mon_battle_opponents`
+vuelve a existir -ahora genuinamente en uso por X/Y-;
+`RunProjectService.note_trainer_battle_opponent_seen` es la vía nueva junto a
+`note_trainer_battle_seen` (ORAS), y ambas alimentan el mismo
+`resolve_six_mon_battle_end` sin cambios -ORAS marca sus seis huecos como
+marcadores opacos para que ambas vías compartan el criterio `len(...) == 6`-.
+`oras_live.ORASBattleProbe`/`realtime.models.BattleState` llevan ahora AMBOS
+campos (`opponent_team_size` para ORAS, `opponent_identity` para X/Y);
+`ui.py` elige la vía según cuál venga rellena. Tests nuevos en
+`tests/test_realtime_xy_alpha7.py`, `tests/test_xy_adapter_battle_state.py`
+y `tests/test_run_service.py`. Sigue pendiente de validación física con un
+combate de seis real ganado en X/Y.
+
+## FIX de verdad: el roster del rival es estático, no "quien está en el campo" (14-09-2026 (3))
+
+El usuario, con razón, rechazó la sospecha de velocidad de emulación de la
+entrada de abajo: pidió seguir investigando en vez de conformarse con un
+botón manual. Se conectó una sesión de diagnóstico en paralelo a la misma
+RPC de Azahar que usa RoleRun (sin tocar la partida real) durante un combate
+real del usuario, comparando un volcado de RAM antes y después de una
+sustitución real. Resultado: `ORAS_BATTLE_TRAINER_OPPONENT_ADDRESS` NO
+cambió en 96 s de combate real con sustitución de por medio. Un barrido más
+amplio (9 MiB alrededor de la dirección conocida) encontró la explicación:
+esa dirección es el **slot 0 de un roster completo del rival, seis huecos de
+`0x1E4` bytes cada uno**, escrito una vez al empezar el combate y nunca
+tocado después -exactamente el mismo roster player-side que ya se leía en
+`ORAS_BATTLE_TRAINER_PLAYER_ADDRESS`, con la misma zancada-. Nunca hizo falta
+perseguir sustituciones: **basta leer los seis huecos una vez** y contar
+cuántos tienen un PK6 válido.
+
+Rediseño resultante: `ORASBattleProbe.opponent_identity` (par species/PID de
+"quien esté activo") se sustituye por `opponent_team_size` (cuántos huecos
+del roster son válidos), calculado en `read_battle_probe` con cinco lecturas
+extra de solo lectura cuando el estado es ``trainer``.
+`RunProjectService.note_six_mon_battle_opponent` (que acumulaba rivales
+distintos vistos) se sustituye por `note_trainer_battle_seen`, que arranca el
+seguimiento en el instante en que ``opponent_team_size == 6`` -ya no hace
+falta esperar a ver salir a los seis, ni un campo `six_mon_battle_opponents`
+en `RunProject`-. `load`/`open_or_create`/`list_projects` retiran esa clave
+vieja del JSON al cargar Runs guardadas durante los días de la versión
+anterior. Se revirtió también el sondeo acelerado a 200 ms de la entrada de
+abajo: ya no hace falta correr una carrera contra la animación, un solo
+sondeo en cualquier instante del combate basta.
+
+Tests actualizados en las tres capas (`tests/test_oras_live.py`,
+`tests/test_oras_adapter_battle_state.py`, `tests/test_run_service.py`).
+Sigue pendiente de una confirmación en directo con el nuevo código -el
+usuario tendrá que reiniciar RoleRun una vez más-.
+
+## Sondeo más rápido en combate de entrenador + diagnóstico temporal (14-09-2026 (2))
+
+Tras el fix de abajo el usuario reinició, ganó un SEGUNDO gimnasio de seis en
+ORAS y siguió sin recibir nada. Se añadió un registro JSONL temporal
+(`RoleRunManager._trace_six_mon_battle`, un archivo `six_mon_battle_trace.jsonl`
+por Run) que confirmó con datos reales que la clasificación "trainer", la
+decodificación del rival y el cierre a los dos "none" seguidos funcionan
+correctamente -un combate de un solo rival se contó, se comparó contra 6 y se
+descartó sin tocar contadores, exactamente como debía-.
+
+La sospecha que queda, sin confirmar todavía: el usuario juega con velocidad
+de emulación en 1400% (visible en la barra de estado de Azahar). El sondeo de
+combate corría a 450 ms también para "trainer"; a 14× velocidad eso puede ser
+más tiempo real del que un rival individual permanece en el campo antes de
+caer, así que el sondeo puede no llegar a verlo nunca. Se bajó ese intervalo
+a 200 ms específicamente para "trainer" (`_finish_oras_live_reconciliation`,
+rama por defecto ORAS/X-Y). Sigue sin ser una garantía a 1400×: mientras no
+se confirme en directo, se recomienda al usuario bajar la velocidad durante
+combates de seis.
+
+## FIX: la regla de "combate de seis" nunca se disparaba de verdad (14-09-2026)
+
+El usuario reportó en directo -acababa de ganar su primer gimnasio de seis en
+ORAS y ni sumó vida ni drafteo- que la automatización del 09-09-2026 (ver
+entrada de abajo) no funcionaba. Causa real: `ORASBattleProbe.opponent_identity`
+(`oras_live.py`) SÍ se calculaba bien, pero `ui.py` nunca recibe ese objeto
+directamente. Lo que llega es `RealTimeSnapshot.battle`, un `BattleState`
+genérico (`app/realtime/models.py`) que `ORASRealTimeAdapter._capture_optional_lanes`
+(`app/realtime/oras_adapter.py`) reconstruye a mano campo por campo a partir
+del probe -y `opponent_identity` no era uno de los campos copiados, porque
+`BattleState` ni siquiera lo declaraba-. El dato se perdía en silencio en
+cada sondeo: `_process_six_mon_battle_probe` siempre veía `opponent_identity =
+None` vía `getattr(..., None)`, así que el combate de seis jamás llegaba a
+acumular un solo rival.
+
+Corregido añadiendo el campo a `BattleState` y copiándolo explícitamente en
+`_capture_optional_lanes`. Añadido `tests/test_oras_adapter_battle_state.py`
+para que una futura pérdida de campo en esta misma conversión falle en tests
+en vez de en directo. **Requiere reiniciar RoleRun**: el proceso que el
+usuario tenía abierto durante el reporte seguía ejecutando el código viejo en
+memoria: los cambios de archivo no se recargan solos.
+
+## Combate de seis Pokémon: vida y drafteo automáticos en ORAS (09-09-2026)
+
+El usuario dictó por voz la regla completa de vidas/drafteos del formato
+(ver memoria `rolerun-format-rules`, usada también para reescribir la
+página Ayuda ese mismo día): superar un combate de seis Pokémon da siempre
++1 drafteo, y además +1 vida si nadie del equipo murió en ESE combate -si
+murió alguien, las vidas ya se descontaron una a una según ocurrió cada
+baja, así que no se suman de más-. Empezamos por ORAS porque ya lee una
+dirección fija del rival ACTIVO en combate (`ORAS_BATTLE_TRAINER_OPPONENT_ADDRESS`,
+usada hasta ahora solo para distinguir salvaje/entrenador); RoleRun no lee
+el roster completo del rival en ningún juego.
+
+`oras_live.ORASBattleProbe` gana un campo `opponent_identity` (species_id,
+PID) que `read_battle_probe` rellena decodificando ese mismo PK6 rival ya
+leído, solo en combates de entrenador. `RunProjectService` gana tres piezas
+nuevas: `note_six_mon_battle_opponent` acumula rivales DISTINTOS vistos
+durante el combate en curso (persistido en `RunProject.six_mon_battle_*`
+para sobrevivir un cierre/reabierto a mitad de combate); `register_detected_faint`
+ahora también cuenta las bajas propias ocurridas mientras ese combate está
+activo; y `resolve_six_mon_battle_end` cierra la sesión y paga la regla
+solo si fueron exactamente seis rivales. `ui.py` conecta las tres desde
+`_finish_oras_live_reconciliation` con la misma confirmación doble de "fin
+de combate" que ya usa el resto del pipeline de batalla ORAS.
+
+X/Y comparte el mismo `ORASBattleProbe`, pero su sonda solo trae PS del
+rival, no el PK6 completo, así que `opponent_identity` llega `None` y la
+regla nunca se dispara ahí -sin falsos positivos, a la espera de una
+investigación de memoria propia de X/Y-. Cubierto por tests nuevos en
+`tests/test_run_service.py` y `tests/test_oras_live.py`; **pendiente de
+validación física** con un combate de seis real en ORAS.
+
 ## Líbero avisa si conserva un movimiento drafteado con OTRO rol (07-09-2026)
 
 Reporte de diseño del usuario: Líbero no restringe movimientos por su cuenta

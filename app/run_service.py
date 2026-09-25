@@ -93,6 +93,23 @@ class RunProject:
     # Bajas detectadas en ORAS que todavía esperan sustituto. Se persisten para
     # que cerrar/reabrir RoleRun no permita perder una muerte ya registrada.
     pending_faints: list[dict[str, Any]] = field(default_factory=list)
+    # Combate de seis Pokémon en curso (regla dictada 09-09-2026): True desde
+    # que se confirma que el rival de un combate de ENTRENADOR tiene seis
+    # Pokémon hasta que se cierra el combate. Persistido para que
+    # cerrar/reabrir RoleRun a mitad de ese combate no pierda el seguimiento.
+    six_mon_battle_active: bool = False
+    # Identidades ``[species_id, marcador]`` de los rivales DISTINTOS vistos en
+    # el combate en curso. Solo lo usan juegos cuyo rival activo hay que
+    # perseguir sustitución a sustitución -X/Y, ver
+    # `note_trainer_battle_opponent_seen`-; ORAS confirma el tamaño del
+    # roster de una sola vez (`note_trainer_battle_seen`) y deja esta lista
+    # con seis marcadores opacos para que `resolve_six_mon_battle_end` use el
+    # mismo criterio (``len(...) == 6``) en ambos casos.
+    six_mon_battle_opponents: list[list[int]] = field(default_factory=list)
+    # Bajas propias registradas mientras este combate estuvo activo. Ya se
+    # descontaron una a una en `register_detected_faint`; aquí solo se cuentan
+    # para decidir si el combate de seis también da +1 vida.
+    six_mon_battle_deaths: int = 0
     # Identidades ya retiradas al Cementerio. Evita descontar
     # dos veces la misma baja si un estado de UI se reconstruye.
     graveyard_pokemon: list[str] = field(default_factory=list)
@@ -167,6 +184,21 @@ class RunProject:
 class RunProjectService:
     """Persistencia propia de una RoleRun, independiente del guardado del juego."""
 
+    # Pedido del usuario 14-09-2026: los atajos vivían dentro de cada Run
+    # (`RunProject.hotkeys`/`controller_hotkeys`/`menu_keys`/`controller_menu_buttons`),
+    # así que cambiar uno en una Run no lo cambiaba en las demás. Este archivo
+    # vive junto a `runs/` y `OBS/`, nunca dentro de una Run concreta, y guarda
+    # el valor compartido que se aplica a todas al cargar. `RunProject` sigue
+    # teniendo su propia copia -todo el resto del código sigue leyendo
+    # `project.hotkeys` sin cambios-, pero esa copia ahora se sincroniza con
+    # este archivo en cada `load`/`open_or_create`/`list_projects`, y cada
+    # cambio del usuario (`set_hotkeys`/`set_controller_hotkeys`/`set_menu_controls`)
+    # se escribe aquí también para que el resto de Runs lo recojan la próxima
+    # vez que se abran.
+    _GLOBAL_SETTINGS_KEYS = (
+        "hotkeys", "controller_hotkeys", "menu_keys", "controller_menu_buttons",
+    )
+
     def __init__(self, root: Path, global_obs_root: Path | None = None, legacy_roots: list[Path] | None = None) -> None:
         self.root = root
         self.global_obs_root = global_obs_root
@@ -175,6 +207,46 @@ class RunProjectService:
             self.global_obs_root.mkdir(parents=True, exist_ok=True)
             self._migrate_obs_to_single_root()
         self._migrate_legacy_runs(legacy_roots or [])
+        self._global_settings_path = self.root.parent / "global_settings.json"
+
+    def _read_global_settings(self) -> dict[str, Any]:
+        try:
+            raw = json.loads(self._global_settings_path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return raw if isinstance(raw, dict) else {}
+
+    def _write_global_settings(self, updates: dict[str, Any]) -> None:
+        data = self._read_global_settings()
+        data.update(updates)
+        try:
+            escribir_json_atomico(self._global_settings_path, data)
+        except OSError:
+            pass
+
+    def _apply_global_settings(self, raw: dict[str, Any]) -> None:
+        """Sustituye en ``raw`` (el JSON crudo de una Run) los atajos por los
+        compartidos, si ya existe un valor guardado. Se aplica ANTES de
+        construir el `RunProject`, así que no hace falta tocar ningún sitio
+        que ya lea `project.hotkeys` y similares."""
+        shared = self._read_global_settings()
+        if not shared:
+            # Primera vez que se abre cualquier Run tras esta funcionalidad
+            # (14-09-2026): todavía no hay ningún valor compartido. Se siembra
+            # con los de ESTA Run -la primera que se abre- para no perder una
+            # personalización ya hecha; las demás Runs convergen a partir de
+            # aquí la próxima vez que se abran.
+            seed = {
+                key: raw[key] for key in self._GLOBAL_SETTINGS_KEYS
+                if isinstance(raw.get(key), dict)
+            }
+            if seed:
+                self._write_global_settings(seed)
+            return
+        for key in self._GLOBAL_SETTINGS_KEYS:
+            value = shared.get(key)
+            if isinstance(value, dict):
+                raw[key] = dict(value)
 
     def _migrate_legacy_runs(self, legacy_roots: list[Path]) -> None:
         """Copia Runs antiguas a Documentos sin sobrescribir datos más nuevos."""
@@ -336,6 +408,7 @@ class RunProjectService:
             raw["controller_hotkeys"].setdefault("open_full_app", "back")
             raw.setdefault("menu_keys", {"accept": "z", "back": "x"})
             raw.setdefault("controller_menu_buttons", {"accept": "a", "back": "b"})
+            self._apply_global_settings(raw)
             project = RunProject(**raw)
             project.save_path = str(save_path.resolve())
             project.updated_at = now
@@ -388,6 +461,16 @@ class RunProjectService:
                 role_marker_layout=2,
             )
             (folder / "history.json").write_text("[]\n", encoding="utf-8")
+            # Pedido del usuario 14-09-2026: los atajos son compartidos entre
+            # Runs (ver `_apply_global_settings`). Una Run NUEVA no pasa por
+            # esa ruta -no hay ``raw`` que leer de disco-, así que se aplica
+            # aquí a mano sobre los valores de fábrica recién construidos.
+            shared_settings = self._read_global_settings()
+            if shared_settings:
+                for key in self._GLOBAL_SETTINGS_KEYS:
+                    value = shared_settings.get(key)
+                    if isinstance(value, dict):
+                        setattr(project, key, dict(value))
 
         self.save(project)
         self._write_obs_placeholders(project)
@@ -417,6 +500,7 @@ class RunProjectService:
                 raw["controller_hotkeys"].setdefault("open_full_app", "back")
                 raw.setdefault("menu_keys", {"accept": "z", "back": "x"})
                 raw.setdefault("controller_menu_buttons", {"accept": "a", "back": "b"})
+                self._apply_global_settings(raw)
                 projects.append(RunProject(**raw))
             except (OSError, json.JSONDecodeError, TypeError):
                 continue
@@ -448,6 +532,7 @@ class RunProjectService:
             raw["controller_hotkeys"].setdefault("open_full_app", "back")
             raw.setdefault("menu_keys", {"accept": "z", "back": "x"})
             raw.setdefault("controller_menu_buttons", {"accept": "a", "back": "b"})
+            self._apply_global_settings(raw)
             project = RunProject(**raw)
             if migrated_prompt or migrated_role_rules:
                 self.save(project)
@@ -704,6 +789,11 @@ class RunProjectService:
         old_value = max(0, int(project.counters.get("vidas", 0)))
         new_value = max(0, old_value - 1)
         project.counters["vidas"] = new_value
+        if project.six_mon_battle_active:
+            # Esta vida ya se descuenta aquí, una a una. El combate de seis
+            # solo necesita saber que hubo alguna para NO volver a sumarla al
+            # cerrarse (regla dictada 09-09-2026).
+            project.six_mon_battle_deaths += 1
 
         # Leer con `history()` aqui era la via destructiva: devuelve [] si el
         # archivo no se puede leer, y estas funciones lo reescriben entero.
@@ -725,6 +815,131 @@ class RunProjectService:
         self.save(project)
         return True
 
+
+    def note_trainer_battle_seen(self, project: RunProject, opponent_team_size: int | None) -> None:
+        """Arranca el seguimiento de un combate de entrenador de seis, si lo es.
+
+        Regla dictada 09-09-2026: solo puede ocurrir en combates de
+        ENTRENADOR de seis Pokémon. En ORAS el roster completo del rival es
+        estático durante todo el combate (ver `oras_live.ORAS_BATTLE_OPPONENT_TEAM_STRIDE`
+        y memoria `six-mon-battle-auto-reward` para cómo se descubrió esto en
+        vivo el 14-09-2026), así que ``opponent_team_size`` ya es el tamaño
+        real del equipo rival desde el primer instante resuelto del combate
+        -no hace falta perseguir sustituciones ni acumular nada-. No hace
+        efecto si ya había un combate en seguimiento (evita reiniciar el
+        conteo de bajas a mitad de combate) ni si el tamaño no es exactamente
+        seis. Ver `note_trainer_battle_opponent_seen` para la vía alternativa
+        que sí necesita acumular (X/Y, cuyo rival activo hay que perseguir
+        sustitución a sustitución).
+        """
+        if project.six_mon_battle_active or opponent_team_size != 6:
+            return
+        project.six_mon_battle_active = True
+        project.six_mon_battle_deaths = 0
+        # Seis marcadores opacos -no hay identidades individuales que guardar
+        # aquí, el roster ya confirmó el tamaño de una vez- para que
+        # `resolve_six_mon_battle_end` use el mismo criterio (``len(...) == 6``)
+        # que la vía de X/Y.
+        project.six_mon_battle_opponents = [[index, 0] for index in range(6)]
+        self.save(project)
+
+    def note_trainer_battle_opponent_seen(
+        self, project: RunProject, species_id: int, instance_key: int,
+    ) -> None:
+        """Acumula un rival distinto visto en el combate de entrenador en curso.
+
+        Vía alternativa a `note_trainer_battle_seen` para juegos cuyo puntero
+        de rival activo SÍ sigue las sustituciones reales -X/Y, comprobado en
+        vivo el 14-09-2026, ver memoria `six-mon-battle-auto-reward`; a
+        diferencia de ORAS, aquí no existe un roster completo que leer de una
+        vez, así que hay que ir contando conforme salen. Arranca la sesión
+        sola en el primer rival visto; huir o perder antes de ver a los seis
+        nunca hace que `resolve_six_mon_battle_end` pague nada, porque nunca
+        se completa el conteo. ``instance_key`` es cualquier valor que
+        distinga individuos de la misma especie (p. ej. la dirección del
+        objeto de combate en memoria); dos rivales de la misma especie pero
+        distinta instancia SÍ cuentan como dos.
+        """
+        if not project.six_mon_battle_active:
+            project.six_mon_battle_active = True
+            project.six_mon_battle_opponents = []
+            project.six_mon_battle_deaths = 0
+        identity = [int(species_id), int(instance_key)]
+        if identity not in project.six_mon_battle_opponents:
+            project.six_mon_battle_opponents.append(identity)
+            self.save(project)
+
+    def resolve_six_mon_battle_end(self, project: RunProject) -> dict[str, Any] | None:
+        """Cierra el combate de entrenador en curso y paga la regla si fueron seis.
+
+        Regla dictada 09-09-2026 (ver `docs` / memoria de formato RoleRun):
+        superar un combate de seis Pokémon da **+1 drafteo siempre**, y
+        además **+1 vida** solo si nadie del equipo murió en ESE combate -si
+        murió alguien, las vidas ya se descontaron una a una según ocurrió
+        cada baja en `register_detected_faint`, así que aquí no se tocan-.
+        Devuelve ``None`` si no había un combate de seis en curso, o si el
+        que acaba de cerrarse no llegó a ver seis rivales distintos (un
+        combate de menos Pokémon, o uno abandonado a medias).
+        """
+        if not project.six_mon_battle_active:
+            return None
+        distinct = len(project.six_mon_battle_opponents)
+        deaths = int(project.six_mon_battle_deaths)
+        project.six_mon_battle_active = False
+        project.six_mon_battle_opponents = []
+        project.six_mon_battle_deaths = 0
+        if distinct != 6:
+            self.save(project)
+            return None
+
+        label = (
+            "Combate de seis Pokémon superado sin bajas: +1 vida y +1 drafteo"
+            if deaths == 0
+            else "Combate de seis Pokémon superado con bajas: +1 drafteo"
+        )
+        events = self._historial_para_escribir(project)
+        timestamp = datetime.now().isoformat(timespec="seconds")
+
+        old_drafteos = max(0, int(project.counters.get("drafteos", 0)))
+        new_drafteos = old_drafteos + 1
+        project.counters["drafteos"] = new_drafteos
+        events.append({
+            "timestamp": timestamp,
+            "type": "six_mon_battle_resolved",
+            "label": label,
+            "counter": "drafteos",
+            "old_value": old_drafteos,
+            "new_value": new_drafteos,
+            "delta": new_drafteos - old_drafteos,
+            "deaths": deaths,
+            "source": "combate de seis en vivo",
+        })
+
+        new_vidas = None
+        if deaths == 0:
+            old_vidas = max(0, int(project.counters.get("vidas", 0)))
+            new_vidas = old_vidas + 1
+            project.counters["vidas"] = new_vidas
+            events.append({
+                "timestamp": timestamp,
+                "type": "six_mon_battle_resolved",
+                "label": label,
+                "counter": "vidas",
+                "old_value": old_vidas,
+                "new_value": new_vidas,
+                "delta": new_vidas - old_vidas,
+                "deaths": deaths,
+                "source": "combate de seis en vivo",
+            })
+
+        self._escribir_historial(project, events)
+        self.save(project)
+        return {
+            "deaths": deaths,
+            "drafteos": new_drafteos,
+            "vidas": new_vidas,
+            "label": label,
+        }
 
     def update_detected_faint_battle_state(
         self, project: RunProject, identity: str, *, in_battle: bool, exit_samples_required: int = 2,
@@ -937,10 +1152,12 @@ class RunProjectService:
     def set_hotkeys(self, project: RunProject, hotkeys: dict[str, str]) -> None:
         project.hotkeys = dict(hotkeys)
         self.save(project)
+        self._write_global_settings({"hotkeys": project.hotkeys})
 
     def set_controller_hotkeys(self, project: RunProject, hotkeys: dict[str, str]) -> None:
         project.controller_hotkeys = dict(hotkeys)
         self.save(project)
+        self._write_global_settings({"controller_hotkeys": project.controller_hotkeys})
 
     def set_menu_controls(
         self, project: RunProject, keyboard: dict[str, str], controller: dict[str, str],
@@ -948,6 +1165,10 @@ class RunProjectService:
         project.menu_keys = dict(keyboard)
         project.controller_menu_buttons = dict(controller)
         self.save(project)
+        self._write_global_settings({
+            "menu_keys": project.menu_keys,
+            "controller_menu_buttons": project.controller_menu_buttons,
+        })
 
     def _write_obs_placeholders(self, project: RunProject) -> None:
         mapping = {

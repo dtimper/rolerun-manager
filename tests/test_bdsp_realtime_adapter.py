@@ -720,3 +720,58 @@ def test_bdsp_adapter_trace_keeps_presentation_separate_from_logical_hp(tmp_path
     assert row["battle_presentation"][0]["hp"] == 12
     assert row["battle_presentation"][0]["hp_animation"] is False
     assert snapshot.diagnostic("presentation").level is DiagnosticLevel.OK
+
+
+def test_bdsp_adapter_opponent_team_size_survives_the_battle_state_conversion() -> None:
+    # Regresión del mismo tipo que ya mordió a ORAS/X-Y/USUM/SM (ver
+    # `tests/test_oras_adapter_battle_state.py` y hermanos): `_battle_state`
+    # y `_presentation_gated_battle_state` reconstruyen el `BattleState` a
+    # mano -si `opponent_team_size` no sobrevive esa conversión, `ui.py`
+    # nunca lo ve-. Regla de "combate de seis" (dictada 09-09-2026, ver
+    # memoria `six-mon-battle-auto-reward`).
+    party = _party_read(
+        _party_pokemon(1, 300, hp=21, max_hp=21, level=12, nickname="Skibidi"),
+    )
+    battle = _battle_read(BDSPBattlePokemon(1, 0, 300, 21, 21, 12))
+    battle_reader = SimpleNamespace(
+        read=lambda: battle, read_opponent_team_size=lambda: 6,
+    )
+    adapter, _client = _adapter(party, battle_reader)
+
+    snapshot = adapter.capture_monitor(_current(), save_path=None, sequence=1)
+
+    assert snapshot.battle.state == "battle"
+    assert snapshot.battle.opponent_team_size == 6
+
+
+def test_bdsp_adapter_opponent_team_size_is_none_outside_battle() -> None:
+    party = _party_read(
+        _party_pokemon(1, 300, hp=21, max_hp=21, level=12, nickname="Skibidi"),
+    )
+    battle_reader = SimpleNamespace(
+        read=lambda: None, read_opponent_team_size=lambda: 6,
+    )
+    adapter, _client = _adapter(party, battle_reader)
+
+    snapshot = adapter.capture_monitor(_current(), save_path=None, sequence=1)
+
+    assert snapshot.battle.state == "none"
+    assert snapshot.battle.opponent_team_size is None
+
+
+def test_bdsp_adapter_opponent_team_size_failure_never_breaks_battle_detection() -> None:
+    # Un lector sin este método nuevo (p. ej. un test doble antiguo, o un
+    # fallo real de la lectura aislada) no puede tumbar la detección
+    # principal de combate -esa es la garantía de la que depende ORAS/X-Y/
+    # USUM/SM y ahora BDSP también-.
+    party = _party_read(
+        _party_pokemon(1, 300, hp=21, max_hp=21, level=12, nickname="Skibidi"),
+    )
+    battle = _battle_read(BDSPBattlePokemon(1, 0, 300, 21, 21, 12))
+    battle_reader = SimpleNamespace(read=lambda: battle)  # sin read_opponent_team_size
+    adapter, _client = _adapter(party, battle_reader)
+
+    snapshot = adapter.capture_monitor(_current(), save_path=None, sequence=1)
+
+    assert snapshot.battle.state == "battle"
+    assert snapshot.battle.opponent_team_size is None

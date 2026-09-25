@@ -191,6 +191,9 @@ class FakeGuestClient:
             return bytes((data[0] ^ 1,)) + data[1:]
         return data
 
+    def read_u64(self, address: int) -> int:
+        return int(struct.unpack("<Q", self.read_memory(int(address), 8))[0])
+
 
 def _box_memory(first: bytes | None = None) -> tuple[FakeGuestClient, int]:
     pointer_base = 0x10000

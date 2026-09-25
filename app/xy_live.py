@@ -295,6 +295,15 @@ XY_BATTLE_POINTER_MIN = 0x08000000
 XY_BATTLE_POINTER_MAX = 0x08DF0000
 XY_BATTLE_HP_OFFSET = 0x0E
 XY_BATTLE_HP_PAIR_SIZE = 4
+# A diferencia de ORAS (donde la dirección "opponent" resultó ser el slot 0
+# de un roster ESTÁTICO de seis que nunca cambia entre sustituciones, ver
+# `oras_live.ORAS_BATTLE_OPPONENT_TEAM_STRIDE`), en X/Y este puntero SÍ sigue
+# al battler rival ACTIVO: comprobado en vivo el 14-09-2026 leyendo la misma
+# RPC en paralelo durante una sustitución real -la dirección apuntada cambió
+# de sitio y la especie/PS reflejaron al nuevo Pokémon-. Por eso aquí la
+# regla de "combate de seis" sí necesita acumular cada rival distinto que
+# vaya saliendo, en vez de leer el roster completo de una vez.
+XY_BATTLE_SPECIES_OFFSET = 0x0C
 
 
 def parse_xy_tm_hm_pocket(raw: bytes) -> dict[int, int]:
@@ -1032,6 +1041,41 @@ class XYLiveReader:
         return int(current_hp), int(max_hp)
 
     @staticmethod
+    def _battle_redundant_opponent_identity(
+        client, first_slot: int, second_slot: int,
+    ) -> tuple[int, int] | None:
+        """Identidad del rival activo para la regla de "combate de seis".
+
+        Misma comprobación redundante que ``_battle_redundant_hp_pair``
+        -las dos copias del puntero deben coincidir-, pero leyendo la especie
+        en vez de los PS. Devuelve ``(species_id, dirección del objeto)``: la
+        dirección cambia con cada sustitución real (ver el comentario de
+        ``XY_BATTLE_SPECIES_OFFSET``), así que sirve como identidad de
+        "individuo distinto" incluso cuando dos rivales comparten especie.
+        """
+        try:
+            first_ptr = struct.unpack("<I", client.read_memory(int(first_slot), 4))[0]
+            second_ptr = struct.unpack("<I", client.read_memory(int(second_slot), 4))[0]
+        except Exception:
+            return None
+        if not (
+            XY_BATTLE_POINTER_MIN < int(first_ptr) < XY_BATTLE_POINTER_MAX
+            and XY_BATTLE_POINTER_MIN < int(second_ptr) < XY_BATTLE_POINTER_MAX
+        ):
+            return None
+        try:
+            first = bytes(client.read_memory(int(first_ptr) + XY_BATTLE_SPECIES_OFFSET, 2))
+            second = bytes(client.read_memory(int(second_ptr) + XY_BATTLE_SPECIES_OFFSET, 2))
+        except Exception:
+            return None
+        if len(first) != 2 or first != second:
+            return None
+        species_id = struct.unpack("<H", first)[0]
+        if not (1 <= int(species_id) <= XY_MAX_SPECIES_ID):
+            return None
+        return int(species_id), int(first_ptr)
+
+    @staticmethod
     def _battle_identity(pokemon: SavePokemon) -> tuple[int, int, int, int]:
         return (
             int(pokemon.species_id), int(pokemon.pid or 0),
@@ -1108,6 +1152,17 @@ class XYLiveReader:
                 player = self._battle_redundant_hp_pair(
                     client, XY_BATTLE_PARTY_PTR_1, XY_BATTLE_PARTY_PTR_2,
                 )
+                # Regla de "combate de seis" (dictada 09-09-2026): a diferencia
+                # de ORAS, aquí el puntero del rival SÍ sigue al battler activo
+                # en cada sustitución (comprobado en vivo el 14-09-2026), así
+                # que se puede leer directamente en vez de perseguir un roster
+                # estático. Solo tiene sentido si ya hay un oponente válido.
+                opponent_identity = (
+                    self._battle_redundant_opponent_identity(
+                        client, XY_BATTLE_OPPONENT_PTR_1, XY_BATTLE_OPPONENT_PTR_2,
+                    )
+                    if opponent is not None else None
+                )
         except Exception:
             return None
 
@@ -1126,13 +1181,15 @@ class XYLiveReader:
             return ORASBattleProbe(state="none")
         self._battle_opponent_absent_streak = 0
         if player is None:
-            return ORASBattleProbe(state="trainer")
+            return ORASBattleProbe(state="trainer", opponent_identity=opponent_identity)
 
         active = self._map_active_battler(current, player)
         if active is None:
             # Combate confirmado, atribución no segura. El fallback post-combate
             # seguirá detectando cualquier Pokémon que realmente haya quedado a 0.
-            return ORASBattleProbe(state="trainer", hp_pairs=(player,))
+            return ORASBattleProbe(
+                state="trainer", hp_pairs=(player,), opponent_identity=opponent_identity,
+            )
 
         active_id = self._battle_identity(active)
         if not self._battle_confirmed_hp:
@@ -1187,7 +1244,10 @@ class XYLiveReader:
                 "liveBattleActive": active_id,
             },
         )
-        return ORASBattleProbe(state="trainer", health_game=health, hp_pairs=(player,))
+        return ORASBattleProbe(
+            state="trainer", health_game=health, hp_pairs=(player,),
+            opponent_identity=opponent_identity,
+        )
 
     def read(
         self,

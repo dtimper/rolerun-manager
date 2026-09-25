@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import inspect
+import time
 from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
@@ -142,6 +143,30 @@ def _legacy_project(save_path: Path) -> RunProject:
         role_rules_active=False,
         counters={"vidas": 4, "pociones": 2, "medallas": 3, "drafteos": 7},
     )
+
+
+def test_navigation_owner_blocks_arrows_while_a_tour_is_open() -> None:
+    """Pedido del usuario 09-09-2026: el tour (`OnboardingTour`) solo pone un
+    velo visual -sin `grab_set` ni bind propio de flechas-, así que se podía
+    seguir navegando la página de fondo con las flechas mientras el tour
+    seguía abierto encima. `navigation_guard` es el único punto que TODAS las
+    vistas (Equipo/PC, Movimientos, Drafteos, enseñar MT) consultan antes de
+    mover el resalte, así que basta con arreglarlo aquí una sola vez."""
+    view = SimpleNamespace(navigation_guard=None)
+    manager = SimpleNamespace(
+        _navigation_owner=None,
+        _active_onboarding_tour=None,
+        _handle_sidebar_navigation=lambda: None,
+    )
+
+    RoleRunManager._set_navigation_owner(manager, view)
+    assert view.navigation_guard() is True
+
+    manager._active_onboarding_tour = object()
+    assert view.navigation_guard() is False
+
+    manager._active_onboarding_tour = None
+    assert view.navigation_guard() is True
 
 
 def test_navigation_owner_prevents_hidden_view_from_consuming_same_arrow() -> None:
@@ -971,7 +996,7 @@ def test_draft_party_cards_use_large_portraits_and_structured_move_chips() -> No
     assert "STAT_KEYS" in source
     assert "ivs" in source
     assert "evs" in source
-    assert 'text="ELEGIR" if eligible else "EN PREPARACIÓN"' in source
+    assert '"ELEGIR" if eligible' in source
 
 
 def test_draft_transition_never_fades_the_application_window() -> None:
@@ -1811,6 +1836,23 @@ def test_save_open_keeps_its_barrier_until_the_first_pc_read_finishes() -> None:
     )
 
 
+def test_select_save_reveals_an_escape_button_from_the_start_for_every_game() -> None:
+    """Pedido del usuario 08-09-2026: sin esto, cualquier fase de la carga
+    inicial -no solo BDSP/Sol-Luna sin emulador- podía dejar al usuario sin
+    ninguna salida real más que cerrar el programa entero."""
+    select = inspect.getsource(RoleRunManager.select_save)
+
+    assert "self._loading_overlay = loading_overlay" in select
+    assert (
+        "self._set_overlay_cancel_action(\n"
+        "            loading_overlay, self._cancel_initial_game_load, \"VOLVER AL INICIO\",\n"
+        "        )" in select
+    )
+    assert select.index("self._loading_overlay = loading_overlay") < select.index(
+        "self._set_overlay_cancel_action(\n            loading_overlay,"
+    )
+
+
 def test_activity_overlay_tracks_the_final_shell_geometry() -> None:
     geometries: list[str] = []
     lifts: list[bool] = []
@@ -2167,10 +2209,103 @@ def test_initial_shell_waits_for_party_sprites_and_their_final_refresh() -> None
     assert manager._initial_shell_reveal_phase == "mapping"
 
 
-def test_bdsp_initial_transport_error_keeps_shell_hidden_until_live_health() -> None:
+def test_cancel_initial_game_load_cancels_the_retire_wheel_and_drops_deferred_repaint() -> None:
+    """VOLVER AL INICIO debe cortar de verdad la rueda de 35-45 ms de
+    `_retire_initial_shell_when_ready` -reportado por el usuario 08-09-2026:
+    tras pulsar el botón "no vuelvo al inicio... el juego se queda en la
+    barra de tareas", y luego un frame de Equipo y PC real con texto extraño
+    superpuesto durante la transición. Sin cancelar este `after`, un tick ya
+    en cola dispara igual más tarde contra una shell ya desmontada."""
+    cancelled: list[object] = []
+    hidden: list[str] = []
+    welcomed: list[bool] = []
+    manager = SimpleNamespace(
+        _cancel_oras_initial_auto_sync=lambda: None,
+        _initial_shell_waiting=True,
+        _initial_shell_retire_after_id="tk-after-42",
+        _arranque_repintado_aplazado=(True, False, time.monotonic()),
+        _hide_busy_indicator=hidden.append,
+        _return_to_welcome=lambda: welcomed.append(True),
+        after_cancel=cancelled.append,
+    )
+
+    RoleRunManager._cancel_initial_game_load(manager)
+
+    assert cancelled == ["tk-after-42"]
+    assert manager._initial_shell_retire_after_id is None
+    assert manager._arranque_repintado_aplazado is None
+    assert manager._initial_shell_waiting is False
+    assert hidden == ["initial-shell"]
+    assert welcomed == [True]
+
+
+def test_a_stale_retire_tick_after_cancel_does_not_touch_the_torn_down_shell() -> None:
+    """Reproduce la carrera exacta: la rueda de arranque programa su próximo
+    tick, el usuario pulsa VOLVER AL INICIO antes de que dispare, y ese tick
+    ya encolado se ejecuta de todos modos. Antes de la corrección esto
+    llamaba a `_soltar_el_repintado_aplazado` -> `_smooth_render_page` con la
+    shell ya desmontada (`self.body` a `None`), lanzando un `AttributeError`
+    que el usuario veía como texto de traceback superpuesto sobre un frame
+    real de Equipo y PC durante la transición. Aquí, si el intento de
+    cancelar el `after` no bastara y el tick disparase de todos modos, el
+    manager de prueba no define `_smooth_render_page` ni `render_page`: si
+    la corrección regresa, esta prueba falla con un `AttributeError`, igual
+    que le pasaba al usuario."""
+    recorded_after: list[tuple[int, object]] = []
+
+    def fake_after(delay, callback):
+        recorded_after.append((delay, callback))
+        return f"tk-after-{len(recorded_after)}"
+
+    manager = SimpleNamespace(
+        _initial_shell_waiting=True,
+        _initial_shell_live_probe_complete=False,
+        _initial_shell_pc_data=None,
+        _initial_shell_reveal_phase="hidden",
+        _body_swap_in_progress=False,
+        _team_pc_view=None,
+        _presented_team_pc_view=None,
+        current_game=SimpleNamespace(),
+        sprite_pil_cache={},
+        _party_health_signature=RoleRunManager._party_health_signature,
+        _widget_alive=lambda _widget: False,
+        _record_bdsp_ui_event=lambda *_args, **_kwargs: None,
+        after=fake_after,
+        # Todavia "recibiendo datos": el repintado aplazado no debe soltarse
+        # en este tick, exactamente como durante una carga real interrumpida.
+        _arranque_todavia_esta_recibiendo_datos=lambda: True,
+        _arranque_repintado_aplazado=(False, False, time.monotonic()),
+        _soltando_repintado_de_arranque=False,
+        ARRANQUE_APLAZA_COMO_MUCHO_S=RoleRunManager.ARRANQUE_APLAZA_COMO_MUCHO_S,
+    )
+    manager._soltar_el_repintado_aplazado = lambda: (
+        RoleRunManager._soltar_el_repintado_aplazado(manager)
+    )
+    manager._retire_initial_shell_when_ready = lambda attempt=0: (
+        RoleRunManager._retire_initial_shell_when_ready(manager, attempt)
+    )
+
+    RoleRunManager._retire_initial_shell_when_ready(manager)
+    assert manager._initial_shell_retire_after_id is not None
+    assert recorded_after
+    stale_delay, stale_callback = recorded_after[-1]
+    assert stale_delay in (35, 45)
+
+    # El usuario pulsa VOLVER AL INICIO: la carga se cancela de verdad.
+    manager._cancel_oras_initial_auto_sync = lambda: None
+    manager._hide_busy_indicator = lambda _reason: None
+    manager._return_to_welcome = lambda: None
+    manager.after_cancel = lambda _after_id: None
+    RoleRunManager._cancel_initial_game_load(manager)
+    assert manager._initial_shell_waiting is False
+    assert manager._arranque_repintado_aplazado is None
+
+    # El tick que ya estaba en la cola de Tk dispara de todos modos.
+    stale_callback()
     busy: list[tuple[str, str]] = []
     retries: list[int] = []
     callbacks: list[object] = []
+    cancel_actions: list[tuple[object, object, str]] = []
     manager = SimpleNamespace(
         _oras_auto_sync_in_progress=True,
         _oras_auto_sync_token=7,
@@ -2185,6 +2320,11 @@ def test_bdsp_initial_transport_error_keeps_shell_hidden_until_live_health() -> 
         _active_azahar_realtime_label=lambda: "Perla Reluciente",
         _update_top_status=lambda: None,
         _show_busy_indicator=lambda reason, message: busy.append((reason, message)),
+        _busy_indicator="overlay-de-prueba",
+        _set_overlay_cancel_action=lambda overlay, callback, text="VOLVER": cancel_actions.append(
+            (overlay, callback, text),
+        ),
+        _cancel_initial_game_load=lambda: None,
         _schedule_oras_initial_auto_sync=retries.append,
         after=lambda _delay, callback: callbacks.append(callback),
     )
@@ -2197,12 +2337,18 @@ def test_bdsp_initial_transport_error_keeps_shell_hidden_until_live_health() -> 
     assert busy and busy[-1][0] == "initial-shell"
     assert retries == [1600]
     assert callbacks == []
+    # Pedido del usuario 08-09-2026: sin emulador abierto, esta barrera podía
+    # quedarse esperando para siempre sin ninguna salida -debe ofrecer una.
+    assert cancel_actions and cancel_actions[-1][0] == "overlay-de-prueba"
+    assert cancel_actions[-1][1] is manager._cancel_initial_game_load
+    assert cancel_actions[-1][2] == "VOLVER AL INICIO"
 
 
 def test_sm_initial_transport_error_keeps_shell_hidden_until_live_health() -> None:
     busy: list[tuple[str, str]] = []
     retries: list[int] = []
     callbacks: list[object] = []
+    cancel_actions: list[tuple[object, object, str]] = []
     manager = SimpleNamespace(
         _oras_auto_sync_in_progress=True,
         _oras_auto_sync_token=7,
@@ -2217,6 +2363,11 @@ def test_sm_initial_transport_error_keeps_shell_hidden_until_live_health() -> No
         _active_azahar_realtime_label=lambda: "Sol/Luna",
         _update_top_status=lambda: None,
         _show_busy_indicator=lambda reason, message: busy.append((reason, message)),
+        _busy_indicator="overlay-de-prueba",
+        _set_overlay_cancel_action=lambda overlay, callback, text="VOLVER": cancel_actions.append(
+            (overlay, callback, text),
+        ),
+        _cancel_initial_game_load=lambda: None,
         _schedule_oras_initial_auto_sync=retries.append,
         after=lambda _delay, callback: callbacks.append(callback),
     )
@@ -2230,6 +2381,49 @@ def test_sm_initial_transport_error_keeps_shell_hidden_until_live_health() -> No
     assert "Sol/Luna" in busy[-1][1]
     assert retries == [1600]
     assert callbacks == []
+    assert cancel_actions and cancel_actions[-1][0] == "overlay-de-prueba"
+    assert cancel_actions[-1][1] is manager._cancel_initial_game_load
+    assert cancel_actions[-1][2] == "VOLVER AL INICIO"
+
+
+def test_oras_initial_transport_error_opens_unconnected_without_a_cancel_button() -> None:
+    """ORAS/X-Y/Ultra Sol-Ultra Luna abren sin conexión -no necesitan escapar
+    de una barrera que ni siquiera se queda esperando, a diferencia de
+    BDSP/Sol-Luna (ver los dos tests de arriba)."""
+    retries: list[int] = []
+    callbacks: list[object] = []
+    cancel_actions: list[tuple[object, object, str]] = []
+    manager = SimpleNamespace(
+        _oras_auto_sync_in_progress=True,
+        _oras_auto_sync_token=7,
+        _session_generation=3,
+        project=SimpleNamespace(slug="oras-test"),
+        current_game=object(),
+        save_engine=SimpleNamespace(key="oras"),
+        _oras_live_active=False,
+        _initial_shell_waiting=True,
+        _initial_shell_live_probe_complete=False,
+        _active_azahar_realtime_key=lambda: "oras",
+        _active_azahar_realtime_label=lambda: "ORAS",
+        _update_top_status=lambda: None,
+        _show_busy_indicator=lambda reason, message: None,
+        _busy_indicator="overlay-de-prueba",
+        _set_overlay_cancel_action=lambda overlay, callback, text="VOLVER": cancel_actions.append(
+            (overlay, callback, text),
+        ),
+        _cancel_initial_game_load=lambda: None,
+        _retire_initial_shell_when_ready=lambda: None,
+        _schedule_oras_initial_auto_sync=retries.append,
+        after=lambda _delay, callback: callbacks.append(callback),
+    )
+
+    RoleRunManager._finish_oras_initial_auto_sync(
+        manager, 3, "oras-test", 7, None, "3DS todavía no está listo",
+    )
+
+    assert manager._initial_shell_live_probe_complete is True
+    assert callbacks, "ORAS debe liberar la shell de inmediato, sin esperar conexión"
+    assert cancel_actions == []
 
 
 def test_initial_health_readiness_rejects_placeholders_and_accepts_valid_faints() -> None:
@@ -2251,6 +2445,10 @@ def test_team_pc_composition_signal_retires_tm_only_for_the_current_view() -> No
     manager = SimpleNamespace(
         _team_pc_view=current,
         _initial_shell_waiting=False,
+        # Vista actual sin barrera de arranque: llega hasta programar el tour
+        # de bienvenida (`self.after(...)`), sin llegar a ejecutarlo -eso es
+        # cosa de `test_onboarding_tour...`, no de esta prueba.
+        after=lambda _delay, callback: None,
     )
 
     RoleRunManager._team_pc_view_composed(manager, object())

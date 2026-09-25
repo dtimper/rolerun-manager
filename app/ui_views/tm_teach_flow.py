@@ -52,6 +52,7 @@ class IntegratedTMTeachFlow:
         on_open_moves: Callable[[], None] | None = None,
         navigation_keys: dict[str, str] | None = None,
         category_icons=None,
+        entry_step: int = 1,
     ) -> None:
         self.master = master
         self.pokemon = pokemon
@@ -65,6 +66,13 @@ class IntegratedTMTeachFlow:
         self.navigation_guard: Callable[[], bool] | None = None
         self.category_icons = category_icons
         self._images: list[Any] = []
+        # Pedido del usuario 09-09-2026: quien abre este flujo con una MT ya
+        # elegida (`initial_move_id` en `_open_integrated_tm_flow`) salta
+        # directo al paso 2 -el usuario nunca ve ni pide el paso 1-. "←" desde
+        # ahí debe cerrar el flujo entero (como si el paso 2 fuera el
+        # primero), no revelar ese paso 1 oculto -que es indistinguible de
+        # "VER MT COMPATIBLES" y el usuario nunca pidió ver.
+        self._entry_step = int(entry_step)
         self.state = TMTeachFlowState(candidates=candidates)
         self._keyboard_navigation = SpatialSelection()
         self._keyboard_targets: dict[object, tuple[Any, Callable[[], None], str, int]] = {}
@@ -354,13 +362,26 @@ class IntegratedTMTeachFlow:
         return "break"
 
     def _open_moves(self) -> None:
+        # `on_close` está pensado para "cerrar y revelar la MISMA página que
+        # había debajo" (CANCELAR/×, que vuelven adonde se abrió este
+        # flujo) -pedido del usuario 08-09-2026, con captura: llamarlo aquí
+        # TAMBIÉN, antes de navegar a Movimientos, hacía que su barrera
+        # ocupada (con foto congelada de esta misma pantalla) compitiera con
+        # la propia transición de `on_open_moves`, revelando encima la
+        # página EQUIPO/PC de la que se venía en vez de la de Movimientos,
+        # y con la comprobación de "¿ya terminó de componerse?" mirando esa
+        # página equivocada -nunca llegaba a demostrarse lista y acababa en
+        # "LA VISTA NO TERMINÓ DE COMPONERSE" pasados los ~4 s de reintentos-.
+        # Movimientos no es la página de la que se vino: quien reciba
+        # `on_open_moves` es responsable de su propio cierre y transición.
         callback = self.on_open_moves
-        self.on_close()
         if callback is not None:
             callback()
+        else:
+            self.on_close()
 
     def _back(self) -> None:
-        if self.state.step == 1:
+        if self.state.step <= self._entry_step:
             self._close()
             return
         self.state.back()
@@ -370,7 +391,16 @@ class IntegratedTMTeachFlow:
         for child in self.content.winfo_children():
             child.destroy()
         self._reset_keyboard_targets()
-        self.back_button.configure(text="×" if self.state.step == 1 else "←")
+        # En el paso 1 no hay nada a lo que volver, así que "←" haría
+        # exactamente lo mismo que CANCELAR -dos controles para la misma
+        # acción, uno de ellos sin etiqueta-. Se oculta aquí y cada paso
+        # posterior lo reafirma (grid) antes de fijar su propio texto.
+        # Mismo criterio ya usado en `IntegratedDraftFlow._render_header`.
+        if self.state.step == 1:
+            self.back_button.grid_remove()
+        else:
+            self.back_button.grid()
+            self.back_button.configure(text="←")
         if self.state.step == 1:
             self._render_tm_step()
         elif self.state.step == 2:
@@ -381,7 +411,12 @@ class IntegratedTMTeachFlow:
     def _render_tm_step(self) -> None:
         name = str(getattr(self.pokemon, "nickname", "") or getattr(self.pokemon, "species", "Pokémon"))
         self.title.configure(text=f"1 · ELIGE UNA MT PARA {name.upper()}")
-        self.subtitle.configure(text=f"Rol {self.role} · {self.source_detail}")
+        # El detalle de procedencia (ROM/RAM/formato de escritura) es
+        # diagnóstico interno, no algo que el usuario necesite leer aquí
+        # -pedido del usuario 08-09-2026-. `self.role`/`self.source_detail`
+        # siguen guardados por si algún día hace falta mostrarlos en otro
+        # sitio (p. ej. un log), pero ya no se pintan en esta cabecera.
+        self.subtitle.grid_remove()
         scroll = ctk.CTkScrollableFrame(self.content, fg_color="#111111", corner_radius=12)
         self._keyboard_scroll = scroll
         scroll.grid(row=0, column=0, sticky="nsew")
@@ -491,6 +526,7 @@ class IntegratedTMTeachFlow:
             self._render()
             return
         self.title.configure(text=f"2 · ¿QUÉ MOVIMIENTO OLVIDARÁ?")
+        self.subtitle.grid()
         self.subtitle.configure(
             text=f"MT{int(candidate['number']):02d} · {candidate['move_name']} · solo están activos los resultados válidos",
         )
@@ -572,6 +608,7 @@ class IntegratedTMTeachFlow:
         old_move = str(self.moves[slot - 1].get("name") or "—")
         name = str(getattr(self.pokemon, "nickname", "") or getattr(self.pokemon, "species", "Pokémon"))
         self.title.configure(text="3 · REVISA LA OPERACIÓN")
+        self.subtitle.grid()
         self.subtitle.configure(text="RoleRun aún no ha escrito nada. La aplicación empieza al confirmar.")
         preview = ctk.CTkFrame(
             self.content, fg_color="#171717", corner_radius=16,

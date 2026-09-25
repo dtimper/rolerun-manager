@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.config import APP_VERSION
 from app.models import PendingTeamChange
 from app.oras_tm_service import ORASPersonalStats
 from app.realtime.sm_adapter import SMRealTimeAdapter
@@ -88,7 +89,7 @@ def test_alpha31_real_game_party_transition_records_full_runtime_slot(tmp_path: 
     latest = tmp_path / "sm_party_runtime_transition_latest.json"
     assert latest.is_file()
     payload = json.loads(latest.read_text(encoding="utf-8"))
-    assert payload["version"] == "0.3.1"
+    assert payload["version"] == APP_VERSION
     assert payload["party_stride"] == SM_PARTY_STRIDE
     assert len(payload["changed_slots"]) == 1
     slot = payload["changed_slots"][0]

@@ -4,6 +4,30 @@
 > secciones cronológicas inferiores se conservan como historial y reflejan lo
 > que estaba pendiente en cada alpha, no necesariamente lo que sigue pendiente.
 
+## Prioridades vigentes a 25-09-2026
+
+Todo lo que sigue a esta sección es historial: muchas casillas `[ ]` de más
+abajo ya se cerraron después (combate de seis, X/Y cambiando el tamaño de la
+party, etc.). Esta lista es lo que de verdad queda abierto.
+
+- [ ] Publicar una Release nueva. La única publicada es `v0.3.1` (07-09-2026);
+  todo lo añadido después (combate de seis automático en siete juegos,
+  REPORTAR FALLO, atajos compartidos entre Runs, tours de bienvenida, mando por
+  XInput…) no le llega a nadie hasta que se suba `APP_VERSION`, se publique
+  en GitHub y se cree la Release con la misma etiqueta.
+- [ ] Estado alterado en la barra flotante: ORAS muestra un estado equivocado
+  (parálisis como sueño) y BDSP no muestra ninguno — el offset `0x94` de
+  `PlayerWork._playerParty` no lleva el estado vivo. Confirmado, sin arreglar.
+- [ ] USUM, combate de seis: la sonda de combate no distingue salvaje de
+  entrenador. Hueco teórico (roster del rival sin limpiar entre combates), no
+  observado nunca en partida.
+- [ ] Diamante/Perla y Platino: sin ninguna dirección de RAM medida; ocultos
+  del selector.
+
+**Aparcado hasta nuevo aviso**: HeartGold/SoulSilver (escritura apagada por el
+incidente `sanity` sin explicar; carril de combate sin estabilizar). Oculto del
+selector junto con DP/Pt.
+
 ## Prioridades vigentes en v0.2.6-alpha.13
 
 - [x] Implementar la primera party B2/W2 de solo lectura para Pokémon Negro 2

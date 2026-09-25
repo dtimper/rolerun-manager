@@ -74,6 +74,19 @@ class BattleState:
     state: str = "unknown"  # wild | trainer | none | unknown
     health_game: SaveGameData | None = None
     hp_pairs: tuple[tuple[int, int], ...] = ()
+    # Nº de miembros con PK6 válido en el roster del rival, solo en ``trainer``.
+    # Hoy solo lo rellena el adaptador ORAS (ver
+    # `oras_live.ORASBattleProbe.opponent_team_size` y
+    # `RunProjectService.note_trainer_battle_seen`); en cualquier otro
+    # adaptador queda en ``None`` y esta vía de la regla de "combate de seis"
+    # no se dispara.
+    opponent_team_size: int | None = None
+    # (species_id, dirección del objeto) del rival ACTIVO, solo en ``trainer``.
+    # Vía alternativa de la misma regla para juegos cuyo puntero de rival SÍ
+    # sigue las sustituciones reales (X/Y, ver
+    # `xy_live.XYLiveReader._battle_redundant_opponent_identity` y
+    # `RunProjectService.note_trainer_battle_opponent_seen`); ORAS no lo usa.
+    opponent_identity: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)

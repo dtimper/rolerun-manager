@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import struct
 import sys
 import types
@@ -129,7 +130,9 @@ def _fixture(*, occupied: list[tuple[int, int]], leading_empty_slots: int = 0):
 
 
 def test_alpha23_version() -> None:
-    assert APP_VERSION == "0.3.1"
+    # Formato de versión publicada (sin -alpha.N), no un número fijo: fijarlo
+    # obligaba a tocar este test en cada Release.
+    assert re.fullmatch(r"\d+\.\d+\.\d+", APP_VERSION)
 
 
 def test_alpha23_zero_sanity_prefilter_skips_huge_zero_area_but_keeps_pk7() -> None:

@@ -636,6 +636,7 @@ def _ui_double(*, current_game: SaveGameData):
         ),
         _live_metadata_is_missing=lambda current, live: False,
         _process_oras_battle_state=lambda state: None,
+        _process_six_mon_battle_probe=lambda probe, state: None,
         _reconcile_pending_faints_against_party=lambda game: None,
         # 06-09-2026: la reconciliación de quinta ajusta también la
         # tabla de aprendizajes por rol en la RAM de melonDS.

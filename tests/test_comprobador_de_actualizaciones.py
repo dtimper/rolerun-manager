@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from app.update_checker import DismissedVersionStore, is_newer
+from app.update_checker import DismissedVersionStore, is_newer, notas_legibles
 
 
 @pytest.mark.parametrize(
@@ -61,3 +61,24 @@ def test_no_avisar_de_esta_version_persiste_solo_esa_version(tmp_path: Path) -> 
     # Un reinicio del programa vuelve a leer del disco, no de memoria.
     reloaded = DismissedVersionStore(store_path)
     assert reloaded.is_dismissed("0.3.2") is True
+
+
+def test_las_notas_en_markdown_se_leen_sin_simbolos() -> None:
+    notas = (
+        "## Novedades\r\n"
+        "- **Combate de seis**: vida y drafteo automáticos.\r\n"
+        "* Nuevo botón `REPORTAR FALLO`.\r\n"
+        "Más detalles en el [historial](https://example.com/CHANGELOG.md)."
+    )
+    assert notas_legibles(notas) == (
+        "NOVEDADES\n"
+        "• Combate de seis: vida y drafteo automáticos.\n"
+        "• Nuevo botón REPORTAR FALLO.\n"
+        "Más detalles en el historial."
+    )
+
+
+def test_unas_notas_sin_markdown_no_cambian() -> None:
+    notas = "Primera versión publicada en GitHub. Avisará de las siguientes."
+    assert notas_legibles(notas) == notas
+    assert notas_legibles("") == ""

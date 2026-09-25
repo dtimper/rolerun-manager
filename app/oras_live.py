@@ -217,6 +217,16 @@ ORAS_BATTLE_WILD_PP_ADDRESS = 0x0820430C
 ORAS_BATTLE_TRAINER_PP_ADDRESS = 0x08205E1C
 ORAS_BATTLE_MON_STRIDE = 580
 ORAS_BATTLE_DYNAMIC_HP_OFFSET = -266  # u16 max HP, seguido de u16 HP actual
+# ``ORAS_BATTLE_TRAINER_OPPONENT_ADDRESS`` NO es "el rival que está en el campo
+# ahora": es el slot 0 del ROSTER COMPLETO del rival, seis huecos de 0x1E4
+# bytes cada uno, estático durante todo el combate -no se mueve al cambiar de
+# Pokémon, así que un solo PK6 leído ahí nunca refleja una sustitución-.
+# Descubierto en vivo el 14-09-2026 comparando un volcado de RAM antes/después
+# de una sustitución real: la dirección conocida no cambió en 96 s de combate,
+# pero un barrido más amplio encontró los seis miembros completos, en orden,
+# exactamente a este paso. Ver memoria `six-mon-battle-auto-reward`.
+ORAS_BATTLE_OPPONENT_TEAM_STRIDE = 0x1E4
+ORAS_BATTLE_OPPONENT_TEAM_SIZE = 6
 ORAS_BATTLE_DYNAMIC_HP_PAIR_SIZE = 4
 # La party de batalla conserva el mismo stride sparse (0x1E4) y la misma
 # separación PK6/estadísticas que la party normal de ORAS. Leer hasta las
@@ -496,6 +506,19 @@ class ORASBattleProbe:
     state: str  # ``wild``, ``trainer`` o ``none``
     health_game: SaveGameData | None = None
     hp_pairs: tuple[tuple[int, int], ...] = ()  # (current_hp, max_hp) por slot leído
+    # Nº de huecos del ROSTER del rival con un PK6 válido, solo en ``trainer``
+    # (ver `ORAS_BATTLE_OPPONENT_TEAM_STRIDE`). Es el tamaño real del equipo
+    # rival, no requiere seguir combates ni sustituciones: un "combate de seis
+    # Pokémon" (regla dictada 09-09-2026) es simplemente ``== 6`` desde el
+    # primer instante resuelto del combate. Ver `RunProjectService.note_trainer_battle_seen`.
+    opponent_team_size: int | None = None
+    # (species_id, dirección del objeto) del rival ACTIVO, solo en ``trainer``.
+    # ORAS no lo rellena -su roster es estático y ``opponent_team_size`` ya
+    # basta-, pero otros juegos (X/Y, ver `xy_live.XYLiveReader._battle_redundant_opponent_identity`)
+    # sí necesitan acumular cada rival distinto visto en el combate porque su
+    # puntero de rival activo sí sigue las sustituciones reales. Ver
+    # `RunProjectService.note_trainer_battle_opponent_seen`.
+    opponent_identity: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1723,13 +1746,36 @@ class ORASLiveReader:
                 if state not in {"wild", "trainer"}:
                     return ORASBattleProbe(state="none")
 
+                # Solo combates de ENTRENADOR alimentan la regla de "combate de
+                # seis" (dictada 09-09-2026): un salvaje nunca cuenta. El roster
+                # completo del rival es estático durante todo el combate -no
+                # hace falta perseguir sustituciones-, así que basta leer los
+                # seis huecos una vez y contar cuántos tienen un PK6 válido.
+                opponent_team_size: int | None = None
+                if state == "trainer":
+                    opponent_team_size = 0
+                    for slot in range(ORAS_BATTLE_OPPONENT_TEAM_SIZE):
+                        slot_address = (
+                            ORAS_BATTLE_TRAINER_OPPONENT_ADDRESS
+                            + slot * ORAS_BATTLE_OPPONENT_TEAM_STRIDE
+                        )
+                        slot_raw = trainer_opp if slot == 0 else client.read_memory(
+                            slot_address, PK6_STORED_SIZE,
+                        )
+                        try:
+                            slot_pokemon = parse_pk6_boxed(slot_raw, 1, 1, {})
+                        except Exception:
+                            slot_pokemon = None
+                        if slot_pokemon is not None:
+                            opponent_team_size += 1
+
                 pp_address = (
                     ORAS_BATTLE_WILD_PP_ADDRESS if state == "wild"
                     else ORAS_BATTLE_TRAINER_PP_ADDRESS
                 )
                 count = min(6, len(current.party))
                 if count <= 0:
-                    return ORASBattleProbe(state=state)
+                    return ORASBattleProbe(state=state, opponent_team_size=opponent_team_size)
                 start = int(pp_address) + ORAS_BATTLE_DYNAMIC_HP_OFFSET
                 size = ((count - 1) * ORAS_BATTLE_MON_STRIDE) + ORAS_BATTLE_DYNAMIC_HP_PAIR_SIZE
                 raw = client.read_memory(start, size)
@@ -1756,7 +1802,10 @@ class ORASLiveReader:
         esperado = [int(pokemon.max_hp or 0) for pokemon in current.party[:count]]
         mapeo = resolve_battle_row_mapping(entradas, esperado)
         if mapeo is None:
-            return ORASBattleProbe(state=state, health_game=None, hp_pairs=tuple(pairs))
+            return ORASBattleProbe(
+                state=state, health_game=None, hp_pairs=tuple(pairs),
+                opponent_team_size=opponent_team_size,
+            )
 
         party: list[SavePokemon] = []
         valid = 0
@@ -1790,7 +1839,10 @@ class ORASLiveReader:
                 party=party,
                 raw={**current.raw, "liveBattleHealth": True, "liveBattleState": state},
             )
-        return ORASBattleProbe(state=state, health_game=health, hp_pairs=tuple(pairs))
+        return ORASBattleProbe(
+            state=state, health_game=health, hp_pairs=tuple(pairs),
+            opponent_team_size=opponent_team_size,
+        )
 
 
     def read_tm_inventory(self) -> tuple[dict[int, int], AzaharProcess, int]:

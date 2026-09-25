@@ -94,6 +94,19 @@ USUM_BATTLE_STATE_TERMINAL_VALUE = 0x00040000
 USUM_BATTLE_PHASE_TERMINAL_VALUE = 0x00000001
 USUM_BATTLE_STATE_IDLE_VALUE = 0x00040005
 USUM_BATTLE_PHASE_IDLE_VALUE = 0x00000006
+# Bug real descubierto en directo el 14-09-2026 (ver memoria
+# `six-mon-battle-auto-reward`): la convergencia KO->PartyData de alpha.62
+# (más abajo) solo puede cerrar el par idle si hubo AL MENOS una baja propia
+# que observar durante el combate. Un combate ganado sin perder ningún
+# Pokémon nunca tiene ninguna baja que converger, así que el par idle se
+# queda "ambiguo" para siempre y ``state`` nunca vuelve a ``none`` -el
+# usuario lo reprodujo con un combate de seis real ganado sin bajas-.
+# Corregido con una vía de escape puramente por tiempo real: si el par idle
+# lleva sostenido este número de segundos SIN ninguna baja observada, se
+# asume que ya es overworld. Un selector real de sustituto forzado se
+# resuelve en unos pocos segundos como mucho; este margen es generoso a
+# propósito para no disparar jamás durante uno real.
+USUM_BATTLE_IDLE_NO_FAINT_TIMEOUT_SECONDS = 20.0
 USUM_BATTLE_PLAYER_MAX_HP_BASE = 0x30002776
 USUM_BATTLE_PLAYER_DISPLAY_HP_BASE = 0x30002778
 USUM_BATTLE_PLAYER_ACTUAL_HP_BASE = 0x30009760
@@ -113,6 +126,23 @@ USUM_BATTLE_ACTUAL_FROM_MAX = USUM_BATTLE_PLAYER_ACTUAL_HP_BASE - USUM_BATTLE_PL
 USUM_BATTLE_PLAYER_IDENTITY_BASE = 0x3254EE60
 USUM_BATTLE_PLAYER_IDENTITY_STRIDE = 0x104
 USUM_BATTLE_PLAYER_IDENTITY_SIZE = PK7_STORED_SIZE
+
+# Regla de "combate de seis" (dictada 09-09-2026, ver memoria
+# `six-mon-battle-auto-reward`): mismo origen público que
+# ``USUM_BATTLE_PLAYER_IDENTITY_BASE`` -USUMCheatMenu Sources/pokeutil/pokemon.h-,
+# esta vez el roster del RIVAL, seis huecos de la misma zancada 0x104.
+# Confirmado en vivo el 14-09-2026 leyendo la misma RPC en paralelo durante un
+# combate real de seis: los seis huecos decodificaron un PK7 válido cada uno,
+# especies/niveles coherentes con un equipo real. El propio header advierte
+# "OPPONENT PARTY IN BATTLE IS ONLY UPDATED INSIDE A BATTLE / THESE POINTERS
+# DON'T UPDATE INSIDE THE BATTLE PROPERLY" -es decir, es un roster ESTÁTICO
+# fijado al empezar el combate, igual que el de ORAS
+# (`oras_live.ORAS_BATTLE_OPPONENT_TEAM_STRIDE`), no un puntero al rival
+# activo como en X/Y-, así que basta leer los seis huecos una vez.
+USUM_BATTLE_OPPONENT_IDENTITY_BASE = 0x3254F4AC
+USUM_BATTLE_OPPONENT_IDENTITY_STRIDE = 0x104
+USUM_BATTLE_OPPONENT_IDENTITY_SIZE = PK7_STORED_SIZE
+USUM_BATTLE_OPPONENT_TEAM_SIZE = 6
 
 # Azahar 263745c RPC: HandleWriteMemory permite PROCESS_IMAGE, HEAP,
 # LINEAR_HEAP y N3DS_EXTRA_RAM, pero NO NEW_LINEAR_HEAP (0x30000000...).
@@ -345,6 +375,9 @@ class USUMBattleProbe:
     actual_hp_pairs: tuple[tuple[int, int], ...] = ()
     validated: bool = False
     reason: str = ""
+    # Nº de huecos del roster del rival con un PK7 válido, solo cuando
+    # ``state == "battle"``. Ver `USUM_BATTLE_OPPONENT_IDENTITY_BASE`.
+    opponent_team_size: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -849,6 +882,11 @@ class USUMLiveReader:
         self._battle_idle_evidence_signatures: dict[
             tuple[int, int, str], tuple[tuple[tuple[int, int, int, int], ...], ...]
         ] = {}
+        # Reloj real (``time.monotonic()``) del primer sondeo que vio el par
+        # idle para este episodio, usado solo por la vía de escape de
+        # ``USUM_BATTLE_IDLE_NO_FAINT_TIMEOUT_SECONDS``. Se borra en cuanto se
+        # sale del par idle (vuelve a activo, converge, o termina el episodio).
+        self._battle_idle_since_by_process: dict[tuple[int, int, str], float] = {}
         # party-index -> battle-row (ambos cero-based). Solo se cachea un mapeo
         # completo demostrado; cambia de forma legítima al elegir otro activo.
         self._battle_row_mappings: dict[
@@ -971,6 +1009,7 @@ class USUMLiveReader:
         self._battle_visible_hp_by_process.pop(process_key, None)
         self._battle_observed_faints_by_process.pop(process_key, None)
         self._battle_idle_evidence_signatures.pop(process_key, None)
+        self._battle_idle_since_by_process.pop(process_key, None)
 
     def _track_validated_battle_hp(
         self, process_key: tuple[int, int, str],
@@ -1949,6 +1988,37 @@ class USUMLiveReader:
             })
             return None
 
+    def read_battle_opponent_team_size(self) -> int | None:
+        """Cuenta cuántos huecos del roster del rival tienen un PK7 válido.
+
+        Regla de "combate de seis" (dictada 09-09-2026): lectura deliberadamente
+        aislada del resto de `read_battle_probe` -esa función ya tiene un ciclo
+        de vida delicado y muy probado (fin de combate, convergencia KO→party,
+        etc.) que no conviene tocar para añadir esto-. Nunca puede tumbar la
+        sonda principal: cualquier fallo se traduce en ``None`` y el llamador
+        simplemente no evalúa la regla ese sondeo.
+        """
+        try:
+            with self.client_factory() as client:
+                process = self._find_usum_process(client.process_list())
+                client.set_process(process.process_id)
+                valid = 0
+                for slot in range(USUM_BATTLE_OPPONENT_TEAM_SIZE):
+                    address = (
+                        USUM_BATTLE_OPPONENT_IDENTITY_BASE
+                        + slot * USUM_BATTLE_OPPONENT_IDENTITY_STRIDE
+                    )
+                    raw = client.read_memory(address, USUM_BATTLE_OPPONENT_IDENTITY_SIZE)
+                    try:
+                        pokemon = parse_pk7_boxed(raw, 1, 1, {})
+                    except Exception:
+                        pokemon = None
+                    if pokemon is not None:
+                        valid += 1
+                return valid
+        except Exception:
+            return None
+
     def read_battle_probe(self, current: SaveGameData) -> USUMBattleProbe | None:
         """Lee PS visibles de batalla sin mezclarlos con la captura estable.
 
@@ -2007,22 +2077,52 @@ class USUMLiveReader:
 
                 if not active_pair:
                     if lifecycle_active and idle_pair:
+                        idle_started = self._battle_idle_since_by_process.setdefault(
+                            process_key, time.monotonic(),
+                        )
                         party_converged, convergence_evidence = self._idle_party_convergence(
                             process_key, current,
                             primary_flag=int(before_state), phase_flag=int(before_phase),
                         )
+                        timed_out_without_faints = False
+                        if not party_converged and not self._battle_observed_faints_by_process.get(
+                            process_key,
+                        ):
+                            # Bug real descubierto en directo el 14-09-2026: sin
+                            # ninguna baja propia que converger -combate ganado
+                            # sin bajas-, la comprobación de arriba nunca puede
+                            # decir que sí. Ver `USUM_BATTLE_IDLE_NO_FAINT_TIMEOUT_SECONDS`.
+                            elapsed = time.monotonic() - idle_started
+                            if elapsed >= USUM_BATTLE_IDLE_NO_FAINT_TIMEOUT_SECONDS:
+                                party_converged = True
+                                timed_out_without_faints = True
+                                convergence_evidence = {
+                                    **convergence_evidence,
+                                    "timed_out_without_observed_faints": True,
+                                    "idle_seconds": round(elapsed, 1),
+                                }
                         if party_converged:
                             self._battle_trace_end(
                                 flag_value=int(before_state), phase_value=int(before_phase),
-                                reason="observed-ko-converged-to-party",
+                                reason=(
+                                    "idle-timeout-no-faints-observed" if timed_out_without_faints
+                                    else "observed-ko-converged-to-party"
+                                ),
                                 evidence=convergence_evidence,
                             )
                             self._clear_battle_lifecycle(process_key)
                             return USUMBattleProbe(
                                 state="none", validated=True,
                                 reason=(
-                                    "fin de combate USUM demostrado: los KO >0→0 observados "
-                                    "en batalla convergieron por identidad a HP=0 en PartyData; "
+                                    (
+                                        "fin de combate USUM asumido: par idle sostenido "
+                                        f"{convergence_evidence.get('idle_seconds')} s sin ninguna "
+                                        "baja propia que converger; "
+                                    ) if timed_out_without_faints else (
+                                        "fin de combate USUM demostrado: los KO >0→0 observados "
+                                        "en batalla convergieron por identidad a HP=0 en PartyData; "
+                                    )
+                                ) + (
                                     f"battle_flag=0x{int(before_state):08X}; "
                                     f"phase=0x{int(before_phase):08X}"
                                 ),
@@ -2064,11 +2164,13 @@ class USUMLiveReader:
                     self._battle_visible_hp_by_process[process_key] = {}
                     self._battle_observed_faints_by_process[process_key] = set()
                     self._battle_idle_evidence_signatures.pop(process_key, None)
+                    self._battle_idle_since_by_process.pop(process_key, None)
                     self._battle_trace_start(
                         current, process=process, primary_flag=before_state, phase_flag=before_phase,
                     )
                 elif process_key in self._battle_suspended_processes:
                     self._battle_suspended_processes.discard(process_key)
+                    self._battle_idle_since_by_process.pop(process_key, None)
                     # La elección de otro activo puede permutar las filas aunque
                     # la party PK7 conserve sus slots. Se exige una prueba nueva.
                     self._battle_row_mappings.pop(process_key, None)
@@ -2380,6 +2482,7 @@ class USUMLiveReader:
         self._battle_visible_hp_by_process.clear()
         self._battle_observed_faints_by_process.clear()
         self._battle_idle_evidence_signatures.clear()
+        self._battle_idle_since_by_process.clear()
         self._battle_row_mappings.clear()
 
 

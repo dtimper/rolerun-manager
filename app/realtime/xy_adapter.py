@@ -194,6 +194,7 @@ class XYRealTimeAdapter(RealTimeGameAdapter):
                     state=str(getattr(probe, "state", "unknown") or "unknown"),
                     health_game=getattr(probe, "health_game", None),
                     hp_pairs=tuple(getattr(probe, "hp_pairs", ()) or ()),
+                    opponent_identity=getattr(probe, "opponent_identity", None),
                 )
                 diagnostics.append(LiveDiagnostic(
                     "battle", DiagnosticLevel.OK,

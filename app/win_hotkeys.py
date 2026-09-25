@@ -42,6 +42,39 @@ MOD_NOREPEAT = 0x4000
 WM_HOTKEY = 0x0312
 WM_TIMER = 0x0113
 WM_QUIT = 0x0012
+VK_NUMLOCK = 0x90
+
+# Con Bloq Num APAGADO, el teclado numérico manda estos VK de navegación en
+# vez de VK_NUMPADx/VK_DECIMAL -es Windows quien decide esto, no algo que
+# RoleRun controle-. `RegisterHotKey` solo escucha el VK exacto que se le
+# pida: registrar siempre VK_NUMPAD7 (por ejemplo) deja el atajo mudo en
+# cuanto el usuario tiene Bloq Num apagado, sin ningún aviso -parece
+# simplemente roto-. Reportado por el usuario 09-09-2026: "sumar vida... el
+# 7 del panel numérico... no veo que suba".
+_NUMLOCK_OFF_ALIAS: dict[int, int] = {
+    0x60: 0x2D,  # NUMPAD0 -> Insert
+    0x61: 0x23,  # NUMPAD1 -> End
+    0x62: 0x28,  # NUMPAD2 -> Down
+    0x63: 0x22,  # NUMPAD3 -> Page Down
+    0x64: 0x25,  # NUMPAD4 -> Left
+    0x65: 0x0C,  # NUMPAD5 -> Clear (algunos teclados no mandan nada)
+    0x66: 0x27,  # NUMPAD6 -> Right
+    0x67: 0x24,  # NUMPAD7 -> Home
+    0x68: 0x26,  # NUMPAD8 -> Up
+    0x69: 0x21,  # NUMPAD9 -> Page Up
+    0x6E: 0x2E,  # Decimal -> Delete
+}
+
+
+def _effective_vk(vk: int, *, num_lock_on: bool) -> int:
+    """El VK que la tecla física manda de verdad, según Bloq Num.
+
+    Para cualquier tecla que no sea del teclado numérico, devuelve `vk` sin
+    tocar -`_NUMLOCK_OFF_ALIAS` no la conoce-.
+    """
+    if num_lock_on:
+        return vk
+    return _NUMLOCK_OFF_ALIAS.get(vk, vk)
 
 
 class WindowsHotkeyManager:
@@ -187,6 +220,7 @@ class WindowsHotkeyManager:
             )
 
         id_to_action: dict[int, str] = {}
+        registered_vk: dict[int, int] = {}
         failed_ids: set[int] = set()
 
         def reconcile_registrations() -> None:
@@ -194,12 +228,26 @@ class WindowsHotkeyManager:
                 scoped_active = bool(self.active_predicate())
             except Exception:
                 scoped_active = False
+            try:
+                num_lock_on = bool(user32.GetKeyState(VK_NUMLOCK) & 1)
+            except Exception:
+                num_lock_on = True
             for hotkey_id, (action, key, modifiers, vk, scoped) in definitions.items():
                 desired = bool(scoped_active) if scoped else True
+                effective_vk = _effective_vk(vk, num_lock_on=num_lock_on)
                 registered = hotkey_id in id_to_action
+                if registered and registered_vk.get(hotkey_id) != effective_vk:
+                    # Bloq Num cambió mientras el atajo seguía registrado: la
+                    # tecla física ahora manda un VK distinto -hay que
+                    # re-registrar contra ese, o el atajo se queda mudo.
+                    user32.UnregisterHotKey(None, hotkey_id)
+                    id_to_action.pop(hotkey_id, None)
+                    registered_vk.pop(hotkey_id, None)
+                    registered = False
                 if desired and not registered:
-                    if user32.RegisterHotKey(None, hotkey_id, modifiers, vk):
+                    if user32.RegisterHotKey(None, hotkey_id, modifiers, effective_vk):
                         id_to_action[hotkey_id] = action
+                        registered_vk[hotkey_id] = effective_vk
                         failed_ids.discard(hotkey_id)
                     elif hotkey_id not in failed_ids:
                         failed_ids.add(hotkey_id)
@@ -209,6 +257,7 @@ class WindowsHotkeyManager:
                 elif not desired and registered:
                     user32.UnregisterHotKey(None, hotkey_id)
                     id_to_action.pop(hotkey_id, None)
+                    registered_vk.pop(hotkey_id, None)
 
         reconcile_registrations()
         timer_id = int(user32.SetTimer(None, 1, 100, None) or 0)

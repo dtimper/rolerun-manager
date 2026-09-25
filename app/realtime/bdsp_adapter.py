@@ -806,8 +806,10 @@ class BDSPRealTimeAdapter(RealTimeGameAdapter):
             ))
 
         battle_started = time.perf_counter()
+        opponent_team_size: int | None = None
         try:
-            battle_raw = self.battle_reader_factory(client).read()
+            battle_reader = self.battle_reader_factory(client)
+            battle_raw = battle_reader.read()
             battle = self._battle_state(game, battle_raw)
             diagnostics.append(LiveDiagnostic(
                 "battle",
@@ -829,6 +831,17 @@ class BDSPRealTimeAdapter(RealTimeGameAdapter):
                 "BattleProc.client.BTL_PARTY",
                 (time.perf_counter() - battle_started) * 1000,
             ))
+
+        if battle.state == "battle":
+            # Regla de "combate de seis" (dictada 09-09-2026): lectura aparte
+            # y deliberadamente aislada -ver `BDSPBattleReader.read_opponent_team_size`-
+            # en su PROPIO try/except, nunca el de arriba: un lector de
+            # prueba (o cualquier otro fallo) que no implemente este método
+            # nuevo no puede tumbar la detección principal de combate.
+            try:
+                opponent_team_size = battle_reader.read_opponent_team_size()
+            except Exception:
+                opponent_team_size = None
 
         logical_battle = battle
         presentation: BDSPBattlePresentationRead | None = None
@@ -855,6 +868,8 @@ class BDSPRealTimeAdapter(RealTimeGameAdapter):
         battle, gate_rows = self._presentation_gated_battle_state(
             game, logical_battle, presentation,
         )
+        if opponent_team_size is not None:
+            battle = replace(battle, opponent_team_size=opponent_team_size)
         held_kos = [
             row for row in gate_rows
             if int(row["logical_hp"]) == 0 and int(row["published_hp"]) > 0

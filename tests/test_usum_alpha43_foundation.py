@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import struct
 from pathlib import Path
 from types import SimpleNamespace
@@ -438,7 +439,9 @@ def _reader(fake=None) -> USUMLiveReader:
 
 
 def test_alpha43_version_and_official_usum_save_layout() -> None:
-    assert APP_VERSION == "0.3.1"
+    # Formato de versión publicada (sin -alpha.N), no un número fijo: fijarlo
+    # obligaba a tocar este test en cada Release.
+    assert re.fullmatch(r"\d+\.\d+\.\d+", APP_VERSION)
     assert (USUM_SAVE_ITEM_BLOCK_OFFSET, USUM_SAVE_ITEM_BLOCK_SIZE) == (0x00000, 0x0E28)
     assert (USUM_SAVE_MISC_BLOCK_OFFSET, USUM_SAVE_MISC_BLOCK_SIZE) == (0x04400, 0x01FC)
     assert (USUM_SAVE_BOX_LAYOUT_BLOCK_OFFSET, USUM_SAVE_BOX_LAYOUT_BLOCK_SIZE) == (0x04C00, 0x05E6)

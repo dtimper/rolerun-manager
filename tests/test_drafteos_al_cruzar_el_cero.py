@@ -38,7 +38,12 @@ def test_el_boton_se_decide_al_construir_la_tarjeta() -> None:
     fuente = inspect.getsource(IntegratedDraftFlow)
 
     assert 'eligible = role != "SIN ROL" and self.draft_count > 0' in fuente
-    assert 'text="ELEGIR" if eligible else "EN PREPARACIÓN"' in fuente
+    assert '"ELEGIR" if eligible' in fuente
+    # Pedido del usuario 09-09-2026: "EN PREPARACIÓN" solo tiene sentido para
+    # SIN ROL -el Pokémon no está listo-; sin drafteos el rol ya está
+    # asignado, así que el motivo es otro y necesita su propio texto.
+    assert 'else "EN PREPARACIÓN" if role == "SIN ROL"' in fuente
+    assert 'else "SIN DRAFTEOS"' in fuente
 
 
 def test_cruzar_el_cero_repinta_la_pagina() -> None:

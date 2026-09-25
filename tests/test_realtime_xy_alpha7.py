@@ -21,6 +21,7 @@ from app.xy_live import (
     XY_BATTLE_OPPONENT_PTR_1,
     XY_BATTLE_OPPONENT_PTR_2,
     XY_BATTLE_HP_OFFSET,
+    XY_BATTLE_SPECIES_OFFSET,
     XY_TITLE_IDS,
 )
 from app.oras_tm_service import oras_tm_item_id
@@ -114,8 +115,10 @@ def _pointer_region(pointer: int) -> bytes:
     return struct.pack("<I", pointer)
 
 
-def _battle_target(max_hp: int, current_hp: int) -> bytearray:
+def _battle_target(max_hp: int, current_hp: int, *, species: int = 0) -> bytearray:
     raw = bytearray(XY_BATTLE_HP_OFFSET + 4)
+    if species:
+        struct.pack_into("<H", raw, XY_BATTLE_SPECIES_OFFSET, species)
     struct.pack_into("<HH", raw, XY_BATTLE_HP_OFFSET, max_hp, current_hp)
     return raw
 
@@ -174,6 +177,56 @@ def test_alpha10_battle_probe_uses_redundant_active_battler_not_fake_six_slot_ta
     assert opponent_faint_health.party[0].current_hp == 0
     assert opponent_faint_health.party[1].current_hp == 35
     assert not detect_fainted_transitions(switch_health, opponent_faint_health)
+
+
+def test_battle_probe_opponent_identity_tracks_real_switches() -> None:
+    """Regla de "combate de seis" (dictada 09-09-2026, ver memoria
+    `six-mon-battle-auto-reward`): a diferencia de ORAS -cuyo puntero de
+    rival resultó ser un roster ESTÁTICO que nunca cambia entre sustituciones
+    dentro del mismo combate-, en X/Y el puntero del rival SÍ sigue al
+    battler activo, comprobado en vivo el 14-09-2026 con una sustitución
+    real. Se simula ese mismo caso: dos Burmy DISTINTOS (misma especie, PID
+    de objeto distinto) deben producir dos identidades distintas.
+    """
+    pa, pb = 0x08210000, 0x08211000
+    opa1, opb1 = 0x08212000, 0x08213000
+    opa2, opb2 = 0x08214000, 0x08215000
+    fake = MemoryClient({
+        XY_BATTLE_PARTY_PTR_1: _pointer_region(pa),
+        XY_BATTLE_PARTY_PTR_2: _pointer_region(pb),
+        XY_BATTLE_OPPONENT_PTR_1: _pointer_region(opa1),
+        XY_BATTLE_OPPONENT_PTR_2: _pointer_region(opb1),
+        pa: _battle_target(47, 22), pb: _battle_target(47, 22),
+        opa1: _battle_target(22, 22, species=412), opb1: _battle_target(22, 22, species=412),
+    })
+    reader = XYLiveReader(Path("missing.json"), client_factory=lambda: fake, stable_delay=0)
+    tank = mon(1, hp=22, max_hp=47)
+
+    probe = reader.read_battle_probe(game(tank))
+    assert probe is not None
+    assert probe.state == "trainer"
+    assert probe.opponent_identity == (412, opa1)
+
+    # El primer Burmy cae y el entrenador saca OTRO Burmy: misma especie,
+    # objeto de combate distinto -exactamente lo que se vio en directo-.
+    fake.regions[XY_BATTLE_OPPONENT_PTR_1] = bytearray(_pointer_region(opa2))
+    fake.regions[XY_BATTLE_OPPONENT_PTR_2] = bytearray(_pointer_region(opb2))
+    fake.regions[opa2] = _battle_target(22, 22, species=412)
+    fake.regions[opb2] = _battle_target(22, 22, species=412)
+
+    probe = reader.read_battle_probe(game(tank))
+    assert probe is not None
+    assert probe.state == "trainer"
+    assert probe.opponent_identity == (412, opa2)
+
+
+def test_battle_probe_opponent_identity_is_none_outside_trainer_battles() -> None:
+    fake = MemoryClient({})
+    reader = XYLiveReader(Path("missing.json"), client_factory=lambda: fake, stable_delay=0)
+    probe = reader.read_battle_probe(game(mon()))
+    assert probe is not None
+    assert probe.state == "none"
+    assert probe.opponent_identity is None
 
 
 def test_alpha7_battle_probe_reports_none_outside_battle() -> None:

@@ -124,6 +124,21 @@ class IntegratedDraftFlow:
         self._external_navigation_focus = False
         self.images: list[Any] = []
         self.libero_choice: Any | None = None
+        self.open_moves_button: Any | None = None
+        # Tarjeta del primer Líbero del equipo, si hay alguno -pedido del
+        # usuario 08-09-2026, para que el tour pueda explicar su mecánica
+        # especial-. `None` si nadie en el equipo tiene ese rol; el tour ya
+        # sabe saltarse un paso cuyo objetivo no resuelve a nada.
+        self.first_libero_card: Any | None = None
+        # Botones de la primera tarjeta de resultado (paso 2), para que el
+        # tour pueda señalar ENSEÑAR AHORA/GUARDAR/↻ -pedido del usuario
+        # 08-09-2026-. Cada tirada reconstruye sus tarjetas por completo
+        # (`_render_results_step`), así que estos se reasignan en cada
+        # renderizado del paso 2; siguen en `None` mientras se esté en
+        # cualquier otro paso.
+        self.first_result_choose_button: Any | None = None
+        self.first_result_save_button: Any | None = None
+        self.first_result_reroll_button: Any | None = None
         self._fade_after_ids: set[str] = set()
         self._viewport_canvas = None
         self._viewport_bind_id = None
@@ -182,6 +197,26 @@ class IntegratedDraftFlow:
             pass
         self._viewport_canvas = None
         self._viewport_bind_id = None
+
+    def is_fully_composed(self) -> bool:
+        """Mismo idioma que `GlobalTMView`/`UnifiedTeamPCView`.
+
+        `self.frame` mide su alto real en pasadas diferidas
+        (`_fit_frame_to_viewport`, a 0/80/180 ms) -quien vaya a apuntar un
+        tour a este flujo necesita esperar a que eso termine, o el recuadro
+        del primer paso sale calculado contra una geometría todavía
+        provisional.
+        """
+        try:
+            self.frame.update_idletasks()
+            return bool(
+                self.frame.winfo_ismapped()
+                and self.frame.winfo_width() > 800
+                and self.frame.winfo_height() > 450
+                and self.content.winfo_ismapped()
+            )
+        except Exception:
+            return False
 
     def destroy(self) -> None:
         self._release_viewport_resize()
@@ -351,17 +386,37 @@ class IntegratedDraftFlow:
             2: "2 · ELIGE EL MOVIMIENTO NUEVO",
             3: "3 · ELIGE QUÉ MOVIMIENTO OLVIDARÁ",
         }
+        # Pedido del usuario 08-09-2026: el paso 1 necesitaba explicar qué es
+        # un drafteo antes de entrar en detalle (antes empezaba directo en
+        # "los seis miembros..."), y el paso 2 necesitaba decir qué hace cada
+        # botón de una tarjeta -ENSEÑAR AHORA, GUARDAR y el ↻ de rehacer, que
+        # antes solo se insinuaba como "repetir la tirada, no [cuesta]" sin
+        # explicar cuándo conviene usarlo (cuando el resultado es un
+        # movimiento que el Pokémon ya conoce).
         subtitles = {
-            1: "Los seis miembros se muestran a la vez. Cada rol genera su propio conjunto de opciones.",
-            2: "Enseñarla ahora o guardarla para después cuesta un drafteo. Repetir la tirada, no.",
+            1: (
+                "Un drafteo tira movimientos nuevos y compatibles con el rol "
+                "de quien elijas. Los seis miembros se muestran a la vez, y "
+                "cada rol genera su propio conjunto de opciones."
+            ),
+            2: (
+                "ENSEÑAR AHORA lo aplica ya; GUARDAR lo deja listo en Movimientos "
+                "para más tarde. Las dos gastan el mismo drafteo. Si ya conoces "
+                "alguno de estos movimientos, pulsa ↻ para repetirlo gratis."
+            ),
             3: "El drafteo se consume únicamente al confirmar uno de estos cuatro huecos.",
         }
         ctk.CTkLabel(header, text=titles[self.step], text_color=GOLD, anchor="w",
                      font=ctk.CTkFont("Segoe UI", 20, "bold")).grid(row=0, column=1, sticky="w")
         ctk.CTkLabel(header, text=subtitles[self.step], text_color=MUTED, anchor="w",
+                     justify="left", wraplength=700,
                      font=ctk.CTkFont("Segoe UI", 11)).grid(row=1, column=1, sticky="w")
         if self.on_open_moves is not None:
-            ctk.CTkButton(
+            # Guardado como atributo (no solo una variable local) para que el
+            # tour de bienvenida pueda señalarlo -pedido del usuario
+            # 08-09-2026-, igual que `heal_party_button`/`fix_roles_button`
+            # en `UnifiedTeamPCView`.
+            self.open_moves_button = ctk.CTkButton(
                 header,
                 text="CONSULTAR MOVIMIENTOS",
                 command=self.on_open_moves,
@@ -373,9 +428,13 @@ class IntegratedDraftFlow:
                 border_color=GOLD,
                 text_color=GOLD,
                 font=ctk.CTkFont("Segoe UI", 10, "bold"),
-            ).grid(row=0, column=2, rowspan=2, padx=(12, 0))
-        ctk.CTkLabel(header, text=f"DRAFTEOS · {self.draft_count}", text_color=SUCCESS if self.draft_count else DANGER,
-                     font=ctk.CTkFont("Segoe UI", 12, "bold")).grid(row=0, column=3, rowspan=2, padx=(12, 0))
+            )
+            self.open_moves_button.grid(row=0, column=2, rowspan=2, padx=(12, 0))
+        # Pedido del usuario 08-09-2026: "DRAFTEOS · N" aquí era redundante
+        # -el mismo dato ya está siempre visible en el contador global de la
+        # cabecera superior (`header_counter_cells["drafteos"]`, explicado
+        # en el propio tour de Equipo y PC)-. Quitado del todo, no solo
+        # ocultado.
 
     def _render_step(self) -> None:
         self._reset_keyboard_targets()
@@ -439,6 +498,8 @@ class IntegratedDraftFlow:
             card.grid_propagate(False)
             card.grid_columnconfigure(1, weight=1)
             card.grid_rowconfigure(5, weight=1)
+            if role == "Líbero" and self.first_libero_card is None:
+                self.first_libero_card = card
 
             portrait = ctk.CTkFrame(card, fg_color="transparent", corner_radius=0)
             portrait.grid(row=0, column=0, rowspan=7, sticky="ns", padx=(12, 8), pady=10)
@@ -532,7 +593,11 @@ class IntegratedDraftFlow:
 
             choose = ctk.CTkButton(
                 card,
-                text="ELEGIR" if eligible else "EN PREPARACIÓN",
+                text=(
+                    "ELEGIR" if eligible
+                    else "EN PREPARACIÓN" if role == "SIN ROL"
+                    else "SIN DRAFTEOS"
+                ),
                 command=lambda p=pokemon, r=role: self._choose_pokemon(p, r),
                 state="normal" if eligible else "disabled",
                 height=28,
@@ -620,6 +685,8 @@ class IntegratedDraftFlow:
                 font=ctk.CTkFont("Segoe UI", 10, "bold"),
             )
             choose.pack(side="left", fill="x", expand=True)
+            if index == 0:
+                self.first_result_choose_button = choose
             columna = result_column * 3
             self._register_keyboard_target(
                 ("result-choose", index), result_row, columna, choose,
@@ -634,6 +701,8 @@ class IntegratedDraftFlow:
                     font=ctk.CTkFont("Segoe UI", 10, "bold"),
                 )
                 save.pack(side="left", padx=(7, 0))
+                if index == 0:
+                    self.first_result_save_button = save
                 columna += 1
                 self._register_keyboard_target(
                     ("result-save", index), result_row, columna, save,
@@ -646,6 +715,8 @@ class IntegratedDraftFlow:
                 border_color="#4A4A4A", text_color=MUTED,
             )
             reroll.pack(side="left", padx=(7, 0))
+            if index == 0:
+                self.first_result_reroll_button = reroll
             self._register_keyboard_target(
                 ("result-reroll", index), result_row, columna + 1,
                 reroll, lambda i=index: self.on_reroll(i),

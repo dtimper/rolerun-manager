@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from app.sdl_gamepad import BUTTON_NAMES, GamepadSample
 from app.ui import RoleRunManager
 
@@ -52,6 +54,17 @@ def test_controller_ui_does_not_expose_a_hidden_guide_chord() -> None:
     assert "GUIDE +" not in settings
 
 
+def test_reportar_bug_is_not_a_reassignable_shortcut_anymore() -> None:
+    """Pedido del usuario 09-09-2026: quitar esa fila de ATAJOS -F8 sigue
+    funcionando de fábrica (ver `_hotkey_action`/`reportar_bug`), pero ya no
+    se puede reasignar desde ajustes."""
+    import inspect
+
+    settings = inspect.getsource(RoleRunManager._render_settings_page)
+    assert "reportar_bug" not in settings
+    assert "Guardar un fallo para revisarlo después" not in settings
+
+
 def test_menu_navigation_controls_are_separate_from_global_shortcuts() -> None:
     import inspect
 
@@ -88,6 +101,39 @@ def test_controller_dpad_routes_home_by_grid_and_page_to_visible_view() -> None:
     manager._floating_menu_level = "page"
     RoleRunManager._dispatch_controller_direction(manager, "left")
     assert moved == ["left"]
+
+
+def test_floating_home_arrows_follow_visible_layout_and_stop_at_edges() -> None:
+    # 0 EQUIPO Y PC, 1 MOVIMIENTOS, 2 DRAFTEOS, 3 BOLSA, 4 engranaje, 5 REPORTAR FALLO
+    manager = SimpleNamespace(
+        _floating_menu_level="home",
+        _floating_menu_buttons=[object()] * 6,
+        _floating_menu_index=0,
+        _paint_floating_menu_selection=lambda: None,
+    )
+
+    def move(start: int, direction: str) -> int:
+        manager._floating_menu_index = start
+        RoleRunManager._move_floating_menu_selection(manager, direction)
+        return manager._floating_menu_index
+
+    assert move(0, "up") == 5
+    assert move(1, "up") == 4
+    assert move(5, "right") == 4
+    assert move(4, "left") == 5
+    assert move(5, "down") == 0
+    assert move(4, "down") == 1
+    assert move(2, "up") == 0
+    assert move(3, "up") == 1
+    # Hacia fuera del menú no se mueve nada (antes daba la vuelta).
+    assert move(2, "down") == 2
+    assert move(3, "down") == 3
+    assert move(2, "left") == 2
+    assert move(0, "left") == 0
+    assert move(3, "right") == 3
+    assert move(1, "right") == 1
+    assert move(5, "up") == 5
+    assert move(4, "up") == 4
 
 
 def test_controller_navigation_uses_modal_owner_instead_of_hidden_page() -> None:
@@ -181,14 +227,101 @@ def test_bdsp_foreground_gate_is_idempotent_and_releases_on_focus_loss() -> None
         ui.ryujinx_ignora_el_mando_sin_foco = anterior
 
 
+def test_ryujinx_stays_suspended_navigating_rolerun_without_that_run_loaded() -> None:
+    """Reportado por el usuario 08-09-2026: navegar RoleRun con el mando (p.
+    ej. Ajustes, o el selector de partida) movía también al personaje en
+    Ryujinx en segundo plano. La retención antes exigía además tener esa
+    MISMA Run de BDSP abierta en RoleRun (`save_engine.key == "bdsp"` y
+    `current_game` cargado) -algo que no hace falta para el problema real:
+    `_hay_mando` ya implica que Ryujinx está corriendo con un mando
+    conectado, sea cual sea la Run que RoleRun tenga abierta, o ninguna."""
+    import app.ui as ui
+
+    class Gate:
+        def __init__(self) -> None:
+            self.active = False
+            self.acquires = 0
+
+        def acquire(self) -> bool:
+            self.acquires += 1
+            self.active = True
+            return True
+
+        def release(self, *, all_levels: bool = False) -> bool:
+            self.active = False
+            return True
+
+    gate = Gate()
+    manager = SimpleNamespace(
+        save_engine=None,
+        current_game=None,
+        _ryujinx_input_gate=gate,
+        _role_run_foreground_gate_held=False,
+        _gamepad_reserved_buttons=set(),
+        _floating_launcher=None,
+        _hay_mando=True,
+        _foreground_belongs_to_this_process=lambda: True,
+        _widget_alive=lambda _widget: False,
+    )
+
+    anterior = ui.ryujinx_ignora_el_mando_sin_foco
+    try:
+        ui.ryujinx_ignora_el_mando_sin_foco = lambda: False
+        assert RoleRunManager._sync_role_run_foreground_input_gate(manager) is True
+        assert gate.acquires == 1
+        assert gate.active is True
+    finally:
+        ui.ryujinx_ignora_el_mando_sin_foco = anterior
+
+
 def test_gamepad_poll_reserves_ryujinx_before_sampling_and_dispatch() -> None:
     import inspect
 
     source = inspect.getsource(RoleRunManager._poll_gamepad)
     sync_index = source.index("_sync_role_run_foreground_input_gate")
-    sample_index = source.index(".sample()")
+    sample_index = source.index("_read_gamepad_buttons()")
     dispatch_index = source.index("_dispatch_game_overlay_key")
     assert sync_index < sample_index < dispatch_index
+
+
+def test_gamepad_buttons_prefer_sdl_ryujinx_over_xinput_fallback() -> None:
+    """SDL/Ryujinx manda cuando está disponible -es el único origen que
+    `RyujinxInputGate` sabe suspender-; XInput (ver `xinput_gamepad.py`) es
+    solo el respaldo para cuando Ryujinx no está abierto y SDL no tiene nada
+    que ofrecer, típicamente para cualquier otro juego o para la pantalla de
+    asignación de botón sin ningún emulador corriendo."""
+    sdl_pad = SimpleNamespace(sample=lambda: GamepadSample(True, "SDL", frozenset({"a"})))
+    xinput_pad = SimpleNamespace(sample=lambda: GamepadSample(True, "XInput", frozenset({"b"})))
+    manager = SimpleNamespace(_gamepad=sdl_pad, _xinput_gamepad=xinput_pad)
+
+    pressed, hay_mando = RoleRunManager._read_gamepad_buttons(manager)
+    assert hay_mando is True
+    assert pressed == frozenset({"a"})
+
+
+def test_gamepad_buttons_fall_back_to_xinput_without_a_readable_sdl_pad() -> None:
+    xinput_pad = SimpleNamespace(sample=lambda: GamepadSample(True, "XInput", frozenset({"back"})))
+
+    manager_no_sdl = SimpleNamespace(_gamepad=None, _xinput_gamepad=xinput_pad)
+    pressed, hay_mando = RoleRunManager._read_gamepad_buttons(manager_no_sdl)
+    assert hay_mando is True
+    assert pressed == frozenset({"back"})
+
+    disconnected_sdl_pad = SimpleNamespace(sample=lambda: GamepadSample(False))
+    manager_disconnected_sdl = SimpleNamespace(_gamepad=disconnected_sdl_pad, _xinput_gamepad=xinput_pad)
+    pressed, hay_mando = RoleRunManager._read_gamepad_buttons(manager_disconnected_sdl)
+    assert hay_mando is True
+    assert pressed == frozenset({"back"})
+
+
+def test_gamepad_buttons_report_nothing_without_any_readable_pad() -> None:
+    manager = SimpleNamespace(
+        _gamepad=None,
+        _xinput_gamepad=SimpleNamespace(sample=lambda: GamepadSample(False)),
+    )
+    pressed, hay_mando = RoleRunManager._read_gamepad_buttons(manager)
+    assert hay_mando is False
+    assert pressed == frozenset()
 
 
 def test_short_gamepad_tap_never_becomes_synthetic_repeat() -> None:
@@ -318,6 +451,110 @@ def test_si_el_emulador_se_protege_solo_no_se_le_para() -> None:
         assert gate.acquires == 1, "sin esa opcion la proteccion si hace falta"
     finally:
         ui.ryujinx_ignora_el_mando_sin_foco = anterior
+
+
+@pytest.fixture
+def controller_capture_app():
+    """Una `RoleRunManager` real y mínima, para probar la pantalla de verdad.
+
+    `begin_controller_capture` construye widgets de Tk de forma directa (sin
+    pasar por ningún doble), así que la única manera honesta de comprobar que
+    ya no softlockea es abrirla sobre una raíz real y pulsar sus controles.
+    """
+    ctk = pytest.importorskip("customtkinter")
+    try:
+        app = RoleRunManager.__new__(RoleRunManager)
+        ctk.CTk.__init__(app)
+    except Exception as exc:  # pragma: no cover - según entorno
+        pytest.skip(f"Sin entorno gráfico para Tk: {exc}")
+    try:
+        app.geometry("900x700")
+        app.project = SimpleNamespace(
+            controller_hotkeys={}, controller_menu_buttons={}, menu_keys={},
+        )
+        app.project_service = SimpleNamespace(
+            set_controller_hotkeys=lambda *a, **k: None,
+            set_menu_controls=lambda *a, **k: None,
+        )
+        app._apply_window_icon = lambda w: None
+        app._smooth_render_page = lambda *a, **k: None
+        app._gamepad_capture_action = None
+        app._gamepad_capture_callback = None
+        app._hay_mando = False
+        app.update()
+        yield app, ctk
+    finally:
+        try:
+            app.destroy()
+        except Exception:
+            pass
+
+
+def _find_widgets(root, predicate, found=None):
+    if found is None:
+        found = []
+    for child in root.winfo_children():
+        try:
+            if predicate(child):
+                found.append(child)
+        except Exception:
+            pass
+        _find_widgets(child, predicate, found)
+    return found
+
+
+def test_controller_capture_screen_has_a_working_cancel_button(controller_capture_app) -> None:
+    """Pedido del usuario 08-09-2026: se quedó softlockeado en esta pantalla
+    -sin mando detectado y sin ninguna forma visible de salir-. Antes solo
+    tenía ESC sin anunciar; ahora también hay un botón CANCELAR real."""
+    app, ctk = controller_capture_app
+
+    RoleRunManager.begin_controller_capture(app, "heal_party")
+    app.update()
+
+    assert app._gamepad_capture_action == "heal_party"
+    cancel_buttons = _find_widgets(
+        app, lambda w: isinstance(w, ctk.CTkButton) and "CANCELAR" in str(w.cget("text")),
+    )
+    assert len(cancel_buttons) == 1
+
+    cancel_buttons[0].invoke()
+    app.update()
+
+    assert app._gamepad_capture_action is None
+    assert app._gamepad_capture_callback is None
+    assert not _find_widgets(
+        app, lambda w: isinstance(w, ctk.CTkLabel) and "PULSA EL BOTÓN" in str(w.cget("text")),
+    ), "CANCELAR debe cerrar la pantalla de verdad, no dejarla colgada"
+
+
+def test_controller_capture_screen_explains_why_nothing_registers_without_a_pad(
+    controller_capture_app,
+) -> None:
+    """Sin un mando legible (hoy, sin Ryujinx abierto) ningún botón se iba a
+    detectar nunca -"me he metido... para presionar el botón que sea... pero
+    no lo pilla"-. La pantalla debe decirlo en vez de quedarse en silencio."""
+    app, ctk = controller_capture_app
+
+    RoleRunManager.begin_controller_capture(app, "heal_party")
+    app.after(500, app.quit)
+    app.mainloop()
+
+    assert _find_widgets(
+        app,
+        lambda w: isinstance(w, ctk.CTkLabel)
+        and "no se detecta ningún mando" in str(w.cget("text")).casefold(),
+    ), "debe avisar de que todavía no hay mando legible"
+
+    app._hay_mando = True
+    app.after(500, app.quit)
+    app.mainloop()
+
+    assert _find_widgets(
+        app,
+        lambda w: isinstance(w, ctk.CTkLabel)
+        and "mando detectado" in str(w.cget("text")).casefold(),
+    ), "debe reflejar que ya hay un mando legible en cuanto aparece"
 
 
 def test_ante_la_duda_se_protege() -> None:

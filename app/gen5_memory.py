@@ -63,6 +63,12 @@ class Gen5Memory:
     # Medida en Blanco sobre dos miembros y las dos tablas; en Negro 2 todavía
     # no se ha medido, así que vale None y ahí se sigue leyendo una sola fila.
     battle_stride: int | None = None
+    # Fila del combatiente rival ACTIVO (no del equipo del jugador). A
+    # diferencia de `battle_presentation`/`battle_logical`, no forma parte de
+    # una tabla de seis filas contiguas: es un carril aislado que solo sigue
+    # a quien el rival tiene en el campo. Se demuestra con una traza de dos
+    # estados igual que las del jugador.
+    battle_opponent_active: int | None = None
 
     @property
     def block_base(self) -> int:
@@ -115,6 +121,27 @@ GEN5_MEMORY: dict[str, Gen5Memory] = {
         # de combatiente seguidos: el PS de cada uno se quedó donde debía tras
         # salir del campo, sin resetear-.
         battle_stride=0x224,
+        # DESCARTADO el 23-09-2026: `0x0214701C` (especie+PS máximo, hallado
+        # con una traza de dos estados sobre un solo golpe) parecía válido,
+        # pero una traza real de seis cambios de rival narrados por el
+        # usuario en directo (patrat, bibarel, lillipup, zangoose,
+        # lickitung, smeargle) demostró que esa dirección solo ciclaba entre
+        # cuatro especies ajenas al combate real -coincidencia, no el rival-.
+        #
+        # Reemplazado por `0x0226170A`, hallado monitorizando en vivo TODA
+        # la RAM cada ~1,2 s buscando exactamente esas seis especies durante
+        # el combate real: una única dirección mostró las seis, EN ESE
+        # ORDEN, con una cadencia de 3,7-4,9 s entre cada una -coherente con
+        # turnos de combate reales-. A diferencia de la tabla del jugador,
+        # aquí NO va acompañada de PS máximo/actual en la misma fila -fuera
+        # de combate los 12 bytes siguientes están a cero mientras la
+        # especie persiste-, así que la identidad del rival en B2/W2 se basa
+        # solo en la especie (sin un segundo campo que distinga individuos
+        # repetidos, a diferencia de X/Y). Es un carril aislado del
+        # combatiente rival activo, no una tabla de seis filas: se rastrea
+        # igual que en X/Y, acumulando especies distintas conforme el rival
+        # cambia de Pokémon.
+        battle_opponent_active=0x0226170A,
     ),
     # Blanco / Negro. Ancla medida el 27-08-2026 sobre la partida del usuario:
     # cuatro PK5 seguidos separados 220 bytes -su equipo de cuatro- y, en la
@@ -163,5 +190,18 @@ GEN5_MEMORY: dict[str, Gen5Memory] = {
         battle_presentation=0x0226D670,
         battle_logical=0x0226E56C,
         battle_stride=0x224,
+        # Demostrado el 23-09-2026 con la misma técnica que en Negro 2:
+        # monitorización en vivo de TODA la RAM cada ~0,9 s durante un
+        # combate real de seis, exigiendo que un valor recién cambiado a un
+        # rango de especie plausible se mantuviera igual dos ticks seguidos
+        # -para descartar ruido puntual- y comparando después contra el
+        # orden narrado por el usuario (tepig, foongus, hippowdon, gulpin,
+        # purrloin, togetic). Una única dirección mostró cinco de las seis
+        # -faltó tepig, ya en el campo antes de arrancar la monitorización-
+        # EN EL ORDEN EXACTO narrado, con 9-11 s entre cada una. No guarda
+        # relación de stride con `battle_presentation`/`battle_logical`: es
+        # un carril aislado del rival, igual que en Negro 2, no una fila más
+        # de esas dos tablas del jugador.
+        battle_opponent_active=0x022A7DCC,
     ),
 }

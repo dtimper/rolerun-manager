@@ -1,13 +1,33 @@
 # RoleRun Manager — estado funcional canónico
 
-- Fecha de corte: 2026-08-27
-- Versión de aplicación: `v0.2.6-alpha.68`
+- Fecha de corte: 2026-09-25
+- Versión de aplicación: `0.3.1` (`app/config.py`; única Release publicada en
+  GitHub, 07-09-2026 — lo posterior está en el árbol local sin publicar)
 
 Este documento es la fuente canónica del estado funcional actual. `CHANGELOG.md`
-y los `README_v*` conservan la evolución histórica; `ROADMAP.md` conserva tanto
+conserva la evolución histórica; `ROADMAP.md` conserva tanto
 prioridades actuales como hitos antiguos. Si una afirmación histórica contradice
 este documento, hay que comprobar código, tests, logs y validación física y
 actualizar aquí el resultado demostrado.
+
+## Resumen vigente (25-09-2026)
+
+Las entradas fechadas de más abajo son el registro de cada avance; esta
+sección es la foto de hoy. Lo posterior al 14-09 está solo en `CHANGELOG.md`.
+
+- **Juegos seleccionables**: Negro/Blanco y Negro 2/Blanco 2 (melonDS), X/Y,
+  ROZA, Sol/Luna y UltraSol/UltraLuna (Azahar), Diamante Brillante/Perla
+  Reluciente (Ryujinx).
+- **Ocultos del selector** (`GAMES_OCULTOS`, `app/ui.py`): Diamante/Perla y
+  Platino (sin direcciones de RAM medidas) y HeartGold/SoulSilver (aparcado:
+  escritura apagada, combate sin estabilizar).
+- **Combate de seis Pokémon** (vida + drafteo automáticos): validado
+  físicamente en los siete juegos seleccionables.
+- **Bugs abiertos confirmados**: estado alterado mal mostrado en la barra
+  flotante (ORAS muestra otro estado; BDSP no muestra ninguno porque el offset
+  `0x94` de `PlayerWork._playerParty` no lleva el estado vivo).
+- **Huecos teóricos sin observar**: en USUM la sonda de combate no distingue
+  salvaje de entrenador para el combate de seis.
 
 ## Foco activo: Design Evolution
 
@@ -15,6 +35,81 @@ La numeración funcional queda fijada así: `v0.2.1` corresponde a BDSP,
 `v0.2.2` a USUM, `v0.2.3` a Sol/Luna, `v0.2.4` a X/Y, `v0.2.5` a ORAS y
 `v0.2.6` a B2/W2. El changelog conserva los nombres históricos anteriores para no
 borrar trazabilidad.
+
+### 14-09-2026 (3) — FIX real de USUM: combate ganado sin bajas nunca terminaba
+
+Extendiendo la regla de "combate de seis" a UltraSol/UltraLuna se descubrió
+un bug preexistente y ajeno a esa regla: `USUMLiveReader` nunca declaraba
+`state="none"` tras un combate ganado SIN perder ningún Pokémon propio,
+porque su mecanismo de fin de combate (alpha.62) exige al menos una baja
+propia observada para converger contra PartyData -sin bajas no hay nada que
+converger-. Nunca se había validado físicamente contra un UltraSol real
+(alpha.62 terminaba "pendiente de validación física"). Corregido con una vía
+de escape por tiempo real (20 s de par idle sostenido sin bajas ⇒ se asume
+overworld), sin tocar el camino ya probado de "sí hubo baja". Ver
+`CHANGELOG.md` para el detalle completo y la razón del primer intento de
+arreglo descartado.
+
+### 14-09-2026 (2) — Regla de "combate de seis" CONFIRMADA en vivo en ORAS y X/Y
+
+Tras el fix de abajo, el usuario probó ambos juegos con combates de seis
+reales (en X/Y tuvo que añadir Pokémon extra al líder, ya que los gimnasios
+tempranos sin modificar no llegan a seis). Se encontró un tercer bug, solo en
+X/Y: la sesión se cerraba en falso a mitad de combate porque el objeto de
+combate del rival tarda varios segundos reales en reconstruirse tras cada
+sustitución, y ese hueco bastaba para superar la confirmación de "fin de
+combate" (entonces medida en número de muestras, no en tiempo real). Un
+combate real se fragmentó en más de veinte resoluciones prematuras de 1-2
+rivales cada una. Corregido midiendo tiempo de reloj real (10 s de "none"
+sostenido) en vez de contar muestras -cadencia de sondeo variable, número de
+muestras no es robusto-. Confirmado en directo justo después: +1 vida y +1
+drafteo correctos en un combate de seis real de X/Y. **La regla queda
+funcionando en vivo en ambos juegos, ya sin pendientes de validación física.**
+Retirado el registro de diagnóstico temporal que sirvió para encontrar los
+tres bugs de esta serie de entradas. Detalle completo en `CHANGELOG.md`.
+
+### 14-09-2026 — FIX: la regla de "combate de seis" no se disparaba en directo
+
+El usuario ganó su primer gimnasio de seis en ORAS tras la entrada de abajo y
+no sumó ni vida ni drafteo. Causa: `ui.py` nunca ve el `ORASBattleProbe` de
+`oras_live.py` directamente -ve `RealTimeSnapshot.battle`, un `BattleState`
+genérico que `ORASRealTimeAdapter._capture_optional_lanes` reconstruye campo
+por campo-, y `opponent_identity` no viajaba por esa conversión porque
+`BattleState` ni lo declaraba. El dato se perdía en silencio en cada sondeo.
+Corregido en `app/realtime/models.py` (campo nuevo en `BattleState`) y
+`app/realtime/oras_adapter.py` (se copia explícitamente). Nuevo test de
+regresión en `tests/test_oras_adapter_battle_state.py` que ejercita la
+conversión completa, no solo el probe aislado. **El usuario necesita
+reiniciar RoleRun** para que el proceso en marcha deje de correr el código
+viejo. Sigue pendiente de validación física contra un combate de seis real
+tras el reinicio.
+
+### 09-09-2026 — Regla de "combate de seis Pokémon" automatizada en ORAS
+
+El usuario dictó por voz el mismo día la regla completa de vidas/drafteos
+(ver memoria `rolerun-format-rules`): superar un combate de seis Pokémon da
+siempre +1 drafteo, y además +1 vida si nadie del equipo murió en ESE
+combate. Hasta ahora los cuatro contadores se ajustaban a mano desde la
+cabecera; esta regla concreta ya se automatiza para ORAS.
+
+RoleRun no lee el roster completo del rival (solo existe una dirección fija
+del rival ACTIVO, `ORAS_BATTLE_TRAINER_OPPONENT_ADDRESS`, ya usada para
+distinguir salvaje/entrenador). En vez de eso, `oras_live.read_battle_probe`
+decodifica species_id+PID de ese PK6 rival en cada sondeo y
+`RunProjectService.note_six_mon_battle_opponent` acumula cuántos rivales
+DISTINTOS salieron durante el combate en curso; al confirmarse el fin del
+combate (dos lecturas seguidas de "none", igual que el resto del pipeline),
+`resolve_six_mon_battle_end` paga la regla solo si fueron exactamente seis.
+Las bajas propias durante ese combate ya las cuenta `register_detected_faint`
+sin cambios de comportamiento -esta regla solo lee ese conteo, nunca
+descuenta una segunda vez-.
+
+Solo ORAS expone hoy la identidad del rival activo; X/Y comparte el mismo
+`ORASBattleProbe` pero su sonda solo trae PS del rival, no PK6 completo, así
+que en X/Y `opponent_identity` llega `None` y la regla nunca se dispara (sin
+falsos positivos). Cubierto por tests (`tests/test_run_service.py`,
+`tests/test_oras_live.py`); **pendiente de validación física** con un
+combate de seis real en ORAS -no confirmado en emulador, ver `CHANGELOG.md`-.
 
 ### 06-09-2026 (5) — Retomados Diamante/Perla, Platino y HeartGold; primer carril de combate de HGSS
 

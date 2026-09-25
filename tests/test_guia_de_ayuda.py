@@ -145,3 +145,34 @@ def test_la_guia_no_supone_que_quien_la_lee_hace_directos() -> None:
     texto = guia()
 
     assert "directo" not in texto
+
+
+def test_la_guia_dice_que_los_atajos_de_teclado_tambien_funcionan_en_rolerun() -> None:
+    """Pedido del usuario 09-09-2026: ya no exigen tener el emulador delante."""
+    texto = guia()
+
+    assert "tanto con el emulador delante como con el propio RoleRun" in texto
+
+
+def test_la_guia_dice_que_sin_rol_no_es_algo_que_rolerun_impida_de_verdad() -> None:
+    """RoleRun no puede bloquear qué Pokémon envías a combate en el emulador
+    real; SIN ROL es una regla que el jugador se compromete a seguir."""
+    texto = guia()
+
+    assert "RoleRun no te lo impide dentro del emulador" in texto
+
+
+def test_la_guia_dice_que_las_tres_opciones_de_cada_tarjeta_se_alcanzan_con_flechas() -> None:
+    """Pedido del usuario 09-09-2026: antes solo ELEGIR era alcanzable."""
+    texto = guia()
+
+    assert "ELEGIR, VER MT COMPATIBLES, RECUERDA-MOVIMIENTOS" in texto
+    assert "las tres se alcanzan con las flechas" in texto
+
+
+def test_la_guia_manda_a_que_es_rolerun_para_las_reglas_exactas() -> None:
+    """Los números concretos (vidas, curaciones, drafteos) viven en la guía
+    del formato, no duplicados aquí -ver ¿QUÉ ES ROLERUN?"""
+    texto = guia()
+
+    assert "mira ¿QUÉ ES ROLERUN?" in texto

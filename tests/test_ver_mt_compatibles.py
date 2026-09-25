@@ -72,6 +72,13 @@ class TestWiring:
         assert "if profile is None:" in fuente
         assert "return" in fuente
 
+    def test_abrir_con_una_mt_ya_elegida_marca_el_paso_2_como_entrada_real(self) -> None:
+        """Pedido del usuario 09-09-2026: quien abre con `initial_move_id` -pulsar
+        ELEGIR en una MT de Movimientos- nunca ve el paso 1, así que "←" desde
+        el paso 2 debe cerrar el flujo, no revelar un paso 1 nunca pedido."""
+        fuente = inspect.getsource(RoleRunManager._open_integrated_tm_flow)
+        assert "entry_step=2 if initial_move_id is not None else 1" in fuente
+
 
 class TestButtonInTeamCard:
     def test_el_boton_aparece_y_llama_al_callback_con_el_pokemon(self, tk_root) -> None:
@@ -117,6 +124,63 @@ class TestButtonInTeamCard:
         card = vista._team_cards["id-1"]
         textos = [_texto(child) for child in card.winfo_children()]
         assert "VER MT COMPATIBLES" not in textos
+
+
+class TestBackFromASkippedFirstStep:
+    """Pedido del usuario 09-09-2026: abrir el flujo con una MT ya elegida
+    (pulsar ELEGIR en una tarjeta de MT de Movimientos, `initial_move_id`)
+    salta directo al paso 2 -el usuario nunca ve ni pide el paso 1-. Antes,
+    "←" desde ahí revelaba ese paso 1 oculto (idéntico a VER MT COMPATIBLES,
+    una pantalla que el usuario nunca pidió) en vez de cerrar el flujo."""
+
+    def _flow_at_step_two(self, root, candidate, closed, *, entry_step):
+        pokemon = object()
+        flow = IntegratedTMTeachFlow(
+            root, pokemon=pokemon, role="Mago", moves=(),
+            candidates=(candidate,), source_detail="",
+            on_apply=lambda slot, candidate: None,
+            on_close=lambda: closed.append(True),
+            entry_step=entry_step,
+        )
+        flow.state.select_tm(int(candidate["move_id"]))
+        flow._render()
+        return flow
+
+    def test_back_closes_the_flow_when_step_two_was_the_real_entry_point(self, tk_root) -> None:
+        _ctk, root = tk_root
+        closed: list[bool] = []
+        candidate = {
+            "number": 35, "item_id": 328, "move_id": LANZALLAMAS_ID,
+            "move_name": "Lanzallamas", "quantity": 1, "category": "special",
+            "type_id": 9, "description": "Una gran ráfaga de fuego.",
+            "power": 95, "accuracy": 100, "pp": 15,
+        }
+        flow = self._flow_at_step_two(root, candidate, closed, entry_step=2)
+        assert flow.state.step == 2
+
+        flow._back()
+
+        assert closed == [True], "atrás desde el paso de entrada real debe cerrar el flujo, no revelar el paso 1"
+        flow.destroy()
+
+    def test_back_still_reveals_step_one_when_it_was_the_real_entry_point(self, tk_root) -> None:
+        """El comportamiento normal -abrir sin `initial_move_id`- no cambia."""
+        _ctk, root = tk_root
+        closed: list[bool] = []
+        candidate = {
+            "number": 35, "item_id": 328, "move_id": LANZALLAMAS_ID,
+            "move_name": "Lanzallamas", "quantity": 1, "category": "special",
+            "type_id": 9, "description": "Una gran ráfaga de fuego.",
+            "power": 95, "accuracy": 100, "pp": 15,
+        }
+        flow = self._flow_at_step_two(root, candidate, closed, entry_step=1)
+        assert flow.state.step == 2
+
+        flow._back()
+
+        assert closed == []
+        assert flow.state.step == 1
+        flow.destroy()
 
 
 class TestStepOneCardStyle:

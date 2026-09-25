@@ -16,9 +16,9 @@ para OBS).
 Negro/Blanco · Negro 2/Blanco 2 · X/Y · Rubí Omega/Zafiro Alfa · Sol/Luna ·
 Ultrasol/Ultraluna · Diamante Brillante/Perla Reluciente
 
-Cada juego se lee en vivo desde el emulador correspondiente (Azahar para 3DS,
-o Ryujinx para Switch, según el título) — no hace falta cerrar la partida
-para consultar el estado.
+Cada juego se lee en vivo desde el emulador correspondiente (melonDS para
+DS, Azahar para 3DS o Ryujinx para Switch, según el título) — no hace falta
+cerrar la partida para consultar el estado.
 
 Diamante/Perla, Platino y HeartGold/SoulSilver tienen motor propio en el
 código pero están ocultos del selector por ahora, a la espera de estabilizar
@@ -41,6 +41,16 @@ Al abrir el programa, comprueba en segundo plano si hay una versión más
 nueva publicada en la pestaña [Releases](../../releases) de este repositorio
 y avisa con un enlace de descarga — no se autoactualiza ni descarga nada sin
 que lo pidas.
+
+Para actualizar:
+
+1. En la página de la versión nueva, descarga **Source code (zip)**.
+2. Cierra RoleRun Manager.
+3. Descomprime el zip y copia todo lo que hay dentro de su carpeta en tu
+   carpeta de RoleRun Manager, aceptando reemplazar los archivos.
+4. Abre `instalar_y_abrir.bat`.
+
+Tus Runs no se pierden: se guardan aparte, en `Documentos\RoleRun Manager`.
 
 ## Más documentación
 

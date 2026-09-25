@@ -172,9 +172,18 @@ def test_las_tres_condiciones_son_las_que_espera_la_barrera() -> None:
 def test_la_rueda_que_gira_sola_es_la_que_suelta() -> None:
     """La barrera se resondea cada 35-45 ms pase lo que pase; nada más lo hace."""
     barrera = inspect.getsource(RoleRunManager._retire_initial_shell_when_ready)
+    barrera_sin_saltos = " ".join(barrera.split())
 
     assert barrera.count("_soltar_el_repintado_aplazado()") >= 2
-    assert "self.after(35, lambda: self._retire_initial_shell_when_ready(attempt + 1))" in barrera
+    assert (
+        "self._initial_shell_retire_after_id = self.after( 35, lambda: "
+        "self._retire_initial_shell_when_ready(attempt + 1) )"
+        in barrera_sin_saltos
+    )
+    # `_cancel_initial_game_load` (VOLVER AL INICIO) necesita poder cortar
+    # este `after` de verdad -guardar el id es lo que se lo permite, ver
+    # ese método y el bug que arregla (08-09-2026).
+    assert "self._initial_shell_retire_after_id = None" in barrera
 
 
 def test_el_render_pregunta_antes_de_reconstruir() -> None:

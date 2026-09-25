@@ -23,6 +23,7 @@ with patch("pathlib.Path.home", return_value=Path(tempfile.gettempdir()) / "role
         ORAS_BATTLE_TRAINER_PP_ADDRESS,
         ORAS_BATTLE_DYNAMIC_HP_OFFSET,
         ORAS_BATTLE_MON_STRIDE,
+        ORAS_BATTLE_OPPONENT_TEAM_STRIDE,
         ORASLiveMemoryBlock,
         ORASLiveSnapshot,
         ORAS_PARTY_STATS_OFFSET,
@@ -400,10 +401,16 @@ class ORASLiveMonitorTests(unittest.TestCase):
         self.assertEqual(client.read_calls, 2)
 
 class _BattleProbeFakeClient:
-    def __init__(self, *, current_hp: int = 0, max_hp: int = 47, battle: str = "wild") -> None:
+    def __init__(
+        self, *, current_hp: int = 0, max_hp: int = 47, battle: str = "wild",
+        opponent_roster_size: int = 6,
+    ) -> None:
         self.current_hp = current_hp
         self.max_hp = max_hp
         self.battle = battle
+        # Cuántos de los seis huecos del roster rival simulan un PK6 válido;
+        # el resto se sirve vacío. Ver `ORAS_BATTLE_OPPONENT_TEAM_STRIDE`.
+        self.opponent_roster_size = opponent_roster_size
         self.selected = 0
 
     def __enter__(self):
@@ -429,6 +436,12 @@ class _BattleProbeFakeClient:
             return opponent if self.battle == "wild" else bytes(PK6_STORED_SIZE)
         if address == ORAS_BATTLE_TRAINER_OPPONENT_ADDRESS and size == PK6_STORED_SIZE:
             return opponent if self.battle == "trainer" else bytes(PK6_STORED_SIZE)
+        if size == PK6_STORED_SIZE and self.battle == "trainer":
+            offset = address - ORAS_BATTLE_TRAINER_OPPONENT_ADDRESS
+            if offset > 0 and offset % ORAS_BATTLE_OPPONENT_TEAM_STRIDE == 0:
+                slot = offset // ORAS_BATTLE_OPPONENT_TEAM_STRIDE
+                if 1 <= slot < 6:
+                    return opponent if slot < self.opponent_roster_size else bytes(PK6_STORED_SIZE)
         if address == ORAS_BATTLE_WILD_PP_ADDRESS and size == 1:
             return b"\x10" if self.battle == "wild" else b"\xff"
         if address == ORAS_BATTLE_TRAINER_PP_ADDRESS and size == 1:
@@ -470,6 +483,51 @@ class ORASBattleProbeTests(unittest.TestCase):
         assert probe is not None
         self.assertEqual(probe.state, "none")
         self.assertIsNone(probe.health_game)
+        self.assertIsNone(probe.opponent_team_size)
+
+    def test_battle_probe_counts_the_full_trainer_opponent_roster_but_not_wild(self) -> None:
+        # Regla de "combate de seis" (dictada 09-09-2026): solo un combate de
+        # ENTRENADOR debe exponer el tamaño del roster rival. Descubierto en
+        # vivo el 14-09-2026 que ``ORAS_BATTLE_TRAINER_OPPONENT_ADDRESS`` es el
+        # slot 0 de un roster de seis estático -no "el rival activo"-, ver
+        # memoria `six-mon-battle-auto-reward`.
+        normal = parse_pk6_party(make_encrypted_pk6(current_hp=23, max_hp=47), 1, {})
+        assert normal is not None
+        current = SaveGameData("AS", "SAV6AO", 6, "Diego", [normal], {})
+        trainer_client = _BattleProbeFakeClient(
+            current_hp=23, max_hp=47, battle="trainer", opponent_roster_size=6,
+        )
+        trainer_reader = ORASLiveReader(
+            Path("does-not-exist.json"), client_factory=lambda: trainer_client, stable_delay=0,
+        )
+        trainer_probe = trainer_reader.read_battle_probe(current)
+        assert trainer_probe is not None
+        self.assertEqual(trainer_probe.state, "trainer")
+        self.assertEqual(trainer_probe.opponent_team_size, 6)
+
+        wild_client = _BattleProbeFakeClient(current_hp=23, max_hp=47, battle="wild")
+        wild_reader = ORASLiveReader(
+            Path("does-not-exist.json"), client_factory=lambda: wild_client, stable_delay=0,
+        )
+        wild_probe = wild_reader.read_battle_probe(current)
+        assert wild_probe is not None
+        self.assertEqual(wild_probe.state, "wild")
+        self.assertIsNone(wild_probe.opponent_team_size)
+
+    def test_battle_probe_counts_fewer_than_six_opponents_correctly(self) -> None:
+        normal = parse_pk6_party(make_encrypted_pk6(current_hp=23, max_hp=47), 1, {})
+        assert normal is not None
+        current = SaveGameData("AS", "SAV6AO", 6, "Diego", [normal], {})
+        client = _BattleProbeFakeClient(
+            current_hp=23, max_hp=47, battle="trainer", opponent_roster_size=3,
+        )
+        reader = ORASLiveReader(
+            Path("does-not-exist.json"), client_factory=lambda: client, stable_delay=0,
+        )
+        probe = reader.read_battle_probe(current)
+        assert probe is not None
+        self.assertEqual(probe.state, "trainer")
+        self.assertEqual(probe.opponent_team_size, 3)
 
     def test_battle_probe_abstains_when_the_table_is_mis_indexed(self) -> None:
         """Reproduce el incidente real del 31-08-2026.

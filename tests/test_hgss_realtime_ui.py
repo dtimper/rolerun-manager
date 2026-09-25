@@ -80,6 +80,7 @@ def _monitor(probe) -> SimpleNamespace:
     manager._process_oras_battle_state = lambda state: (
         manager.estados_de_combate.append(state)
     )
+    manager._process_six_mon_battle_probe = lambda probe, state: None
     manager._reconcile_pending_faints_against_party = lambda game: (
         manager.reconciliaciones.append(game)
     )

@@ -312,6 +312,16 @@ def test_olvidar_la_tabla_no_falla_aunque_no_hubiera_ninguna() -> None:
 # --------------------------------------------------------------------------
 
 
+#: Checksum de cabecera (u16 LE en 0x15E) de los volcados de los que salen las
+#: referencias de PKHeX. El título solo no basta: el 23-09-2026 apareció junto
+#: al original una segunda ROM de Negro 2 («Pokémon Negro 2.nds», cabecera
+#: 0x9CE4) con el mismo título pero otra compilación -objeto y EV distintos en
+#: cuatro especies-, y por orden alfabético pasaba delante del volcado bueno.
+#: Blanco tiene la misma situación («Pokémon Blanco.nds», 0xCBCB); hasta ahora
+#: solo se salvaba porque el original se llama «5596 - …» y se ordena antes.
+_CABECERA_DE_REFERENCIA = {"b2w2": 0x46C8, "bw": 0xC780}
+
+
 def _rom_real(clave: str) -> Path | None:
     base = Path("D:/Users/diego/Diego/Juegos/POKEMON ROLERUN")
     if not base.exists():
@@ -319,10 +329,15 @@ def _rom_real(clave: str) -> Path | None:
     juego = GEN5_GAMES[clave]
     for candidata in sorted(base.glob("*/*.nds")):
         try:
-            if candidata.open("rb").read(12) in juego.titles:
-                return candidata
+            with candidata.open("rb") as rom:
+                cabecera = rom.read(0x160)
         except OSError:
             continue
+        if (
+            cabecera[:12] in juego.titles
+            and int.from_bytes(cabecera[0x15E:0x160], "little") == _CABECERA_DE_REFERENCIA[clave]
+        ):
+            return candidata
     return None
 
 

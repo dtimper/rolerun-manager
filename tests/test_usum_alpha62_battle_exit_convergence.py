@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import struct
 from pathlib import Path
+from unittest.mock import patch
 
 from app.azahar_rpc import AzaharProcess
 from app.save_engine_client import SaveGameData, SavePokemon
 from app.usum_live import (
     USUM_BATTLE_ACTUAL_FROM_MAX,
     USUM_BATTLE_DISPLAY_FROM_MAX,
+    USUM_BATTLE_IDLE_NO_FAINT_TIMEOUT_SECONDS,
     USUM_BATTLE_PHASE_ACTIVE_VALUE,
     USUM_BATTLE_PHASE_ADDRESS,
     USUM_BATTLE_PHASE_IDLE_VALUE,
@@ -174,3 +176,71 @@ def test_alpha62_preexisting_party_zero_cannot_end_forced_replacement() -> None:
     suspended = reader.read_battle_probe(already_fainted)
 
     assert suspended is not None and suspended.state == "battle"
+
+
+def test_idle_timeout_without_any_observed_faint_eventually_ends_the_battle() -> None:
+    """Bug real descubierto en directo el 14-09-2026 (ver memoria
+    `six-mon-battle-auto-reward`): un combate ganado SIN perder ningún
+    Pokémon nunca tiene ninguna baja que converger contra PartyData, así que
+    la comprobación de arriba (alpha.62) se queda esperando para siempre y
+    ``state`` no vuelve nunca a ``none``. La vía de escape por tiempo real
+    -`USUM_BATTLE_IDLE_NO_FAINT_TIMEOUT_SECONDS`- debe cerrarlo igualmente,
+    pero solo tras ese margen, nunca antes.
+    """
+    rpc = _BattleRPC()
+    reader = _reader(rpc)
+    healthy_party = _game(PARTY_MAXES)
+
+    clock = {"now": 1_000.0}
+
+    with patch("app.usum_live.time.monotonic", side_effect=lambda: clock["now"]):
+        baseline = reader.read_battle_probe(healthy_party)
+        assert baseline is not None and baseline.state == "battle"
+
+        rpc.state = USUM_BATTLE_STATE_IDLE_VALUE
+        rpc.phase = USUM_BATTLE_PHASE_IDLE_VALUE
+
+        # Recién visto el par idle, sin ninguna baja: sigue ambiguo.
+        just_idle = reader.read_battle_probe(healthy_party)
+        assert just_idle is not None and just_idle.state == "battle"
+
+        # Todavía no ha pasado el margen completo: sigue ambiguo.
+        clock["now"] += USUM_BATTLE_IDLE_NO_FAINT_TIMEOUT_SECONDS - 1
+        still_waiting = reader.read_battle_probe(healthy_party)
+        assert still_waiting is not None and still_waiting.state == "battle"
+
+        # Pasado el margen sin ninguna baja observada: se asume overworld.
+        clock["now"] += 2
+        ended = reader.read_battle_probe(healthy_party)
+        assert ended is not None and ended.state == "none"
+        assert "sin ninguna" in ended.reason
+
+
+def test_idle_timeout_does_not_preempt_a_real_observed_faint_convergence() -> None:
+    """El escape por tiempo no debe interferir cuando SÍ hay una baja real que
+    converger: esa vía ya estaba probada (ver el primer test de este
+    archivo) y debe seguir resolviendo tan pronto como PartyData confirme el
+    HP=0, sin esperar el margen de tiempo.
+    """
+    rpc = _BattleRPC()
+    reader = _reader(rpc)
+    full_party = _game(PARTY_MAXES)
+
+    clock = {"now": 2_000.0}
+
+    with patch("app.usum_live.time.monotonic", side_effect=lambda: clock["now"]):
+        assert reader.read_battle_probe(full_party).state == "battle"
+
+        rpc.displayed = (18, 0, 149, 20, 101, 17)
+        rpc.actual = rpc.displayed
+        assert reader.read_battle_probe(full_party).state == "battle"
+
+        rpc.state = USUM_BATTLE_STATE_IDLE_VALUE
+        rpc.phase = USUM_BATTLE_PHASE_IDLE_VALUE
+        # Un instante después del par idle -mucho antes del margen de
+        # timeout-, PartyData ya confirma el HP=0: converge de inmediato.
+        clock["now"] += 1
+        overworld_party = _game((18, 0, 149, 20, 101, 17))
+        ended = reader.read_battle_probe(overworld_party)
+        assert ended is not None and ended.state == "none"
+        assert "sin ninguna" not in ended.reason
