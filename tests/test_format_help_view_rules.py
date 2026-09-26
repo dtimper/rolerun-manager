@@ -66,8 +66,11 @@ def test_the_lives_rule_states_the_real_numbers(view) -> None:
     texts = " ".join(_all_texts(view.frame))
     assert "Empiezas con 10 vidas" in texts
     assert "sumas una vida" in texts
-    assert "restas una vida por cada uno perdido" in texts
-    assert "combate de seis Pokémon" in texts
+    # Corregido por el usuario el 2026-09-26: la vida se pierde en cualquier
+    # combate; solo ganarla depende del combate de seis Pokémon.
+    assert "en cualquier combate, te resta una vida" in texts
+    assert "Solo se gana vida en un combate de seis Pokémon" in texts
+    assert "no cualquier combate suelto" not in texts
 
 
 def test_drafts_and_potions_are_tied_to_the_right_battles(view) -> None:

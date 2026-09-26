@@ -1,6 +1,18 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+## Ayuda: regla de vidas y opciones de drafteo (26-09-2026)
+
+Corregido a petición del usuario al revisar la web, que repetía los mismos
+errores. La Ayuda decía que solo los combates de seis Pokémon mueven las vidas:
+en realidad cada Pokémon perdido resta una vida en cualquier combate (el
+programa ya lo contaba así, `register_detected_faint`) y solo ganarla depende
+del combate de seis. Y decía que un drafteo genera siempre cuatro opciones:
+son tres (Asesino, Mago), cuatro (Tanque, Prisma) o cinco (Support), una por
+categoría de `data/roles.json`. Regresión actualizada en
+`tests/test_format_help_view_rules.py`. Suite completa 3039 passed,
+18 skipped.
+
 # v0.5.1 — publicada el 26-09-2026
 
 - **El Líbero ya no es un rol libre.** Ahora imita el rol que elijas

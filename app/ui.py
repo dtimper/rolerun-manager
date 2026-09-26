@@ -28316,7 +28316,7 @@ class RoleRunManager(ctk.CTk):
             "Si lo que quieres es mirar sin enseñar nada, MOVIMIENTOS → CONSULTA DE MOVIMIENTOS busca en el catálogo del juego y separa lo que cada rol admite de lo que no.",
         ])
         section(7, "◈", "Drafteos", "Tirar es gratis. Quedarse un resultado, no.", [
-            "Elige el rol y después el Pokémon. Se generan cuatro opciones del conjunto de ese rol.",
+            "Elige el Pokémon. Se generan entre tres y cinco opciones del conjunto de su rol, según cuál sea: tres para Asesino y Mago, cuatro para Tanque y Prisma, cinco para Support.",
             "Repetir una opción con ↻ no cuesta nada, y volver atrás tampoco. Puedes cambiar de rol o de Pokémon cuantas veces quieras.",
             "Cada opción ofrece dos salidas: ENSEÑAR AHORA, que te lleva a elegir qué movimiento olvida; o GUARDAR, que la deja esperando en MOVIMIENTOS.",
             "Las dos cuestan un drafteo. Es lo mismo quedárselo que enseñarlo, y por eso enseñar después un drafteo guardado ya no vuelve a cobrar.",

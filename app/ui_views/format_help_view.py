@@ -118,7 +118,7 @@ class IntegratedFormatHelpView:
         concepts = (
             ("SEIS ROLES", "Cada Pokémon aprende solo lo que su rol permite. El Líbero imita el rol que elijas de los otros cinco, así que puedes repetir uno."),
             ("SUPERVIVENCIA", "Como en cualquier Nuzlocke: una captura por ruta, y un Pokémon debilitado se va al Cementerio para siempre."),
-            ("10 VIDAS", "Llegan a 0 y la Run se pierde. Suben o bajan según cómo termines cada combate de seis Pokémon -detalle más abajo."),
+            ("10 VIDAS", "Llegan a 0 y la Run se pierde. Cada Pokémon que pierdas resta una; superar un combate de seis Pokémon sin bajas suma una -detalle más abajo."),
         )
         for column, (title, detail) in enumerate(concepts):
             card = ctk.CTkFrame(cards, fg_color=PANEL, corner_radius=14, border_width=1, border_color="#383838")
@@ -181,8 +181,11 @@ class IntegratedFormatHelpView:
         # de "Nuzlocke con vidas". No inventar otros valores aquí.
         bullet_card(4, "LAS VIDAS, EN NÚMEROS", [
             "Empiezas con 10 vidas. Si llegan a 0, la Run está perdida.",
-            "Lo que mueve las vidas es un combate de seis Pokémon -un líder de gimnasio, el Alto Mando, un rival importante-, no cualquier combate suelto.",
-            "Si superas uno de esos combates sin perder ningún Pokémon, sumas una vida. Si pierdes Pokémon en él, restas una vida por cada uno perdido en ESE combate.",
+            # Corregido por el usuario el 2026-09-26: se pierde vida en
+            # cualquier combate, no solo en los de seis (el programa ya lo
+            # contaba así: `register_detected_faint`).
+            "Cada Pokémon que pierdas, en cualquier combate, te resta una vida.",
+            "Solo se gana vida en un combate de seis Pokémon -un líder de gimnasio, el Alto Mando, un rival importante-: si lo superas sin perder ningún Pokémon, sumas una vida.",
             "Superar un combate de seis Pokémon, pierdas o no vidas en él, también te da un drafteo.",
             "Cada vez que entras en un combate contra un líder de gimnasio, ganas una curación.",
             "Completar la Run es derrotar al Campeón de la Liga. Un Pokémon debilitado se va al Cementerio para siempre: no vuelve a estar disponible en esta Run.",
