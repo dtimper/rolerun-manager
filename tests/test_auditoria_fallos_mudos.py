@@ -142,12 +142,14 @@ def test_con_la_barra_oculta_la_firma_si_se_anula() -> None:
 
 # --------------------------------------------- 5. la categoría de drafteo doble
 
-def test_el_libero_nunca_saca_dos_veces_la_misma_categoria() -> None:
+def test_ningun_rol_saca_dos_veces_la_misma_categoria() -> None:
     """Eran dos claves con la MISMA lista de 11 IDs y el mismo título.
 
     El dedup es por clave, así que las dos sobrevivían: en un 3,85% de los
-    drafteos de Líbero salían dos tarjetas «Problemas de Estado» alimentadas del
-    mismo conjunto. Cuatro categorías útiles en vez de cinco.
+    drafteos del antiguo Líbero salían dos tarjetas «Problemas de Estado»
+    alimentadas del mismo conjunto. El Líbero ya no tiene conjunto propio
+    (2026-09-26, drafea con el rol que imita), así que se comprueba en los
+    cinco roles que sí lo tienen.
     """
     datos = Path(DATA_DIR)
     motor = DraftEngine(
@@ -155,9 +157,10 @@ def test_el_libero_nunca_saca_dos_veces_la_misma_categoria() -> None:
         rng=random.Random(1234),
     )
 
-    for _vuelta in range(3000):
-        titulos = [r["title"] for r in motor.generate_role("Líbero")]
-        assert len(set(titulos)) == len(titulos), titulos
+    for rol in motor.role_names():
+        for _vuelta in range(200):
+            titulos = [r["title"] for r in motor.generate_role(rol)]
+            assert len(set(titulos)) == len(titulos), (rol, titulos)
 
 
 def test_la_lista_de_problemas_de_estado_existe_una_sola_vez() -> None:

@@ -296,7 +296,9 @@ class Alpha42RoleReworkTests(unittest.TestCase):
         self.assertIn(92, pool)
         self.assertNotIn(672, pool)
 
-    def test_libero_draft_places_three_unique_auxiliaries_before_both_damage_categories(self) -> None:
+    def test_libero_has_no_draft_pool_of_its_own(self) -> None:
+        """Desde el 2026-09-26 el Líbero drafea con el rol que imita: el
+        controlador pasa ese rol al motor, nunca "Líbero"."""
         engine = DraftEngine(
             DATA / "moves.json",
             DATA / "roles.json",
@@ -304,19 +306,9 @@ class Alpha42RoleReworkTests(unittest.TestCase):
             rng=random.Random(42),
         )
 
-        results = engine.generate_role("Líbero")
-        pool_keys = [entry["pool_key"] for entry in results]
-
-        self.assertEqual(len(results), 5)
-        self.assertEqual(pool_keys[-2:], ["extra_ataque_fisico", "extra_ataque_especial"])
-        self.assertEqual(len(set(pool_keys)), 5)
-        self.assertTrue(
-            set(pool_keys[:3]).isdisjoint({
-                "extra_ataque_fisico", "extra_ataque_especial",
-                "defensa_ataque_fisico", "defensa_ataque_especial",
-            })
-        )
-
+        with self.assertRaises(ValueError):
+            engine.generate_role("Líbero")
+        self.assertNotIn("Líbero", engine.role_names())
 
 if __name__ == "__main__":
     unittest.main()

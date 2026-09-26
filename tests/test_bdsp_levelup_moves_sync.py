@@ -250,14 +250,33 @@ class SyncBdspLevelupMovesTests(unittest.TestCase):
         self.assertEqual(fake.run.pending_changes, [])
         self.assertNotIn("111:222:333", fake._bdsp_levelup_pending)
 
-    def test_libero_nunca_sustituye_nada(self) -> None:
+    def test_libero_sin_rol_imitado_no_sustituye_nada(self) -> None:
+        """En preparación, igual que SIN ROL (2026-09-26)."""
         fake = self._fake(role="Líbero")
+        fake._rules_role_for = lambda p, role, libero_role=None: "SIN ROL"
         fake._bdsp_levelup_last_levels["111:222:333"] = 2
         pokemon = self._houndoom(5, [1, 2, THUNDER, 0])
         game = SimpleNamespace(party=[pokemon])
         fake._sync_bdsp_levelup_moves(game)
         self.assertEqual(fake.run.pending_changes, [])
         self.assertNotIn("111:222:333", fake._bdsp_levelup_pending)
+
+    def test_libero_que_imita_asesino_aprende_lo_mismo_que_un_asesino(self) -> None:
+        """Fase 4 (2026-09-26): mismo sustituto, byte a byte, que un Asesino."""
+        resultados = []
+        for rol, imitado in (("Asesino", None), ("Líbero", "Asesino")):
+            fake = self._fake(role=rol)
+            fake._rules_role_for = lambda p, role, libero_role=None, i=imitado: i
+            fake._bdsp_levelup_last_levels["111:222:333"] = 2
+            pokemon = self._houndoom(5, [1, 2, 0, 0])
+            game = SimpleNamespace(party=[pokemon])
+            fake._sync_bdsp_levelup_moves(game)
+            pokemon.move_ids = [1, 2, THUNDER, 0]
+            fake._sync_bdsp_levelup_moves(game)
+            self.assertEqual(len(fake.run.pending_changes), 1, rol)
+            resultados.append(fake.run.pending_changes[0].new_move_id)
+        self.assertNotEqual(resultados[0], THUNDER)
+        self.assertEqual(resultados[0], resultados[1])
 
     def test_sin_tabla_cargada_no_hace_nada(self) -> None:
         fake = self._fake(table={})

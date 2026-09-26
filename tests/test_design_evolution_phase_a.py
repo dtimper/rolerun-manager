@@ -925,6 +925,9 @@ def test_visual_draft_generation_does_not_consume_the_counter() -> None:
         ),
         _team_change_is_locked=lambda show_warning=True: False,
         _effective_role=lambda _pokemon: ("Líbero", "●"),
+        # Líbero que imita al Mago: drafea con el conjunto del Mago (2026-09-26).
+        _libero_role_of=lambda _pokemon: "Mago",
+        _rules_role=lambda _pokemon: "Mago",
         _set_operation_status=lambda *_args, **_kwargs: None,
         _draft_transition=lambda: None,
     )
@@ -932,10 +935,11 @@ def test_visual_draft_generation_does_not_consume_the_counter() -> None:
     RoleRunManager._draft_choose_visual_pokemon(manager, pokemon, "Mago")
 
     assert project.counters["drafteos"] == 3
-    assert run.role == "Líbero"
+    assert run.role == "Mago"
     assert run.pokemon_slot == 1
     assert run.pending_changes == []
     assert manager.current_results[0]["move"] == "Psíquico"
+    assert manager.current_results[0]["pool_key"] == "mago"
 
 
 def test_five_draft_results_use_three_top_cards_and_two_centered_bottom_cards() -> None:
@@ -1463,7 +1467,7 @@ def test_realtime_faint_libero_waits_for_a_fresh_ev_choice(backend_key: str) -> 
         _effective_role=lambda _pokemon: ("Líbero", "●"),
         _role_symbol=lambda _role: "●",
         _floating_bar_is_visible=lambda: True,
-        _prompt_libero_ev_stats=lambda pokemon, callback, context="main": prompts.append(
+        _prompt_libero_role=lambda pokemon, callback, context="main": prompts.append(
             (pokemon, callback, context)
         ),
         _incoming_snapshot_for_role=lambda _pokemon, role, _slots: {"role": role},

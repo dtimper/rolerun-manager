@@ -24,7 +24,7 @@ import re
 import struct
 import time
 from dataclasses import dataclass
-from typing import Callable, Mapping, Sequence
+from typing import Callable, Iterable, Mapping, Sequence
 
 from .ryujinx_host_memory import RyujinxHostMappedClient
 from .ryujinx_host_write import RyujinxHostWriteTransport
@@ -49,6 +49,7 @@ def build_species_anchor(
     entries: tuple[tuple[int, int, int], ...],
     *,
     wildcard_keys: frozenset[int] | None = None,
+    alternatives: Mapping[int, Iterable[int]] | None = None,
 ) -> WazaOboeAnchor:
     """``entries`` en el mismo formato que produce ``parse_wazaoboe_table``:
     ``(move_id, level, key)`` por entrada, en el orden original de la tabla.
@@ -72,6 +73,12 @@ def build_species_anchor(
     demostrado el 2026-09-04 con Absol (359): comodín en las 13 entradas
     encontró 2 coincidencias, mientras que solo 1-2 de esas 13 realmente
     necesitaban parchearse esa sesión.
+
+    ``alternatives`` (2026-09-26): para una ``key`` sin comodín, además del
+    vainilla acepta exactamente estos movimientos -los sustitutos que algún
+    rol pondría ahí-. Una fila que se quedó con la tabla de OTRO rol (un
+    cambio de rol, o una sesión anterior) se sigue encontrando sin volver al
+    comodín de 2 bytes que hizo ambiguo a Absol.
     """
     if not entries:
         raise ValueError("No hay entradas para construir un ancla.")
@@ -90,6 +97,9 @@ def build_species_anchor(
         parts.append(move_bytes)
         if wildcard_keys is None or key in wildcard_keys:
             regex_parts.append(b"..")
+        elif alternatives is not None and key in alternatives:
+            options = sorted({move_bytes, *(struct.pack("<h", int(v)) for v in alternatives[key])})
+            regex_parts.append(b"(?:" + b"|".join(re.escape(option) for option in options) + b")")
         else:
             regex_parts.append(re.escape(move_bytes))
         move_offsets.append(offset)

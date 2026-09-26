@@ -184,6 +184,9 @@ class UnifiedTeamPCView:
         base_stats_for: Callable[[Any], dict[str, int]] | None = None,
         on_left_edge: Callable[[], None] | None = None,
         on_edge_accept: Callable[[], bool] | None = None,
+        libero_role_for: Callable[[Any], str | None] | None = None,
+        on_libero_role: Callable[[Any, str], None] | None = None,
+        libero_role_options: tuple[str, ...] = (),
     ) -> None:
         self.master = master
         # Lista, no tupla: las casillas se repintan una a una y hay que poder
@@ -230,6 +233,11 @@ class UnifiedTeamPCView:
         self.navigation_keys = dict(navigation_keys or {"accept": "z", "back": "x"})
         self.on_left_edge = on_left_edge
         self.on_edge_accept = on_edge_accept
+        # Desplegable del rol que imita el Líbero (2026-09-25). La vista solo
+        # enseña y avisa: guardar el rol y preparar sus EV es del controlador.
+        self.libero_role_for = libero_role_for
+        self.on_libero_role = on_libero_role
+        self.libero_role_options = tuple(libero_role_options)
         # Los bindings viven en el toplevel y pueden coexistir durante una
         # transición o debajo de un flujo modal. El controlador decide cuál es
         # la única vista autorizada a consumir navegación.
@@ -1006,6 +1014,17 @@ class UnifiedTeamPCView:
             )
             return False
 
+        menu = registro.get("libero_menu")
+        if menu is not None:
+            try:
+                self._sincronizar_menu_libero(menu, pokemon)
+            except Exception as error:
+                perf.mark(
+                    "diag.update_team_card.fallo", motivo="menu_libero", identity=str(identity),
+                    error=type(error).__name__,
+                )
+                return False
+
         # Lo último, y solo si todo lo visible ha ido bien: si se apuntara antes
         # y la actualización fallara a medio camino, la tarjeta enseñaría a uno
         # y el arrastre movería a otro.
@@ -1264,17 +1283,33 @@ class UnifiedTeamPCView:
                 "textos_mov": textos_mov,
             }
 
+        # El Líbero lleva, bajo su icono, el desplegable del rol que imita.
+        con_desplegable = (
+            not self.mode_banner and slot_role == "Líbero"
+            and self.on_libero_role is not None and bool(self.libero_role_options)
+        )
+        side = content
+        if con_desplegable:
+            side = ctk.CTkFrame(content, fg_color="transparent", corner_radius=0)
+            side.grid(row=0, column=3, rowspan=info_rowspan, padx=(6, 1))
         role_icon = self.role_icon_for(slot_role, 27)
         if role_icon is not None:
             self.images.append(role_icon)
         info = ctk.CTkButton(
-            content, text="" if role_icon is not None else "?", image=role_icon,
+            side, text="" if role_icon is not None else "?", image=role_icon,
             command=lambda role_name=slot_role: self.on_role_info(role_name),
             width=34, height=34, corner_radius=17, fg_color="transparent",
             hover_color="#303030", border_width=1, border_color=GOLD,
             text_color=GOLD, font=ctk.CTkFont("Trebuchet MS", 14, "bold"),
         )
-        info.grid(row=0, column=3, rowspan=info_rowspan, padx=(6, 1))
+        excluded: set[Any] = {info}
+        if con_desplegable:
+            info.pack(pady=(0, 3))
+            libero_menu = self._libero_role_menu(side, identity, pokemon)
+            libero_menu.pack()
+            excluded.add(libero_menu)
+        else:
+            info.grid(row=0, column=3, rowspan=info_rowspan, padx=(6, 1))
         self.role_info_buttons[identity] = info
         info.bind("<Enter>", lambda _event, button=info, role=slot_role: self._show_role_tooltip(button, role), add="+")
         info.bind("<Leave>", lambda _event: self._hide_role_tooltip(), add="+")
@@ -1283,18 +1318,67 @@ class UnifiedTeamPCView:
         self._bind_click_tree(
             card,
             lambda _event=None, ident=identity: self._click_team_card(ident),
-            exclude={info},
+            exclude=excluded,
         )
         self._bind_drag_tree(
-            card, "team", None, exclude={info},
+            card, "team", None, exclude=excluded,
             pokemon_getter=lambda ident=identity: self._team_card_pokemon.get(ident),
         )
         self._bind_hover_tree(
             card,
             lambda _event=None, ident=identity, widget=card: self._team_hover(widget, ident),
             lambda _event=None: self.frame.after_idle(self._apply_selection_styles),
-            exclude={info},
+            exclude=excluded,
         )
+
+    #: Lo que enseña el desplegable de un Líbero que aún no eligió qué imita.
+    #: Corto a propósito: el desplegable no debe ser más ancho que el icono de
+    #: rol del resto de tarjetas, o le recorta el nombre al Líbero.
+    LIBERO_SIN_ELEGIR = "ELEGIR"
+
+    def _libero_menu_style(self, role: str | None) -> dict[str, Any]:
+        """Texto y color del desplegable: dorado si falta elegir, como PREPARACIÓN."""
+        if role:
+            return {"text": role.upper(), "fg_color": PANEL_ALT, "text_color": TEXT}
+        return {"text": self.LIBERO_SIN_ELEGIR, "fg_color": "#3A2F17", "text_color": PREPARATION}
+
+    def _libero_role_menu(self, parent, identity: str, pokemon: Any) -> ctk.CTkOptionMenu:
+        by_label = {role.upper(): role for role in self.libero_role_options}
+        style = self._libero_menu_style(self.libero_role_for(pokemon) if self.libero_role_for else None)
+        menu = ctk.CTkOptionMenu(
+            parent, values=list(by_label), width=68, height=22, corner_radius=6,
+            fg_color=style["fg_color"], text_color=style["text_color"],
+            button_color=GOLD, button_hover_color="#D3AF70",
+            dropdown_fg_color=PANEL_ALT, dropdown_text_color=TEXT,
+            dropdown_hover_color="#332B1D",
+            font=ctk.CTkFont("Segoe UI", 9, "bold"),
+            dropdown_font=ctk.CTkFont("Segoe UI", 11, "bold"),
+            # Sin cierre sobre el Pokémon: la tarjeta puede actualizarse en
+            # sitio y el de entonces ya no sería el de ahora.
+            command=lambda label, ident=identity: self._elegir_rol_libero(ident, by_label.get(label)),
+        )
+        menu.set(style["text"])
+        # Junto al resto de lo que la tarjeta enseña, para que una
+        # actualización en sitio también lo ponga al día.
+        registro = self._team_card_widgets.get(str(identity))
+        if registro is not None:
+            registro["libero_menu"] = menu
+        return menu
+
+    def _elegir_rol_libero(self, identity: str, role: str | None) -> None:
+        pokemon = self._team_card_pokemon.get(str(identity))
+        if pokemon is None or not role or self.on_libero_role is None:
+            return
+        self.on_libero_role(pokemon, role)
+
+    def _sincronizar_menu_libero(self, menu, pokemon: Any) -> None:
+        """Pone en el desplegable el rol imitado actual tras una actualización en sitio."""
+        if self.libero_role_for is None:
+            return
+        style = self._libero_menu_style(self.libero_role_for(pokemon))
+        self._configurar_si_cambia(menu, fg_color=style["fg_color"], text_color=style["text_color"])
+        if menu.get() != style["text"]:
+            menu.set(style["text"])
 
     def _render_pc_shell(self) -> None:
         header = ctk.CTkFrame(self.pc_panel, fg_color="transparent")

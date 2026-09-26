@@ -84,6 +84,7 @@ class IntegratedDraftFlow:
         move_metadata_for: Callable[[int], dict[str, Any]],
         moves_for: Callable[[Any], tuple[list[str], list[int]]],
         on_choose_pokemon: Callable[[Any, str], None],
+        libero_role_for: Callable[[Any], str | None] | None = None,
         on_choose_move: Callable[[int], None],
         on_reroll: Callable[[int], None],
         on_choose_slot: Callable[[int], None],
@@ -110,6 +111,9 @@ class IntegratedDraftFlow:
         self.move_metadata_for = move_metadata_for
         self.moves_for = moves_for
         self.on_choose_pokemon = on_choose_pokemon
+        # Qué rol imita un Líbero (2026-09-26): drafea con ese conjunto, así que
+        # la tarjeta lo dice. Sin elegir, al pulsarla se pregunta.
+        self.libero_role_for = libero_role_for
         self.on_choose_move = on_choose_move
         self.on_reroll = on_reroll
         self.on_choose_slot = on_choose_slot
@@ -506,9 +510,13 @@ class IntegratedDraftFlow:
             ctk.CTkLabel(
                 portrait, text="", image=image, width=118, height=118,
             ).pack()
+            role_label = f"{symbol} {role}".strip()
+            if role == "Líbero" and self.libero_role_for is not None:
+                imitated = self.libero_role_for(pokemon)
+                role_label += f" · {imitated}" if imitated else " · elegir rol"
             ctk.CTkLabel(
                 portrait,
-                text=f"{symbol} {role}".strip(),
+                text=role_label,
                 text_color=GOLD if eligible else MUTED,
                 font=ctk.CTkFont("Segoe UI", 11, "bold"),
             ).pack(pady=(2, 0))

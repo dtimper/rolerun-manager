@@ -16,10 +16,10 @@ GLOBAL_ROLE_NOTE = (
 
 ROLE_GUIDE: dict[str, dict[str, str]] = {
     "Líbero": {
-        "summary": "El rol libre: no tiene restricciones propias de movimientos ni de objetos.",
-        "allowed": "Movimientos de daño físico, movimientos de daño especial y cualquier movimiento de estado.",
-        "limits": "No tiene limitaciones propias del rol.",
-        "preparation": "Puede ocupar su casilla desde el inicio. En drafteos el usuario elige de qué pool de rol obtiene las opciones.",
+        "summary": "El comodín: imita el rol que elijas entre Asesino, Mago, Tanque, Prisma y Support, y se juzga exactamente como él. Así puedes llevar un rol repetido.",
+        "allowed": "Exactamente lo que permite el rol que imita. Sus drafteos salen del conjunto de ese rol, aprende por nivel los movimientos de ese rol y sus EV son los de ese rol.",
+        "limits": "Las mismas que el rol que imita. El rol se elige en el desplegable de su casilla y se puede cambiar cuando quieras: desde ese momento se juzga con las reglas del nuevo, y lo que ya no encaje sale en rojo.",
+        "preparation": "Mientras no elijas qué rol imita, está en preparación: no puede draftear ni se le marca nada. Al darle el rol Líbero, RoleRun te pregunta cuál imita.",
     },
     "Tanque": {
         "summary": "Defensor físico: puede atacar por cualquier lado, pero sus herramientas de estado deben reforzar la Defensa física.",
@@ -47,7 +47,7 @@ ROLE_GUIDE: dict[str, dict[str, str]] = {
     },
     "Prisma": {
         "summary": "Defensor especial: puede atacar por cualquier lado, pero sus boosts deben incluir Defensa Especial sin aumentar Defensa física.",
-        "allowed": "Movimientos de daño físico o especial que no recuperen PS; movimientos que provoquen directamente un problema de estado principal, incluido envenenar sin dañar (Hilo Venenoso: solo Prisma, Support y Líbero pueden); movimientos que bajen el Ataque Especial del rival (Seducción, Onda Anómala, Confidencia), salvo que también bajen su Ataque; Acua Aro, Arraigo y Drenadoras; cualquier movimiento de estado que solo afecte a la Velocidad, o que suba Velocidad junto con Defensa Especial (Danza Aleteo, Geocontrol); y boosts que aumenten Defensa Especial pudiendo aumentar además otras estadísticas salvo Defensa física (por ejemplo, Paz Mental).",
+        "allowed": "Movimientos de daño físico o especial que no recuperen PS; movimientos que provoquen directamente un problema de estado principal, incluido envenenar sin dañar (Hilo Venenoso: solo Prisma y Support pueden); movimientos que bajen el Ataque Especial del rival (Seducción, Onda Anómala, Confidencia), salvo que también bajen su Ataque; Acua Aro, Arraigo y Drenadoras; cualquier movimiento de estado que solo afecte a la Velocidad, o que suba Velocidad junto con Defensa Especial (Danza Aleteo, Geocontrol); y boosts que aumenten Defensa Especial pudiendo aumentar además otras estadísticas salvo Defensa física (por ejemplo, Paz Mental).",
         "limits": "No puede recuperar PS con movimientos de daño ni con curación directa. Cualquier boost que aumente Defensa física es ilegal, incluso si también aumenta Defensa Especial; Masa Cósmica no es válida.",
         "preparation": "Si el moveset no cumple estas condiciones, la casilla permanece en preparación hasta corregirlo.",
     },

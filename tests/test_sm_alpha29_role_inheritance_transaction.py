@@ -62,7 +62,7 @@ def test_in_game_pc_entry_to_libero_waits_for_explicit_ev_choice() -> None:
 
     prompts = []
     writes = []
-    manager._prompt_libero_ev_stats = lambda pokemon, callback, *, context: prompts.append(
+    manager._prompt_libero_role = lambda pokemon, callback, *, context: prompts.append(
         (pokemon, callback, context)
     )
     manager._save_oras_live_changes = lambda batch, **kwargs: writes.append((list(batch), kwargs)) or True

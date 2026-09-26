@@ -1497,7 +1497,7 @@ def test_xy_in_game_pc_entry_to_libero_waits_for_explicit_ev_choice() -> None:
         _pokemon_identity=_ui_identity,
         _floating_bar_is_visible=lambda: True,
         _update_top_status=lambda: None,
-        _prompt_libero_ev_stats=lambda pokemon, callback, *, context: prompts.append(
+        _prompt_libero_role=lambda pokemon, callback, *, context: prompts.append(
             (pokemon, callback, context)
         ),
         _save_oras_live_changes=lambda batch, **kwargs: writes.append((list(batch), kwargs)) or True,

@@ -1,6 +1,233 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.5.1 — publicada el 26-09-2026
+
+- **El Líbero ya no es un rol libre.** Ahora imita el rol que elijas
+  (Asesino, Mago, Tanque, Prisma o Support) y se juzga exactamente como él:
+  movimientos en rojo, drafteos, lo que aprende por nivel y sus EV. Así puedes
+  llevar un rol repetido. Se elige en un desplegable en su casilla de Equipo, y
+  al darle el rol Líbero RoleRun te pregunta cuál imita.
+- **Aprendizajes por nivel más fiables al cambiar de rol.** En Rubí Omega y
+  Zafiro Alfa el juego podía seguir ofreciendo el movimiento del rol anterior;
+  en Diamante Brillante y Perla Reluciente, cambiar de rol dejaba sustitutos
+  del rol anterior y el movimiento que se aprende al evolucionar se colaba sin
+  cambiar. Corregido y probado en los siete juegos.
+- La ayuda, las fichas de los roles y la web (https://rolerun.github.io/)
+  explican la regla nueva.
+
+**Si vienes de la 0.4.x**, además: instalador nuevo que lleva Python y .NET
+dentro (no hace falta instalar nada más), y el aviso de versión nueva
+descarga el instalador directamente.
+
+## Líbero imita un rol (25/26-09-2026)
+
+Cambio de formato dictado por el usuario: Líbero deja de ser el rol libre y
+pasa a imitar a Asesino, Mago, Tanque, Prisma o Support -elegido por
+Pokémon, pudiendo repetir rol en el equipo-, porque un Pokémon demasiado
+fuerte seguía cabiendo en Líbero sin restricciones. Esta fase solo añade la
+base, sin cambio visible todavía: `role_rules.rules_role` (qué rol cuenta
+para las reglas), `RunProject.libero_roles` con
+`RunProjectService.libero_role_key/libero_role_for/set_libero_role` (clave
+PID:TID:SID, sobrevive a evoluciones) y `RoleRunManager._rules_role`. Un
+Líbero sin rol imitado conserva provisionalmente las reglas de antes.
+Regresión: `tests/test_libero_rol_imitado.py` (47 pruebas); suite completa
+2998 passed, 18 skipped.
+
+### Fase 2: desplegable, selector, rojos y EV (26-09-2026)
+
+- La tarjeta del Líbero en Equipo lleva bajo su icono un desplegable con el
+  rol que imita («ELEGIR» en dorado si falta). Cambiarlo guarda el rol,
+  prepara los EV del rol nuevo por el mismo camino que un cambio de rol
+  (`_set_projected_member_role`) y repinta.
+- El selector «EV de Líbero» (dos estadísticas libres) pasa a ser «¿Qué rol
+  imita?» (`_prompt_libero_role`), con flechas/mando. Entrega las dos
+  estadísticas del rol elegido, así que arrastre, PC, sustituto de una baja,
+  FIJAR ROLES y entrada automática no cambian. No se vuelve a preguntar si el
+  Pokémon ya lo tenía, y FIJAR ROLES y el sustituto de una baja lo preguntan
+  aunque el juego no escriba EV.
+- Editor de rol: con Líbero elegido aparece la fila «ROL QUE IMITA EL
+  LÍBERO», y la vista previa enseña los rojos y los EV de ese rol.
+- Rojos: `_collect_pokemon_move_issues`, `_support_damage_excess` y
+  `_tm_move_compatible_with_role` juzgan a un Líbero con el rol que imita; la
+  incidencia sigue diciendo «Líbero» (rol de su casilla).
+- `role_rules.ROLE_EV_STATS` es ahora la única tabla de EV por rol.
+
+Regresión: `tests/test_libero_rol_imitado.py` (61 pruebas) y pruebas
+antiguas adaptadas al selector nuevo; suite completa 3012 passed, 18
+skipped. Verificado en pantalla con ventanas de prueba (sin Run ni emulador):
+desplegable, selector con flechas y editor de rol. Validado por el usuario en
+partida el 26-09-2026.
+
+### Fase 3: drafteo con el rol imitado (26-09-2026)
+
+- Ya no existe un Líbero libre. `rules_role` devuelve «SIN ROL» para un
+  Líbero sin rol imitado (solo Runs anteriores al cambio): preparación, sin
+  rojos ni drafteo hasta elegirlo.
+- Drafteos: un Líbero drafea con el conjunto del rol que imita y el drafteo
+  queda como de ese rol (se guarda, se enseña y se anota así). Si aún no lo
+  eligió, pulsar ELEGIR abre el selector, prepara sus EV y sigue el drafteo
+  (`_draft_after_libero_choice`). La tarjeta dice «Líbero · Mago» o «Líbero ·
+  elegir rol». Paso del tutorial «EL CASO DE LÍBERO» reescrito.
+- Eliminados `DraftEngine._generate_libero` (el conjunto propio del Líbero:
+  dos ataques fijos + tres categorías al azar) y el aviso «Movimiento
+  drafteado del X, no del Líbero» (`libero_foreign_move_reason`, 07-09-2026),
+  que la regla nueva hace innecesario. `RunProject.drafted_move_origin` se
+  conserva solo para que las Runs que lo tienen sigan abriendo.
+- Drafteos guardados: un Líbero-Mago puede enseñarse los de Mago; los
+  guardados como «Líbero» antes del cambio siguen siendo suyos.
+
+Regresión: `tests/test_libero_rol_imitado.py` (fase 3); se retiró
+`tests/test_libero_movimiento_de_otro_rol.py` y se adaptaron las pruebas del
+conjunto propio del Líbero. Suite completa 3012 passed, 18 skipped.
+Validado por el usuario en partida el 26-09-2026.
+
+### Fase 4: aprendizajes por nivel con el rol imitado (26-09-2026)
+
+- Los 17 puntos donde los siete juegos (más HGSS) deciden qué aprende un
+  Pokémon al subir de nivel -tabla parcheada por especie, red de seguridad
+  del movimiento recién aprendido y recuerda-movimientos- juzgan a un Líbero
+  con el rol que imita. Un Líbero-Mago aprende exactamente lo mismo que un
+  Mago (misma semilla de sustitución); sin rol elegido, nada (preparación).
+  Antes el Líbero se saltaba la tabla por especie y solo tenía la cláusula de
+  evasión.
+- `_sync_levelup_tables_now`: la sincronización inmediata tras un cambio de
+  rol estaba copiada en tres sitios; ahora es una función, y también la usan
+  el cambio del rol imitado (desplegable/editor) y el drafteo que lo pide.
+
+Regresión: prueba BDSP «Líbero-Asesino aprende lo mismo que un Asesino» en
+`tests/test_bdsp_levelup_moves_sync.py`, más las de sincronización inmediata;
+suite completa 3015 passed, 18 skipped. Pendiente de validación física del
+usuario, juego a juego. Pendiente: textos (fase 5).
+
+### Fase 4, corrección: ORAS enseñaba el sustituto del rol anterior (26-09-2026)
+
+Reportado por el usuario en su partida (Alfa Zafiro randomizado): Quagsire,
+Líbero, pasó de imitar al Asesino a imitar al Mago y aprendió Afilagarras
+(solo de Asesino). Demostrado con sus propios datos: el archivo del mod ya
+tenía la tabla de Mago desde las 11:04:02 (`escrituras_vivas.jsonl`,
+`roles_by_species` 195→Mago; en disco, Maquinación en el nivel 24) y
+RoleRun registró el nivel 24 a las 11:04:13. Recalculada la tabla de su ROM,
+Afilagarras es exactamente el sustituto de ASESINO de esa entrada (la
+vainilla es Gravedad): el juego usó la tabla anterior. Es el mismo síntoma que
+X/Y (demostrado el 05-09-2026, mismo motor): el juego guarda la tabla y el
+archivo nuevo no siempre llega. No es propio del Líbero; afecta a cualquier
+cambio de rol en ORAS.
+
+- ORAS recibe la red de seguridad de X/Y (`_sync_oras_levelup_moves_backup`):
+  si aparece en los 4 huecos un movimiento nuevo que no encaja con el rol del
+  momento, se sustituye al instante. El núcleo pasa a ser común
+  (`_substitute_new_off_role_moves`); X/Y conserva su comportamiento y su
+  capa del cartel, que ORAS no lleva (su búfer de RAM no está demostrado).
+- Solo en ORAS: si el Pokémon baja de nivel entre dos sondeos (reiniciar el
+  juego sin cerrar RoleRun), se rehace la base sin sustituir nada, para no
+  cambiar solos movimientos que ya tenía; esos se marcan en rojo como siempre.
+
+Regresión: `tests/test_oras_levelup_moves_backup.py` (reproduce el caso de
+Quagsire). Suite completa 3022 passed, 18 skipped. Pendiente de validación
+física en ORAS.
+
+Segunda prueba del usuario (Houndoom, 11:30): la red de seguridad SÍ actuó
+-el juego enseñó Colmillo Ígneo, de la tabla de Asesino, y RoleRun lo cambió
+4 s después-, pero por Esfera Aural, un movimiento de Mago cualquiera, no el
+que la tabla de Mago marca en ese nivel (Estallido), así que el
+recuerda-movimientos dejó de coincidir. Ahora, si el movimiento colado sale de
+una entrada de la tabla de la especie (vainilla o de cualquier rol), se
+sustituye por lo que esa misma entrada vale para el rol actual
+(`_oras_levelup_table_substitute`), con el mismo cálculo que el archivo del
+mod. Comprobado con la ROM del usuario: Colmillo Ígneo→Estallido (Houndoom
+13), Afilagarras→Maquinación (Quagsire 24), Afilagarras→Aligerar (Houndoom 16).
+
+Causa del cartel que ofrece el movimiento viejo, demostrada solo leyendo la
+RAM de su Azahar: el juego guarda en memoria dos copias de la tabla de la
+especie (fuera de la ventana de ±4 MiB alrededor del equipo que usan
+USUM/SM) y anuncia desde ahí; siguen siendo las de Asesino aunque el archivo
+ya sea el de Mago, y abrir la ficha del Pokémon NO las rehace (a diferencia
+de USUM). Prueba controlada autorizada por el usuario: reescritas a mano las
+dos copias de Houndoom a la tabla de Mago (solo movimientos, relectura
+correcta, originales guardados). **Validado físicamente**: al subir a
+Houndoom al nivel 16, el juego ofreció Aligerar (tabla de Mago) en vez de
+Afilagarras. Suite completa 3024 passed, 18 skipped.
+
+Automatizado (`app/oras_levelup_announcement_cache.py`,
+`_sync_oras_levelup_announcement_cache`): tras cada escritura del archivo del
+mod, un hilo pone al día las copias en RAM de las especies del equipo cuya
+tabla cambió (todas si RoleRun acaba de abrirse). Solo reescribe una copia si
+su contenido completo es exactamente una tabla conocida de la especie
+(vainilla o de algún rol), relee después y deshace si no quedó bien; recuerda
+dónde estaban las copias por proceso para no volver a barrer. Un fallo aquí
+nunca deshace la escritura del archivo. Regresión:
+`tests/test_oras_levelup_announcement_cache.py`. Suite completa 3033 passed,
+18 skipped. **Validado físicamente** el 26-09-2026 (Houndoom, Líbero):
+imitando al Asesino, el juego ofreció Tajo Umbrío en el nivel 20; al pasar a
+Mago, Desarrollo en el 26 -las entradas de cada tabla-. Log: el barrido
+inicial al abrir RoleRun tardó ~9 s y encontró las 2 copias; cada cambio de
+rol posterior las corrigió en ~10 ms desde las direcciones recordadas.
+
+### Fase 4, corrección: BDSP no devolvía lo que cambió el rol anterior (26-09-2026)
+
+Reportado por el usuario (Whiscash, Líbero): Asesino→Mago y el juego le
+ofreció Llave Giro. Demostrado en `escrituras_vivas.jsonl`: como Asesino se
+parchearon 13 entradas de la fila de 340 (la 15, nivel 56, → Llave Giro); al
+pasar a Mago solo se reescribieron las 5 que el Mago sustituye
+(`bdsp_levelup_tabla_parcheada`, índices 6/7/9/10/11), y el resto se quedó
+con los sustitutos de Asesino. `_sync_bdsp_levelup_table_patch` solo pedía
+las entradas que sustituye el rol ACTUAL. No es propio del Líbero: afectaba a
+cualquier cambio de rol en BDSP, y quitar el rol tampoco restauraba nada.
+
+- Ahora se pide la fila de todo lo que algún rol puede tocar: el sustituto
+  del rol actual o, si no lo necesita, el vainilla. El escritor transaccional
+  (`WazaOboeLivePatcher`) sigue escribiendo solo lo que difiere.
+- `build_species_anchor(alternatives=...)`: en esas entradas el ancla acepta
+  el vainilla o los sustitutos conocidos de cada rol -una fila que se quedó
+  con la tabla de otro rol se sigue encontrando sin volver al comodín que
+  hizo ambiguo a Absol el 04-09-.
+- Restaurar al vainilla una especie que ya no necesita nada solo se pide si
+  RoleRun la cambió en esta sesión (`_bdsp_levelup_table_touched`), para no
+  localizar especies nunca tocadas (escaneo de memoria, 04-09-2026).
+
+Comprobado con la tabla real del usuario: la entrada del nivel 56 de Whiscash
+vuelve a Bofetón Lodo al pasar a Mago. Regresión en
+`tests/test_bdsp_levelup_table_patch_sync.py`. Suite completa 3036 passed,
+18 skipped. Validado por el usuario en partida: tras Asesino→Mago, todos los
+movimientos por nivel encajan con el rol.
+
+Mismo día, segundo caso: Barboach (Líbero-Asesino) subió del 23 al 35 de golpe,
+evolucionó a Whiscash y el juego le ofreció Pistola Agua, su movimiento de
+evolución (entrada de nivel 0) sin sustituir. Log: la fila de 340 se parcheó a
+las 13:13:07, 29 s después de la subida (13:12:38), al verlo ya en el equipo.
+`_sync_bdsp_levelup_table_patch` ahora prepara con el mismo rol la fila de la
+SIGUIENTE evolución de cada miembro con rol (`EVOLUTIONS`, la tabla que ya
+usan X/Y y quinta); solo la siguiente, porque cada fila nueva cuesta
+localizarla en memoria. Nunca pisa el rol de un miembro real de esa especie.
+Regresión en `tests/test_bdsp_levelup_table_patch_sync.py`. Suite completa
+3039 passed, 18 skipped. **Validado físicamente** el mismo día: al evolucionar
+como Líbero-Asesino, el juego ofreció Desarme en vez de Pistola Agua; el log
+muestra la fila de Whiscash parcheada 20 s antes de la evolución.
+
+### Fase 4 cerrada (26-09-2026)
+
+Validada físicamente por el usuario con un Líbero que pasa de imitar al
+Asesino a imitar al Mago en los siete juegos seleccionables: ORAS, USUM,
+Sol/Luna, X/Y, BDSP, Blanco 2/Negro 2 y Blanco/Negro (detalle por juego en
+`docs/CURRENT_STATE.md`).
+
+### Fase 5: textos (26-09-2026)
+
+- Guía del formato (`format_help_view.py`): la introducción y la tarjeta
+  «SEIS ROLES» ya no presentan al Líbero como rol libre, sino como el comodín
+  que imita otro rol y permite repetirlo.
+- Ficha del rol Líbero (`role_content.py`): qué imita, cómo se elige y
+  cambia, y que sin elegirlo está en preparación. La del Prisma deja de citar
+  al Líbero como excepción de Hilo Venenoso.
+- Ayuda: el paso «Reparte los roles» admite el rol repetido del Líbero, y
+  «Equipo y PC» explica el desplegable.
+- Consulta de movimientos: el selector de rol ya no ofrece «Líbero» (no tiene
+  reglas propias que consultar).
+- Web (repositorio `rolerun.github.io`, sin publicar): mismos textos.
+
+Suite completa 3039 passed, 18 skipped.
+
 ## La web se muda a rolerun.github.io (25-09-2026)
 
 Pedido del usuario: una dirección más corta que

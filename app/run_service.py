@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from . import perf
+from .role_rules import libero_imitated_role
 
 
 class HistorialIlegible(RuntimeError):
@@ -142,8 +143,18 @@ class RunProject:
     # (p. ej. cambiar a Support solo para garantizarse un hazard y volver a
     # Líbero después). Clave por identidad estable de Pokémon (mismo criterio
     # que ``oras_levelup_move_history``, sobrevive a evoluciones); valor
-    # ``{"<move_id>": "<rol>"}``. Ver ``role_rules.libero_foreign_move_reason``.
+    # ``{"<move_id>": "<rol>"}``.
+    #
+    # Histórico desde el 2026-09-26: el Líbero ya no es libre -imita un rol y
+    # se juzga con sus reglas-, así que ese aviso desapareció y nada escribe
+    # ni lee esto. Se conserva para que las Runs que lo tienen sigan abriendo.
     drafted_move_origin: dict[str, dict[str, str]] = field(default_factory=dict)
+    # Rol que imita cada Líbero (2026-09-25, ver ``role_rules.rules_role``):
+    # ``{"<clave>": "<rol>"}``. Pertenece al Pokémon, no a la casilla -decidido
+    # por el usuario-: si vuelve del PC lo recuerda, y otro Pokémon puesto de
+    # Líbero elige el suyo. Clave de ``RunProjectService.libero_role_key``,
+    # sin especie para que sobreviva a una evolución.
+    libero_roles: dict[str, str] = field(default_factory=dict)
     hotkeys: dict[str, str] = field(default_factory=lambda: {
         "sync_live_game": "f5",
         "vidas_mas": "num 7",
@@ -652,6 +663,36 @@ class RunProjectService:
         if int(pid or 0) or int(tid or 0) or int(sid or 0):
             return f"{int(species_id)}:{int(pid or 0)}:{int(tid or 0)}:{int(sid or 0)}"
         return f"fallback:{int(species_id)}:{nickname.strip().casefold()}"
+
+    @staticmethod
+    def libero_role_key(species_id: int, pid: int, tid: int, sid: int, nickname: str = "") -> str:
+        """Clave de ``RunProject.libero_roles``.
+
+        PID:TID:SID sin especie -mismo criterio que el historial de
+        aprendizajes por nivel-: evolucionar no debe olvidar qué rol imitaba.
+        """
+        if int(pid or 0) or int(tid or 0) or int(sid or 0):
+            return f"{int(pid or 0)}:{int(tid or 0)}:{int(sid or 0)}"
+        return f"fallback:{int(species_id)}:{nickname.strip().casefold()}"
+
+    @staticmethod
+    def libero_role_for(project: RunProject, key: str) -> str | None:
+        """Rol que imita el Líbero de ``key``; ``None`` si no hay uno válido."""
+        return libero_imitated_role(project.libero_roles.get(key))
+
+    def set_libero_role(self, project: RunProject, key: str, role: str | None) -> None:
+        """Fija (o borra con ``None``) el rol que imita el Líbero de ``key``."""
+        if role is None:
+            if project.libero_roles.pop(key, None) is None:
+                return
+        else:
+            imitated = libero_imitated_role(role)
+            if imitated is None:
+                raise ValueError(f"Un Líbero no puede imitar el rol: {role}")
+            if project.libero_roles.get(key) == imitated:
+                return
+            project.libero_roles[key] = imitated
+        self.save(project)
 
 
     def adjust_counter(self, project: RunProject, counter: str, delta: int, source: str = "manual") -> int:

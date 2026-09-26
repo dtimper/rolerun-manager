@@ -68,8 +68,8 @@ class DraftEngine:
         return int(move_id) in self.self_healing_damage_moves
 
     def generate_role(self, role: str) -> list[dict]:
-        if role == "Líbero":
-            return self._generate_libero()
+        # Líbero ya no tiene conjunto propio (2026-09-26): drafea con el del
+        # rol que imita, que es lo que el controlador pasa aquí.
         if role not in self.roles:
             raise ValueError(f"Rol desconocido: {role}")
         return [self._result_for(category) for category in self.roles[role]]
@@ -90,36 +90,6 @@ class DraftEngine:
             "move": move["name_es"],
             "move_en": move.get("name_en", ""),
         }
-
-    def _generate_libero(self) -> list[dict]:
-        """Genera el pool propio de Líbero sin duplicar categorías de daño."""
-        fixed = [
-            {"title": "Ataque físico", "pool_key": "extra_ataque_fisico"},
-            {"title": "Ataque especial", "pool_key": "extra_ataque_especial"},
-        ]
-        damage_pool_keys = {
-            "extra_ataque_fisico", "extra_ataque_especial",
-            "defensa_ataque_fisico", "defensa_ataque_especial",
-        }
-        candidates: list[dict] = []
-        seen: set[str] = set()
-        for categories in self.roles.values():
-            for category in categories:
-                pool_key = str(category["pool_key"])
-                if pool_key in damage_pool_keys or pool_key in seen:
-                    continue
-                if not self._compatible_pool(pool_key):
-                    continue
-                seen.add(pool_key)
-                candidates.append(category)
-        if len(candidates) < 3:
-            raise ValueError("Líbero no dispone de tres categorías auxiliares utilizables en este juego.")
-        random_categories = self._rng.sample(candidates, 3)
-        # La composición visual de cinco resultados usa tres tarjetas arriba y
-        # dos abajo. Publicamos primero las tres categorías sorteadas para que
-        # la fila superior resuma de un vistazo el resultado aleatorio, y
-        # dejamos los dos ataques fijos en la fila inferior.
-        return [self._result_for(category) for category in random_categories + fixed]
 
     def reroll(self, pool_key: str, current_move_id: int) -> dict:
         pool = self._compatible_pool(pool_key)

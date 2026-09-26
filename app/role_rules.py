@@ -69,6 +69,51 @@ def canonical_role(role: str) -> str:
     return value
 
 
+# Decidido por el usuario el 2026-09-25: Líbero deja de ser el "rol libre".
+# Limitar los otros cinco no bastaba -un Pokémon demasiado fuerte seguía
+# cabiendo en Líbero sin restricción alguna-, así que ahora Líbero imita a uno
+# de los otros cinco roles, elegido por Pokémon, y el equipo puede repetir ese
+# rol. La marca física del juego sigue siendo la de Líbero; el rol imitado lo
+# guarda RoleRun en ``RunProject.libero_roles``.
+LIBERO_IMITABLE_ROLES: tuple[str, ...] = tuple(role for role in ROLE_ORDER if role != "Líbero")
+
+
+# Las dos estadísticas que cada rol lleva a 252 EV (las otras cuatro, a 0).
+# Un Líbero recibe las del rol que imita (decidido por el usuario el
+# 2026-09-25): ya no elige dos libres.
+ROLE_EV_STATS: dict[str, tuple[str, str]] = {
+    "Asesino": ("attack", "speed"),
+    "Mago": ("sp_attack", "speed"),
+    "Tanque": ("hp", "defense"),
+    "Prisma": ("hp", "sp_defense"),
+    "Support": ("defense", "sp_defense"),
+}
+
+
+def libero_imitated_role(value: str | None) -> str | None:
+    """Normaliza el rol que imita un Líbero; ``None`` si no es uno válido."""
+    role = canonical_role(value) if value else ""
+    return role if role in LIBERO_IMITABLE_ROLES else None
+
+
+def rules_role(role: str, libero_role: str | None = None) -> str:
+    """Rol cuyas reglas de movimientos se aplican a un Pokémon.
+
+    Cualquier rol que no sea Líbero se juzga por sí mismo. Un Líbero se juzga
+    exactamente como el rol que imita: rojos, drafteo, aprendizajes por nivel
+    y EV salen de ese rol, no de reglas propias de Líbero.
+
+    Un Líbero que todavía no eligió qué rol imita -solo puede pasar en Runs
+    anteriores a este cambio: asignar Líbero ya lo pregunta siempre- está en
+    PREPARACIÓN, igual que un SIN ROL: no drafea ni se le marca nada hasta que
+    lo elija. Desde el 2026-09-26 (fase 3) ya no existe un Líbero libre.
+    """
+    role = canonical_role(role)
+    if role != "Líbero":
+        return role
+    return libero_imitated_role(libero_role) or "SIN ROL"
+
+
 # Decidido por el usuario el 2026-09-03: un movimiento de estado que combina
 # Velocidad con OTRO stat solo es válido para el rol cuyo propio stat incluya
 # — el mismo criterio que ya usan las pools curadas de cada rol (Corpulencia
@@ -230,30 +275,6 @@ def damage_move_issue_reason(
     if role in {"Tanque", "Prisma"} and move_id in self_healing_damage_moves:
         return f"{role} no puede recuperar PS mediante movimientos de daño"
     return ""
-
-
-# Decidido por el usuario el 2026-09-07: Líbero no restringe movimientos por
-# su cuenta (ver ``allowed_status_move_ids`` devolviendo ``None``), pero eso
-# es precisamente lo que hacía abusable cambiar a OTRO rol solo para
-# garantizarse un drafteo concreto (p. ej. Support para asegurar un hazard) y
-# volver a Líbero después a quedarse el movimiento sin más. Un movimiento de
-# Líbero sigue sin ser ilegal, pero si el registro demuestra que se drafteó
-# con un rol distinto se avisa igual que cualquier otra incompatibilidad, con
-# papelera/MT como salida -mismo flujo que ya usa la cláusula de evasión-.
-def libero_foreign_move_reason(origin_role: str | None) -> str:
-    """Motivo de aviso si Líbero conserva un movimiento drafteado como OTRO rol.
-
-    ``origin_role`` es el rol activo cuando se drafteó el movimiento, o
-    ``None``/cadena vacía si no hay registro -aprendido por otra vía: nivel,
-    MT, migración, o drafteado antes de que este historial existiera-. Sin
-    registro no se avisa: no hay prueba de que sea ajeno a Líbero, y esta
-    función sigue el mismo criterio que el resto de RoleRun de no inventar
-    incompatibilidades sin poder demostrarlas.
-    """
-    role = canonical_role(origin_role) if origin_role else "Líbero"
-    if role == "Líbero":
-        return ""
-    return f"Movimiento drafteado del {role}, no del Líbero"
 
 
 def engine_role_name(role: str, *, legacy_engine: bool = False) -> str:

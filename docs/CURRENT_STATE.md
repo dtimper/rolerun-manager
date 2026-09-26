@@ -24,6 +24,38 @@ sección es la foto de hoy. Lo posterior al 14-09 está solo en `CHANGELOG.md`.
   `MELONDS_GEN4_ESCRIBE` en `app/ui.py`).
 - **Combate de seis Pokémon** (vida + drafteo automáticos): validado
   físicamente en los siete juegos seleccionables.
+- **Líbero imita un rol** (cambio de formato del 25-09-2026, en fases; ver
+  `CHANGELOG.md`): la fase 2 -desplegable en la casilla, selector «¿qué rol
+  imita?», rojos y EV del rol elegido- la validó el usuario en partida el
+  26-09-2026 («Funciona»), y también la fase 3 -drafteo con el rol imitado-
+  el mismo día. Fase 4 (aprendizajes por nivel con el rol imitado) hecha,
+  pendiente de validación física juego a juego; fase 5 (textos) sin empezar.
+- **Corrección 26-09-2026: ORAS SÍ puede enseñar una tabla de aprendizajes
+  anterior** tras un cambio de rol, igual que X/Y (antes se daba por
+  demostrado que no). Evidencia y arreglo (red de seguridad compartida con
+  X/Y) en `CHANGELOG.md`, «Fase 4, corrección». El anuncio sale de dos
+  copias de la tabla en la RAM del juego (región de ~256 MiB, lejos del
+  equipo; abrir la ficha no las rehace): reescribirlas a mano quedó
+  **validado físicamente** el 26-09-2026 (Houndoom ofreció Aligerar, de
+  Mago, en vez de Afilagarras), y la corrección automática de RoleRun
+  también (Tajo Umbrío como Asesino en el 20, Desarrollo como Mago en el 26).
+  Fase 4 validada en ORAS y en USUM (26-09-2026: Carnivine, Líbero; como
+  Mago ofreció Paranormal en el nivel 7 y como Asesino Mazazo en el 11,
+  ambos desde el primer momento -sin corrección posterior en el log-, con
+  las 2 copias en RAM corregidas 3 s antes) y en Sol/Luna (Ledyba, Líbero:
+  como Asesino Agitacola/Martillazo en 5/8; como Mago, Luminícola, Eco
+  Metálico y Llanto Falso en el 12; sin corrección posterior) y en X/Y
+  (Zigzagoon→Linoone, Líbero: Asesino en 5/9/11, Mago en 13/17 y, tras
+  evolucionar, 23/29; sin errores de la red de seguridad, ya con el núcleo
+  común con ORAS) y en BDSP (Barboach→Whiscash, Líbero: tras corregir que
+  un cambio de rol no devolvía lo que cambió el rol anterior y preparar la
+  fila de la siguiente evolución, todo lo aprendido por nivel encaja con el
+  rol y al evolucionar como Asesino ofreció Desarme) y en Blanco 2/Negro 2
+  (Lillipup, Líbero: Afilar como Asesino en el 5, Onda Vacío como Mago en el
+  8) y en Blanco/Negro (Lillipup, Líbero: Danza Espada como Asesino en el 5,
+  Premonición como Mago en el 8). **Fase 4 validada en los siete juegos
+  seleccionables** (26-09-2026). Fase 5 (textos de Ayuda, fichas de rol,
+  consulta de movimientos y web) hecha; la web está pendiente de publicar.
 - **Bugs abiertos confirmados**: estado alterado mal mostrado en la barra
   flotante (ORAS muestra otro estado; BDSP no muestra ninguno porque el offset
   `0x94` de `PlayerWork._playerParty` no lleva el estado vivo).

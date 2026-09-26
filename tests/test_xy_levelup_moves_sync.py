@@ -64,6 +64,9 @@ class SyncCacheTests(unittest.TestCase):
         fake._sync_xy_levelup_moves_backup = (
             RoleRunManager._sync_xy_levelup_moves_backup.__get__(fake)
         )
+        fake._substitute_new_off_role_moves = (
+            RoleRunManager._substitute_new_off_role_moves.__get__(fake)
+        )
         return fake
 
     def _bulbasaur(self, *, level: int = 10, pid: int = 1) -> SimpleNamespace:

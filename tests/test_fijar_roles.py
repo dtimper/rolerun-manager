@@ -64,7 +64,7 @@ def _manager(roles: dict[str, str], *, live_key: str = "b2w2"):
         _sync_live_layout=lambda: None,
         _set_operation_status=lambda *a, **k: None,
         _request_oras_live_auto_apply_since=lambda antes: None,
-        _prompt_libero_ev_stats=lambda p, callback: callback(("attack", "speed")),
+        _prompt_libero_role=lambda p, callback: callback(("attack", "speed")),
         run=SimpleNamespace(pending_changes=[]),
         active_page="team",
         aplicados=aplicados,
@@ -143,7 +143,7 @@ def test_al_libero_se_le_preguntan_sus_estadisticas() -> None:
 def test_si_se_cancela_el_libero_no_se_fija_ninguno() -> None:
     """Mejor no tocar nada que dejar el equipo a medias."""
     manager, _ = _manager({"A": "SIN ROL", "B": "SIN ROL"})
-    manager._prompt_libero_ev_stats = lambda p, callback: None
+    manager._prompt_libero_role = lambda p, callback: None
 
     RoleRunManager.fijar_roles_del_equipo(manager)
 
@@ -152,7 +152,7 @@ def test_si_se_cancela_el_libero_no_se_fija_ninguno() -> None:
 
 def test_sin_libero_pendiente_no_se_pregunta_nada() -> None:
     manager, _ = _manager({"A": "Líbero", "B": "SIN ROL"})
-    manager._prompt_libero_ev_stats = lambda p, callback: pytest.fail(
+    manager._prompt_libero_role = lambda p, callback: pytest.fail(
         "no debe preguntarse: el Líbero ya está asignado",
     )
 
@@ -246,7 +246,7 @@ def test_el_intercambio_de_roles_pide_los_ev_del_nuevo_libero() -> None:
             _effective_role=lambda p: (p.role, ""),
             _projected_party=lambda: equipo,
             _pokemon_identity=lambda p: f"{p.species_id}:{p.pid}:{p.tid}:{p.sid}",
-            _prompt_libero_ev_stats=(
+            _prompt_libero_role=(
                 lambda p, cb, context="main": pedidos.append(p.nickname)
             ),
             _set_projected_member_role=lambda *a, **k: None,
@@ -272,4 +272,4 @@ def test_asignar_libero_sin_estadisticas_avisa_en_vez_de_callarse() -> None:
 
     fuente = inspect.getsource(RoleRunManager._apply_role_assignment)
     assert 'role == "Líbero" and len(set(libero_stats)) != 2' in fuente
-    assert "FALTAN LOS EV DEL LÍBERO" in fuente
+    assert "FALTA EL ROL QUE IMITA EL LÍBERO" in fuente

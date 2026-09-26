@@ -6,6 +6,7 @@ import ctypes
 import json
 import math
 import queue
+import struct
 import subprocess
 import sys
 import threading
@@ -60,7 +61,8 @@ from .pc_browser import filter_pc_pokemon, reset_scrollable_to_top
 from .role_rules import (
     ROLE_ORDER, ROLE_OPTIONS, ROLE_SYMBOLS, ROLE_TO_KEY,
     allowed_status_move_ids, canonical_role, damage_move_issue_reason,
-    is_evasion_move, libero_foreign_move_reason, role_from_markings,
+    is_evasion_move, role_from_markings, rules_role,
+    LIBERO_IMITABLE_ROLES, ROLE_EV_STATS,
 )
 from .models import PendingChange, PendingDraft, PendingInventoryChange, PendingPartyHeal, PendingPCRoleChange, PendingRoleChange, PendingTMTeach, PendingTeamChange, RunSession
 from .save_engine_client import SaveEngineClient, SaveEngineError, SaveGameData, SavePokemon, SavePCData, SaveBox
@@ -120,7 +122,7 @@ from .xy_rom_service import (
 )
 from . import xy_levelup_moves as xy_levelup_moves_mod
 from . import gen4_levelup_memory, gen4_levelup_moves, gen5_levelup_memory, gen5_levelup_moves
-from .pokemon_evolutions import evolution_descendants
+from .pokemon_evolutions import EVOLUTIONS, evolution_descendants
 from .sonido import Sonidos
 from .sm_rom_service import (
     SMRomProfileError, load_sm_levelup_moves_blob, load_sm_rom_tm_profile,
@@ -538,6 +540,18 @@ class RoleRunManager(ctk.CTk):
         self._xy_levelup_moves_last_roles_key: tuple | None = None
         self._xy_levelup_history_last_levels: dict[str, int] = {}
         self._xy_levelup_backup_known_moves: dict[str, list[int]] = {}
+        # Huecos de cada miembro en el último sondeo de ORAS, para su red de
+        # seguridad (`_sync_oras_levelup_moves_backup`, 2026-09-26).
+        self._oras_levelup_backup_known_moves: dict[str, list[int]] = {}
+        self._oras_levelup_backup_known_levels: dict[str, int] = {}
+        # Especies/forma cuya fila de WazaOboeTable cambió RoleRun en esta
+        # sesión (`_sync_bdsp_levelup_table_patch`, 2026-09-26).
+        self._bdsp_levelup_table_touched: set[tuple[int, int]] = set()
+        # Copias en RAM de la tabla de aprendizajes que decide el anuncio de
+        # ORAS (`_sync_oras_levelup_announcement_cache`, 2026-09-26).
+        self._oras_announcement_cache_running = False
+        self._oras_announcement_cache_pending: dict | None = None
+        self._oras_announcement_copy_addresses: dict[tuple[int, int], list[int]] = {}
         self._xy_levelup_announcement_cache_running: bool = False
         # Petición de más especies llegada MIENTRAS el hilo de arriba ya
         # estaba en curso (ver ``_sync_xy_levelup_announcement_cache``):
@@ -1780,7 +1794,7 @@ class RoleRunManager(ctk.CTk):
         if libero_recipient is not None:
             recipient_identity = self._pokemon_identity(libero_recipient)
             if len(libero_assignments.get(recipient_identity, ())) != 2:
-                self._prompt_libero_ev_stats(
+                self._prompt_libero_role(
                     libero_recipient,
                     lambda stats, src=source, dst=target_role, ctx=context, known=libero_assignments: self._move_pokemon_to_role_by_drag(
                         src, dst, context=ctx,
@@ -1813,15 +1827,7 @@ class RoleRunManager(ctk.CTk):
         # falta esperar a releer la partida. Validado físicamente el
         # 2026-09-03: un intercambio de roles entre dos Pokémon ya se refleja
         # de inmediato.
-        self._sync_oras_levelup_moves_mod(self.current_game)
-        self._sync_usum_levelup_moves_mod(self.current_game)
-        self._sync_usum_levelup_moves_backup(self.current_game)
-        self._sync_sm_levelup_moves_mod(self.current_game)
-        self._sync_sm_levelup_moves_backup(self.current_game)
-        self._sync_xy_levelup_moves_mod(self.current_game)
-        self._sync_xy_levelup_moves_backup(self.current_game)
-        self._sync_gen5_levelup_moves(self.current_game)
-        self._sync_hgss_levelup_moves(self.current_game)
+        self._sync_levelup_tables_now()
 
         left = source.nickname or source.species
         if target is not None:
@@ -7677,6 +7683,48 @@ class RoleRunManager(ctk.CTk):
         role = canonical_role(pokemon.role)
         return role, symbols.get(role, pokemon.role_symbol)
 
+    def _rules_role(self, pokemon: SavePokemon) -> str:
+        """Rol cuyas reglas de movimientos se aplican a ``pokemon``.
+
+        Igual que ``_effective_role`` salvo para un Líbero, que se juzga como
+        el rol que imita (2026-09-25, ver ``role_rules.rules_role``).
+        """
+        return self._rules_role_for(pokemon, self._effective_role(pokemon)[0])
+
+    def _rules_role_for(
+        self, pokemon: SavePokemon, role: str, libero_role: str | None = None,
+    ) -> str:
+        """Como ``_rules_role`` pero con el rol dado, no el efectivo.
+
+        Lo usan quienes juzgan a un Pokémon contra un rol concreto -la tarjeta
+        con el rol de su casilla, la vista previa del editor-. ``libero_role``
+        permite previsualizar un rol imitado aún sin guardar.
+        """
+        role = canonical_role(role)
+        if role != "Líbero":
+            return role
+        if libero_role is None:
+            libero_role = self._libero_role_of(pokemon)
+        return rules_role(role, libero_role)
+
+    def _libero_role_key(self, pokemon: SavePokemon) -> str:
+        return self.project_service.libero_role_key(
+            pokemon.species_id, pokemon.pid, pokemon.tid, pokemon.sid,
+            pokemon.nickname or pokemon.species,
+        )
+
+    def _libero_role_of(self, pokemon: SavePokemon) -> str | None:
+        """Rol que imita ``pokemon`` si fuera Líbero; ``None`` si no lo eligió."""
+        if self.project is None:
+            return None
+        return self.project_service.libero_role_for(self.project, self._libero_role_key(pokemon))
+
+    @staticmethod
+    def _libero_stats_for(role: str | None) -> tuple[str, ...]:
+        """Las dos estadísticas del rol imitado, en el orden de STAT_KEYS."""
+        chosen = set(ROLE_EV_STATS.get(str(role or ""), ()))
+        return tuple(key for key in STAT_KEYS if key in chosen)
+
     @staticmethod
     def _role_symbol(role: str) -> str:
         return ROLE_SYMBOLS.get(canonical_role(role), "")
@@ -10734,9 +10782,9 @@ class RoleRunManager(ctk.CTk):
             self._save_oras_live_changes(batch, automatic=True, base_game=captured_game)
 
         context = "floating" if self._floating_bar_is_visible() else "main"
-        self.sync_status = f"◌ Elige los EV de Líbero para {pokemon.nickname or pokemon.species}"
+        self.sync_status = f"◌ Elige qué rol imita el Líbero {pokemon.nickname or pokemon.species}"
         self._update_top_status()
-        self._prompt_libero_ev_stats(pokemon, apply_choice, context=context)
+        self._prompt_libero_role(pokemon, apply_choice, context=context)
         return True
 
     def _sm_role_transition_key(self, game: SaveGameData) -> tuple:
@@ -11783,9 +11831,11 @@ class RoleRunManager(ctk.CTk):
             role = fallback_role if fallback_role in ROLE_ORDER else "SIN ROL"
             symbol = self._role_symbol(role)
         live_key = str(getattr(getattr(self, "save_engine", None), "key", ""))
-        if live_key in ROLE_EV_WRITER_GAME_KEYS and role == "Líbero" and len(libero_stats) != 2:
+        # El rol que imita el Líbero se pregunta siempre, escriba EV o no: sin
+        # él no hay reglas que aplicarle (2026-09-25).
+        if role == "Líbero" and len(libero_stats) != 2:
             context = "floating" if self._floating_bar_is_visible() else "main"
-            self._prompt_libero_ev_stats(
+            self._prompt_libero_role(
                 incoming,
                 lambda stats, pokemon=incoming: self._prepare_faint_replacement(
                     pokemon, libero_stats=stats,
@@ -12010,6 +12060,7 @@ class RoleRunManager(ctk.CTk):
         self._oras_live_monitor_failures = 0
         if self._active_azahar_realtime_key() == "oras":
             self._sync_oras_levelup_moves_mod(snapshot.game if snapshot else None)
+            self._sync_oras_levelup_moves_backup(snapshot.game if snapshot else None)
         if self._active_azahar_realtime_key() == "usum":
             self._sync_usum_levelup_moves_mod(snapshot.game if snapshot else None)
             self._sync_usum_levelup_moves_backup(snapshot.game if snapshot else None)
@@ -15105,6 +15156,7 @@ class RoleRunManager(ctk.CTk):
             move_metadata_for=self._draft_move_metadata,
             moves_for=self._effective_moves_for_review,
             on_choose_pokemon=self._draft_choose_visual_pokemon,
+            libero_role_for=self._libero_role_of,
             on_choose_move=self.select_drafted_move,
             on_reroll=self.reroll_move,
             on_choose_slot=self.select_move_slot,
@@ -15273,7 +15325,16 @@ class RoleRunManager(ctk.CTk):
             )
             return
         effective_role, _symbol = self._effective_role(pokemon)
-        if effective_role == "SIN ROL" or effective_role not in {*self.engine.role_names(), "Líbero"}:
+        # Un Líbero drafea con el conjunto del rol que imita (2026-09-26). Si
+        # aún no lo eligió, se pregunta aquí y el drafteo sigue solo después.
+        if effective_role == "Líbero" and self._libero_role_of(pokemon) is None:
+            self._prompt_libero_role(
+                pokemon,
+                lambda stats, p=pokemon, pool=pool_role: self._draft_after_libero_choice(p, pool, stats),
+            )
+            return
+        effective_role = self._rules_role(pokemon)
+        if effective_role == "SIN ROL" or effective_role not in self.engine.role_names():
             self._set_operation_status(
                 "warning", "POKÉMON EN PREPARACIÓN",
                 "Asigna un rol antes de iniciar un drafteo con este Pokémon.", persistent=True,
@@ -15297,6 +15358,20 @@ class RoleRunManager(ctk.CTk):
             "Todavía no se ha consumido ningún drafteo.",
         )
         self._draft_transition()
+
+    def _draft_after_libero_choice(
+        self, pokemon: SavePokemon, pool_role: str, libero_stats: tuple[str, ...],
+    ) -> None:
+        """Tras elegir en Drafteos qué rol imita un Líbero: sus EV y el drafteo.
+
+        Sin repintar la página entre medias -eso lo hará el propio drafteo-:
+        los EV se preparan igual que desde su casilla de Equipo.
+        """
+        pending_ids_before = {id(change) for change in self.run.pending_changes}
+        self._set_projected_member_role(pokemon, "Líbero", libero_stats=libero_stats)
+        self._sync_levelup_tables_now()
+        self._request_oras_live_auto_apply_since(pending_ids_before)
+        self._draft_choose_visual_pokemon(pokemon, pool_role)
 
     def _reset_visual_draft_flow(self) -> None:
         self.run.role = None
@@ -15987,7 +16062,10 @@ class RoleRunManager(ctk.CTk):
             roles_by_species: dict[int, str] = {}
             for pokemon in game.party:
                 role, _symbol = self._effective_role(pokemon)
-                if role in {"SIN ROL", "Líbero", ""}:
+                if role == "Líbero":
+                    # Aprende como el rol que imita (2026-09-26); sin elegir, nada.
+                    role = self._rules_role_for(pokemon, role)
+                if role in {"SIN ROL", ""}:
                     continue
                 roles_by_species[int(pokemon.species_id)] = role
             # Mismo adelanto a las evoluciones futuras que ya hace X/Y: cuando
@@ -16157,6 +16235,9 @@ class RoleRunManager(ctk.CTk):
                 if not crossed:
                     continue
                 role, _symbol = self._effective_role(pokemon)
+                if role == "Líbero":
+                    # Aprende como el rol que imita (2026-09-26); sin elegir, nada.
+                    role = self._rules_role_for(pokemon, role)
                 if self._append_gen5_levelup_history_entries(
                     identity, pokemon, species_id, crossed, role, pre_capture=False,
                 ):
@@ -16296,7 +16377,10 @@ class RoleRunManager(ctk.CTk):
             roles_by_species: dict[int, str] = {}
             for pokemon in game.party:
                 role, _symbol = self._effective_role(pokemon)
-                if role in {"SIN ROL", "Líbero", ""}:
+                if role == "Líbero":
+                    # Aprende como el rol que imita (2026-09-26); sin elegir, nada.
+                    role = self._rules_role_for(pokemon, role)
+                if role in {"SIN ROL", ""}:
                     continue
                 roles_by_species[int(pokemon.species_id)] = role
             for species_id, role in list(roles_by_species.items()):
@@ -16450,6 +16534,9 @@ class RoleRunManager(ctk.CTk):
                 if not crossed:
                     continue
                 role, _symbol = self._effective_role(pokemon)
+                if role == "Líbero":
+                    # Aprende como el rol que imita (2026-09-26); sin elegir, nada.
+                    role = self._rules_role_for(pokemon, role)
                 if self._append_hgss_levelup_history_entries(
                     identity, pokemon, species_id, crossed, role, pre_capture=False,
                 ):
@@ -16763,7 +16850,12 @@ class RoleRunManager(ctk.CTk):
                 _nombres, ids = self._effective_moves_for_review(pokemon)
                 if move_id in {int(valor or 0) for valor in ids}:
                     conocidos.append(identidad)
-                elif drafteos_guardados.puede_aprenderlo(guardado, rol):
+                elif drafteos_guardados.puede_aprenderlo(guardado, self._rules_role_for(pokemon, rol)) or (
+                    # Un Líbero-Mago aprende los drafteos de Mago; y los que
+                    # se guardaron como Líbero antes del 2026-09-26, con su
+                    # antiguo conjunto propio, siguen siendo suyos.
+                    rol == "Líbero" and str(guardado.get("role", "")).strip() == "Líbero"
+                ):
                     compatibles.append(identidad)
             entradas.append({
                 "kind": "draft",
@@ -17087,6 +17179,9 @@ class RoleRunManager(ctk.CTk):
             effective_moves_for=self._effective_moves_for_review,
             support_damage_for=self._support_damage_excess,
             on_support_damage=self._open_support_damage_removal_selector,
+            libero_role_for=self._libero_role_of,
+            on_libero_role=self._set_libero_imitated_role,
+            libero_role_options=LIBERO_IMITABLE_ROLES,
             on_box_change=self._team_pc_change_box,
             on_search=self._team_pc_global_search,
             on_action=self._team_pc_action,
@@ -17558,20 +17653,19 @@ class RoleRunManager(ctk.CTk):
         ]
         # Pedido del usuario 08-09-2026: solo si hay algún Líbero en el
         # equipo -si no, `target` no resuelve a nada y el tour salta este
-        # paso solo, como ya hace con cualquier objetivo ausente. Mecánica
-        # confirmada contra `DraftEngine._generate_libero`
-        # (`app/draft_engine.py`): además de sus dos ataques fijos, sortea
-        # tres categorías auxiliares al azar entre las de otros roles.
+        # paso solo, como ya hace con cualquier objetivo ausente. Desde el
+        # 2026-09-26 el Líbero ya no tiene conjunto propio: drafea con el del
+        # rol que imita (`_draft_choose_visual_pokemon`).
         if getattr(self._draft_view, "first_libero_card", None) is not None:
             steps.append(
                 OnboardingTourStep(
                     target=lambda: self._draft_view.first_libero_card,
                     title="EL CASO DE LÍBERO",
                     text=(
-                        "Líbero tiene sus dos ataques fijos (físico y "
-                        "especial) más tres categorías auxiliares sorteadas "
-                        "al azar entre las de otros roles: sus drafteos son "
-                        "los más variados de todos."
+                        "Líbero drafea como el rol que imita: sus opciones "
+                        "salen del mismo conjunto que las de ese rol. Si aún "
+                        "no has elegido cuál imita, se te preguntará al "
+                        "pulsar ELEGIR."
                     ),
                 ),
             )
@@ -18264,7 +18358,7 @@ class RoleRunManager(ctk.CTk):
             occupied = {self._effective_role(member)[0] for member in projected}
             effective_target_role = next((role for role in ROLE_ORDER if role not in occupied), None)
         if effective_target_role == "Líbero" and len(libero_stats) != 2:
-            self._prompt_libero_ev_stats(
+            self._prompt_libero_role(
                 incoming,
                 lambda stats, inc=incoming, out=outgoing, role=target_role: self._team_pc_execute_change(
                     inc, out, target_role=role, libero_stats=stats,
@@ -19117,6 +19211,18 @@ class RoleRunManager(ctk.CTk):
         si dos miembros ACTIVOS del equipo son de la misma especie con
         roles distintos, se elige un único ganador determinista por sondeo
         —el de menor slot— para no alternar el contenido cada vez.
+
+        2026-09-26, bug real en la partida del usuario (Whiscash, Líbero):
+        solo se pedían las entradas que el rol ACTUAL sustituye. Al pasar de
+        Asesino a Mago, las que el Asesino había cambiado y el Mago no
+        necesita cambiar se quedaban con el sustituto de Asesino (Llave Giro).
+        Ahora se pide la fila entera de todo lo que algún rol podría haber
+        tocado: el sustituto del rol de ahora o, si no lo necesita, el
+        vainilla. Restaurar al vainilla una especie que ya no necesita nada
+        solo se pide si RoleRun la cambió en esta sesión
+        (``_bdsp_levelup_table_touched``): pedirlo siempre obligaría a
+        localizar también especies nunca tocadas, y localizar cuesta un
+        escaneo de memoria (la ralentización del 2026-09-04).
         """
         if getattr(self.save_engine, "key", "") != "bdsp" or game is None:
             return
@@ -19136,9 +19242,33 @@ class RoleRunManager(ctk.CTk):
                 if current is None or int(pokemon.slot) < int(current.slot):
                     winners[species_form] = pokemon
 
+            role_by_form: dict[tuple[int, int], str] = {}
+            for species_form, pokemon in winners.items():
+                role, _symbol = self._effective_role(pokemon)
+                if role == "Líbero":
+                    # Aprende como el rol que imita (2026-09-26); sin elegir, nada.
+                    role = self._rules_role_for(pokemon, role)
+                role_by_form[species_form] = role
+            # 2026-09-26, demostrado en la partida del usuario: Barboach
+            # evolucionó a Whiscash y el juego le ofreció su movimiento de
+            # evolución (entrada de nivel 0) sin sustituir -Pistola Agua como
+            # Asesino-, porque la fila de Whiscash se parcheó 29 s después, al
+            # verlo ya en el equipo. Como X/Y y quinta, la fila de la especie
+            # en la que puede evolucionar se prepara antes con el mismo rol.
+            # Solo la SIGUIENTE evolución, no toda la cadena: aquí cada fila
+            # nueva cuesta localizarla en memoria (2026-09-04), y al
+            # evolucionar se preparará la siguiente. `setdefault` nunca pisa
+            # el rol de un miembro real del equipo.
+            for (species_id, _form), role in list(role_by_form.items()):
+                if role in {"SIN ROL", ""}:
+                    continue
+                for evolved in EVOLUTIONS.get(int(species_id), ()):
+                    role_by_form.setdefault((int(evolved), 0), role)
+
             patches: dict[tuple[int, int], dict[int, int]] = {}
             anchors: dict[tuple[int, int], object] = {}
-            for species_form, pokemon in winners.items():
+            restore_only: set[tuple[int, int]] = set()
+            for species_form, role in role_by_form.items():
                 species_id, form = species_form
                 entries = (
                     self._bdsp_levelup_table.get((species_id, form))
@@ -19146,30 +19276,50 @@ class RoleRunManager(ctk.CTk):
                 )
                 if not entries:
                     continue
-                role, _symbol = self._effective_role(pokemon)
-                patch = compute_species_patch(
-                    entries, role, species_id=species_id,
+                kwargs = dict(
+                    species_id=species_id,
                     pools=self.engine.pools, damage_classes=self.engine.damage_classes,
                     speed_status_moves=self.engine.speed_status_moves,
                     self_healing_damage_moves=self.engine.self_healing_damage_moves,
                     usable_move_ids=usable_move_ids,
                 )
-                if not patch:
+                patch = compute_species_patch(entries, role, **kwargs)
+                role_patches = [compute_species_patch(entries, other, **kwargs) for other in LIBERO_IMITABLE_ROLES]
+                vanilla = {int(index): int(move_id) for move_id, _level, index in entries}
+                # Todo lo que algún rol podría haber dejado escrito en la fila.
+                alternatives: dict[int, set[int]] = {}
+                for other_patch in role_patches:
+                    for index, move_id in other_patch.items():
+                        alternatives.setdefault(int(index), set()).add(int(move_id))
+                desired = {index: int(patch.get(index, vanilla[index])) for index in alternatives}
+                desired.update({int(index): int(move_id) for index, move_id in patch.items()})
+                if not desired:
+                    continue
+                if not patch and species_form not in self._bdsp_levelup_table_touched:
                     continue
                 # Comodín SOLO en las entradas que de verdad hace falta
                 # parchear (no en las 15-20 de toda la tabla): un patrón
                 # demasiado genérico puede coincidir por azar en otro punto
                 # de la memoria y perder la especie como ambigua —
-                # demostrado el 2026-09-04 con Absol.
+                # demostrado el 2026-09-04 con Absol. En el resto de lo que
+                # algún rol toca, solo el vainilla o esos sustitutos.
                 anchors[species_form] = build_species_anchor(
                     species_form, entries, wildcard_keys=frozenset(patch.keys()),
+                    alternatives=alternatives,
                 )
-                patches[species_form] = {int(index): int(move_id) for index, move_id in patch.items()}
+                patches[species_form] = desired
+                if patch:
+                    self._bdsp_levelup_table_touched.add(species_form)
+                else:
+                    restore_only.add(species_form)
 
             if not patches:
                 return
             outcomes = sync(patches, anchors)
             for outcome in outcomes:
+                if outcome.species_form in restore_only:
+                    # Ya localizada y devuelta entera al vainilla.
+                    self._bdsp_levelup_table_touched.discard(outcome.species_form)
                 if outcome.changed:
                     self._registrar_intento_vivo(
                         "bdsp_levelup_tabla_parcheada",
@@ -19261,6 +19411,9 @@ class RoleRunManager(ctk.CTk):
                     )
                     if crossed:
                         role, _symbol = self._effective_role(pokemon)
+                        if role == "Líbero":
+                            # Aprende como el rol que imita (2026-09-26); sin elegir, nada.
+                            role = self._rules_role_for(pokemon, role)
                         # Se calcula sobre TODAS las entradas de la especie
                         # (no solo las cruzadas), exactamente igual que
                         # ``_sync_bdsp_levelup_table_patch`` (Enfoque A) —
@@ -19582,7 +19735,10 @@ class RoleRunManager(ctk.CTk):
             roles_by_species: dict[int, str] = {}
             for pokemon in game.party:
                 role, _symbol = self._effective_role(pokemon)
-                if role in {"SIN ROL", "Líbero", ""}:
+                if role == "Líbero":
+                    # Aprende como el rol que imita (2026-09-26); sin elegir, nada.
+                    role = self._rules_role_for(pokemon, role)
+                if role in {"SIN ROL", ""}:
                     continue
                 roles_by_species[int(pokemon.species_id)] = role
             # El resto de esta función —copiar el blob vainilla y evaluar
@@ -19630,6 +19786,7 @@ class RoleRunManager(ctk.CTk):
                 patched,
                 expected_size=len(self._oras_levelup_moves_vanilla),
             )
+            previous_written = self._oras_levelup_moves_last_written
             self._oras_levelup_moves_last_written = patched
             self._oras_levelup_moves_last_roles_key = roles_key
             self._registrar_intento_vivo(
@@ -19638,6 +19795,14 @@ class RoleRunManager(ctk.CTk):
         except Exception as exc:
             self._registrar_intento_vivo("oras_levelup_sync_error", error=str(exc))
             return
+        # El archivo no basta: el juego anuncia desde sus copias en RAM. Va
+        # aparte y después, para que un fallo aquí nunca deshaga lo anterior.
+        try:
+            self._sync_oras_levelup_announcement_cache(
+                self._oras_announcement_targets(game, previous_written, patched),
+            )
+        except Exception as exc:
+            self._registrar_intento_vivo("oras_levelup_announcement_cache_error", error=str(exc))
 
     def _oras_levelup_usable_move_ids(self) -> set[int]:
         return (
@@ -19769,6 +19934,9 @@ class RoleRunManager(ctk.CTk):
                 if not crossed:
                     continue
                 role, _symbol = self._effective_role(pokemon)
+                if role == "Líbero":
+                    # Aprende como el rol que imita (2026-09-26); sin elegir, nada.
+                    role = self._rules_role_for(pokemon, role)
                 if self._append_oras_levelup_history_entries(
                     identity, pokemon, species_id, crossed, role, pre_capture=False,
                 ):
@@ -19884,7 +20052,10 @@ class RoleRunManager(ctk.CTk):
             roles_by_species: dict[int, str] = {}
             for pokemon in game.party:
                 role, _symbol = self._effective_role(pokemon)
-                if role in {"SIN ROL", "Líbero", ""}:
+                if role == "Líbero":
+                    # Aprende como el rol que imita (2026-09-26); sin elegir, nada.
+                    role = self._rules_role_for(pokemon, role)
+                if role in {"SIN ROL", ""}:
                     continue
                 roles_by_species[int(pokemon.species_id)] = role
             # Copia previa a adelantar evoluciones futuras: el búfer de
@@ -20019,35 +20190,302 @@ class RoleRunManager(ctk.CTk):
             or self.project is None
         ):
             return
+
+        # 2026-09-05, CUARTO bug real confirmado en la partida: el
+        # disparador por cruce de nivel (``_sync_xy_levelup_moves_mod``)
+        # solo se arma comparando contra el ÚLTIMO nivel que RoleRun
+        # vio de este Pokémon -y ese historial no se resetea si el
+        # usuario reinicia el JUEGO sin reiniciar RoleRun (su propio
+        # flujo de pruebas: reiniciar para bajar de nivel sin
+        # relanzar la app). Si RoleRun se reconecta ya con el nivel
+        # de vuelta en el mismo valor que tenía antes del reinicio,
+        # nunca ve el cruce y nunca dispara el parcheo del cartel
+        # -demostrado con Zigzagoon: Mago→Asesino, mismo nivel 9 tras
+        # un reinicio del juego, cartel anunciando "Vozarrón" -el
+        # sustituto de MAGO- con el archivo ya en Asesino-. Esta red
+        # de seguridad, en cambio, compara el CONTENIDO real de los
+        # 4 huecos en cada sondeo -nunca se "gasta"-, así que
+        # engancha aquí también el parcheo del cartel: si acaba de
+        # sustituir un movimiento, el cartel para esta especie
+        # probablemente también quedó desactualizado.
+        def al_sustituir(species_id: int, role: str) -> None:
+            if self._xy_levelup_moves_last_written is not None:
+                self._sync_xy_levelup_announcement_cache(
+                    game, {species_id: role}, self._xy_levelup_moves_last_written,
+                )
+
+        self._substitute_new_off_role_moves(
+            game,
+            known_moves_attr="_xy_levelup_backup_known_moves",
+            usable_move_ids=self._xy_levelup_usable_move_ids,
+            log_prefix="xy",
+            on_substituted=al_sustituir,
+        )
+
+    def _sync_oras_levelup_moves_backup(self, game: SaveGameData | None) -> None:
+        """Aprendizajes por rol en ORAS: la misma red de seguridad que X/Y.
+
+        Se creía que ORAS no la necesitaba (Azahar relee ``a/1/9/1`` sin
+        caché). 2026-09-26, demostrado en la partida real del usuario
+        (Alfa Zafiro randomizado, Quagsire de Líbero): con el archivo del mod
+        ya en la tabla de Mago desde las 11:04:02 -Maquinación en el nivel
+        24-, al llegar al 24 unos segundos después aprendió Afilagarras, que
+        es justo el sustituto de ASESINO de esa entrada (el rol que imitaba
+        un momento antes; la vainilla es Gravedad). Es el mismo síntoma que
+        X/Y, del mismo motor de sexta generación: el juego guarda la tabla y
+        el archivo nuevo no llega a tiempo. Igual que allí, en vez de
+        perseguir esa caché se corrige lo que de verdad aparece en los 4
+        huecos. Sin la capa del cartel de X/Y: su búfer de RAM no está
+        demostrado en ORAS.
+        """
+        if (
+            getattr(self.save_engine, "key", "") != "oras"
+            or game is None
+            or self.project is None
+        ):
+            return
+        self._substitute_new_off_role_moves(
+            game,
+            known_moves_attr="_oras_levelup_backup_known_moves",
+            known_levels_attr="_oras_levelup_backup_known_levels",
+            usable_move_ids=self._oras_levelup_usable_move_ids,
+            log_prefix="oras",
+            table_substitute=self._oras_levelup_table_substitute,
+        )
+
+    def _oras_announcement_targets(
+        self, game: SaveGameData, previous_blob: bytes | None, patched_blob: bytes,
+    ) -> dict[int, tuple[list[int], list[bytes], bytes]]:
+        """Qué copias en RAM hay que poner al día tras escribir ``patched_blob``.
+
+        Solo las especies del equipo cuya tabla cambió respecto a la última
+        escritura (todas si no la hay: RoleRun recién abierto con el juego ya
+        en marcha puede encontrar copias de la sesión anterior). Para cada
+        una: sus niveles, las tablas que se reconocen como suyas (vainilla y
+        la de cada rol, con el mismo cálculo que el archivo) y la de ahora.
+        """
+        from .oras_levelup_announcement_cache import table_payload
+
+        targets: dict[int, tuple[list[int], list[bytes], bytes]] = {}
+        usable_move_ids = self._oras_levelup_usable_move_ids()
+        for species_id in {int(pokemon.species_id) for pokemon in game.party}:
+            entries = (self._oras_levelup_moves_vanilla_entries or {}).get(species_id)
+            if not entries:
+                continue
+            offsets = [int(key) for _move, _level, key in entries]
+            now = [struct.unpack_from("<h", patched_blob, offset)[0] for offset in offsets]
+            if previous_blob is not None and now == [
+                struct.unpack_from("<h", previous_blob, offset)[0] for offset in offsets
+            ]:
+                continue
+            levels = [int(level) for _move, level, _key in entries]
+            known = [table_payload([move for move, _level, _key in entries], levels)]
+            for role in LIBERO_IMITABLE_ROLES:
+                patch = oras_levelup_moves_mod.compute_species_patch(
+                    entries, role, species_id=species_id,
+                    pools=self.engine.pools, damage_classes=self.engine.damage_classes,
+                    speed_status_moves=self.engine.speed_status_moves,
+                    self_healing_damage_moves=self.engine.self_healing_damage_moves,
+                    usable_move_ids=usable_move_ids,
+                )
+                known.append(table_payload([patch.get(key, move) for move, _level, key in entries], levels))
+            targets[species_id] = (levels, known, table_payload(now, levels))
+        return targets
+
+    def _sync_oras_levelup_announcement_cache(
+        self, targets: dict[int, tuple[list[int], list[bytes], bytes]],
+    ) -> None:
+        """Pone las copias en RAM de cada especie en su tabla de ahora, en un hilo.
+
+        Ver ``app/oras_levelup_announcement_cache.py`` (evidencia y
+        seguridad). Barrer la memoria tarda segundos, así que nunca en el
+        hilo de Tk; y una petición que llega con otra en curso se guarda para
+        la siguiente vuelta en vez de perderse (mismo motivo que X/Y). Las
+        direcciones halladas se recuerdan por proceso: la segunda vez basta
+        con comprobarlas.
+        """
+        if not targets:
+            return
+        if self._oras_announcement_cache_running:
+            pending = dict(self._oras_announcement_cache_pending or {})
+            pending.update(targets)
+            self._oras_announcement_cache_pending = pending
+            return
+        self._oras_announcement_cache_pending = None
+        self._oras_announcement_cache_running = True
+        threading.Thread(
+            target=self._oras_announcement_cache_worker, args=(dict(targets),),
+            daemon=True, name="RoleRunOrasAnnouncementCache",
+        ).start()
+
+    def _oras_announcement_cache_worker(self, current: dict) -> None:
+        """Hilo de `_sync_oras_levelup_announcement_cache`. Solo toca la memoria."""
+        from .oras_levelup_announcement_cache import find_copies, patch_copies
+        from .win_process_memory import WindowsProcessMemory
+
         try:
+            while current:
+                wpm = WindowsProcessMemory()
+                for process in wpm.list_azahar_processes():
+                    pid = int(process.pid)
+                    handle = wpm.open_process(pid)
+                    try:
+                        to_scan: dict[int, list[int]] = {}
+                        patched = 0
+                        for species_id, (levels, known, target) in current.items():
+                            cached = self._oras_announcement_copy_addresses.get((pid, species_id), [])
+                            done = patch_copies(wpm, handle, cached, known_payloads=known, target=target)
+                            if cached and done == len(cached):
+                                patched += done
+                            else:
+                                to_scan[species_id] = levels
+                        if to_scan:
+                            found = find_copies(wpm, handle, to_scan)
+                            for species_id, addresses in found.items():
+                                _levels, known, target = current[species_id]
+                                patched += patch_copies(
+                                    wpm, handle, addresses, known_payloads=known, target=target,
+                                )
+                                self._oras_announcement_copy_addresses[(pid, species_id)] = [
+                                    address for address in addresses
+                                    if wpm.read(handle, address, len(target)) == target
+                                ]
+                        self._registrar_intento_vivo(
+                            "oras_levelup_announcement_cache",
+                            pid=pid, especies=sorted(current), barridas=sorted(to_scan),
+                            copias=patched,
+                        )
+                    finally:
+                        wpm.close_process(handle)
+                current = self._oras_announcement_cache_pending or {}
+                self._oras_announcement_cache_pending = None
+        except Exception as exc:
+            self._registrar_intento_vivo("oras_levelup_announcement_cache_error", error=str(exc))
+        finally:
+            self._oras_announcement_cache_running = False
+
+    def _oras_levelup_table_substitute(
+        self, species_id: int, level: int, learned_move_id: int, role: str,
+        current_ids: list[int],
+    ) -> int | None:
+        """El movimiento que la tabla del rol ``role`` pone donde se coló ``learned_move_id``.
+
+        Busca, de la entrada más alta a la más baja hasta ``level``, una
+        entrada de la especie cuyo movimiento -vainilla o el de CUALQUIER
+        rol- sea el que acaba de aparecer: es la entrada que el juego leyó de
+        su tabla vieja. Devuelve lo que esa entrada vale para el rol actual,
+        con el mismo cálculo (y la misma semilla) que el archivo del mod y el
+        recuerda-movimientos. ``None`` si no sale de ninguna entrada o si el
+        Pokémon ya conoce ese movimiento: entonces decide el sustituto
+        genérico.
+        """
+        entries = (self._oras_levelup_moves_vanilla_entries or {}).get(int(species_id))
+        if not entries or role not in LIBERO_IMITABLE_ROLES:
+            return None
+        usable_move_ids = self._oras_levelup_usable_move_ids()
+        patches = {
+            candidate: oras_levelup_moves_mod.compute_species_patch(
+                entries, candidate, species_id=int(species_id),
+                pools=self.engine.pools, damage_classes=self.engine.damage_classes,
+                speed_status_moves=self.engine.speed_status_moves,
+                self_healing_damage_moves=self.engine.self_healing_damage_moves,
+                usable_move_ids=usable_move_ids,
+            )
+            for candidate in LIBERO_IMITABLE_ROLES
+        }
+        for move_id, entry_level, key in sorted(entries, key=lambda entry: -int(entry[1])):
+            if int(entry_level) > int(level):
+                continue
+            posibles = {int(move_id)} | {int(patch.get(key, move_id)) for patch in patches.values()}
+            if int(learned_move_id) not in posibles:
+                continue
+            target = int(patches[role].get(key, move_id))
+            if target == int(learned_move_id) or target in current_ids:
+                return None
+            return target
+        return None
+
+    def _substitute_new_off_role_moves(
+        self,
+        game: SaveGameData,
+        *,
+        known_moves_attr: str,
+        usable_move_ids,
+        log_prefix: str,
+        on_substituted=None,
+        known_levels_attr: str | None = None,
+        table_substitute=None,
+    ) -> None:
+        """Núcleo común de la red de seguridad de X/Y y ORAS.
+
+        Compara los 4 huecos de cada miembro con los del sondeo anterior
+        (atributo ``known_moves_attr``, por PID:TID:SID) y, si aparece un movimiento nuevo
+        que no encaja con su rol en ese instante, encola su sustitución por
+        el mismo camino transaccional que cualquier cambio de movimiento. La
+        primera vez que ve a un Pokémon solo fija la base.
+
+        ``known_levels_attr`` (ORAS, 2026-09-26) protege el flujo de pruebas del
+        usuario: reiniciar el juego para bajar de nivel sin reiniciar RoleRun.
+        Al volver, reaparecen movimientos aprendidos con el rol ANTERIOR que
+        esta comparación vería como "nuevos" y sustituiría sola, cuando la
+        regla de RoleRun es marcarlos en rojo y dejar decidir al usuario. Si
+        el nivel baja entre dos sondeos, solo se rehace la base. X/Y no lo
+        pasa: su comportamiento validado físicamente queda igual.
+
+        ``table_substitute`` (ORAS, 2026-09-26): si el movimiento colado sale
+        de una entrada de la tabla de la especie, devuelve el que esa MISMA
+        entrada tiene en la tabla del rol actual. Así el sustituto coincide
+        con el archivo del mod y con el recuerda-movimientos, en vez de ser
+        uno cualquiera del rol. ``None`` deja el sustituto genérico de siempre.
+
+        El estado se pide por nombre, ya dentro del ``try``: un fallo aquí
+        nunca debe tumbar el sondeo que llama, como antes de extraerlo.
+        """
+        try:
+            known_moves: dict[str, list[int]] = getattr(self, known_moves_attr)
+            known_levels: dict[str, int] | None = (
+                getattr(self, known_levels_attr) if known_levels_attr else None
+            )
             pending_ids_before = {id(change) for change in self.run.pending_changes}
-            usable_move_ids = self._xy_levelup_usable_move_ids()
+            usable_move_ids = usable_move_ids()
             for pokemon in game.party:
                 identity = f"{int(pokemon.pid or 0)}:{int(pokemon.tid or 0)}:{int(pokemon.sid or 0)}"
                 level = int(pokemon.level or 0)
                 species_id = int(pokemon.species_id)
                 current_ids = [int(move_id or 0) for move_id in pokemon.move_ids[:4]]
-                previous_ids = self._xy_levelup_backup_known_moves.get(identity)
-                self._xy_levelup_backup_known_moves[identity] = list(current_ids)
+                previous_ids = known_moves.get(identity)
+                known_moves[identity] = list(current_ids)
+                if known_levels is not None:
+                    previous_level = known_levels.get(identity)
+                    known_levels[identity] = level
+                    if previous_level is not None and level < previous_level:
+                        continue
                 if previous_ids is None:
                     continue
                 new_ids = [mid for mid in current_ids if mid > 0 and mid not in previous_ids]
                 if not new_ids:
                     continue
                 role, _symbol = self._effective_role(pokemon)
+                if role == "Líbero":
+                    # Aprende como el rol que imita (2026-09-26); sin elegir, nada.
+                    role = self._rules_role_for(pokemon, role)
                 pokemon_identity = self._pokemon_identity(pokemon)
                 substituted_here = False
                 for new_move_id in new_ids:
-                    substitute = compute_move_substitute(
-                        new_move_id, role,
-                        species_id=species_id,
-                        level=level,
-                        pools=self.engine.pools, damage_classes=self.engine.damage_classes,
-                        speed_status_moves=self.engine.speed_status_moves,
-                        self_healing_damage_moves=self.engine.self_healing_damage_moves,
-                        exclude=set(current_ids) - {new_move_id},
-                        usable_move_ids=usable_move_ids,
-                    )
+                    substitute = None
+                    if table_substitute is not None:
+                        substitute = table_substitute(species_id, level, new_move_id, role, current_ids)
+                    if substitute is None:
+                        substitute = compute_move_substitute(
+                            new_move_id, role,
+                            species_id=species_id,
+                            level=level,
+                            pools=self.engine.pools, damage_classes=self.engine.damage_classes,
+                            speed_status_moves=self.engine.speed_status_moves,
+                            self_healing_damage_moves=self.engine.self_healing_damage_moves,
+                            exclude=set(current_ids) - {new_move_id},
+                            usable_move_ids=usable_move_ids,
+                        )
                     if substitute is None:
                         continue
                     move_slot = current_ids.index(new_move_id) + 1
@@ -20075,35 +20513,16 @@ class RoleRunManager(ctk.CTk):
                     ]
                     self.run.pending_changes.append(change)
                     self._registrar_intento_vivo(
-                        "xy_levelup_backup_sustitucion_encolada",
+                        f"{log_prefix}_levelup_backup_sustitucion_encolada",
                         identidad=identity, hueco=move_slot,
                         aprendido=new_move_id, sustituto=substitute, rol=str(role),
                     )
                     substituted_here = True
-                # 2026-09-05, CUARTO bug real confirmado en la partida: el
-                # disparador por cruce de nivel (``_sync_xy_levelup_moves_mod``)
-                # solo se arma comparando contra el ÚLTIMO nivel que RoleRun
-                # vio de este Pokémon -y ese historial no se resetea si el
-                # usuario reinicia el JUEGO sin reiniciar RoleRun (su propio
-                # flujo de pruebas: reiniciar para bajar de nivel sin
-                # relanzar la app). Si RoleRun se reconecta ya con el nivel
-                # de vuelta en el mismo valor que tenía antes del reinicio,
-                # nunca ve el cruce y nunca dispara el parcheo del cartel
-                # -demostrado con Zigzagoon: Mago→Asesino, mismo nivel 9 tras
-                # un reinicio del juego, cartel anunciando "Vozarrón" -el
-                # sustituto de MAGO- con el archivo ya en Asesino-. Esta red
-                # de seguridad, en cambio, compara el CONTENIDO real de los
-                # 4 huecos en cada sondeo -nunca se "gasta"-, así que
-                # engancha aquí también el parcheo del cartel: si acaba de
-                # sustituir un movimiento, el cartel para esta especie
-                # probablemente también quedó desactualizado.
-                if substituted_here and self._xy_levelup_moves_last_written is not None:
-                    self._sync_xy_levelup_announcement_cache(
-                        game, {species_id: role}, self._xy_levelup_moves_last_written,
-                    )
+                if substituted_here and on_substituted is not None:
+                    on_substituted(species_id, role)
             self._request_oras_live_auto_apply_since(pending_ids_before)
         except Exception as exc:
-            self._registrar_intento_vivo("xy_levelup_backup_sync_error", error=str(exc))
+            self._registrar_intento_vivo(f"{log_prefix}_levelup_backup_sync_error", error=str(exc))
 
     def _sync_xy_levelup_announcement_cache(
         self, game: SaveGameData | None, roles_by_species: dict, patched_blob: bytes,
@@ -20340,6 +20759,9 @@ class RoleRunManager(ctk.CTk):
                 # incluso cuando el archivo del mod no cambió esta vuelta.
                 self._xy_levelup_species_leveled_this_tick.add(species_id)
                 role, _symbol = self._effective_role(pokemon)
+                if role == "Líbero":
+                    # Aprende como el rol que imita (2026-09-26); sin elegir, nada.
+                    role = self._rules_role_for(pokemon, role)
                 if self._append_xy_levelup_history_entries(
                     identity, pokemon, species_id, crossed, role, pre_capture=False,
                 ):
@@ -20464,7 +20886,10 @@ class RoleRunManager(ctk.CTk):
             roles_by_personal_id: dict[int, str] = {}
             for pokemon in game.party:
                 role, _symbol = self._effective_role(pokemon)
-                if role in {"SIN ROL", "Líbero", ""}:
+                if role == "Líbero":
+                    # Aprende como el rol que imita (2026-09-26); sin elegir, nada.
+                    role = self._rules_role_for(pokemon, role)
+                if role in {"SIN ROL", ""}:
                     continue
                 personal_id = self._usum_levelup_personal_id_for(
                     int(pokemon.species_id), int(getattr(pokemon, "form", 0) or 0)
@@ -20576,6 +21001,9 @@ class RoleRunManager(ctk.CTk):
                 if not new_ids:
                     continue
                 role, _symbol = self._effective_role(pokemon)
+                if role == "Líbero":
+                    # Aprende como el rol que imita (2026-09-26); sin elegir, nada.
+                    role = self._rules_role_for(pokemon, role)
                 personal_id = self._usum_levelup_personal_id_for(species_id, form)
                 pokemon_identity = self._pokemon_identity(pokemon)
                 for new_move_id in new_ids:
@@ -20852,7 +21280,10 @@ class RoleRunManager(ctk.CTk):
             roles_by_personal_id: dict[int, str] = {}
             for pokemon in game.party:
                 role, _symbol = self._effective_role(pokemon)
-                if role in {"SIN ROL", "Líbero", ""}:
+                if role == "Líbero":
+                    # Aprende como el rol que imita (2026-09-26); sin elegir, nada.
+                    role = self._rules_role_for(pokemon, role)
+                if role in {"SIN ROL", ""}:
                     continue
                 personal_id = self._sm_levelup_personal_id_for(
                     int(pokemon.species_id), int(getattr(pokemon, "form", 0) or 0)
@@ -20933,6 +21364,9 @@ class RoleRunManager(ctk.CTk):
                 if not new_ids:
                     continue
                 role, _symbol = self._effective_role(pokemon)
+                if role == "Líbero":
+                    # Aprende como el rol que imita (2026-09-26); sin elegir, nada.
+                    role = self._rules_role_for(pokemon, role)
                 personal_id = self._sm_levelup_personal_id_for(species_id, form)
                 pokemon_identity = self._pokemon_identity(pokemon)
                 for new_move_id in new_ids:
@@ -21217,6 +21651,9 @@ class RoleRunManager(ctk.CTk):
                 if not crossed:
                     continue
                 role, _symbol = self._effective_role(pokemon)
+                if role == "Líbero":
+                    # Aprende como el rol que imita (2026-09-26); sin elegir, nada.
+                    role = self._rules_role_for(pokemon, role)
                 if self._append_sm_levelup_history_entries(
                     identity, pokemon, species_id, crossed, role, pre_capture=False,
                     personal_id=personal_id,
@@ -21366,6 +21803,9 @@ class RoleRunManager(ctk.CTk):
                 if not crossed:
                     continue
                 role, _symbol = self._effective_role(pokemon)
+                if role == "Líbero":
+                    # Aprende como el rol que imita (2026-09-26); sin elegir, nada.
+                    role = self._rules_role_for(pokemon, role)
                 if self._append_usum_levelup_history_entries(
                     identity, pokemon, species_id, crossed, role, pre_capture=False,
                     personal_id=personal_id,
@@ -21879,6 +22319,8 @@ class RoleRunManager(ctk.CTk):
         self, pokemon: SavePokemon, role: str, move_id: int, target_slot: int,
     ) -> bool:
         """Aplica las mismas reglas que las tarjetas de Equipo a una MT candidata."""
+        if role == "Líbero":
+            role = self._rules_role_for(pokemon, role)
         move_id = int(move_id)
         if is_evasion_move(move_id):
             # Absoluto: ni siquiera Líbero o SIN ROL pueden quedarse con un
@@ -22947,34 +23389,37 @@ class RoleRunManager(ctk.CTk):
                 })
         return candidates
 
-    def _support_damage_excess(self, pokemon: SavePokemon, role: str) -> tuple[int, list[dict]]:
+    def _support_damage_excess(
+        self, pokemon: SavePokemon, role: str, libero_role: str | None = None,
+    ) -> tuple[int, list[dict]]:
+        # Un Líbero que imita al Support tiene su mismo límite de dos ataques.
+        if role == "Líbero":
+            role = self._rules_role_for(pokemon, role, libero_role)
         candidates = self._support_damage_candidates(pokemon, role)
         return max(0, len(candidates) - 2), candidates
 
-    def _collect_pokemon_move_issues(self, pokemon: SavePokemon, role: str) -> list[dict]:
-        """Comprueba un Pokémon contra un rol concreto usando la previsualización actual."""
+    def _collect_pokemon_move_issues(
+        self, pokemon: SavePokemon, role: str, libero_role: str | None = None,
+    ) -> list[dict]:
+        """Comprueba un Pokémon contra un rol concreto usando la previsualización actual.
+
+        Un Líbero se juzga como el rol que imita (2026-09-25): ``role`` sigue
+        siendo el de su casilla -es lo que viaja en cada incidencia-, pero
+        las reglas salen de ``_rules_role_for``. ``libero_role`` sirve para
+        previsualizar un rol imitado todavía sin guardar.
+        """
+        issue_role = role
+        if role == "Líbero":
+            # Sin rol imitado, en preparación: igual que SIN ROL, nada que marcar.
+            role = self._rules_role_for(pokemon, role, libero_role)
         if role == "SIN ROL":
             return []
-        # Líbero no tiene más restricción de rol que la evasión (2026-09-04,
-        # absoluta para cualquier rol) y, desde el 2026-09-07, quedarse con un
-        # movimiento drafteado con OTRO rol activo -ver
-        # `role_rules.libero_foreign_move_reason`-: se sigue comprobando eso,
-        # pero no el resto de reglas de daño/estado que no le aplican.
-        solo_evasion = role == "Líbero"
 
         fallback_physical = {int(move_id) for move_id in self.engine.pools.get("extra_ataque_fisico", [])}
         fallback_special = {int(move_id) for move_id in self.engine.pools.get("extra_ataque_especial", [])}
-        allowed_status = set() if solo_evasion else (self._allowed_move_ids_for_role(role) or set())
+        allowed_status = self._allowed_move_ids_for_role(role) or set()
         move_names, move_ids = self._effective_moves_for_review(pokemon)
         issues: list[dict] = []
-
-        origin_by_move_id: dict[int, str] = {}
-        if solo_evasion and self.project is not None:
-            pokemon_identity = self._pokemon_identity(pokemon)
-            origin_by_move_id = {
-                int(move_key): str(origin_role)
-                for move_key, origin_role in self.project.drafted_move_origin.get(pokemon_identity, {}).items()
-            }
 
         for move_index, (move_name, move_id) in enumerate(zip(move_names, move_ids), start=1):
             move_id = int(move_id or 0)
@@ -22983,24 +23428,12 @@ class RoleRunManager(ctk.CTk):
             if is_evasion_move(move_id):
                 issues.append({
                     "pokemon": pokemon,
-                    "role": role,
+                    "role": issue_role,
                     "move_slot": move_index,
                     "move_name": move_name,
                     "move_id": move_id,
                     "reason": "Movimiento de evasión: ningún rol puede usarlo",
                 })
-                continue
-            if solo_evasion:
-                foreign_reason = libero_foreign_move_reason(origin_by_move_id.get(move_id))
-                if foreign_reason:
-                    issues.append({
-                        "pokemon": pokemon,
-                        "role": role,
-                        "move_slot": move_index,
-                        "move_name": move_name,
-                        "move_id": move_id,
-                        "reason": foreign_reason,
-                    })
                 continue
 
             category = self._damage_class_for_move(move_id)
@@ -23037,7 +23470,7 @@ class RoleRunManager(ctk.CTk):
             if reason:
                 issues.append({
                     "pokemon": pokemon,
-                    "role": role,
+                    "role": issue_role,
                     "move_slot": move_index,
                     "move_name": move_name,
                     "move_id": move_id,
@@ -24188,15 +24621,7 @@ class RoleRunManager(ctk.CTk):
             # Incluye también la liberación de un rol ocupado en la misma
             # transacción viva que la sustitución.
             self._request_oras_live_auto_apply_since(pending_ids_before)
-            self._sync_oras_levelup_moves_mod(self.current_game)
-            self._sync_usum_levelup_moves_mod(self.current_game)
-            self._sync_usum_levelup_moves_backup(self.current_game)
-            self._sync_sm_levelup_moves_mod(self.current_game)
-            self._sync_sm_levelup_moves_backup(self.current_game)
-            self._sync_xy_levelup_moves_mod(self.current_game)
-            self._sync_xy_levelup_moves_backup(self.current_game)
-            self._sync_gen5_levelup_moves(self.current_game)
-            self._sync_hgss_levelup_moves(self.current_game)
+            self._sync_levelup_tables_now()
             self._pc_cache = None
             self._sync_live_layout()
             close_picker()
@@ -24318,7 +24743,108 @@ class RoleRunManager(ctk.CTk):
         window.after(20, window.focus_force)
         return window
 
-    def _prompt_libero_ev_stats(self, pokemon: SavePokemon, callback, *, context: str = "main") -> None:
+    def _finish_libero_from_role_editor(self, pokemon: SavePokemon, previous_role: str) -> None:
+        """Tras elegir en el selector el rol imitado que pidió el editor de rol."""
+        imitated = self._libero_role_of(pokemon)
+        if imitated is None:
+            return
+        if previous_role == "Líbero":
+            self._apply_libero_imitated_role(pokemon, imitated)
+        else:
+            self.assign_role(pokemon, "Líbero", None, self._libero_stats_for(imitated))
+
+    def _remember_libero_role(self, pokemon: SavePokemon, role: str) -> None:
+        """Guarda en la Run qué rol imita ``pokemon`` cuando es Líbero."""
+        if self.project is None:
+            return
+        self.project_service.set_libero_role(self.project, self._libero_role_key(pokemon), role)
+
+    def _set_libero_imitated_role(self, pokemon: SavePokemon, role: str) -> None:
+        """Cambia qué rol imita un Líbero que ya está en el equipo.
+
+        Lo usan el desplegable de su casilla y el editor de rol. Reutiliza el
+        mismo camino que cualquier cambio de rol (`_set_projected_member_role`),
+        que ya sabe preparar solo los EV cuando el rol de la casilla no cambia:
+        así sus EV pasan a ser los del rol nuevo y los rojos se recalculan.
+        """
+        if self.project is None:
+            return
+        if self._libero_role_of(pokemon) == role and not self._libero_needs_evs(pokemon, role):
+            return
+        self._apply_libero_imitated_role(pokemon, role)
+
+    def _sync_levelup_tables_now(self) -> None:
+        """Lleva ya a la tabla de aprendizajes de cada juego un cambio de rol.
+
+        Sin esto, un cambio de rol solo llegaba a la tabla en el siguiente
+        sondeo pasivo (hasta ~950 ms en ORAS), tiempo de sobra con el juego
+        acelerado para subir de nivel con el rol anterior. `_rules_role` ya lee
+        el cambio pendiente, así que no hace falta esperar a releer la partida.
+        Cada juego ignora la llamada si no es el suyo. Antes estaba copiado
+        tres veces; el rol imitado del Líbero era el cuarto sitio que lo
+        necesitaba (2026-09-26).
+        """
+        self._sync_oras_levelup_moves_mod(self.current_game)
+        self._sync_oras_levelup_moves_backup(self.current_game)
+        self._sync_usum_levelup_moves_mod(self.current_game)
+        self._sync_usum_levelup_moves_backup(self.current_game)
+        self._sync_sm_levelup_moves_mod(self.current_game)
+        self._sync_sm_levelup_moves_backup(self.current_game)
+        self._sync_xy_levelup_moves_mod(self.current_game)
+        self._sync_xy_levelup_moves_backup(self.current_game)
+        self._sync_gen5_levelup_moves(self.current_game)
+        self._sync_hgss_levelup_moves(self.current_game)
+
+    def _apply_libero_imitated_role(self, pokemon: SavePokemon, role: str) -> None:
+        """Guarda el rol imitado, prepara sus EV y repinta, sin comprobar si cambió.
+
+        El selector ya lo guardó antes de llamar aquí, así que "no cambió" no
+        significa que no haya que repintar.
+        """
+        if self.project is None:
+            return
+        pending_ids_before = {id(change) for change in self.run.pending_changes}
+        self._remember_libero_role(pokemon, role)
+        if self._effective_role(pokemon)[0] == "Líbero":
+            self._set_projected_member_role(
+                pokemon, "Líbero", libero_stats=self._libero_stats_for(role),
+            )
+            # Lo que aprende por nivel cambia con el rol imitado (fase 4).
+            self._sync_levelup_tables_now()
+        self._smooth_render_page(preserve_scroll=(self.active_page == "team"))
+        self._sync_live_layout()
+        self._show_role_toast(f"Líbero · imita a {role}")
+        self._request_oras_live_auto_apply_since(pending_ids_before)
+
+    def _libero_needs_evs(self, pokemon: SavePokemon, role: str) -> bool:
+        """Si los EV de ``pokemon`` todavía no son los del rol ``role``."""
+        if self._active_azahar_realtime_key() not in ROLE_EV_WRITER_GAME_KEYS or not pokemon.evs:
+            return False
+        desired = self._bdsp_role_evs("Líbero", self._libero_stats_for(role))
+        return desired is not None and desired != tuple(int(pokemon.evs.get(key, 0)) for key in STAT_KEYS)
+
+    def _prompt_libero_role(
+        self, pokemon: SavePokemon, callback, *, context: str = "main",
+        ask_always: bool = False,
+    ) -> None:
+        """Pregunta qué rol imita un Líbero y entrega sus dos estadísticas.
+
+        Sustituye (2026-09-25) al antiguo selector de dos EV libres: el Líbero
+        ya no es un rol libre, imita a uno de los otros cinco. ``callback``
+        sigue recibiendo dos estadísticas -las del rol elegido-, así que los
+        flujos que ya las transportaban (arrastre, PC, sustituto de una baja,
+        FIJAR ROLES, entrada automática) no cambian. La elección se guarda
+        para ese Pokémon: si ya la tenía, no se vuelve a preguntar -para
+        cambiarla está el desplegable de su casilla-. ``ask_always`` pregunta
+        igualmente, con el actual ya marcado: es el camino con flechas/mando
+        desde el editor de rol, donde la fila del rol imitado no se alcanza.
+        """
+        remembered = self._libero_role_of(pokemon)
+        if remembered is not None and not ask_always:
+            known_stats = self._libero_stats_for(remembered)
+            self.after(0, lambda: callback(known_stats))
+            return
+
         window = self._create_libero_ev_window(context)
         floating_modal = context == "floating" and not isinstance(window, IntegratedWindowSurface)
         if floating_modal:
@@ -24327,72 +24853,109 @@ class RoleRunManager(ctk.CTk):
                 modal_windows = set()
                 self._floating_modal_windows = modal_windows
             modal_windows.add(window)
+        # Mismo motivo que `_open_pc_role_editor`: sobre el root, las flechas
+        # también las oiría la página de fondo mientras esto está abierto.
+        previous_navigation_owner = getattr(self, "_navigation_owner", None)
+        self._set_navigation_owner(None)
+        toplevel = window.winfo_toplevel()
+        key_bindings: list[tuple[str, str]] = []
+        original_destroy = window.destroy
+
+        def destroy_and_restore() -> None:
+            for sequence, funcid in key_bindings:
+                try:
+                    toplevel.unbind(sequence, funcid)
+                except Exception:
+                    pass
+            key_bindings.clear()
+            if floating_modal:
+                self._floating_modal_windows.discard(window)
+            self._set_navigation_owner(previous_navigation_owner)
+            original_destroy()
+
+        window.destroy = destroy_and_restore
         self._apply_window_icon(window)
-        window.title("EV de Líbero")
-        window.geometry("620x430")
+        window.title("Rol del Líbero")
+        window.geometry("620x330")
         if not floating_modal:
             window.transient(self)
         window.grab_set()
-        selected: set[str] = set()
-        buttons: dict[str, ctk.CTkButton] = {}
+        name = pokemon.nickname or pokemon.species
         ctk.CTkLabel(
-            window, text=f"ELIGE 2 STATS PARA {pokemon.nickname or pokemon.species}",
+            window, text=f"¿QUÉ ROL IMITA {name.upper()}?",
             text_color=TEXT, font=ctk.CTkFont("Segoe UI", 21, "bold"),
         ).pack(pady=(26, 5))
         ctk.CTkLabel(
-            window, text="Ambas quedarán en 252 EV; las otras cuatro quedarán en 0.",
-            text_color=MUTED,
+            window,
+            text=(
+                "El Líbero funciona como el rol que elijas: sus movimientos, su drafteo,\n"
+                "lo que aprende por nivel y sus EV serán los de ese rol."
+            ),
+            text_color=MUTED, justify="center",
         ).pack(pady=(0, 18))
         grid = ctk.CTkFrame(window, fg_color="transparent")
-        grid.pack(fill="both", expand=True, padx=34)
-        grid.grid_columnconfigure((0, 1, 2), weight=1, uniform="libero_evs")
-        confirm = ctk.CTkButton(window, text="APLICAR", state="disabled", height=42)
+        grid.pack(fill="x", padx=34, pady=(0, 28))
+        grid.grid_columnconfigure((0, 1, 2), weight=1, uniform="libero_roles")
+        buttons: dict[str, ctk.CTkButton] = {}
+        nav = SpatialSelection(
+            SpatialTarget(role, index // 3, index % 3)
+            for index, role in enumerate(LIBERO_IMITABLE_ROLES)
+        )
 
-        def toggle(key: str) -> None:
-            if key in selected:
-                selected.remove(key)
-            elif len(selected) < 2:
-                selected.add(key)
-            for stat_key, button in buttons.items():
-                chosen = stat_key in selected
-                configurar_si_cambia(
-                    button,
-                    fg_color=GOLD if chosen else PANEL_ALT,
-                    text_color="#111111" if chosen else TEXT,
-                )
-            confirm.configure(
-                state="normal" if len(selected) == 2 else "disabled",
-                fg_color=GOLD if len(selected) == 2 else "#3A3428",
-            )
-
-        for index, key in enumerate(STAT_KEYS):
-            button = ctk.CTkButton(
-                grid, text=STAT_LABELS[key], height=62,
-                command=lambda value=key: toggle(value),
-                fg_color=PANEL_ALT, hover_color="#332B1D", border_width=1,
-                border_color=GOLD, text_color=TEXT,
-            )
-            button.grid(row=index // 3, column=index % 3, sticky="nsew", padx=5, pady=5)
-            buttons[key] = button
-        def apply_selection() -> None:
-            if floating_modal:
-                self._floating_modal_windows.discard(window)
+        def choose(role: str) -> None:
             window.destroy()
-            stats = tuple(key for key in STAT_KEYS if key in selected)
-            # Reportado por el usuario 03-09-2026: en contexto "main" este
-            # diálogo vive en un `IntegratedWindowSurface` (un velo + marco
-            # superpuestos sobre el propio root, no una ventana de sistema
-            # aparte). `callback` dispara el cambio de rol, la sincronización
-            # del mod de aprendizajes y el repintado de Equipo/PC en la misma
-            # pulsación que acaba de destruir ese velo; si Tk aún no procesó
-            # esa destrucción, el indicador de "Cargando cajas del PC…" y el
-            # nuevo repintado competían por el mismo hueco con los restos del
-            # diálogo, viéndose ambos superpuestos. Encolarlo aquí deja que la
-            # destrucción se pinte primero.
+            self._remember_libero_role(pokemon, role)
+            stats = self._libero_stats_for(role)
+            # Reportado por el usuario 03-09-2026 con el selector anterior: en
+            # contexto "main" este diálogo es un velo sobre el propio root, y
+            # `callback` repinta Equipo/PC en la misma pulsación que acaba de
+            # destruirlo. Encolarlo deja que la destrucción se pinte primero.
             self.after(0, lambda: callback(stats))
 
-        confirm.configure(command=apply_selection)
-        confirm.pack(fill="x", padx=38, pady=(16, 28))
+        def highlight() -> None:
+            # Resalte por borde, como en el editor de rol: un fondo dorado
+            # borraba el icono, que también es dorado.
+            for role, button in buttons.items():
+                focused = role == nav.selected_key
+                configurar_si_cambia(
+                    button,
+                    border_color="#F2C45E" if focused else GOLD,
+                    border_width=3 if focused else 1,
+                )
+
+        for index, role in enumerate(LIBERO_IMITABLE_ROLES):
+            stats_text = " · ".join(STAT_LABELS[key] for key in self._libero_stats_for(role))
+            icon = self.role_icons.image(role, 30)
+            button = ctk.CTkButton(
+                grid, text=f"{role.upper()}\n{stats_text}", image=icon, compound="left",
+                height=70, command=lambda value=role: choose(value),
+                fg_color=PANEL_ALT, hover_color="#332B1D", border_width=1,
+                border_color=GOLD, text_color=TEXT,
+                font=ctk.CTkFont("Segoe UI", 12, "bold"),
+            )
+            button.grid(row=index // 3, column=index % 3, sticky="nsew", padx=5, pady=5)
+            buttons[role] = button
+        if remembered is not None:
+            nav.selected_key = remembered
+            highlight()
+
+        def move(direction: str) -> str:
+            nav.move(direction)
+            highlight()
+            return "break"
+
+        def activate(_event=None) -> str:
+            if nav.selected_key is not None:
+                choose(str(nav.selected_key))
+            return "break"
+
+        for sequence, direction in (
+            ("<KeyPress-Left>", "left"), ("<KeyPress-Right>", "right"),
+            ("<KeyPress-Up>", "up"), ("<KeyPress-Down>", "down"),
+        ):
+            funcid = toplevel.bind(sequence, lambda _e, d=direction: move(d), add="+")
+            key_bindings.append((sequence, funcid))
+        key_bindings.append(("<KeyPress-Return>", toplevel.bind("<KeyPress-Return>", activate, add="+")))
 
     def _set_projected_member_role(
         self, pokemon: SavePokemon, role: str, *, libero_stats: tuple[str, ...] = (),
@@ -25241,15 +25804,7 @@ class RoleRunManager(ctk.CTk):
             if holder is not None:
                 self._set_projected_member_role(holder, "SIN ROL")
                 self._sync_live_layout()
-            self._sync_oras_levelup_moves_mod(self.current_game)
-            self._sync_usum_levelup_moves_mod(self.current_game)
-            self._sync_usum_levelup_moves_backup(self.current_game)
-            self._sync_sm_levelup_moves_mod(self.current_game)
-            self._sync_sm_levelup_moves_backup(self.current_game)
-            self._sync_xy_levelup_moves_mod(self.current_game)
-            self._sync_xy_levelup_moves_backup(self.current_game)
-            self._sync_gen5_levelup_moves(self.current_game)
-            self._sync_hgss_levelup_moves(self.current_game)
+            self._sync_levelup_tables_now()
             self._pc_cache = None
             self._update_top_status()
             if embedded:
@@ -25776,7 +26331,9 @@ class RoleRunManager(ctk.CTk):
             # Absoluto: ningún rol, ni siquiera Líbero, puede usarlo (2026-09-04).
             return False, "Movimiento de evasión: ningún rol puede usarlo"
         if role == "Líbero":
-            return True, "Sin restricciones de rol"
+            # Desde el 2026-09-26 no tiene reglas propias: se juzga como el rol
+            # que imita, que es el que hay que consultar.
+            return False, "El Líbero usa las reglas del rol que imita"
         if role in {"SIN ROL", ""} or move_id <= 0:
             return False, "Selecciona un rol válido"
 
@@ -25842,7 +26399,7 @@ class RoleRunManager(ctk.CTk):
             font=ctk.CTkFont("Segoe UI", 11, "bold"),
         ).grid(row=0, column=1, sticky="w", padx=10, pady=(16, 5))
         role_menu = ctk.CTkOptionMenu(
-            controls, variable=role_var, values=list(ROLE_ORDER),
+            controls, variable=role_var, values=list(LIBERO_IMITABLE_ROLES),
             fg_color=PANEL_ALT, button_color=GOLD, button_hover_color="#D3AF70",
             text_color=TEXT, dropdown_fg_color=PANEL_ALT, dropdown_text_color=TEXT,
             width=210,
@@ -26523,11 +27080,9 @@ class RoleRunManager(ctk.CTk):
         ).pack(padx=24, pady=(0, 14))
 
         selected_role = ctk.StringVar(value=current_role)
-        selected_libero_stats = {
-            key for key in STAT_KEYS if int(pokemon.evs.get(key, 0)) == 252
-        }
-        if len(selected_libero_stats) != 2:
-            selected_libero_stats.clear()
+        # Rol que imitaría como Líbero (2026-09-25). Se previsualiza aquí -rojos
+        # y EV de ese rol- y solo se guarda al aceptar.
+        selected_imitated: dict[str, str | None] = {"role": self._libero_role_of(pokemon)}
 
         # ACEPTAR ROL/CANCELAR se reservan primero, ancladas abajo. Si se
         # empaquetaban después de `preview` (que pide `expand=True`), la vista
@@ -26535,10 +27090,34 @@ class RoleRunManager(ctk.CTk):
         # quedaban fuera del área visible: se podía elegir Líbero, pero no
         # había con qué confirmarlo salvo agrandando la ventana a mano.
         def accept_role(_event=None) -> str:
-            self.assign_role(
-                pokemon, selected_role.get(), window,
-                tuple(key for key in STAT_KEYS if key in selected_libero_stats),
-            )
+            role = selected_role.get()
+            if role != "Líbero":
+                self.assign_role(pokemon, role, window)
+                return "break"
+            imitated = selected_imitated["role"]
+            if imitated is None:
+                # Con flechas no se llega a la fila del rol imitado: el mismo
+                # selector que usan el arrastre y FIJAR ROLES lo pregunta.
+                window.destroy()
+                self._prompt_libero_role(
+                    pokemon, lambda _stats: self._finish_libero_from_role_editor(pokemon, current_role),
+                )
+                return "break"
+            if current_role == "Líbero":
+                window.destroy()
+                if imitated == self._libero_role_of(pokemon):
+                    # Nada cambió en la fila del rol imitado, que con flechas
+                    # no se alcanza: se pregunta aquí para poder cambiarlo.
+                    self._prompt_libero_role(
+                        pokemon,
+                        lambda _stats: self._finish_libero_from_role_editor(pokemon, current_role),
+                        ask_always=True,
+                    )
+                else:
+                    self._set_libero_imitated_role(pokemon, imitated)
+                return "break"
+            self._remember_libero_role(pokemon, imitated)
+            self.assign_role(pokemon, "Líbero", window, self._libero_stats_for(imitated))
             return "break"
 
         actions = ctk.CTkFrame(window, fg_color="transparent")
@@ -26623,21 +27202,28 @@ class RoleRunManager(ctk.CTk):
                 )
             self._clear(preview)
             symbol = self._role_symbol(role)
-            issues = self._collect_pokemon_move_issues(pokemon, role) if role != "SIN ROL" else []
+            imitated = selected_imitated["role"] if role == "Líbero" else None
+            issues = self._collect_pokemon_move_issues(pokemon, role, imitated) if role != "SIN ROL" else []
             bad_slots = {int(issue["move_slot"]) for issue in issues}
             issue_by_slot = {int(issue["move_slot"]): issue for issue in issues}
-            support_excess, support_candidates = self._support_damage_excess(pokemon, role)
+            support_excess, support_candidates = self._support_damage_excess(pokemon, role, imitated)
             support_slots = {int(item["move_slot"]) for item in support_candidates} if support_excess else set()
+            heading = f"{symbol} {role}".strip()
+            if imitated:
+                heading += f" · imita a {imitated}"
             ctk.CTkLabel(
-                preview, text=f"{symbol} {role}".strip(), text_color=GOLD if role != "SIN ROL" else MUTED,
+                preview, text=heading, text_color=GOLD if role != "SIN ROL" else MUTED,
                 font=ctk.CTkFont("Segoe UI Symbol", 20, "bold"),
             ).pack(pady=(16, 4))
             status = (
                 "SIN ROL · el Pokémon puede permanecer en preparación" if role == "SIN ROL"
+                else "Elige abajo qué rol imita el Líbero" if role == "Líbero" and not imitated
                 else (f"◆ Support tiene {len(support_candidates)} movimientos de daño · deberás elegir {support_excess} para eliminar" if support_excess
                       else ("✓ Todos los movimientos son compatibles" if not issues else f"⚠ {len(issues)} movimiento(s) incompatibles · se conservarán"))
             )
             status_color = GOLD if support_excess else (SUCCESS if role != "SIN ROL" and not issues else (DANGER if issues else MUTED))
+            if role == "Líbero" and not imitated:
+                status_color = GOLD
             ctk.CTkLabel(
                 preview, text=status, text_color=status_color,
                 font=ctk.CTkFont("Segoe UI", 11, "bold"),
@@ -26798,6 +27384,36 @@ class RoleRunManager(ctk.CTk):
                             continue
                         widget.bind("<Enter>", _al_entrar_la_casilla, add="+")
                         widget.bind("<Leave>", _al_salir_la_casilla, add="+")
+            if role == "Líbero":
+                imitated_frame = ctk.CTkFrame(preview, fg_color="transparent")
+                imitated_frame.pack(fill="x", padx=18, pady=(0, 12))
+                ctk.CTkLabel(
+                    imitated_frame, text="ROL QUE IMITA EL LÍBERO", text_color=GOLD,
+                    font=ctk.CTkFont("Segoe UI", 11, "bold"),
+                ).pack(pady=(0, 6))
+                imitated_grid = ctk.CTkFrame(imitated_frame, fg_color="transparent")
+                imitated_grid.pack(fill="x")
+                imitated_grid.grid_columnconfigure(
+                    tuple(range(len(LIBERO_IMITABLE_ROLES))), weight=1, uniform="imitated",
+                )
+
+                def choose_imitated(candidate: str) -> None:
+                    selected_imitated["role"] = candidate
+                    render_preview("Líbero")
+
+                for column, candidate in enumerate(LIBERO_IMITABLE_ROLES):
+                    chosen = candidate == imitated
+                    ctk.CTkButton(
+                        imitated_grid,
+                        text=f"{self._role_symbol(candidate)}  {candidate.upper()}",
+                        command=lambda c=candidate: choose_imitated(c),
+                        height=40, corner_radius=9,
+                        fg_color=GOLD if chosen else PANEL_ALT,
+                        text_color="#111111" if chosen else TEXT,
+                        hover_color="#D3AF70" if chosen else "#332B1D",
+                        border_width=1, border_color=GOLD if chosen else "#444444",
+                        font=ctk.CTkFont("Segoe UI Symbol", 10, "bold"),
+                    ).grid(row=0, column=column, sticky="ew", padx=3)
             ev_frame = ctk.CTkFrame(preview, fg_color="transparent")
             ev_frame.pack(fill="x", padx=18, pady=(0, 12))
             ctk.CTkLabel(
@@ -26807,34 +27423,20 @@ class RoleRunManager(ctk.CTk):
             ev_grid = ctk.CTkFrame(ev_frame, fg_color="transparent")
             ev_grid.pack(fill="x")
             ev_grid.grid_columnconfigure(tuple(range(6)), weight=1, uniform="evstats")
-            fixed = {
-                "Asesino": {"attack", "speed"},
-                "Mago": {"sp_attack", "speed"},
-                "Tanque": {"hp", "defense"},
-                "Prisma": {"hp", "sp_defense"},
-                "Support": {"defense", "sp_defense"},
-            }.get(role, set())
-
-            def toggle_libero(key: str) -> None:
-                if key in selected_libero_stats:
-                    selected_libero_stats.remove(key)
-                elif len(selected_libero_stats) < 2:
-                    selected_libero_stats.add(key)
-                render_preview("Líbero")
-
+            # El Líbero lleva los EV del rol que imita (2026-09-25).
+            fixed = set(ROLE_EV_STATS.get(imitated if role == "Líbero" else role, ()))
             for column, key in enumerate(STAT_KEYS):
-                active = key in (selected_libero_stats if role == "Líbero" else fixed)
-                button = ctk.CTkButton(
+                active = key in fixed
+                ctk.CTkButton(
                     ev_grid,
                     text=f"{STAT_LABELS[key]}\n{'252' if active else '0'}",
-                    command=(lambda k=key: toggle_libero(k)) if role == "Líbero" else None,
+                    command=None,
                     height=48, corner_radius=9,
                     fg_color=GOLD if active else PANEL_ALT,
                     text_color="#111111" if active else MUTED,
-                    hover_color="#D3AF70" if role == "Líbero" else (GOLD if active else PANEL_ALT),
+                    hover_color=GOLD if active else PANEL_ALT,
                     font=ctk.CTkFont("Segoe UI", 10, "bold"),
-                )
-                button.grid(row=0, column=column, sticky="ew", padx=3)
+                ).grid(row=0, column=column, sticky="ew", padx=3)
 
         for index, (role, symbol) in enumerate(ROLE_OPTIONS):
             role_text = f"{symbol}  {role.upper()}" + ("  ·  LIBRE" if role in free_roles else "")
@@ -26937,9 +27539,11 @@ class RoleRunManager(ctk.CTk):
         old_role, _ = self._effective_role(pokemon)
         target_role = pokemon.role if role == "AUTO" else role
         if target_role == "Líbero" and len(libero_stats) != 2:
+            libero_stats = self._libero_stats_for(self._libero_role_of(pokemon))
+        if target_role == "Líbero" and len(libero_stats) != 2:
             messagebox.showwarning(
-                "Distribución EV incompleta",
-                "Líbero necesita exactamente dos estadísticas seleccionadas.",
+                "Falta el rol del Líbero",
+                "Elige qué rol imita el Líbero antes de aceptar.",
                 parent=window,
             )
             return
@@ -26988,13 +27592,10 @@ class RoleRunManager(ctk.CTk):
     def _bdsp_role_evs(
         role: str, libero_stats: tuple[str, ...] = (),
     ) -> tuple[int, int, int, int, int, int] | None:
-        selected = {
-            "Asesino": {"attack", "speed"},
-            "Mago": {"sp_attack", "speed"},
-            "Tanque": {"hp", "defense"},
-            "Prisma": {"hp", "sp_defense"},
-            "Support": {"defense", "sp_defense"},
-        }.get(role)
+        # Para Líbero, ``libero_stats`` son las dos del rol que imita
+        # (`_libero_stats_for`): todos los flujos que ya transportaban sus
+        # dos estadísticas siguen sirviendo tal cual.
+        selected = set(ROLE_EV_STATS.get(role, ())) or None
         if role == "Líbero":
             selected = set(libero_stats) if len(set(libero_stats)) == 2 else None
         if selected is None:
@@ -27041,14 +27642,15 @@ class RoleRunManager(ctk.CTk):
             )
             return
 
-        # El Líbero es el único que necesita una decisión: qué dos estadísticas
-        # sube. Se pregunta antes de tocar nada, y si se cancela no se fija
+        # El Líbero es el único que necesita una decisión: qué rol imita
+        # (2026-09-25; antes, qué dos estadísticas subía). Se pregunta antes de
+        # tocar nada, escriba EV el juego o no, y si se cancela no se fija
         # ninguno: mejor eso que dejar el equipo a medias.
         libero = next(
             ((pokemon, rol) for pokemon, rol in pendientes if rol == "Líbero"), None,
         )
-        if libero is not None and self._active_azahar_realtime_key() in ROLE_EV_WRITER_GAME_KEYS:
-            self._prompt_libero_ev_stats(
+        if libero is not None:
+            self._prompt_libero_role(
                 libero[0],
                 lambda stats: self._fijar_roles_confirmado(pendientes, stats),
             )
@@ -27132,20 +27734,21 @@ class RoleRunManager(ctk.CTk):
             old_evs = tuple(int(pokemon.evs.get(key, 0)) for key in STAT_KEYS)
             new_evs = None
             escribe_ev = self._active_azahar_realtime_key() in ROLE_EV_WRITER_GAME_KEYS
+            if role == "Líbero" and len(set(libero_stats)) != 2:
+                # Si ya se sabe qué rol imita, sus EV se deducen igual que los
+                # de cualquier otro rol (2026-09-25).
+                libero_stats = self._libero_stats_for(self._libero_role_of(pokemon))
             if escribe_ev and pokemon.evs:
                 new_evs = self._bdsp_role_evs(role, libero_stats)
-            if escribe_ev and role == "Líbero" and len(set(libero_stats)) != 2:
-                # El Líbero es el único rol cuyo reparto de EV no se deduce: hay
-                # que elegir dos estadísticas. Todos los caminos normales lo
-                # preguntan antes de llegar aquí, pero si alguno no lo hiciera,
-                # el rol se asignaría y los EV se quedarían como estaban **sin
-                # decir nada**. Un silencio así es indistinguible de que RoleRun
-                # no funcione, que es justo lo que hay que evitar.
+            if role == "Líbero" and len(set(libero_stats)) != 2:
+                # Todos los caminos normales preguntan qué rol imita antes de
+                # llegar aquí, pero si alguno no lo hiciera, el rol se asignaría
+                # **sin decir nada** de que al Líbero le falta su rol imitado.
+                # Un silencio así es indistinguible de que RoleRun no funcione.
                 self._set_operation_status(
-                    "warning", "FALTAN LOS EV DEL LÍBERO",
+                    "warning", "FALTA EL ROL QUE IMITA EL LÍBERO",
                     f"{pokemon.nickname or pokemon.species} pasa a Líbero, pero nadie "
-                    "eligió sus dos estadísticas: se le deja el rol y los EV que ya "
-                    "tenía. Usa CAMBIAR ROL sobre él para repartirlos.",
+                    "eligió qué rol imita. Elígelo en el desplegable de su casilla.",
                     persistent=True,
                 )
             reconcile_gen7_stats = self._active_azahar_realtime_key() in {"sm", "usum"} and new_evs is not None
@@ -27630,7 +28233,7 @@ class RoleRunManager(ctk.CTk):
         flow.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="helpflow")
         steps = [
             ("1", "ABRE TU EDICIÓN", "Elige el juego en el selector. Con el emulador abierto, RoleRun lee el equipo y las cajas en vivo."),
-            ("2", "REPARTE LOS ROLES", "Cada Pokémon que vaya a combatir necesita un rol, y no se repiten: seis roles, seis casillas."),
+            ("2", "REPARTE LOS ROLES", "Cada Pokémon que vaya a combatir necesita un rol: seis roles, seis casillas. El Líbero imita uno de los otros cinco, así que ese rol se puede repetir."),
             ("3", "AJUSTA LOS MOVIMIENTOS", "Lo que no cumple el rol sale en rojo. Se corrige con una MT o con un drafteo."),
             ("4", "SIGUE JUGANDO", "Los cambios compatibles se escriben en la partida al momento. Guardar lo sigues haciendo tú, desde el juego."),
         ]
@@ -27699,6 +28302,7 @@ class RoleRunManager(ctk.CTk):
             "Un Pokémon SIN ROL puede estar en el equipo mientras lo preparas, pero todavía no es apto para combatir -RoleRun no te lo impide dentro del emulador; es la regla que te comprometes a seguir.",
             "Arrastra para mover: del equipo al PC, del PC al equipo y de una casilla del PC a otra vacía. El borde del destino te dice en verde o rojo si ese gesto vale antes de soltarlo.",
             "Si das a un Pokémon un rol que ya tiene otro, los dos lo intercambian. Así nunca aparece un SIN ROL de más.",
+            "El Líbero es el comodín: bajo su icono tiene un desplegable para elegir qué rol imita -Asesino, Mago, Tanque, Prisma o Support-. Se juzga exactamente como ese rol: lo que sale en rojo, sus drafteos, lo que aprende por nivel y sus EV.",
             "De los Pokémon guardados en el PC, RoleRun recuerda el último rol que tuvieron. Es solo memoria para reconocerlos al volver: sus movimientos no se tocan nunca solos.",
             "Los movimientos que no cumplen el rol salen en rojo, y cada uno ofrece SUSTITUIR con una MT compatible con el ROL. La compatibilidad de especie del juego no se usa: manda el rol.",
             "Todo -casillas, editor de rol- se puede recorrer con las flechas del teclado o del mando, no solo con ratón.",
@@ -28297,8 +28901,8 @@ class RoleRunManager(ctk.CTk):
             return []
         eligible: list[SavePokemon] = []
         for pokemon in self.current_game.party:
-            effective_role, _symbol = self._effective_role(pokemon)
-            if effective_role == role or effective_role == "Líbero":
+            # Un Líbero solo drafea con el rol que imita (2026-09-26).
+            if self._rules_role(pokemon) == role:
                 eligible.append(pokemon)
         # Primero aparece el Pokémon del rol elegido y después el Líbero.
         eligible.sort(key=lambda pokemon: 0 if self._effective_role(pokemon)[0] == role else 1)
@@ -28338,7 +28942,7 @@ class RoleRunManager(ctk.CTk):
             if image is not None:
                 self.draft_card_images.append(image)
             role_line = f"{symbol} {effective_role}" if symbol else effective_role
-            eligibility = "PUEDE USAR CUALQUIER DRAFTEO" if effective_role == "Líbero" else f"POKÉMON {self.run.role.upper()}"
+            eligibility = f"LÍBERO · IMITA A {self.run.role.upper()}" if effective_role == "Líbero" else f"POKÉMON {self.run.role.upper()}"
             button = ctk.CTkButton(
                 grid,
                 text=f"{(pokemon.nickname or pokemon.species).upper()}\n{role_line}\n{eligibility}",
@@ -29977,16 +30581,6 @@ class RoleRunManager(ctk.CTk):
             new_move_id=draft.move_id,
             pokemon_identity=pokemon_identity,
         )
-        # Registra bajo qué rol se drafteó este movimiento (2026-09-07): es lo
-        # que permite avisar más tarde si Líbero conserva un movimiento que en
-        # realidad se drafteó con otro rol activo. Se anota aquí, junto al
-        # resto de mutaciones de `self.project` de esta función -"el momento
-        # definitivo del drafteo"-, para que quede escrito en el mismo guardado
-        # que ya dispara `adjust_run_counter`/`saved_drafts` más abajo.
-        if self.project is not None:
-            self.project.drafted_move_origin.setdefault(pokemon_identity, {})[
-                str(int(draft.move_id))
-            ] = canonical_role(draft.role)
         # Un mismo Pokémon/hueco solo puede tener una edición pendiente. Si ese
         # hueco acababa de rellenarse con una MT, el drafteo pasa a ser la última
         # decisión y la MT deja de consumirse.

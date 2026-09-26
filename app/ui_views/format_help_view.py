@@ -99,11 +99,12 @@ class IntegratedFormatHelpView:
                 "backtracking constante a curar al Centro Pokémon, y que el reto "
                 "dependa demasiado de qué movimientos te toquen al azar -a veces te "
                 "sale un Pokémon tan roto que la partida deja de dar miedo-. La "
-                "solución son los roles: solo UNO de tus seis Pokémon (Líbero, el "
-                "\"rol libre\") puede aprender cualquier movimiento del juego. Los "
-                "otros cinco están limitados al conjunto de su rol, ya pensado para "
-                "no romper el reto. Si sale algo desequilibrado, es solo uno; el "
-                "resto del equipo tiene ataques coherentes con lo que hace."
+                "solución son los roles: cada uno de tus seis Pokémon tiene un rol, "
+                "y el rol decide qué movimientos puede aprender, un conjunto ya "
+                "pensado para no romper el reto. Ninguno queda libre: ni siquiera "
+                "un Pokémon muy fuerte se sale de lo que su rol permite. El Líbero "
+                "es el comodín: imita el rol que elijas de los otros cinco, así "
+                "que puedes llevar un rol repetido."
             ),
             text_color=MUTED,
             wraplength=760,
@@ -115,7 +116,7 @@ class IntegratedFormatHelpView:
         cards.grid(row=2, column=0, sticky="ew")
         cards.grid_columnconfigure((0, 1, 2), weight=1, uniform="format_intro")
         concepts = (
-            ("SEIS ROLES", "Solo Líbero puede aprender cualquier movimiento. Los otros cinco están limitados al conjunto de su rol."),
+            ("SEIS ROLES", "Cada Pokémon aprende solo lo que su rol permite. El Líbero imita el rol que elijas de los otros cinco, así que puedes repetir uno."),
             ("SUPERVIVENCIA", "Como en cualquier Nuzlocke: una captura por ruta, y un Pokémon debilitado se va al Cementerio para siempre."),
             ("10 VIDAS", "Llegan a 0 y la Run se pierde. Suben o bajan según cómo termines cada combate de seis Pokémon -detalle más abajo."),
         )

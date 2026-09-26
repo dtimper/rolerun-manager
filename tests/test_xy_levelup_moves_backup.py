@@ -59,6 +59,10 @@ class SyncXyLevelupMovesBackupTests(unittest.TestCase):
         fake._sync_xy_levelup_moves_backup = (
             RoleRunManager._sync_xy_levelup_moves_backup.__get__(fake)
         )
+        # Núcleo común con ORAS desde el 2026-09-26.
+        fake._substitute_new_off_role_moves = (
+            RoleRunManager._substitute_new_off_role_moves.__get__(fake)
+        )
         fake._applied_calls = applied
         fake._announcement_cache_calls = announcement_cache_calls
         return fake
