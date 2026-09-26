@@ -121,6 +121,24 @@ def _proceso_de(hwnd: int) -> int | None:
         return None
 
 
+def minimizada(hwnd: int | None) -> bool:
+    """Si la ventana está minimizada. ``False`` si no se pudo saber.
+
+    Hace falta aparte de ``mayor_tapadura``: al minimizar, Windows manda la
+    ventana a (-32000, -32000), donde nada la tapa. Medido en la máquina del
+    usuario el 26-09-2026: minimizada daba una tapadura de 0,0, así que la
+    barra flotante seguía en pantalla con el juego ya escondido.
+    """
+    if not hwnd:
+        return False
+    try:
+        user32 = ctypes.windll.user32
+        user32.IsIconic.argtypes = (ctypes.c_void_p,)
+        return bool(user32.IsIconic(ctypes.c_void_p(int(hwnd))))
+    except Exception:
+        return False
+
+
 def _es_ventana_real(hwnd: int) -> bool:
     """Visible, no minimizada y con superficie. Lo demás no tapa nada."""
     try:

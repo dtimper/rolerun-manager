@@ -56,8 +56,12 @@ def _publisher(current_hp: int) -> SimpleNamespace:
         _main_ui_dirty_while_floating=False,
         barra_reconstruida=0,
         refrescos_de_pagina=[],
+        avisos_obs=0,
         _floating_bar_is_visible=lambda: False,
         _refresh_live_health_page=lambda: None,
+    )
+    manager._schedule_obs_health_refresh = lambda: setattr(
+        manager, "avisos_obs", manager.avisos_obs + 1,
     )
     manager._render_floating_bar = lambda force=False: setattr(
         manager, "barra_reconstruida", manager.barra_reconstruida + 1,
@@ -76,6 +80,8 @@ def test_un_cambio_real_de_ps_llega_a_la_partida_y_a_la_vista() -> None:
     assert manager.current_game.party[0].current_hp == 45
     assert manager.refrescos_de_pagina == [90]
     assert manager._live_health_render_after_id == "timer"
+    # 26-09-2026: la barra de vida de OBS recibe el mismo cambio.
+    assert manager.avisos_obs == 1
 
 
 def test_sin_cambio_de_ps_no_se_toca_absolutamente_nada() -> None:
@@ -87,6 +93,7 @@ def test_sin_cambio_de_ps_no_se_toca_absolutamente_nada() -> None:
     assert manager.barra_reconstruida == 0
     assert manager.refrescos_de_pagina == []
     assert manager._floating_bar_last_signature == ("firma", "vieja")
+    assert manager.avisos_obs == 0
 
 
 def test_con_la_barra_flotante_visible_se_refresca_ella_y_no_la_pagina() -> None:

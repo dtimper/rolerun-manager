@@ -56,6 +56,12 @@ sección es la foto de hoy. Lo posterior al 14-09 está solo en `CHANGELOG.md`.
   Premonición como Mago en el 8). **Fase 4 validada en los siete juegos
   seleccionables** (26-09-2026). Fase 5 (textos de Ayuda, fichas de rol,
   consulta de movimientos y web) hecha; la web está pendiente de publicar.
+- **OBS: nombre y barra de vida por rol** (`<rol>_nombre.html`,
+  `<rol>_vida.html`, 26-09-2026), **barra flotante retirada al minimizar el
+  emulador** y **OBS refrescado cuando una baja se retira porque el Pokémon
+  vuelve vivo al recargar sin guardar**: validado físicamente por el usuario
+  el 26-09-2026 en UltraSol/UltraLuna (Azahar) con OBS abierto («ya funciona
+  todo bien»). Publicado en `v0.5.2`.
 - **Bugs abiertos confirmados**: estado alterado mal mostrado en la barra
   flotante (ORAS muestra otro estado; BDSP no muestra ninguno porque el offset
   `0x94` de `PlayerWork._playerParty` no lleva el estado vivo).

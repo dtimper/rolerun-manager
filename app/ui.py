@@ -73,7 +73,7 @@ from .game_source_service import GameSourceProfile, GameSourceProfileService
 from .reporte_de_bugs import BUGS_DIR, guardar_reporte, informes
 from .envio_de_reportes import MAX_CAPTURAS, preparar_y_enviar
 from .ui_components.reporte_de_fallo_dialog import ReporteDeFalloDialog
-from .ventana_activa import mayor_tapadura
+from .ventana_activa import mayor_tapadura, minimizada
 from .win_hotkeys import WindowsHotkeyManager
 from .sdl_gamepad import (
     BUTTON_NAMES,
@@ -439,6 +439,7 @@ class RoleRunManager(ctk.CTk):
         )
         self.project: RunProject | None = None
         self.obs_sync = ObsSyncService(self.project_service, SPRITE_DIR)
+        self._obs_health_after_id = None
         self.save_watcher = SaveFileWatcher(self._on_watched_save_changed)
         self.sync_status = "Sin vigilancia"
         self.oras_live_reader = ORASLiveReader(DATA_DIR / "move_catalog.json")
@@ -4238,6 +4239,11 @@ class RoleRunManager(ctk.CTk):
         juego = int(getattr(self, "_last_supported_emulator_hwnd", 0) or 0)
         if not juego:
             return False
+        # Minimizado tampoco se ve, pero ahí nada lo tapa: Windows lo manda
+        # fuera de la pantalla y la tapadura sale 0. Pedido por el usuario el
+        # 26-09-2026: al minimizar el emulador la barra se quedaba puesta.
+        if minimizada(juego):
+            return True
         # Las ventanas de RoleRun están encima del juego por diseño: la barra
         # flotante es exactamente eso.
         return mayor_tapadura(juego, {os.getpid()}) >= self.JUEGO_TAPADO
@@ -11199,6 +11205,7 @@ class RoleRunManager(ctk.CTk):
         changed = RoleRunManager._merge_live_health_fields(self.current_game, game)
         if not changed:
             return False
+        self._schedule_obs_health_refresh()
         if self._floating_bar_is_visible():
             # La firma anterior NO se anula aquí. `force=True` ya se salta por su
             # cuenta la comparación de igualdad, y la ruta rápida —mover solo las
@@ -11238,12 +11245,21 @@ class RoleRunManager(ctk.CTk):
             return
 
         if source == "overworld":
+            stale_cleared = False
             for member in game.party:
                 if int(getattr(member, "current_hp", 0) or 0) <= 0:
                     continue
                 identity = self._pokemon_identity(member)
                 if self.project_service.clear_stale_detected_faint_for_alive_party(self.project, identity):
                     self._close_faint_picker_for_identity(identity)
+                    stale_cleared = True
+            if stale_cleared:
+                # La baja retirada saca al Pokémon de la proyección que alimenta
+                # OBS y la barra. Sin esto volvía a verse en RoleRun -que se
+                # repinta solo- pero OBS seguía sin él hasta el siguiente cambio
+                # de equipo o rol. Visto en USUM el 26-09-2026 al recargar la
+                # partida sin guardar tras perder a Porygon.
+                self._sync_live_layout()
 
         if previous is None:
             return
@@ -14679,10 +14695,49 @@ class RoleRunManager(ctk.CTk):
     def _sync_obs_state(self, data: SaveGameData | None = None) -> dict[str, str]:
         if not self.project or not (data or self.current_game):
             return {"status": "inactive"}
-        result = self.obs_sync.sync(self.project, data or self.current_game)
+        result = self.obs_sync.sync(
+            self.project, data or self.current_game, health=self._obs_health_values,
+        )
         if result.get("status") == "conflict":
             self.sync_status = f"⚠ Conflicto: {result.get('conflicts', 'roles duplicados')}"
         return result
+
+    def _obs_health_values(self, pokemon: SavePokemon) -> tuple[int, int, int, bool]:
+        """Misma autoridad de PS que la barra flotante, para que OBS no discrepe."""
+        hp, max_hp, status = self._floating_health_values(pokemon)
+        return hp, max_hp, status, self._floating_hp_is_live(pokemon)
+
+    def _schedule_obs_health_refresh(self) -> None:
+        """Lleva a OBS un cambio de PS, agrupando los que llegan seguidos.
+
+        26-09-2026: la barra de vida de OBS. Hasta ahora OBS solo se
+        sincronizaba al cambiar equipo, rol o contadores; los PS vivos nunca
+        llegaban. Algunos juegos publican la vida bajando punto a punto durante
+        la animación, así que se agrupa en una escritura cada ~250 ms como
+        mucho en vez de una por muestra.
+        """
+        if getattr(self, "_obs_health_after_id", None) is not None:
+            return
+        try:
+            self._obs_health_after_id = self.after(250, self._flush_obs_health_refresh)
+        except Exception:
+            self._obs_health_after_id = None
+
+    def _flush_obs_health_refresh(self) -> None:
+        self._obs_health_after_id = None
+        # El equipo se proyecta AHORA, no se reutiliza el último que se mandó.
+        # 26-09-2026, USUM: reutilizarlo volvía a escribir en OBS el equipo de
+        # cuando Porygon tenía una baja pendiente -sin él- en cada cambio de
+        # PS, aunque la baja ya se hubiera retirado al recargar la partida.
+        game = self._projected_game_for_live_layout()
+        if game is None or not self.project:
+            return
+        try:
+            self._sync_obs_state(game)
+        except Exception:
+            # Si OBS no puede escribir (antivirus, copia de seguridad), el
+            # siguiente cambio de PS lo reintenta; nunca debe romper el monitor.
+            pass
 
     def _manual_obs_sync(self) -> None:
         result = self._sync_obs_state(self.current_game)

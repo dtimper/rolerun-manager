@@ -1,6 +1,87 @@
 > Este archivo conserva el historial de versiones. Para el estado funcional,
 > baseline y bugs abiertos actuales, consultar `docs/CURRENT_STATE.md`.
 
+# v0.5.2 — publicada el 26-09-2026
+
+- **OBS: nombre y barra de vida de cada Pokémon.** Nuevas fuentes para
+  colocar donde quieras en tu escena: `libero_nombre.html`,
+  `asesino_nombre.html`… con el nombre, y `libero_vida.html`,
+  `asesino_vida.html`… con una barra de vida que se mueve en directo mientras
+  juegas. Tus fuentes de siempre no cambian. Cómo añadirlas: en
+  INSTRUCCIONES_OBS.txt, dentro de la carpeta OBS.
+- **La barra flotante se quita al minimizar el emulador**, y vuelve al
+  abrirlo otra vez.
+- **Arreglado:** si un Pokémon caía y recargabas la partida sin guardar,
+  volvía a salir en RoleRun pero no en OBS.
+- La Ayuda explica bien la regla de vidas (cada Pokémon perdido resta una
+  vida en cualquier combate) y cuántas opciones da cada drafteo.
+
+**Si vienes de la 0.5.0 o anterior**, además: el Líbero ya no es un rol
+libre, sino que imita el rol que elijas (Asesino, Mago, Tanque, Prisma o
+Support) y se juzga como él; y los aprendizajes por nivel siguen bien el rol
+en los siete juegos.
+
+## OBS: el Pokémon que vuelve vivo al recargar no reaparecía (26-09-2026)
+
+Reportado en USUM: Porygon cae, la baja pendiente lo saca de Equipo/OBS/barra
+(por diseño hasta elegir sustituto), el usuario recarga sin guardar y Porygon
+vuelve vivo. RoleRun lo volvía a mostrar, pero OBS no. Causa, trazada con el
+historial de la Run (`pokemon_fainted_auto` 16:39:03, `pending_faints` vacío
+después sin evento de resolución) y el código: la limpieza
+`clear_stale_detected_faint_for_alive_party` en
+`_process_oras_health_snapshot` solo cerraba el selector y nunca volvía a
+sincronizar OBS; la barra se repinta sola cada 500 ms y RoleRun al publicar,
+OBS no. Además la barra de vida de OBS (misma fecha) reescribía en cada tick
+de PS el último equipo mandado -el de la baja- en vez del actual.
+
+- Retirar una baja así llama ahora a `_sync_live_layout` (OBS + barra).
+- `_flush_obs_health_refresh` proyecta el equipo en el momento
+  (`_projected_game_for_live_layout`) en vez de reutilizar el último mandado.
+
+Regresiones en `tests/test_obs_nombre_y_vida.py`, que fallan sin el arreglo.
+Sin cambios en la detección de bajas, vidas ni escrituras al juego.
+
+## Barra flotante: se retira al minimizar el emulador (26-09-2026)
+
+Reportado por el usuario: al minimizar el emulador la barra flotante se
+quedaba en pantalla. Causa: `_el_juego_esta_tapado` solo miraba si otra
+ventana tapaba el juego (`mayor_tapadura`), y una ventana minimizada está en
+(-32000, -32000), donde nada la tapa. Medido en esta máquina: tapadura 0,0 con
+la ventana minimizada. Ahora `ventana_activa.minimizada` (`IsIconic`) cuenta
+como juego no visible; al restaurarlo la barra vuelve como con el tapado. Lo
+mismo aplica al menú flotante, que usa la misma función. Comprobado en lectura
+sobre la ventana real de Azahar minimizada (`minimizada=True`). Regresión en
+`tests/test_barra_flotante_juego_minimizado.py`, con una ventana real
+minimizada. Suite completa 3047 passed, 18 skipped. Pendiente la prueba física
+con RoleRun reiniciado.
+
+## OBS: nombre y barra de vida por rol (26-09-2026)
+
+Pedido por el usuario: ver en OBS el nombre de cada Pokémon y su vida en
+tiempo real. Eligió piezas sueltas (colocables por separado) y solo barra, sin
+números. La carpeta OBS gana `<rol>_nombre.html` y `<rol>_vida.html` para los
+seis roles (más `pieza.css`, `nombre.js`, `vida.js`); `libero.html` y el resto
+de fuentes de sprite no cambian, así que las escenas existentes siguen igual.
+`state.json` añade `hp`, `max_hp`, `hp_live` y `sprite_rev` por rol.
+
+- La vida sale de la misma autoridad que la barra flotante
+  (`_floating_health_values` + `_floating_hp_is_live`): mismos colores, y gris
+  cuando en combate ese Pokémon no tiene PS medidos. Sin lectura viva
+  (`max_hp == 0`) la barra se oculta en vez de mostrar un 0 % no medido.
+- Antes los PS vivos nunca llegaban a OBS: solo se sincronizaba con cambios de
+  equipo, rol o contadores. Ahora `_publish_live_health` programa una
+  sincronización agrupada (como mucho una cada ~250 ms).
+- `ObsSyncService` solo reescribe los archivos cuyo contenido cambió; un tick
+  de PS toca únicamente `state.json`. El sprite usa ahora `sprite_rev` (fecha
+  del PNG) en vez de `updated_at` para no recargarse con cada tick de vida.
+
+Regresiones en `tests/test_obs_nombre_y_vida.py`; el falso de
+`tests/test_b2w2_health_and_floating_flicker.py` comprueba además que un
+cambio de PS avisa a OBS y que sin cambio no. Verificado en navegador con los
+archivos generados: colores, texto que se encoge para caber y actualización en
+directo al cambiar `state.json`. Pendiente la prueba física en OBS con un
+juego en marcha.
+
 ## Ayuda: regla de vidas y opciones de drafteo (26-09-2026)
 
 Corregido a petición del usuario al revisar la web, que repetía los mismos
